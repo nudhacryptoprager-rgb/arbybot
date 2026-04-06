@@ -57,6 +57,8 @@ _HOT_ARTIFACT_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_latest.jso
 _PROMOTED_PAIRS_PATH = os.path.join("data", "runs", "_rolling", "m7_promoted_pairs.json")
 # M7.A.5.42: Cold→hot bridge queue — top executable candidates with TTL for hot lane consumption.
 _COLD_HOT_BRIDGE_PATH = os.path.join("data", "runs", "_rolling", "m7_cold_hot_bridge.json")
+# M7.A.5.45: Hot execution intents — compact rows for hot-scored + profit-guard-checked candidates.
+_HOT_INTENTS_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_intents_latest.json")
 
 
 def _write_promoted_pairs(promoted: dict) -> None:
@@ -176,12 +178,17 @@ def _populate_pool_token_cache_from_bridge(bridge: dict) -> int:
 def _prewarm_registry_from_bridge(
     registry, bridge: dict,
     dex_configs: dict, rpc_url: str, block_num: int,
+    priority_pools: set | None = None,
 ) -> int:
     """Prewarm hot registry from bridge entries using token addresses.
 
     M7.A.5.43: Pool-address-first matching. Bridge entries carry
     pool_address + token0_addr + token1_addr. We prewarm the registry
     using actual token addresses, not symbol-pair strings.
+
+    M7.A.5.45: Priority prewarm. When priority_pools is provided (set of
+    lowercase pool addresses from cold_executable), those pools are
+    prewarmed first. Remaining ptt entries are prewarmed after.
 
     Returns number of pairs prewarmed.
     """
@@ -190,7 +197,15 @@ def _prewarm_registry_from_bridge(
         return 0
     count = 0
     _seen_pairs: set = set()
-    for pa, triple in ptt.items():
+
+    # M7.A.5.45: Sort ptt entries so priority_pools come first.
+    _priority = priority_pools or set()
+    _items = sorted(
+        ptt.items(),
+        key=lambda kv: (0 if kv[0].lower() in _priority else 1),
+    )
+
+    for pa, triple in _items:
         if len(triple) != 3:
             continue
         t0, t1, _fee = triple
@@ -454,6 +469,18 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
     }
 
+    # M7.A.5.45: Compute headline_level for hot artifact.
+    _fast_scored = len(fast_results) if fast_results else 0
+    _fast_positive = sum(1 for r in (fast_results or []) if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0)
+    _guard_count = len(guard_results) if guard_results else 0
+    hot["headline_level"] = _compute_headline_level({
+        "diagnostic_positive": _fast_positive,
+        "cold_executable_positive": _fast_positive,
+        "hot_scored": _fast_scored,
+        "profit_guard_passed": _guard_count,
+        "realized_onchain_profit": 0,
+    })
+
     # M7.A.5.39: Two-level promoted watchlist info
     _cand = candidate_pairs or []
     _exec = promoted_pairs or []
@@ -624,6 +651,105 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
 
 
+def _compute_headline_level(funnel: dict) -> str:
+    """Return the highest confirmed execution funnel stage with count > 0.
+
+    M7.A.5.45: Headline enforcement — the UI and reports must not claim
+    progress beyond this level. Stages are checked in reverse order
+    (most advanced first). Returns the stage name string.
+    """
+    _STAGES = [
+        "realized_onchain_profit",
+        "profit_guard_passed",
+        "hot_scored",
+        "cold_executable_positive",
+        "diagnostic_positive",
+    ]
+    for stage in _STAGES:
+        if funnel.get(stage, 0) > 0:
+            return stage
+    return "none"
+
+
+def _write_hot_intents(
+    fast_results: list | None,
+    guard_results: list | None,
+    iteration: int,
+    bridge: dict | None = None,
+) -> None:
+    """Write hot execution intents artifact — compact rows for hot-scored
+    and profit-guard-checked candidates only.
+
+    M7.A.5.45: This artifact is the canonical "ready to submit" queue.
+    Only candidates that were actually scored in hot lane (scoring_path=
+    registry_fast) appear. Rows include profit_guard_passed status.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = []
+
+    # Extract hot-scored candidates from fast_results
+    _fast = fast_results or []
+    # Build set of guard-passed event_ids for cross-reference
+    _guard_event_ids: set = set()
+    if guard_results:
+        for r_dict, _g in guard_results:
+            eid = r_dict.get("event_id") if isinstance(r_dict, dict) else getattr(r_dict, "event_id", None)
+            if eid:
+                _guard_event_ids.add(eid)
+
+    for r in _fast:
+        eid = getattr(r, "event_id", None)
+        net = getattr(r, "best_backrun_net_bps", None) or 0
+        rows.append({
+            "event_id": eid,
+            "actual_pair": getattr(r, "actual_pair", None),
+            "net_bps": round(net, 4) if net else 0,
+            "profit_guard_passed": getattr(r, "profit_guard_passed", False),
+            "guard_passed_in_hot": eid in _guard_event_ids,
+            "scoring_path": getattr(r, "scoring_path", None),
+            "pipeline_latency_ms": getattr(r, "quote_pipeline_latency_ms", None),
+            "route_viable": getattr(r, "route_viable", False),
+        })
+
+    # Sort by net_bps descending
+    rows.sort(key=lambda x: x.get("net_bps", 0), reverse=True)
+
+    # Compute funnel counts for hot lane
+    _hot_scored = len(_fast)
+    _hot_positive = sum(1 for x in rows if x.get("net_bps", 0) > 0)
+    _guard_passed = sum(1 for x in rows if x.get("guard_passed_in_hot"))
+
+    headline_level = _compute_headline_level({
+        "diagnostic_positive": _hot_positive,
+        "cold_executable_positive": _hot_positive,
+        "hot_scored": _hot_scored,
+        "profit_guard_passed": _guard_passed,
+        "realized_onchain_profit": 0,
+    })
+
+    payload = {
+        "timestamp": ts,
+        "loop_iteration": iteration,
+        "headline_level": headline_level,
+        "hot_scored_count": _hot_scored,
+        "hot_positive_count": _hot_positive,
+        "profit_guard_passed_count": _guard_passed,
+        "cold_executable_pool_count": len(bridge.get("cold_executable", [])) if bridge else 0,
+        "intents": rows[:20],  # Cap at 20 rows
+    }
+
+    try:
+        os.makedirs(os.path.dirname(_HOT_INTENTS_PATH), exist_ok=True)
+        with open(_HOT_INTENTS_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+        logger.info(
+            "Hot intents written: scored=%d positive=%d guard_passed=%d headline=%s",
+            _hot_scored, _hot_positive, _guard_passed, headline_level,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write hot intents: %s", str(exc)[:120])
+
+
 def run_loop(cli_args) -> None:
     """Run the continuous ws-live loop."""
     _apply_lane_defaults(cli_args)
@@ -681,6 +807,18 @@ def run_loop(cli_args) -> None:
                 _bridge_cache_count = _populate_pool_token_cache_from_bridge(_bridge)
                 _bridge_prewarm_count = 0
 
+                # M7.A.5.45: Build execution queue — cold_executable pool addresses
+                # get priority prewarm so hot lane scores them first.
+                _cold_exec_pools: set = set()
+                for _ce in _bridge.get("cold_executable", []):
+                    _pa = _ce.get("pool_address", "") if isinstance(_ce, dict) else ""
+                    if _pa:
+                        _cold_exec_pools.add(_pa.lower())
+                for _ne in _bridge.get("near_executable", []):
+                    _pa = _ne.get("pool_address", "") if isinstance(_ne, dict) else ""
+                    if _pa:
+                        _cold_exec_pools.add(_pa.lower())
+
                 _hot_pairs_to_prewarm: dict = {}
                 # 1. Seed defaults on first iteration
                 if iteration == 1:
@@ -715,10 +853,11 @@ def run_loop(cli_args) -> None:
                         _dex_cfg = _all_dexes.get(cli_args.chain, {})
                         _token_addr = get_all_token_addresses(cli_args.chain)
 
-                        # M7.A.5.43: Bridge-first prewarm (pool-address → token-address)
+                        # M7.A.5.45: Bridge-first prewarm with cold_executable priority
                         if _bridge.get("pool_token_transport"):
                             _bridge_prewarm_count = _prewarm_registry_from_bridge(
                                 _hot_registry, _bridge, _dex_cfg, _rpc, _block,
+                                priority_pools=_cold_exec_pools,
                             )
 
                         # Legacy symbol-pair prewarm for seeds and accumulated pairs
@@ -939,6 +1078,14 @@ def run_loop(cli_args) -> None:
                     promoted_pairs=_promoted_pairs.get("execution", []),
                     candidate_pairs=_promoted_pairs.get("candidate", []),
                     bridge_diagnostics=_hot_bridge_diag,
+                )
+
+                # M7.A.5.45: Write hot execution intents artifact
+                _write_hot_intents(
+                    fast_results=fast_results,
+                    guard_results=guard_results,
+                    iteration=iteration,
+                    bridge=_bridge,
                 )
 
             best = artifact.get("best_net_bps_clean")

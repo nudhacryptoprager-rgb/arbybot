@@ -1632,6 +1632,7 @@ class TestM7A532RollingCanonicalSet:
             "m7_orderflow_latest.json", "m7_hot_latest.json",
             "m7_promoted_pairs.json",
             "m7_cold_hot_bridge.json",
+            "m7_hot_intents_latest.json",
         }
         for f in rolling.iterdir():
             if f.is_file():
@@ -3695,6 +3696,7 @@ class TestM7A544ExecutionFunnel:
             "hot_scored",
             "profit_guard_passed",
             "realized_onchain_profit",
+            "headline_level",  # M7.A.5.45
         }
         assert required_keys == set(funnel.keys())
 
@@ -3704,7 +3706,10 @@ class TestM7A544ExecutionFunnel:
         artifact = build_replay_summary(events, results, mode="offline")
         funnel = artifact["execution_funnel"]
         for key, val in funnel.items():
-            assert isinstance(val, int), f"{key} should be int, got {type(val)}"
+            if key == "headline_level":  # M7.A.5.45: string field
+                assert isinstance(val, str), f"{key} should be str, got {type(val)}"
+            else:
+                assert isinstance(val, int), f"{key} should be int, got {type(val)}"
 
     def test_execution_funnel_hot_scored_default_zero(self):
         """Cold lane cannot compute hot_scored — defaults to 0."""
@@ -3869,3 +3874,187 @@ class TestM7A544DashboardFunnelSection:
         import pathlib
         src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
         assert "verified_profitable" in src
+
+
+# ===========================================================================
+# M7.A.5.45 — Bridge execution queue, hot intents, headline enforcement
+# ===========================================================================
+
+
+class TestM7A545HeadlineLevel:
+    """M7.A.5.45: headline_level computation in execution_funnel."""
+
+    def test_headline_level_present_in_funnel(self):
+        """Cold-lane artifact must include headline_level in execution_funnel."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        art = build_replay_summary(events, results, mode="ws_live")
+        funnel = art.get("execution_funnel", {})
+        assert "headline_level" in funnel
+
+    def test_headline_level_with_positives(self):
+        """When diagnostic_positive > 0, headline_level should be at least that."""
+        events = build_fixture_events()
+        results = [score_backrun_offline(e) for e in events]
+        art = build_replay_summary(events, results, mode="ws_live")
+        funnel = art.get("execution_funnel", {})
+        if funnel.get("diagnostic_positive", 0) > 0:
+            assert funnel["headline_level"] != "none"
+
+    def test_headline_level_none_when_all_zero(self):
+        """When all stages are 0, headline_level = 'none'."""
+        from scripts.m7a_orderflow_loop import _compute_headline_level
+        funnel = {
+            "diagnostic_positive": 0,
+            "cold_executable_positive": 0,
+            "hot_scored": 0,
+            "profit_guard_passed": 0,
+            "realized_onchain_profit": 0,
+        }
+        assert _compute_headline_level(funnel) == "none"
+
+    def test_headline_level_picks_highest(self):
+        """headline_level should be the most advanced confirmed stage."""
+        from scripts.m7a_orderflow_loop import _compute_headline_level
+        funnel = {
+            "diagnostic_positive": 5,
+            "cold_executable_positive": 2,
+            "hot_scored": 3,
+            "profit_guard_passed": 1,
+            "realized_onchain_profit": 0,
+        }
+        assert _compute_headline_level(funnel) == "profit_guard_passed"
+
+    def test_headline_level_cold_only(self):
+        """When only cold stages have counts, headline should be cold."""
+        from scripts.m7a_orderflow_loop import _compute_headline_level
+        funnel = {
+            "diagnostic_positive": 5,
+            "cold_executable_positive": 2,
+            "hot_scored": 0,
+            "profit_guard_passed": 0,
+            "realized_onchain_profit": 0,
+        }
+        assert _compute_headline_level(funnel) == "cold_executable_positive"
+
+
+class TestM7A545PriorityPrewarm:
+    """M7.A.5.45: _prewarm_registry_from_bridge with priority_pools."""
+
+    def test_function_accepts_priority_pools(self):
+        """_prewarm_registry_from_bridge must accept priority_pools param."""
+        from scripts.m7a_orderflow_loop import _prewarm_registry_from_bridge
+        import inspect
+        sig = inspect.signature(_prewarm_registry_from_bridge)
+        assert "priority_pools" in sig.parameters
+
+    def test_priority_pools_default_is_none(self):
+        """Default value for priority_pools is None."""
+        from scripts.m7a_orderflow_loop import _prewarm_registry_from_bridge
+        import inspect
+        sig = inspect.signature(_prewarm_registry_from_bridge)
+        assert sig.parameters["priority_pools"].default is None
+
+    def test_empty_bridge_returns_zero(self):
+        """Empty bridge ptt returns 0 prewarmed."""
+        from scripts.m7a_orderflow_loop import _prewarm_registry_from_bridge
+
+        class DummyReg:
+            def preload_pair(self, *a, **kw):
+                pass
+        result = _prewarm_registry_from_bridge(
+            DummyReg(), {}, {}, "", 0, priority_pools=set()
+        )
+        assert result == 0
+
+
+class TestM7A545HotIntentsArtifact:
+    """M7.A.5.45: _write_hot_intents function contract."""
+
+    def test_write_hot_intents_exists(self):
+        """Function exists in m7a_orderflow_loop."""
+        from scripts.m7a_orderflow_loop import _write_hot_intents
+        assert callable(_write_hot_intents)
+
+    def test_write_hot_intents_writes_file(self, tmp_path, monkeypatch):
+        """_write_hot_intents writes the intents artifact to rolling dir."""
+        import json as _json
+        from scripts import m7a_orderflow_loop as mod
+        out = tmp_path / "m7_hot_intents_latest.json"
+        monkeypatch.setattr(mod, "_HOT_INTENTS_PATH", str(out))
+
+        mod._write_hot_intents(
+            fast_results=[], guard_results=None, iteration=1, bridge={},
+        )
+        assert out.exists()
+        data = _json.loads(out.read_text(encoding="utf-8"))
+        assert "headline_level" in data
+        assert "hot_scored_count" in data
+        assert "intents" in data
+        assert isinstance(data["intents"], list)
+
+    def test_write_hot_intents_caps_rows(self, tmp_path, monkeypatch):
+        """Intents rows are capped at 20."""
+        import json as _json
+        from scripts import m7a_orderflow_loop as mod
+        out = tmp_path / "m7_hot_intents_latest.json"
+        monkeypatch.setattr(mod, "_HOT_INTENTS_PATH", str(out))
+
+        # Make 30 fake BackrunResult-like objects
+        class FakeResult:
+            def __init__(self, i):
+                self.event_id = f"evt_{i}"
+                self.actual_pair = "WETH/USDC"
+                self.best_backrun_net_bps = 10.0 - i * 0.1
+                self.profit_guard_passed = False
+                self.scoring_path = "registry_fast"
+                self.quote_pipeline_latency_ms = 5.0
+                self.route_viable = True
+
+        fakes = [FakeResult(i) for i in range(30)]
+        mod._write_hot_intents(
+            fast_results=fakes, guard_results=None, iteration=1, bridge={},
+        )
+        data = _json.loads(out.read_text(encoding="utf-8"))
+        assert len(data["intents"]) <= 20
+
+
+class TestM7A545HotIntentsPathConstant:
+    """M7.A.5.45: _HOT_INTENTS_PATH is defined."""
+
+    def test_path_constant_exists(self):
+        from scripts.m7a_orderflow_loop import _HOT_INTENTS_PATH
+        assert "m7_hot_intents_latest.json" in _HOT_INTENTS_PATH
+
+
+class TestM7A545DashboardHeadlineLevel:
+    """M7.A.5.45: Dashboard shows headline_level badge."""
+
+    def test_dashboard_has_headline_level(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "headline_level" in src
+
+    def test_dashboard_has_headlinelevel_color_logic(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "headlineLevelColor" in src
+
+    def test_dashboard_has_hot_scored_color(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "hot_scored" in src
+
+
+class TestM7A545DashboardIntentsEndpoint:
+    """M7.A.5.45: Dashboard server has /api/intents endpoint."""
+
+    def test_intents_endpoint_in_server(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard_server.py").read_text(encoding="utf-8")
+        assert "/api/intents" in src
+
+    def test_intents_artifact_in_files(self):
+        import pathlib
+        src = pathlib.Path("monitoring/dashboard_server.py").read_text(encoding="utf-8")
+        assert "m7_hot_intents" in src

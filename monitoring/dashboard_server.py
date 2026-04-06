@@ -27,6 +27,7 @@ ARTIFACT_FILES = {
     "hot_loop": ROLLING_DIR / "hot_loop_latest.json",
     "m7_orderflow": ROLLING_DIR / "m7_orderflow_latest.json",
     "m7_hot": ROLLING_DIR / "m7_hot_latest.json",
+    "m7_hot_intents": ROLLING_DIR / "m7_hot_intents_latest.json",
 }
 
 DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"
@@ -42,6 +43,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._serve_rolling_data()
         elif self.path == "/api/hot":
             self._serve_hot_data()
+        elif self.path == "/api/intents":
+            self._serve_intents_data()
         else:
             self.send_error(404)
 
@@ -93,6 +96,25 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     result[key] = json.load(f)
             except (json.JSONDecodeError, OSError):
                 result[key] = None
+        payload = json.dumps(result, default=str).encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_intents_data(self):
+        """M7.A.5.45: Serve hot execution intents artifact."""
+        result = {"m7_hot_intents": None}
+        path = ARTIFACT_FILES["m7_hot_intents"]
+        if path.is_file():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    result["m7_hot_intents"] = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                result["m7_hot_intents"] = None
         payload = json.dumps(result, default=str).encode("utf-8")
 
         self.send_response(200)

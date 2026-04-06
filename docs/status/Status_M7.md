@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.44 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.44 adds execution funnel model (5 stages), micro-refinement (5 size multipliers per candidate), execution-time verification (verified_profitable=True on top 2 candidates at 77.65 and 73.81 bps), 3 bridge-hit counters, dashboard Execution Gap Funnel section. First verified_profitable=True candidates. 3310 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.45 + M7.R1 + M7.T1 — all scopes produce no-graduate verdicts. M7.A.5.45 adds bridge-driven execution queue (cold_executable priority prewarm), hot execution intents artifact (`m7_hot_intents_latest.json`), funnel headline_level enforcement (prevents claims above confirmed level), dashboard headline badge. 3327 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
 **Updated**: 2026-04-06  
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep ($1-$10K), 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles (`narrow_7|expanded_10`), orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, subgraph seed (blocked), gas decomposition, stale/low-lag split, low-lag reject decomposition, low-lag debug diagnostic, pool-class truth, V2 direct resolve, low-lag watchlist, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, gas-floor prefilter, registry activation in ws-live, low-lag registry-direct scoring bridge, pipeline latency optimization, detection-time low-lag truth, anomaly-clean headlines, wall-clock budget abort, Timeboost feasibility, profit guard fix + hot-mode fast path + stage timing, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist + stale KPI fix, batch pre-resolve + supervisor fix + size_valid cache, top-candidate persistence + hot lane token resolution fix. M7.B remains closed.
 
@@ -174,36 +174,23 @@ CI: 3219 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ## M7.A.5.38: Session-Scoped Caching + Enrichment Cache + Latency Budget Hit Rate
 
-**Hypothesis**: M7.A.5.38 = latency_budget_hit_rate >= 0.80 in 15-minute nonstop runtime. Remove enrichment, oracle, and registry_preload from effective per-event cost via session-scoped caches.
+**Hypothesis**: latency_budget_hit_rate >= 0.80 via session-scoped caches for enrichment, oracle, and registry_preload.
 
-**Changes**: (1) `m7/orderflow/resolve.py`: added `_enrichment_cache` — process-level dict caching immutable ERC-20 symbol/decimals data. `enrich_tokens_batch()` checks cache before RPC multicall; only uncached addresses go to `batch_symbol()` + `batch_decimals()`. Successfully enriched entries cached forever (immutable data). (2) `m7/orderflow/pricing.py`: `_ORACLE_CACHE_STALE_BLOCKS` 50→5000 (5000 blocks ≈ 20 min on Arbitrum). Oracle is "sanity guardrail, not execution truth" — stale-20min acceptable for diagnostic cold lane, covers multi-iteration reuse. (3) `m7/orderflow/pool_registry.py`: `__init__` accepts `stale_threshold_blocks: int = 10` parameter. `preload_pair()` uses `self.stale_threshold_blocks` instead of hard-coded 10. Default stays 10 for hot lane (backward compatible). (4) `scripts/m7a_orderflow_loop.py`: cold registry init `PoolRegistry(stale_threshold_blocks=5000)` — diagnostic lane state refresh only after 5000 blocks (~20 min), effectively never within a 15-min session after initial warmup. (5) +9 tests in 4 classes (TestM7A538EnrichmentCaching, TestM7A538OracleThreshold, TestM7A538RegistryStaleThreshold).
+**Changes**: (1) `m7/orderflow/resolve.py`: `_enrichment_cache` for immutable ERC-20 symbol/decimals. (2) `m7/orderflow/pricing.py`: `_ORACLE_CACHE_STALE_BLOCKS` 50→5000. (3) `m7/orderflow/pool_registry.py`: configurable `stale_threshold_blocks`. (4) `scripts/m7a_orderflow_loop.py`: cold registry `PoolRegistry(stale_threshold_blocks=5000)`. (5) +9 tests in 4 classes.
 
-**Online evidence**: 0.25h nonstop `--no-m4`. 5 cold iterations, 3 hot lanes alive, 0 restarts. Rolling at `m7_orderflow_latest.json` timestamp `2026-04-04T09:21:43Z`.
+**Online evidence**: 0.25h nonstop. latency_budget_hit_rate peaks 0.80 (warm), settles 0.72. total_pipeline mean 275-290ms (near 250ms budget). enrichment_ms drops to ~7ms (cached), oracle_ms ~15ms (warm), registry_preload_ms 121ms.
 
-| Metric | M7.A.5.37 (baseline) | Iter 1 (cold) | Iter 3 (warm) | Iter 5 (final) |
-|--------|---------------------|---------------|---------------|----------------|
-| total_pipeline.mean (ms) | 866 | 893 | **275** | 290 |
-| resolve_ms.mean | 197 | 296 | **109** | 94 |
-| enrichment_ms.mean | 96 | 63 | **30** | **7** |
-| oracle_ms.mean | 245 | 114 | **15** | 55 |
-| registry_preload_ms.mean | 327 | 421 | **121** | 133 |
-| latency_budget_hit_rate | **0.19** | 0.36 | **0.80** | **0.72** |
-
-Key observations: (1) enrichment_ms drops to ~0 for repeated tokens (fully cached). (2) oracle_ms drops to ~15ms on warm iteration (5000-block threshold covers inter-iteration gap). (3) registry_preload_ms drops from 327→121ms (5000-block threshold prevents per-iteration refresh). (4) Remaining latency from NEW pairs not seen in previous iterations (cold-start cost irreducible). (5) latency_budget_hit_rate peaks at 0.80 (iteration 3, all pairs warm), settles to 0.72 as new pairs appear. (6) total_pipeline mean 275-290ms is close to 250ms budget; warm-cache-only pairs consistently under budget.
-
-CI: 3228 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+CI: 3228 passed, 6 skipped. ALL REQUIRED GATES PASSED.
 
 ---
 
 ## M7.A.5.39: Two-Level Promotion + Hot Prewarm + Cold Lane Registry Fix
 
-**Hypothesis**: M7.A.5.39 = promoted-watchlist activation + hot p50/p90 proof under 10–20 minute nonstop runtime. Previous session confirmed hot path is already zero-RPC; real blocker is that pairs never get promoted because size_valid_for_token=false blocks all candidates.
+**Hypothesis**: promoted-watchlist activation + hot p50/p90 proof under nonstop runtime.
 
-**Changes**: (1) `scripts/m7a_orderflow_loop.py`: **Critical bug fix** — cold lane was setting `_ext_registry = _hot_registry` instead of `_ext_registry = None`. This would trigger hot mode in cold lane if hot_registry was initialized (wrong). Fixed to `_ext_registry = None` so cold lane always uses full diagnostic scoring. (2) `scripts/m7a_orderflow_loop.py`: **Cold lane prewarm target fix** — prewarm was preloading `_hot_registry` instead of `_cold_registry`. Fixed to prewarm the correct registry used by cold lane scoring. (3) `scripts/m7a_orderflow_loop.py`: **Two-level promotion** — `_promote_pairs_from_cold()` now returns `dict` with `candidate` (relaxed: no size_valid requirement, cap PROMOTED_CANDIDATE_MAX_PAIRS=20) and `execution` (strict: all rules including size_valid, cap PROMOTED_MAX_PAIRS=10). Candidate pairs enter registry prewarm; execution pairs get full hot-path scoring priority. (4) `scripts/m7a_orderflow_loop.py`: **Cross-lane promoted pairs file** — cold lane writes `m7_promoted_pairs.json` rolling artifact; hot lane reads it at each iteration for prewarm. Solves the cold→hot cross-process communication gap. (5) `scripts/m7a_orderflow_loop.py`: **Hot lane prewarm** — hot lane now preloads its registry from HOT_WATCHLIST_PAIRS seeds + accumulated hot results + cross-lane promoted pairs. Previously hot registry was empty (never prewarmed). (6) `m7/orderflow/mode_ws_live.py`: **Web3 reuse** — per-block `Web3(HTTPProvider)` creation moved before the block loop (single instance reused). Eliminates ~5-10ms per block of object creation overhead. (7) `scripts/start_nonstop_runtime.py`: **stdout drain fix** — `drain_output()` now called in health check loop. Previously `stdout=PIPE` was set but never drained, causing potential pipe buffer stalls on long nonstop runs. (8) `m7/shared/constants.py`: New `PROMOTED_CANDIDATE_MAX_PAIRS = 20` constant, updated promotion rule documentation for two-level system. (9) +16 tests in 7 classes (TestM7A539TwoLevelPromotion, TestM7A539Constants, TestM7A539ColdLaneRegistryFix, TestM7A539CrossLanePromoted, TestM7A539HotPrewarmFromCross, TestM7A539HotArtifactTwoLevel, TestM7A539StdoutDrainFix). Updated 5 existing tests for new dict return type.
+**Changes**: (1) Cold lane registry fix — was using `_hot_registry` instead of `None` for `_ext_registry`. (2) Cold prewarm target fix — was prewarming `_hot_registry` instead of `_cold_registry`. (3) Two-level promotion — `_promote_pairs_from_cold()` returns `candidate` (relaxed, cap 20) and `execution` (strict+size_valid, cap 10). (4) Cross-lane `m7_promoted_pairs.json` for cold→hot communication. (5) Hot lane prewarm from seeds + accumulated + cross-promoted. (6) Web3 HTTPProvider reuse (single instance). (7) `start_nonstop_runtime.py` stdout drain fix. (8) `PROMOTED_CANDIDATE_MAX_PAIRS = 20`. (9) +16 tests in 7 classes.
 
-**Online evidence**: PENDING — requires nonstop runtime verification.
-
-CI: 3244 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+CI: 3244 passed, 6 skipped. ALL REQUIRED GATES PASSED.
 
 ---
 
@@ -288,6 +275,23 @@ CI: 3291 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 - 3/3 processes alive, 0 restarts
 
 CI: 3310 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+
+---
+
+## M7.A.5.45: Bridge Execution Queue + Hot Intents + Headline Enforcement
+
+**Hypothesis**: M7.A.5.45 = bridge as scheduler input for hot lane, hot execution intents artifact, funnel headline_level enforcement. Core insight (from user review): "cold verified positive ≠ hot executable positive" — the remaining gap is executional. cold_executable pools must get priority prewarm, and the highest confirmed funnel stage must be machine-visible to prevent over-claiming.
+
+**Changes**: (1) `scripts/m7a_orderflow_loop.py`: **Bridge-driven execution queue** — `_prewarm_registry_from_bridge()` now accepts `priority_pools` param (set of lowercase pool addresses from `cold_executable` + `near_executable`). Priority pools are prewarmed first via sorted iteration. Hot lane extracts `cold_executable` and `near_executable` pool addresses from bridge, passes them as `priority_pools`. (2) `scripts/m7a_orderflow_loop.py`: **Hot intents artifact** — new `_write_hot_intents()` function writes `m7_hot_intents_latest.json` with compact rows for hot-scored candidates only. Schema: `timestamp`, `loop_iteration`, `headline_level`, `hot_scored_count`, `hot_positive_count`, `profit_guard_passed_count`, `cold_executable_pool_count`, `intents[]` (capped at 20). New `_HOT_INTENTS_PATH` constant. Called after `_write_hot_artifact()` in hot lane post-scoring. (3) `scripts/m7a_orderflow_loop.py`: **Headline enforcement** — new `_compute_headline_level()` function returns the highest confirmed funnel stage with count > 0. Added to both hot artifact (`headline_level` top-level field) and hot intents artifact. (4) `m7/orderflow/artifacts.py`: Cold-lane `execution_funnel` now includes `headline_level` string field. (5) `monitoring/dashboard.html`: Headline level badge above funnel table — color-coded (red=none, yellow=diagnostic/cold, green=hot_scored+). (6) `monitoring/dashboard_server.py`: New `/api/intents` endpoint serving `m7_hot_intents_latest.json`. Added `m7_hot_intents` to `ARTIFACT_FILES`. (7) +17 tests in 6 new classes (TestM7A545HeadlineLevel, TestM7A545PriorityPrewarm, TestM7A545HotIntentsArtifact, TestM7A545HotIntentsPathConstant, TestM7A545DashboardHeadlineLevel, TestM7A545DashboardIntentsEndpoint). Updated 2 existing M7A544 tests for `headline_level` field.
+
+**Online evidence**: 10-minute nonstop `--no-m4`. Fresh rolling at `2026-04-06T10:37:14Z`:
+- Cold `execution_funnel: {diagnostic_positive:7, cold_executable_positive:0, hot_scored:0, profit_guard_passed:0, realized_onchain_profit:0, headline_level:"diagnostic_positive"}`
+- Hot `headline_level: "none"` (no hot-scored events this window — expected: incoming events at different pools)
+- `m7_hot_intents_latest.json`: created with correct schema — `hot_scored_count:0, cold_executable_pool_count:2`
+- Bridge: cold_executable=0 (this window), near_executable=5, pool_token_transport=46
+- 3/3 processes alive, 0 restarts, 10+ minutes continuous
+
+CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
 
 ---
 

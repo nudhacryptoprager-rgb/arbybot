@@ -1007,6 +1007,22 @@ def build_replay_summary(
         "realized_onchain_profit": 0,  # M7.B — not yet implemented
     }
 
+    # M7.A.5.45: Headline level — highest confirmed funnel stage with count > 0.
+    # Prevents UI/reports from claiming progress beyond confirmed level.
+    _hl_stages = [
+        "realized_onchain_profit",
+        "profit_guard_passed",
+        "hot_scored",
+        "cold_executable_positive",
+        "diagnostic_positive",
+    ]
+    _hl = "none"
+    for _s in _hl_stages:
+        if execution_funnel.get(_s, 0) > 0:
+            _hl = _s
+            break
+    execution_funnel["headline_level"] = _hl
+
     # M7.A.5.42: Diagnostic-raw block — metrics that are informational but MUST NOT
     # be treated as headline or execution-readiness signals.
     diagnostic_raw = {

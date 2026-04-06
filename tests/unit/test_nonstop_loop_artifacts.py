@@ -50,6 +50,7 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m7_hot_latest.json",
             "m7_promoted_pairs.json",
             "m7_cold_hot_bridge.json",
+            "m7_hot_intents_latest.json",
         }
         
         # Archive files are allowed (created on reset)

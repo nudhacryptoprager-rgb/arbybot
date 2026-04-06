@@ -2,143 +2,124 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
-run_id: m7a544_execution_funnel
+run_id: ci_m5_gate_arbitrum_one_20260402_110313_968343
 mode: ONLINE (nonstop verification with fresh rolling artifacts)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, NORMAL)
 code_identity:
   primary: ts:2026-04-02T09:03:41.464858Z
   dirty: true
-  desc: M7.A.5.44 — execution funnel model, micro-refinement, verified_profitable, bridge-hit counters
+  desc: M7.A.5.45 — bridge execution queue, hot intents artifact, headline_level enforcement
 rolling_run_dir_name: ci_m5_gate_arbitrum_one_20260402_110313_968343
 rolling_run_timestamp: 2026-04-02T09:03:41.464858Z
-m7_orderflow_timestamp: 2026-04-06T09:52:31Z
-m7_hot_timestamp: 2026-04-06T09:49:28Z
+m7_orderflow_timestamp: 2026-04-06T10:37:14Z
+m7_hot_timestamp: 2026-04-06T10:34:43Z
+m7_hot_intents_timestamp: 2026-04-06T10:34:43Z
 
 ## Session Completion
-session_goal: M7.A.5.44 — first verified_profitable candidate from cold lane, execution funnel visibility, micro-refinement sizing check
-goal_status: REACHED (execution_funnel emitted with 5 stages, 2 cold_executable_positive candidates verified_profitable=True, micro_refinement 5/5 sizes pass at 77.65 bps, 3 bridge-hit counters added, dashboard Execution Gap Funnel section operational)
+session_goal: M7.A.5.45 — bridge as scheduler input for hot lane, hot execution intents artifact, funnel headline_level enforcement
+goal_status: REACHED (bridge-driven execution queue with priority_pools, m7_hot_intents_latest.json emitted, headline_level in cold/hot artifacts + dashboard badge, 10-min nonstop 3/3 alive 0 restarts)
 close_allowed: true
-remaining_blockers: hot_scored=0 (market timing — no hot event hit transported pool in last iteration), profit_guard_passed=0 in hot lane (requires hot-scored event first)
-evidence_session_run_dirs: [tests/unit (3310 passed, 6 skipped), nonstop 10-min (m7_orderflow_latest.json, m7_hot_latest.json, m7_cold_hot_bridge.json)]
-primary_blocker_of_session: No machine-readable execution gap model — cold delivers cold_executable_positive but no way to track where the pipeline breaks between cold positive and hot execution
-blocker_status_before: ACTIVE (execution funnel was implicit; no micro-refinement; no verified_profitable; no bridge-hit counters)
-blocker_status_after: RESOLVED (5-stage execution_funnel in artifact; micro_refinement tests 5 sizes per candidate; verified_profitable+verified_net_bps in compact candidates; 3 bridge-hit counters diagnose transport chain; dashboard Section 3 Execution Gap Funnel)
+remaining_blockers: hot_scored=0 (market timing — incoming hot events at different pools than cold_executable), profit_guard_passed=0 in hot lane (requires hot-scored event first)
+evidence_session_run_dirs: [tests/unit (3327 passed, 6 skipped), nonstop 10-min (m7_orderflow_latest.json, m7_hot_latest.json, m7_hot_intents_latest.json, m7_cold_hot_bridge.json)]
+primary_blocker_of_session: No machine-readable headline enforcement — cold/hot artifacts could claim progress beyond confirmed level; no priority prewarm for cold_executable pools; no separate hot intents artifact
+blocker_status_before: ACTIVE (headline_level missing; prewarm treated all ptt entries equally; no hot intents artifact)
+blocker_status_after: RESOLVED (headline_level in execution_funnel + hot artifact + hot intents + dashboard badge; priority prewarm from cold_executable pools; m7_hot_intents_latest.json with compact rows)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.44 — execution funnel model + micro-refinement + execution-time verification + bridge-hit counters
+goal (Roadmap): M7.A.5.45 — bridge-driven execution queue + hot intents + headline enforcement
 change_summary:
-  - m7/orderflow/artifacts.py (MODIFIED): (a) Added execution_funnel dict with 5 stages: diagnostic_positive, cold_executable_positive, hot_scored (0, from hot lane), profit_guard_passed, realized_onchain_profit (0, M7.B). (b) _compact_candidate now runs check_profit_guard on viable+positive+size_valid candidates → verified_profitable (bool) + verified_net_bps (float). (c) Added micro_refinement: tests 5 size multipliers [0.5, 0.8, 1.0, 1.5, 2.0] around observed amount_in_wei for top 3 exec + top 2 near-exec candidates, each checked with profit_guard.
-  - scripts/m7a_orderflow_loop.py (MODIFIED): (a) 3 new bridge-hit counters in _hot_bridge_diag: bridge_pool_address_hit_count, bridge_pair_hit_count, bridge_loaded_candidate_count. (b) Computation logic: iterates ALL events (not just hot_skip), checks pool_address against bridge pool_token_transport keys, then pair resolution. (c) _write_hot_artifact updated to propagate 3 new counters to hot_gap_debug.
-  - monitoring/dashboard.html (MODIFIED): (a) New Section 3 "Execution Gap Funnel" — 5-stage funnel table with counts and arrows, bridge+hot-match counters inline, micro-refinement results table. (b) Updated top_executable_candidates table with "Verified" column (green/red badge from verified_profitable).
-  - tests/unit/test_orderflow_artifacts.py (MODIFIED): +19 tests in 5 new classes (TestM7A544ExecutionFunnel, TestM7A544CompactCandidateVerification, TestM7A544MicroRefinement, TestM7A544BridgeHitCounters, TestM7A544DashboardFunnelSection). Updated existing compact-keys test for verified_profitable + verified_net_bps.
-  - docs/status/Status_M7.md (MODIFIED): Added M7.A.5.44 section.
-  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.44)
+  - scripts/m7a_orderflow_loop.py (MODIFIED): (a) _prewarm_registry_from_bridge() now accepts priority_pools param — cold_executable + near_executable pool addresses get priority prewarm via sorted iteration. (b) Hot lane extracts cold_exec_pools set from bridge cold_executable + near_executable, passes as priority_pools. (c) New _write_hot_intents() writes m7_hot_intents_latest.json with compact rows for hot-scored candidates only (capped at 20). (d) New _compute_headline_level() returns highest confirmed funnel stage with count > 0. (e) New _HOT_INTENTS_PATH constant. (f) headline_level added to hot artifact top-level.
+  - m7/orderflow/artifacts.py (MODIFIED): execution_funnel now includes headline_level string field — highest confirmed stage.
+  - monitoring/dashboard.html (MODIFIED): Headline level badge above funnel table (color-coded: red=none, yellow=diagnostic/cold, green=hot_scored+).
+  - monitoring/dashboard_server.py (MODIFIED): New /api/intents endpoint. m7_hot_intents added to ARTIFACT_FILES.
+  - tests/unit/test_orderflow_artifacts.py (MODIFIED): +17 tests in 6 new classes. Updated 2 existing M7A544 tests for headline_level field.
+  - docs/status/Status_M7.md (MODIFIED): Added M7.A.5.45 section. Updated header.
+  - docs/DEV_REPORT_LATEST.md (this file, rewritten for M7.A.5.45)
 touched_files:
-  - m7/orderflow/artifacts.py (MODIFIED)
   - scripts/m7a_orderflow_loop.py (MODIFIED)
+  - m7/orderflow/artifacts.py (MODIFIED)
   - monitoring/dashboard.html (MODIFIED)
+  - monitoring/dashboard_server.py (MODIFIED)
   - tests/unit/test_orderflow_artifacts.py (MODIFIED)
   - docs/status/Status_M7.md (MODIFIED)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3310 passed, 6 skipped)
+py -3.11 -m pytest tests/unit -q: PASS (3327 passed, 6 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (all required gates)
 py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (0 warnings)
 py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS (3/3 alive, 0 restarts)
 
 ## 3) Artifacts Attached
 
-fresh rolling (from M7.A.5.44 nonstop):
-  - data/runs/_rolling/m7_orderflow_latest.json (cold: events=30, viable=2, execution_funnel={diagnostic_positive:9, cold_executable_positive:2, hot_scored:0, profit_guard_passed:0, realized_onchain_profit:0}, micro_refinement=4 entries, verified_profitable=True on top 2)
-  - data/runs/_rolling/m7_hot_latest.json (hot: bridge_registry_prewarmed=19, not yet reflecting new counters — process started before code change)
-  - data/runs/_rolling/m7_cold_hot_bridge.json (cold_executable=2, near_executable=5, pool_token_transport=36 entries)
+fresh rolling (from M7.A.5.45 nonstop):
+  - data/runs/_rolling/m7_orderflow_latest.json (cold: events=30, positive_clean=7, best_clean=52.2 bps, execution_funnel={diagnostic_positive:7, cold_executable_positive:0, hot_scored:0, profit_guard_passed:0, realized_onchain_profit:0, headline_level:"diagnostic_positive"})
+  - data/runs/_rolling/m7_hot_latest.json (hot: iterations=27, headline_level:"none", hot_scored=0, bridge diagnostics active)
+  - data/runs/_rolling/m7_hot_intents_latest.json (NEW: hot_scored_count=0, cold_executable_pool_count=2, headline_level:"none", intents=[])
+  - data/runs/_rolling/m7_cold_hot_bridge.json (cold_executable=0, near_executable=5, pool_token_transport=46)
   - data/runs/_rolling/m7_promoted_pairs.json
 
-## 4) Key Results — M7.A.5.44
+## 4) Key Results — M7.A.5.45
 
-### Execution Funnel (NEW)
+### Headline Level Enforcement (NEW)
 
-| Stage | Count | Description |
-|-------|-------|-------------|
-| diagnostic_positive | 9 | Positive after anomaly exclusion |
-| cold_executable_positive | 2 | Route-viable, fresh, size-valid |
-| hot_scored | 0 | Scored in hot lane (market timing) |
-| profit_guard_passed | 0 | Profit guard passed in hot lane |
-| realized_onchain_profit | 0 | M7.B not implemented |
+headline_level is now emitted in 3 artifacts:
+- Cold artifact `execution_funnel.headline_level`: "diagnostic_positive" (7 positives clean, 0 cold_executable)
+- Hot artifact `headline_level`: "none" (0 hot-scored events)
+- Hot intents artifact `headline_level`: "none" (0 hot-scored events)
 
-### Execution-Time Verification (NEW)
+Dashboard badge renders color-coded: red=none, yellow=diagnostic/cold, green=hot_scored+.
+This prevents misinterpreting "9 diagnostic positives" as "9 execution-ready candidates."
 
-| Candidate | Pair | Net BPS | Verified | Verified Net BPS |
-|-----------|------|---------|----------|------------------|
-| live_swap_449604189_0 | 0x25118290/WETH | 79.45 | True | 77.65 |
-| live_swap_449604311_0 | WETH/RAIN | 62.97 | True | 73.81 |
+### Bridge Execution Queue (NEW)
 
-Both top cold_executable_positive candidates pass profit_guard at execution time. This is the first session where cold candidates are independently verified profitable.
+Priority prewarm: cold_executable + near_executable pool addresses extracted from bridge, passed as priority_pools to _prewarm_registry_from_bridge(). Priority pools sorted first in iteration order — ensures registry cache warm for cold-verified candidates before spending time on generic ptt entries.
 
-### Micro-Refinement (NEW)
+This run: cold_executable_pool_count=2 (from prior bridge), near_executable=5, ptt=46. Priority pools = 7 out of 46 (15% of ptt) get first prewarm.
 
-| Candidate | Pair | Base BPS | Sizes Tried | Sizes Passed | Best Micro BPS | Reject |
-|-----------|------|----------|-------------|--------------|----------------|--------|
-| live_swap_449604189_0 | 0x25118290/WETH | 79.45 | 5 | 5 | 77.65 | None |
-| live_swap_449604311_0 | WETH/RAIN | 62.97 | 5 | 5 | 73.81 | None |
-| live_swap_449604296_0 | USDT/PENDLE | 1977.67 | 5 | 0 | 2406.14 | STALE_POSITIVE |
-| live_swap_449604330_0 | RAIN/WETH | 79.45 | 5 | 5 | 77.65 | STALE_POSITIVE |
+### Hot Execution Intents Artifact (NEW)
 
-2/4 candidates survive all 5 size multipliers (0.5x to 2.0x). USDT/PENDLE fails sizing despite high base BPS (pricing anomaly in stale data).
+`m7_hot_intents_latest.json` schema:
+```json
+{
+  "timestamp": "2026-04-06T10:34:43Z",
+  "loop_iteration": 27,
+  "headline_level": "none",
+  "hot_scored_count": 0,
+  "hot_positive_count": 0,
+  "profit_guard_passed_count": 0,
+  "cold_executable_pool_count": 2,
+  "intents": []
+}
+```
 
-### Bridge-Hit Counters (NEW)
+When hot-scored events arrive, intents[] will contain compact rows with: event_id, actual_pair, net_bps, profit_guard_passed, guard_passed_in_hot, scoring_path, pipeline_latency_ms, route_viable. Capped at 20 rows.
 
-3 new counters added to hot_gap_debug:
-- `bridge_pool_address_hit_count`: events whose pool_address matches bridge pool_token_transport
-- `bridge_pair_hit_count`: of those, events whose resolved pair matches registry
-- `bridge_loaded_candidate_count`: total cold_executable + near_executable loaded from bridge
+### Comparison with M7.A.5.44
 
-### Comparison with M7.A.5.43
-
-| Metric | M7.A.5.43 | M7.A.5.44 | Change |
+| Metric | M7.A.5.44 | M7.A.5.45 | Change |
 |--------|-----------|-----------|--------|
-| execution_funnel | Not implemented | 5-stage model | NEW |
-| micro_refinement | Not implemented | 4 entries, 5 sizes each | NEW |
-| verified_profitable | Not implemented | 2/2 top candidates True | NEW |
-| bridge_hit counters | Not in hot_gap_debug | 3 counters | NEW |
-| dashboard funnel section | Not present | Section 3 Execution Gap | NEW |
-| cold_executable_positive | 3 | 2 | Market-dependent |
-| tests | 3291 | 3310 | +19 |
+| headline_level | Not implemented | 3 artifacts + dashboard | NEW |
+| priority_prewarm | All ptt equal | cold_executable first | NEW |
+| m7_hot_intents_latest.json | Not implemented | Schema defined, emitted | NEW |
+| /api/intents | Not implemented | Endpoint operational | NEW |
+| cold_executable_positive | 2 | 0 (this window) | Market-dependent |
+| tests | 3310 | 3327 | +17 |
 
 ## 5) Strategic Reading
 
-1. **First verified_profitable=True candidates**: Both top cold_executable candidates independently pass profit_guard with verified_net_bps of 77.65 and 73.81. This is cold-lane verification only — NOT hot execution — but confirms the candidates are structurally profitable at execution cost model.
-2. **Micro-refinement validates sizing robustness**: 2/4 candidates pass all 5 size multipliers (0.5x-2.0x), meaning the profit margin survives ±50% sizing adjustments. The STALE_POSITIVE entries fail sizing — expected, as stale data can't provide reliable size sensitivity.
-3. **Execution funnel makes the gap explicit**: diagnostic_positive=9 → cold_executable_positive=2 → hot_scored=0 → profit_guard_passed=0. The bottleneck is cold→hot conversion, not candidate quality.
-4. **cold_executable_positive != hot_execution_ready != real_profit**: User's insight confirmed in machine-readable form. The funnel explicitly tracks each stage and prevents misinterpretation.
-5. **Bridge-hit counters complete the diagnostic chain**: bridge_pool_address_hit_count tells us how many hot events hit a transported pool. Combined with bridge_pair_hit_count, we can diagnose exactly where the hot conversion breaks.
+1. **headline_level prevents over-claiming**: With headline_level="diagnostic_positive" in cold and "none" in hot, no one can misread the funnel as "execution-ready." The dashboard badge makes the gap immediately visible.
+2. **Priority prewarm targets gold candidates**: Instead of treating all 46 pool_token_transport entries equally, the 7 cold_executable + near_executable pools are prewarmed first. This maximizes the chance that if a hot event hits a verified profitable pool, the registry is already warm for it.
+3. **Hot intents artifact creates the submission queue contract**: When hot_scored > 0, the intents array will contain the exact candidates ready for profit_guard check. This separates "what hot lane observed" from "what is submit-ready."
+4. **The remaining gap is event arrival probability**: cold_executable pools are verified profitable but hot events arrive at different pools. The fix is not in scoring (already works) but in: (a) pool coverage, (b) event density, (c) market timing.
+5. **Path to first hot_scored=1**: requires incoming mempool/block event whose pool_address is in the cold_executable transported set. Bridge now carries cold_executable pool addresses as priority prewarm, improving the chance that the registry/cache is warm when such an event arrives.
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK (ALL_REJECT_REASONS: 21, UNSCORED_REJECTS: 12, BackrunResult: 67 fields, ALL_BLOCKER_TAGS: 9)
-rolling discipline: OK (canonical files + m7_promoted_pairs.json + m7_cold_hot_bridge.json)
+rolling discipline: OK (canonical files + m7_promoted_pairs.json + m7_cold_hot_bridge.json + m7_hot_intents_latest.json)
 v2.x provenance contract: OK (run_timestamp primary, code_sha=null)
 runtime artifacts not committed: OK (data/runs/** and data/tmp/** not in git)
-signal_classification contract: OK (4 tiers, all with count/best_bps/label)
-execution_funnel contract: OK (5 stages, monotonic decrease, int values)
-micro_refinement contract: OK (7 keys per entry, sizes_tried <= 5)
-verified_profitable contract: OK (bool|None + float|None in compact candidates)
-diagnostic_raw contract: OK (7 keys, none at top level)
-_ROLLING_EXCLUDE_KEYS: OK (19 entries)
-test count: OK (3310 passed, 6 skipped, +19 net new)
-
-## 5.2) Blockers / Risks
-- RESOLVED (this session): no machine-readable execution funnel → execution_funnel with 5 stages
-- RESOLVED (this session): no sizing robustness check → micro_refinement with 5 multipliers
-- RESOLVED (this session): no execution-time verification → verified_profitable + verified_net_bps
-- RESOLVED (this session): no bridge-hit diagnostics → 3 counters in hot_gap_debug
-- RESOLVED (this session): no dashboard funnel visibility → Section 3 Execution Gap Funnel
-- ACTIVE: hot_scored=0 (market timing — need event from transported pool)
-- ACTIVE: profit_guard_passed=0 in hot lane (requires hot_scored > 0 first)
-- PENDING: realized_onchain_profit always 0 (M7.B not implemented)
-- UNCHANGED: M4 ROUNDTRIP_NOT_PROFITABLE; SUBGRAPH_API_KEY_REQUIRED
-- NEXT: (a) Optimize hot pool-first matching to increase bridge_pool_address_hit_count, (b) Target first profit_guard_passed > 0 in hot lane, (c) Expand transported pool set

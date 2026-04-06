@@ -1051,7 +1051,20 @@ function renderM7Orderflow(m7, m7Hot) {
   const microRef = m7.micro_refinement || [];
   const hgdGap = m7Hot?.hot_gap_debug || {};
 
+  // M7.A.5.45: Headline level enforcement
+  const headlineLevel = funnel.headline_level || m7Hot?.headline_level || 'none';
+  const headlineLevelColor = headlineLevel === 'none' ? '#da3633'
+    : headlineLevel === 'diagnostic_positive' ? '#d29922'
+    : headlineLevel === 'cold_executable_positive' ? '#d29922'
+    : headlineLevel === 'hot_scored' ? '#3fb950'
+    : headlineLevel === 'profit_guard_passed' ? '#3fb950'
+    : headlineLevel === 'realized_onchain_profit' ? '#3fb950'
+    : '#7c8593';
+
   html += '<h3 style="font-size:.85rem;color:#d29922;margin:14px 0 4px">Execution Gap Funnel</h3>';
+  html += `<div style="margin:4px 0 8px;padding:4px 8px;border-radius:4px;background:${headlineLevelColor}22;border:1px solid ${headlineLevelColor};display:inline-block;font-size:.75rem">`;
+  html += `<strong>headline_level:</strong> <span style="color:${headlineLevelColor}">${headlineLevel}</span>`;
+  html += '</div>';
   html += '<table style="margin-top:4px"><tr><th>Stage</th><th class="num">Count</th><th></th></tr>';
   const funnelStages = [
     ['diagnostic_positive', funnel.diagnostic_positive ?? '\u2014'],
