@@ -680,6 +680,45 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     hot["bridge_miss_sample_top"] = _bd.get("bridge_miss_sample_top", [])
     # M7.A.5.47k: Bridge exclusion reasons at top level
     hot["bridge_excluded_top"] = _bd.get("bridge_excluded_top", [])
+    # M7.A.5.47l: Bridge selected pools at assembly time
+    hot["bridge_selected_pools_top"] = _bd.get("bridge_selected_at_assembly", [])
+
+    # M7.A.5.47l: cold_exec_pool_trace — per-pool diagnostic for each
+    # cold_executable pool showing exactly where it stands in the hot window.
+    _cold_exec_trace: list = []
+    _bridge_cold_execs = _bd.get("_bridge_cold_executable", [])
+    for _cet in _bridge_cold_execs:
+        _cet_pa = (_cet.get("pool_address") or "").lower() if isinstance(_cet, dict) else ""
+        if not _cet_pa:
+            continue
+        # Check: is this pool in the bridge?
+        _cet_in_bridge = _cet_pa in {
+            (e.get("pool_address") or "").lower()
+            for e in _bd.get("bridge_selected_at_assembly", [])
+        }
+        # Check: did any hot event arrive at this pool?
+        _cet_hot_events = 0
+        for _r in _raw_results:
+            _evt = getattr(_r, "_source_event", None)
+            if _evt and getattr(_evt, "pool_address", "").lower() == _cet_pa:
+                _cet_hot_events += 1
+        # Check: was it scored?
+        _cet_scored = 0
+        for _r in _raw_results:
+            _evt = getattr(_r, "_source_event", None)
+            if (_evt and getattr(_evt, "pool_address", "").lower() == _cet_pa
+                    and getattr(_r, "scoring_path", None) != "hot_skip"):
+                _cet_scored += 1
+        _cold_exec_trace.append({
+            "pool_address": _cet_pa,
+            "actual_pair": _cet.get("actual_pair", ""),
+            "cold_net_bps": _cet.get("net_bps", 0),
+            "in_bridge": _cet_in_bridge,
+            "hot_events_this_window": _cet_hot_events,
+            "fast_score_attempted": _cet_scored,
+            "registry_match": _bd.get("canonical_pair_match_count", 0) > 0,
+        })
+    hot["cold_exec_pool_trace"] = _cold_exec_trace
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -1479,6 +1518,12 @@ def run_loop(cli_args) -> None:
                             # Defense-in-depth: skip anomalies even if artifacts leaked them
                             if _sp_rr in _ANOMALY_REJECTS:
                                 continue
+                            # M7.A.5.47l: Skip stale candidates whose sub-reason
+                            # is block_lag — these are not recoverable in current
+                            # mode (lag 3..8). Only pipeline_abort / state_recheck
+                            # (lag ≤ 2) are genuine recovery candidates.
+                            if _sp.get("stale_sub_reason") == "block_lag":
+                                continue
                             if _sp_pa and _sp_pa in _ptt and _sp_pa not in _bucket_a and _sp_pa not in _bucket_b:
                                 _bucket_c1_stale.add(_sp_pa)
                                 # Refresh TTL for freshly-seen recoverable stale pools
@@ -1576,6 +1621,13 @@ def run_loop(cli_args) -> None:
                         # Assemble: A + B + C1 + C2 + C3 (diverse fill)
                         _bridge_pool_addrs = _committed | set(_diverse_fill)
 
+                        # M7.A.5.47l: Hard-pin — cold-exec pools MUST survive
+                        # regardless of family cap, floor, or any other pressure.
+                        # This is defense-in-depth: bucket_a already includes them,
+                        # but if any downstream logic accidentally evicts them,
+                        # force re-add here.
+                        _bridge_pool_addrs |= _bucket_a
+
                         # M7.A.5.47j: Bridge minimum floor — if we have PTT
                         # pools discovered, the focused filter should never
                         # collapse below a reasonable fraction of them.
@@ -1617,6 +1669,31 @@ def run_loop(cli_args) -> None:
                                 "exclude_reason": _reason,
                             })
                         _bridge_excluded_top = _bridge_excluded[:10]
+
+                        # M7.A.5.47l: Build bridge_selected_pools_top at assembly
+                        # time (not only at hot merge). This ensures the field is
+                        # always populated when bridge_focused_pool_count > 0.
+                        _bridge_selected_at_assembly: list = []
+                        for _bsa_pa in list(_bridge_pool_addrs)[:30]:
+                            _bsa_bucket = "C3_activity_fill"
+                            if _bsa_pa in _bucket_a:
+                                _bsa_bucket = "A_cold_exec"
+                            elif _bsa_pa in _bucket_b:
+                                _bsa_bucket = "B_hot_seen"
+                            elif _bsa_pa in _bucket_c1_stale:
+                                _bsa_bucket = "C1_stale_recovery"
+                            elif _bsa_pa in _bucket_c2_gas_near:
+                                _bsa_bucket = "C2_gas_near"
+                            _bsa_info = _ptt.get(_bsa_pa) or _ptt.get(_bsa_pa.lower())
+                            _bsa_fam = ""
+                            if _bsa_info and len(_bsa_info) >= 2:
+                                _bsa_fam = f"{_bsa_info[0]}/{_bsa_info[1]}"
+                            _bridge_selected_at_assembly.append({
+                                "pool_address": _bsa_pa,
+                                "bucket": _bsa_bucket,
+                                "family": _bsa_fam,
+                                "selected": True,
+                            })
 
                         _active_in_filter = sum(
                             1 for pa in _bridge_pool_addrs
@@ -1770,6 +1847,8 @@ def run_loop(cli_args) -> None:
                     "bridge_loaded_candidate_count": 0,
                     # M7.A.5.47k: Bridge exclusion reasons (why pools were left out)
                     "bridge_excluded_top": _bridge_excluded_top if '_bridge_excluded_top' in dir() else [],
+                    # M7.A.5.47l: Bridge selected pools at assembly time
+                    "bridge_selected_at_assembly": _bridge_selected_at_assembly if '_bridge_selected_at_assembly' in dir() else [],
                     # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
                     "_bridge_cold_executable": _bridge.get("cold_executable", []),
                 }
@@ -2042,6 +2121,10 @@ def run_loop(cli_args) -> None:
                                     "selected": True,
                                 })
                         _bridge_update["bridge_selected_pools_top"] = _bsp_diag[:20]
+                        # M7.A.5.47l: Also persist bridge_excluded_top into bridge file
+                        _bridge_update["bridge_excluded_top"] = (
+                            _bridge_excluded_top if '_bridge_excluded_top' in dir() else []
+                        )
                         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, _bridge_update, indent=2)
                 except Exception as _exc_bu:
                     logger.debug("Bridge file update failed: %s", str(_exc_bu)[:120])

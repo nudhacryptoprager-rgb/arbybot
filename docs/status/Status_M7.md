@@ -254,6 +254,24 @@ CI: 3385 passed, 6 skipped. ALL GATES PASSED.
 
 CI: 3461 passed, 6 skipped.
 
+### M7.A.5.47k (session-scoped rollup + stale_sub_reason + auto-pin ALL bridge-miss + route_viable split)
+
+**Diagnosis**: Bridge race condition — cold lane overwrites bridge file without overlap/selected keys. Stale candidates lack sub-classification. Auto-promote only pinned active pools, missing direct bridge-miss events.
+
+**Changes**: (1) Session-scoped hot rollup: `_SESSION_ID` detects supervisor restart, resets session counters. (2) Always emit `overlap`/`selected` as `[]` in cold bridge, not null. (3) `stale_sub_reason`: pipeline_abort / block_lag / state_recheck in `_compact_candidate()`. (4) Auto-pin ALL bridge-miss pools, not just `recent_active`. (5) Recoverable-stale split: `route_viable` / `not_viable` — C1 uses only route_viable. (6) C2 unknown-family safe default: skip, not admit. (7) `bridge_excluded_top` with 4 reason types. (8) 47 new tests (26 for 47k).
+
+CI: 3487 passed, 6 skipped.
+
+### M7.A.5.47l (cold-exec hard-pin + cold_exec_pool_trace + cut_stage_top + C1 block_lag filter)
+
+**Hypothesis**: M7.A.5.47l = first hot bridge hit on the exact cold-executable pool `0xd13040d4fe917ee704158cfcb3338dcd2838b245`.
+
+**Diagnosis**: Fresh 10-minute verification (April 7, 2026) confirms one cold executable-positive candidate (`0x25118290/WETH`, 110.96 bps, verified profitable) but hot conversion remains zero. The system cuts positive moments in three distinct places: broad-universe families die on gas economics (GAS_EXCEEDS_GROSS=20/30), RAIN/WETH-like families die on stale block lag (lag 3..8), and the surviving cold executable pool dies on hot overlap rather than on math.
+
+**Changes**: (1) Cold-exec hard-pin: `_bridge_pool_addrs |= _bucket_a` after all assembly. (2) `bridge_selected_pools_top` populated at assembly time (never empty when bridge_focused_pool_count > 0). (3) `cold_exec_pool_trace` diagnostic: per-pool `in_bridge`, `hot_events_this_window`, `fast_score_attempted`, `registry_match`. (4) C1 stale filter: skip `stale_sub_reason=block_lag` (lag 3..8 not recoverable). (5) `cut_stage_top` artifact: machine-readable summary of WHERE each positive dies — `economics`, `stale_block_lag`, `stale_pipeline_abort`, `stale_state_recheck`, `viable`. (6) `bridge_excluded_top` persisted into bridge file. (7) 21 new tests.
+
+CI: 3508 passed, 6 skipped.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)

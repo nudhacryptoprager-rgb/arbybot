@@ -1236,6 +1236,50 @@ def build_replay_summary(
         key=lambda x: (-(x["stale_positive_count"] or 0), -(x["best_clean_bps"] or -99999)),
     )[:10]
 
+    # M7.A.5.47l: cut_stage_top — machine-readable summary of WHERE each positive
+    # candidate is cut. Stages: economics, stale_block_lag, stale_pipeline_abort,
+    # stale_state_recheck, viable (survived all filters).
+    _cut_stage_counts: dict = {
+        "economics": 0,           # GAS_EXCEEDS_GROSS
+        "stale_block_lag": 0,     # STALE_POSITIVE with block_lag > 2
+        "stale_pipeline_abort": 0,  # STALE_POSITIVE with mid-pipeline abort
+        "stale_state_recheck": 0, # STALE_POSITIVE with state recheck
+        "viable": 0,              # Survived all filters
+    }
+    _cut_stage_families: dict = {k: {} for k in _cut_stage_counts}
+    for r in results:
+        if (r.best_backrun_net_bps or 0) <= 0:
+            continue
+        pf = _pair_family(r)
+        rr = getattr(r, "reject_reason", None) or ""
+        if rr == REJECT_GAS_EXCEEDS_GROSS:
+            stage = "economics"
+        elif rr == REJECT_STALE_POSITIVE:
+            _psl = getattr(r, "pipeline_stage_latency_ms", None) or {}
+            if _psl.get("mid_pipeline_abort"):
+                stage = "stale_pipeline_abort"
+            elif _lag(r) > 2:
+                stage = "stale_block_lag"
+            else:
+                stage = "stale_state_recheck"
+        elif r.route_viable:
+            stage = "viable"
+        else:
+            continue  # other rejects (anomaly, etc.) — not interesting
+        _cut_stage_counts[stage] += 1
+        _cut_stage_families[stage][pf] = _cut_stage_families[stage].get(pf, 0) + 1
+    cut_stage_top = {
+        stage: {
+            "count": _cut_stage_counts[stage],
+            "top_families": sorted(
+                [{"pair_family": pf, "count": cnt}
+                 for pf, cnt in _cut_stage_families[stage].items()],
+                key=lambda x: -x["count"],
+            )[:5],
+        }
+        for stage in _cut_stage_counts
+    }
+
     return {
         "mode": mode,
         "timestamp": ts,
@@ -1403,6 +1447,8 @@ def build_replay_summary(
         # M7.A.5.47g: Gas economics + staleness decomposition per family
         "cost_by_pair_family_top": cost_by_pair_family_top,
         "staleness_by_pair_family_top": staleness_by_pair_family_top,
+        # M7.A.5.47l: Where positive candidates die (machine-readable)
+        "cut_stage_top": cut_stage_top,
         # M7.A.5.46: compact=True skips heavy results/debug serialization.
         # Callers that need raw results use _raw_results (BackrunResult objects).
         "results": [] if compact else [asdict(r) for r in results],
