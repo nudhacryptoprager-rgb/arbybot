@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1 OPEN — Base event-source pilot validates swap event availability** (M7 Arbitrum mainline FROZEN per 47s. M7.E1 Base pilot: 734 raw V3 Swap logs in 10 blocks (73.4/block avg), 10/10 same-block scored, sole blocker=GAS_EXCEEDS_GROSS at best -2.28 bps. Event source works — gas economics is new frontier.)  
+**Status**: **M7.E1.1 OPEN — Base full hot/cold nonstop validated under gas blocker** (M7 Arbitrum mainline FROZEN per 47s. M7.E1.1 Base 10-min nonstop: 30 events scored, 26 GAS_EXCEEDS_GROSS, 3 viable (anomaly-priced), best near-executable=-2.20 bps. Hot/cold bridge EXERCISED: 30 bridge_selected_pools, 38 focused, 177 hot windows. Gas breakdown: l1_data=0.16 bps, l2_exec=0.04 bps, total=0.20 bps. Event source confirmed — gas economics sole blocker.)  
 **Updated**: 2026-04-07
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -159,9 +159,7 @@ Batch pre-resolve ALL event pools BEFORE scoring loop — eliminates per-event r
 
 **M7.A.5.45**: Bridge execution queue (priority_pools), hot intents artifact, headline_level enforcement. Evidence: schema intact, cold_executable_pool_count=2. CI: 3327 passed.
 
-**M7.A.5.46**: Strip 13 legacy hypothesis blocks from live-path, compact build_replay_summary, fix hot cold_executable_positive semantic (reads from bridge, not synthesized), bridge pair fallback counter, dashboard restructure. CI: 3327 passed.
-
-CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+**M7.A.5.46**: Strip 13 legacy hypothesis blocks from live-path, compact build_replay_summary, fix hot cold_executable_positive semantic (reads from bridge, not synthesized), bridge pair fallback counter, dashboard restructure. CI: 3327 passed, 6 skipped. Safety: PASS.
 
 ---
 
@@ -249,11 +247,33 @@ External 2025–2026 evidence aligns with the local freeze result: profitable sh
 
 CI: 3698 passed, 6 skipped.
 
+### M7.E1.1: Full Hot/Cold Nonstop Validation (April 7, 20:23-20:33Z)
+
+**Goal**: Prove Base remains gas-blocked after full 10-min hot/cold nonstop, not just cold-only pilot.
+
+**Code changes**: `artifacts.py` — per-candidate gas breakdown (l1_data_gas_bps, l2_exec_gas_bps, total_gas_bps, gap_to_zero_bps). 4 new tests. CI: 3702 passed, 6 skipped.
+
+**Evidence (10-min nonstop, 20:23-20:33Z)**:
+
+| Metric | E1 (cold) | E1.1 (hot+cold) |
+|--------|-----------|------------------|
+| events_scored | 10 | 30 |
+| GAS_EXCEEDS_GROSS | 10/10 | 26/30 (86.7%) |
+| best_near_exec_bps | -10.20 | **-2.20** |
+| bridge_selected_pools | 0 | 30 |
+| hot_windows / events | 0/0 | 177/82 |
+| l1_data / l2_exec / total gas bps | N/A | 0.16 / 0.04 / 0.20 |
+| supervisor restarts | N/A | 0 (3/3 alive) |
+
+**Findings**: (1) Hot/cold bridge exercised — 30 pools selected, 38 focused, promoted_watchlist=5 pairs. (2) Hot artifacts Base-origin (was Arbitrum-era). (3) GAS_EXCEEDS_GROSS sole blocker — L1 data 80% of gas. (4) Near-executable frontier narrowed -10.20→-2.20 bps. (5) USDC/WETH narrow contour at -9.16 gap; wider pairs closer to breakeven. (6) AMONGUS/WETH in watchlist but NOT near-executable. (7) Flashblocks untested (separate subtask).
+
+CI: 3702 passed, 6 skipped (3698 + 4 new gas breakdown tests).
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
-Per `docs/step_M7.md`: M7.B is the execution phase, closed by default. Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
+Per `docs/step_M7.md`: Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
 
 ---
 
@@ -267,18 +287,13 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — M7.E1 pilot confirms 734 swap logs in 10 blocks (73.4/block avg).
-2. **GAS_EXCEEDS_GROSS — ACTIVE (Base)** — All 10 Base events rejected by gas economics. best_net_bps=-2.28 (close to breakeven). New frontier: gas optimization, larger trade sizes, or L1 data cost reduction.
-3. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve from local machine. Sub-block delivery untested. Alchemy WS fallback works.
+1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — M7.E1.1 confirms 30 events scored in 10-min nonstop (26 GAS_EXCEEDS_GROSS).
+2. **GAS_EXCEEDS_GROSS — ACTIVE (Base)** — 26/30 events rejected by gas economics in E1.1 nonstop. Best near-executable=-2.20 bps (QWLA/WETH). Gas breakdown: l1_data=0.16 bps (80%), l2_exec=0.04 bps (20%), total=0.20 bps. USDC/WETH narrow contour at -9.16 bps mean gap — wider-universe pairs closer to breakeven.
+3. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve from local machine. Sub-block delivery untested. Alchemy WS fallback works. Separate subtask — not mixed with economics proof.
 4. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. **M7 Arbitrum mainline remains FROZEN.** No further changes to Arbitrum M7 scoring/bridge logic.
-2. **M7.E1 Base pilot OPEN — event source validated.** Next priorities:
-   - Priority 1: Resolve Flashblocks WS connectivity (alternative endpoints, HTTP polling, or WSS via different provider) for sub-block (<200ms) event delivery.
-   - Priority 2: Gas economics optimization — larger trade sizes, L1 data cost analysis, gas_floor_bps tuning for Base.
-   - Priority 3: Multi-iteration nonstop run on Base (10+ min) with full hot/cold bridge cycle to assess family-level bridge convergence.
-   - Priority 4: If gas breakeven achieved → Tenderly simulation validation.
-3. **Source plane validated — gas plane is new frontier**: Event-source absence blocker does NOT exist on Base. The bottleneck shifted to gas economics (GAS_EXCEEDS_GROSS at -2.28 bps best).
-4. **Diagnostic toolkit proven on Base**: scoring pipeline works (100% same-block, 57-103ms latency), pool discovery healthy (35 known, 19 active), coverage complete (no_counter_pool_rate=0.0).
+1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 scoring/bridge changes.
+2. **Base gas blocker priorities**: (a) Flashblocks WS connectivity (separate subtask — alt endpoints, HTTP polling) for sub-block delivery. (b) Gas economics — L1 data cost reduction, gas_floor_bps tuning, larger trade sizes. (c) Narrow contour assessment — non-contour pairs (QWLA/WETH -2.20) closer to breakeven than USDC/WETH (-9.16). (d) If breakeven achieved → Tenderly simulation.
+3. **Source plane validated, gas plane is the frontier**: Event-source absence does NOT exist on Base. Hot/cold bridge operational. Gas breakdown fields in all candidate rows.

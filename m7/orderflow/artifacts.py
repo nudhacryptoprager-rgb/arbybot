@@ -892,10 +892,18 @@ def build_replay_summary(
             else:
                 _stale_sub = "state_recheck"
 
+        # M7.E1.1: Gas breakdown for actionable diagnostics (especially L2 chains)
+        _l2_gas = getattr(r, "l2_gas_bps", None)
+        _l1_data = getattr(r, "l1_data_bps", None)
+        _total_gas = getattr(r, "total_gas_bps", None)
+        _net = round(r.best_backrun_net_bps, 4) if r.best_backrun_net_bps else 0
+        # gap_to_zero_bps = how far net_bps is from breakeven (positive = profitable)
+        _gap_to_zero = _net  # net_bps IS the gap to zero by definition
+
         return {
             "event_id": r.event_id,
             "actual_pair": r.actual_pair,
-            "net_bps": round(r.best_backrun_net_bps, 4) if r.best_backrun_net_bps else 0,
+            "net_bps": _net,
             "block_lag": r.block_lag,
             "same_state_class": r.same_state_class,
             "route_viable": r.route_viable,
@@ -910,6 +918,11 @@ def build_replay_summary(
             # M7.A.5.44: Execution-time local verification
             "verified_profitable": _verified,
             "verified_net_bps": _verified_net_bps,
+            # M7.E1.1: Per-candidate gas breakdown
+            "l1_data_gas_bps": round(_l1_data, 4) if _l1_data is not None else None,
+            "l2_exec_gas_bps": round(_l2_gas, 4) if _l2_gas is not None else None,
+            "total_gas_bps": round(_total_gas, 4) if _total_gas is not None else None,
+            "gap_to_zero_bps": _gap_to_zero,
         }
 
     _TOP_N = 5

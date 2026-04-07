@@ -165,6 +165,127 @@ class TestFlashblocksWSPreference:
 
 
 # ---------------------------------------------------------------------------
+# M7.E1.1: Gas breakdown fields in compact candidate rows
+# ---------------------------------------------------------------------------
+class TestE1_1_GasBreakdownInCompactCandidates:
+    """
+    M7.E1.1: _compact_candidate emits l1_data_gas_bps, l2_exec_gas_bps,
+    total_gas_bps, gap_to_zero_bps for actionable per-candidate gas diagnostics.
+    """
+
+    def test_gas_fields_present_when_populated(self):
+        from m7.orderflow.artifacts import build_replay_summary
+        from tests.unit.conftest import _make_event, _make_result
+        from m7.shared.constants import REJECT_GAS_EXCEEDS_GROSS
+
+        e = _make_event()
+        r = _make_result(
+            event_id="g1",
+            best_backrun_net_bps=-8.5,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+            event_block=100,
+            event_detected_at_block=100,
+            l2_gas_bps=2.5,
+            l1_data_bps=10.0,
+            total_gas_bps=12.5,
+        )
+        art = build_replay_summary([e], [r], mode="test", chain="base")
+        near = art["near_executable_candidates"]
+        assert len(near) == 1
+        c = near[0]
+        assert c["l1_data_gas_bps"] == 10.0
+        assert c["l2_exec_gas_bps"] == 2.5
+        assert c["total_gas_bps"] == 12.5
+        assert c["gap_to_zero_bps"] == -8.5
+
+    def test_gas_fields_none_when_not_set(self):
+        from m7.orderflow.artifacts import build_replay_summary
+        from tests.unit.conftest import _make_event, _make_result
+        from m7.shared.constants import REJECT_GAS_EXCEEDS_GROSS
+
+        e = _make_event()
+        r = _make_result(
+            event_id="g2",
+            best_backrun_net_bps=-5.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+            event_block=200,
+            event_detected_at_block=200,
+        )
+        art = build_replay_summary([e], [r], mode="test", chain="base")
+        near = art["near_executable_candidates"]
+        assert len(near) == 1
+        c = near[0]
+        assert c["l1_data_gas_bps"] is None
+        assert c["l2_exec_gas_bps"] is None
+        assert c["total_gas_bps"] is None
+        assert c["gap_to_zero_bps"] == -5.0
+
+    def test_gas_fields_in_top_executable_candidates(self):
+        from m7.orderflow.artifacts import build_replay_summary
+        from tests.unit.conftest import _make_event, _make_result
+
+        e = _make_event()
+        r = _make_result(
+            event_id="exec1",
+            best_backrun_net_bps=3.0,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=None,
+            route_viable=True,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+            event_block=100,
+            event_detected_at_block=100,
+            l2_gas_bps=1.0,
+            l1_data_bps=4.0,
+            total_gas_bps=5.0,
+        )
+        art = build_replay_summary([e], [r], mode="test", chain="base")
+        top = art["top_executable_candidates"]
+        assert len(top) >= 1
+        c = top[0]
+        assert c["l1_data_gas_bps"] == 4.0
+        assert c["l2_exec_gas_bps"] == 1.0
+        assert c["total_gas_bps"] == 5.0
+        assert c["gap_to_zero_bps"] == 3.0
+
+    def test_gap_to_zero_matches_net_bps(self):
+        """gap_to_zero_bps == net_bps by definition (distance from breakeven)."""
+        from m7.orderflow.artifacts import build_replay_summary
+        from tests.unit.conftest import _make_event, _make_result
+        from m7.shared.constants import REJECT_GAS_EXCEEDS_GROSS
+
+        e = _make_event()
+        r = _make_result(
+            event_id="gap1",
+            best_backrun_net_bps=-2.28,
+            block_lag=0,
+            same_state_class="same_block",
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            route_viable=False,
+            size_valid_for_token=True,
+            scoring_path="registry_direct",
+            event_block=100,
+            event_detected_at_block=100,
+            total_gas_bps=10.0,
+        )
+        art = build_replay_summary([e], [r], mode="test", chain="base")
+        near = art["near_executable_candidates"]
+        assert len(near) == 1
+        assert near[0]["gap_to_zero_bps"] == near[0]["net_bps"]
+
+
+# ---------------------------------------------------------------------------
 # 6. start_nonstop_runtime chain passthrough
 # ---------------------------------------------------------------------------
 
