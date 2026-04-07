@@ -242,6 +242,18 @@ CI: 3385 passed, 6 skipped. ALL GATES PASSED.
 
 **Changes**: (1) `m7/orderflow/artifacts.py`: `top_recoverable_stale_candidates` (lag ≤ 2, positive, size_valid) — strict subset of stale positives. (2) `scripts/m7a_orderflow_loop.py`: C1 switched from `cold_stale_positive` to `cold_recoverable_stale`. C2 filters to gross-positive families via micro_refinement check. `_hot_seen_pin` dict with TTL=3: auto-pins resolved hot-seen pools into bucket B for 3 hot windows. TTL decrement alongside stale-pin. Bridge carries `cold_recoverable_stale`. `hot_seen_vs_bridge_overlap_top` diagnostic showing overlap between event pools and bridge set with bucket labels and absence reasons.
 
+### M7.A.5.47i (anomaly-clean recoverable stale + bridge hit detection isolation)
+
+**Fresh 47h evidence** (10-min nonstop): cold REGRESSED (viable_count=0, best_net_bps_executable=null). Hot still blocked (bridge_pool_hit_total=0, fast_path_scored_total=0). Root cause analysis revealed 3 bugs:
+
+1. **PRICING_ANOMALY contamination**: `_is_stale()` returned True for `same_state_class=stale` regardless of `reject_reason`. Pool `0x7dfa` had PRICING_ANOMALY at 36927 bps leaking through recoverable_stale into C1.
+2. **Silent exception killing bridge hit detection**: Entire bridge hit block in single `try/except Exception: pass`. Registry ops raising in first loop killed PTT hit counting in second loop. Bridge hits ALWAYS 0.
+3. **Bridge file update using unsafe variables**: `_bucket_a` etc. undefined when bridge assembly failed → NameError → silently caught → `bridge_selected_pools_top` never written.
+
+**Changes**: (1) `m7/orderflow/artifacts.py`: Strict `reject_reason == STALE_POSITIVE` (not `_is_stale()` class match). `_ANOMALY_REJECTS` exclusion set. (2) `scripts/m7a_orderflow_loop.py`: **CRITICAL** — split bridge hit detection into 3 independent try/except blocks with `logger.debug` on failure. C1 defense-in-depth anomaly skip. C2 gas-near tolerance (`_C2_GAS_GAP_TOLERANCE_BPS = -10`). Bridge file update uses safe aliases (`_ba`, `_bb`, `_bc1`, `_bc2`, `_ptt_diag`). Bridge-miss active auto-promote. Bridge hit diagnostic log line. (3) `tests/unit/test_47i_anomaly_clean.py`: 26 tests covering all 5 fixes.
+
+CI: 3437 passed, 6 skipped.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)

@@ -1427,17 +1427,22 @@ def run_loop(cli_args) -> None:
                         )
 
                         # M7.A.5.47h: 3-bucket fill with exact-pool pinning.
-                        # C1 (stale_recovery): ONLY recoverable stale (lag ≤ 2,
-                        #   positive, size_valid) — not all stale positives.
-                        #   Uses cold_recoverable_stale (strict subset).
+                        # M7.A.5.47i: C1 (stale_recovery): ONLY recoverable stale
+                        #   with reject_reason=STALE_POSITIVE (no PRICING_ANOMALY,
+                        #   no TOKEN_PAIR_UNRESOLVED). Lag ≤ 2, positive, size_valid.
+                        #   Uses cold_recoverable_stale (strict from artifacts.py).
                         #   + TTL-pinned pools from prior iterations.
                         # C2 (gas_near_survivor): near_executable with
-                        #   GAS_EXCEEDS_GROSS AND positive gross (can cross zero
-                        #   at larger size). Gross-negative families excluded.
+                        #   GAS_EXCEEDS_GROSS AND positive gross. Gross-negative excluded.
                         # C3 (activity_fill): remaining PTT by activity score.
+                        _ANOMALY_REJECTS = {"PRICING_ANOMALY", "TOKEN_PAIR_UNRESOLVED"}
                         _bucket_c1_stale: set = set()
                         for _sp in _bridge.get("cold_recoverable_stale", []):
                             _sp_pa = (_sp.get("pool_address") or "").lower()
+                            _sp_rr = _sp.get("reject_reason", "")
+                            # Defense-in-depth: skip anomalies even if artifacts leaked them
+                            if _sp_rr in _ANOMALY_REJECTS:
+                                continue
                             if _sp_pa and _sp_pa in _ptt and _sp_pa not in _bucket_a and _sp_pa not in _bucket_b:
                                 _bucket_c1_stale.add(_sp_pa)
                                 # Refresh TTL for freshly-seen recoverable stale pools
@@ -1451,17 +1456,31 @@ def run_loop(cli_args) -> None:
                                 _bucket_c1_stale.add(_pin_pa)
 
                         _bucket_c2_gas_near: set = set()
-                        # M7.A.5.47h: Only admit near_executable pools whose
-                        # family has positive gross (mean_gas_gap_bps > 0 in
-                        # micro_refinement or positive verified_net via bridge).
-                        # Gross-negative families cannot cross zero at any size.
-                        _gross_positive_families: set = set()
+                        # M7.A.5.47i: Admit near_executable pools whose family
+                        # has positive gross OR is within a small negative gap of
+                        # breakeven. Families with large negative gas gap cannot
+                        # cross zero at any realistic size — exclude them.
+                        _C2_GAS_GAP_TOLERANCE_BPS = -10  # allow families this close to breakeven
+                        _gas_viable_families: set = set()
                         for _mr in _bridge.get("micro_refinement", []):
-                            if (_mr.get("verified_net_bps_after_refinement") or 0) > 0:
+                            # Primary: verified net > 0 (definitely profitable family)
+                            _v_net = _mr.get("verified_net_bps_after_refinement") or 0
+                            if _v_net > 0:
                                 _ap = (_mr.get("actual_pair") or "")
                                 _parts = _ap.split("/")
                                 if len(_parts) == 2:
-                                    _gross_positive_families.add(
+                                    _gas_viable_families.add(
+                                        tuple(sorted((_parts[0].lower(), _parts[1].lower())))
+                                    )
+                                continue
+                            # Secondary: gas_floor_gap_bps within tolerance
+                            # (slightly negative but close to breakeven)
+                            _gfg = _mr.get("gas_floor_gap_bps")
+                            if _gfg is not None and _gfg >= _C2_GAS_GAP_TOLERANCE_BPS:
+                                _ap = (_mr.get("actual_pair") or "")
+                                _parts = _ap.split("/")
+                                if len(_parts) == 2:
+                                    _gas_viable_families.add(
                                         tuple(sorted((_parts[0].lower(), _parts[1].lower())))
                                     )
                         for _ne in _bridge.get("near_executable", []):
@@ -1473,12 +1492,12 @@ def run_loop(cli_args) -> None:
                                 continue
                             if _ne_pa in _bucket_a or _ne_pa in _bucket_b or _ne_pa in _bucket_c1_stale:
                                 continue
-                            # Check gross-positive via pool family
+                            # Check gas-viable via pool family
                             _ne_info = _ptt.get(_ne_pa) or _ptt.get(_ne_pa.lower())
                             if _ne_info and len(_ne_info) >= 2:
                                 _ne_fam = tuple(sorted((_ne_info[0].lower(), _ne_info[1].lower())))
-                                if _ne_fam not in _gross_positive_families:
-                                    continue  # gross-negative family → skip
+                                if _ne_fam not in _gas_viable_families:
+                                    continue  # gas-hopeless family → skip
                             _bucket_c2_gas_near.add(_ne_pa)
 
                         # Bucket C3: activity fill from remaining (exclude C1/C2)
@@ -1668,52 +1687,85 @@ def run_loop(cli_args) -> None:
                     # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
                     "_bridge_cold_executable": _bridge.get("cold_executable", []),
                 }
+                # M7.A.5.47i: Split bridge diagnostics into independent blocks
+                # so one failure doesn't kill the bridge hit counter.
+                _ptc = None
                 try:
                     from m7.orderflow.resolve import _pool_token_cache as _ptc
-                    for _r in artifact.get("_raw_results", []):
-                        if getattr(_r, "scoring_path", None) != "hot_skip":
-                            continue
-                        _evt = getattr(_r, "_source_event", None)
-                        if not _evt or not getattr(_evt, "pool_address", None):
-                            continue
-                        _ck = _evt.pool_address.lower()
-                        _cached = _ptc.get(_ck)
-                        if _cached:
-                            _hot_bridge_diag["pool_address_match_count"] += 1
-                            _t0, _t1, _ = _cached
-                            if _hot_registry:
-                                _entries = _hot_registry.lookup_pair(_t0, _t1)
-                                if _entries:
-                                    _hot_bridge_diag["canonical_pair_match_count"] += 1
-                                    _active = [e for e in _entries if e.is_active()]
-                                    if not _active:
-                                        _hot_bridge_diag["registry_has_pair_but_not_pool_count"] += 1
+                except Exception:
+                    pass
 
-                    # M7.A.5.44: Bridge-hit counters — across ALL events (not just hot_skip)
+                # Block 1: pool_address_match via registry (may raise on registry ops)
+                try:
+                    if _ptc is not None:
+                        for _r in artifact.get("_raw_results", []):
+                            if getattr(_r, "scoring_path", None) != "hot_skip":
+                                continue
+                            _evt = getattr(_r, "_source_event", None)
+                            if not _evt or not getattr(_evt, "pool_address", None):
+                                continue
+                            _ck = _evt.pool_address.lower()
+                            _cached = _ptc.get(_ck)
+                            if _cached:
+                                _hot_bridge_diag["pool_address_match_count"] += 1
+                                _t0, _t1, _ = _cached
+                                if _hot_registry:
+                                    _entries = _hot_registry.lookup_pair(_t0, _t1)
+                                    if _entries:
+                                        _hot_bridge_diag["canonical_pair_match_count"] += 1
+                                        _active = [e for e in _entries if e.is_active()]
+                                        if not _active:
+                                            _hot_bridge_diag["registry_has_pair_but_not_pool_count"] += 1
+                except Exception as _exc_b1:
+                    logger.debug("Bridge diag block-1 (registry match) failed: %s", str(_exc_b1)[:120])
+
+                # Block 2: Bridge-hit counters — across ALL events (not just hot_skip)
+                # M7.A.5.44: This is the critical bridge hit counter.
+                try:
                     _bridge_ptt = _bridge.get("pool_token_transport", {})
                     _bridge_ptt_lower = {k.lower() for k in _bridge_ptt}
-                    for _r in artifact.get("_raw_results", []):
+                    _raw_results_for_bridge = artifact.get("_raw_results", [])
+                    for _r in _raw_results_for_bridge:
                         _evt = getattr(_r, "_source_event", None)
                         if not _evt or not getattr(_evt, "pool_address", None):
                             continue
                         _ck_all = _evt.pool_address.lower()
                         if _ck_all in _bridge_ptt_lower:
                             _hot_bridge_diag["bridge_pool_address_hit_count"] += 1
-                            _cached_all = _ptc.get(_ck_all)
-                            if _cached_all and _hot_registry:
-                                _t0a, _t1a, _ = _cached_all
-                                _ent_all = _hot_registry.lookup_pair(_t0a, _t1a)
-                                if _ent_all:
-                                    _hot_bridge_diag["bridge_pair_hit_count"] += 1
-                    # bridge_loaded_candidate_count = entries loaded from bridge
+                            if _ptc is not None:
+                                _cached_all = _ptc.get(_ck_all)
+                                if _cached_all and _hot_registry:
+                                    _t0a, _t1a, _ = _cached_all
+                                    _ent_all = _hot_registry.lookup_pair(_t0a, _t1a)
+                                    if _ent_all:
+                                        _hot_bridge_diag["bridge_pair_hit_count"] += 1
+                    # Log diagnostic for bridge hit investigation
+                    if _raw_results_for_bridge and _bridge_ptt_lower:
+                        _sample_evt_pools = []
+                        for _sr in _raw_results_for_bridge[:5]:
+                            _se = getattr(_sr, "_source_event", None)
+                            if _se and getattr(_se, "pool_address", None):
+                                _sample_evt_pools.append(_se.pool_address.lower()[:10])
+                        _sample_ptt = list(_bridge_ptt_lower)[:5]
+                        logger.info(
+                            "Bridge hit diag: raw_results=%d ptt_size=%d hits=%d "
+                            "evt_pools_sample=%s ptt_sample=%s",
+                            len(_raw_results_for_bridge), len(_bridge_ptt_lower),
+                            _hot_bridge_diag["bridge_pool_address_hit_count"],
+                            _sample_evt_pools, [p[:10] for p in _sample_ptt],
+                        )
+                    elif not _bridge_ptt_lower:
+                        logger.debug("Bridge hit diag: PTT empty (bridge not yet written?)")
+                except Exception as _exc_b2:
+                    logger.debug("Bridge diag block-2 (ptt hit) failed: %s", str(_exc_b2)[:120])
+
+                # Block 3: Loaded count + pair-fallback
+                try:
                     _hot_bridge_diag["bridge_loaded_candidate_count"] = len(
                         _bridge.get("cold_executable", [])
                     ) + len(_bridge.get("near_executable", []))
 
-                    # M7.A.5.46: Bridge pair-fallback counter — hot_skip events
-                    # whose actual_pair matches a bridge candidate's pair (even
-                    # though pool_address didn't match). Diagnoses whether pair-
-                    # level matching could improve conversion.
+                    # M7.A.5.46: Bridge pair-fallback counter
                     _bridge_pairs: set = set()
                     for _cand in (_bridge.get("cold_executable", []) + _bridge.get("near_executable", [])):
                         _cp = _cand.get("actual_pair", "") if isinstance(_cand, dict) else ""
@@ -1727,8 +1779,8 @@ def run_loop(cli_args) -> None:
                         if _ap and _ap in _bridge_pairs:
                             _pair_fallback += 1
                     _hot_bridge_diag["bridge_pair_fallback_count"] = _pair_fallback
-                except Exception:
-                    pass
+                except Exception as _exc_b3:
+                    logger.debug("Bridge diag block-3 (loaded/fallback) failed: %s", str(_exc_b3)[:120])
 
                 # M7.A.5.47c: Track hot-seen pool addresses for cross-iteration ranking
                 _wls_h = artifact.get("ws_live_stats", {})
@@ -1781,30 +1833,63 @@ def run_loop(cli_args) -> None:
                             })
                 _hot_bridge_diag["bridge_miss_sample_top"] = _bridge_miss_sample[:5]
 
-                # M7.A.5.47h: hot_seen_vs_bridge_overlap diagnostic — shows
+                # M7.A.5.47i: Auto-promote bridge-miss pools that are in
+                # recent_active_pools into _hot_seen_pin for next hot windows.
+                # This is the shortest path to first bridge_pool_hit: if we see
+                # events at a pool that's active, pin it into bucket B.
+                _active_pool_set: set = set()
+                for _rap in _bridge.get("recent_active_pools_top", []):
+                    _rap_pa = (_rap.get("pool_address") or "").lower()
+                    if _rap_pa:
+                        _active_pool_set.add(_rap_pa)
+                _auto_promoted = 0
+                for _bms in _bridge_miss_sample[:10]:
+                    _bms_pa = (_bms.get("event_pool") or "").lower()
+                    if _bms_pa and _bms_pa in _active_pool_set:
+                        if _bms_pa not in _hot_seen_pin or _hot_seen_pin[_bms_pa].get("ttl", 0) <= 1:
+                            _hot_seen_pin[_bms_pa] = {
+                                "ttl": _HOT_SEEN_PIN_TTL_INIT,
+                                "last_iter": iteration,
+                                "source": "bridge_miss_active_promote",
+                            }
+                            _auto_promoted += 1
+                if _auto_promoted > 0:
+                    logger.info(
+                        "Hot bridge-miss auto-promote: %d pools pinned (iter %d)",
+                        _auto_promoted, iteration,
+                    )
+
+                # M7.A.5.47i: hot_seen_vs_bridge_overlap diagnostic — shows
                 # which hot-seen pools are in the focused bridge and which aren't,
                 # and what bucket they landed in (or why absent).
+                # Always produces a list (even if empty) — never None.
                 _overlap_diag: list = []
-                if _hot_hist:
+                if _hot_hist and _bridge_pool_addrs is not None:
+                    # Guard: bucket variables may not exist if bridge assembly failed
+                    _ba = _bucket_a if '_bucket_a' in dir() else set()
+                    _bb = _bucket_b if '_bucket_b' in dir() else set()
+                    _bc1 = _bucket_c1_stale if '_bucket_c1_stale' in dir() else set()
+                    _bc2 = _bucket_c2_gas_near if '_bucket_c2_gas_near' in dir() else set()
+                    _ptt_diag = _ptt if '_ptt' in dir() else {}
                     for _oh in _hot_hist[:10]:
                         _oh_addr = (_oh.get("pool") or "").lower()
                         if not _oh_addr:
                             continue
                         _in_bridge = _oh_addr in _bridge_pool_addrs
                         _bucket_label = "absent"
-                        if _oh_addr in _bucket_a:
+                        if _oh_addr in _ba:
                             _bucket_label = "A_cold_exec"
-                        elif _oh_addr in _bucket_b:
+                        elif _oh_addr in _bb:
                             _bucket_label = "B_hot_seen"
-                        elif _oh_addr in _bucket_c1_stale:
+                        elif _oh_addr in _bc1:
                             _bucket_label = "C1_stale_recovery"
-                        elif _oh_addr in _bucket_c2_gas_near:
+                        elif _oh_addr in _bc2:
                             _bucket_label = "C2_gas_near"
                         elif _in_bridge:
                             _bucket_label = "C3_activity_fill"
                         _reason = ""
                         if not _in_bridge:
-                            if _oh_addr not in _ptt:
+                            if _oh_addr not in _ptt_diag:
                                 _reason = "not_in_ptt"
                             elif _oh_addr in _hot_seen_pin:
                                 _reason = "pinned_but_ttl_expired_or_not_in_ptt"
@@ -1832,6 +1917,44 @@ def run_loop(cli_args) -> None:
                     candidate_pairs=_promoted_pairs.get("candidate", []),
                     bridge_diagnostics=_hot_bridge_diag,
                 )
+
+                # M7.A.5.47i: Write hot-side diagnostics back into bridge file.
+                # The bridge file is cold-written, but overlap/selection diagnostics
+                # are only available from hot lane, so we merge them in.
+                # Uses safe aliases (_ba, _bb, _bc1, _bc2, _ptt_diag) to avoid
+                # NameError when bridge assembly didn't complete.
+                try:
+                    if os.path.exists(_COLD_HOT_BRIDGE_PATH) and _bridge_pool_addrs is not None:
+                        with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _bf:
+                            _bridge_update = json.load(_bf)
+                        _bridge_update["hot_seen_vs_bridge_overlap_top"] = _overlap_diag[:5]
+                        # M7.A.5.47i: bridge_selected_pools_top — which pools
+                        # made it into the focused bridge and why.
+                        _bsp_diag: list = []
+                        for _bsp_pa in list(_bridge_pool_addrs)[:30]:
+                            _bsp_bucket = "C3_activity_fill"
+                            if _bsp_pa in _ba:
+                                _bsp_bucket = "A_cold_exec"
+                            elif _bsp_pa in _bb:
+                                _bsp_bucket = "B_hot_seen"
+                            elif _bsp_pa in _bc1:
+                                _bsp_bucket = "C1_stale_recovery"
+                            elif _bsp_pa in _bc2:
+                                _bsp_bucket = "C2_gas_near"
+                            _bsp_info = _ptt_diag.get(_bsp_pa)
+                            _bsp_fam = ""
+                            if _bsp_info and len(_bsp_info) >= 2:
+                                _bsp_fam = f"{_bsp_info[0]}/{_bsp_info[1]}"
+                            _bsp_diag.append({
+                                "pool_address": _bsp_pa,
+                                "bucket": _bsp_bucket,
+                                "family": _bsp_fam,
+                                "selected": True,
+                            })
+                        _bridge_update["bridge_selected_pools_top"] = _bsp_diag[:20]
+                        _atomic_json_write(_COLD_HOT_BRIDGE_PATH, _bridge_update, indent=2)
+                except Exception as _exc_bu:
+                    logger.debug("Bridge file update failed: %s", str(_exc_bu)[:120])
 
                 # M7.A.5.45: Write hot execution intents artifact
                 _write_hot_intents(

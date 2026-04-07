@@ -909,14 +909,19 @@ def build_replay_summary(
     )[:_TOP_N]
     top_stale_positive_candidates = [_compact_candidate(r) for r in _stale_candidates]
 
-    # M7.A.5.47h: Recoverable stale — strict subset of stale positives that
-    # could realistically be caught at same-block lag. Criteria:
-    #   block_lag ≤ 2, best_backrun_net_bps > 0, size_valid_for_token = true.
-    # Only these qualify for C1 stale-recovery bridge pinning.
+    # M7.A.5.47i: Recoverable stale — anomaly-clean strict contract.
+    # Requirements (ALL must be true):
+    #   reject_reason == STALE_POSITIVE (not PRICING_ANOMALY, not UNRESOLVED)
+    #   block_lag ≤ 2
+    #   best_backrun_net_bps > 0
+    #   size_valid_for_token = true
+    # This is the ONLY source for C1 stale-recovery bridge pinning.
+    _ANOMALY_REJECTS = {REJECT_PRICING_ANOMALY, REJECT_TOKEN_PAIR_UNRESOLVED}
     _recoverable_stale_candidates = sorted(
         [
             r for r in results
-            if _is_stale(r)
+            if getattr(r, "reject_reason", None) == REJECT_STALE_POSITIVE
+            and getattr(r, "reject_reason", None) not in _ANOMALY_REJECTS
             and (r.best_backrun_net_bps or 0) > 0
             and r.size_valid_for_token
             and (_lag(r) <= 2)
