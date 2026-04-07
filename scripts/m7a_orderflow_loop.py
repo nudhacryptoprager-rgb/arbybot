@@ -258,18 +258,33 @@ def _write_cold_hot_bridge(
         # Cold lane writes bridge_selected_pools_top=[] because it doesn't
         # do bridge assembly (hot-only). Without this, cold overwrites wipe
         # the hot-merged values every cold iteration.
-        _HOT_PRESERVE_KEYS = (
-            "bridge_selected_pools_top", "bridge_hit_trace_top",
-            "cold_exec_pool_trace", "bridge_excluded_top",
+        # M7.A.5.47p: Only preserve bridge_hit_trace_top / cold_exec_pool_trace
+        # if current cold payload has cold_executable entries.  When cold
+        # reports cold_executable=[], the trace is stale and must be cleared.
+        _HOT_PRESERVE_ALWAYS = (
+            "bridge_selected_pools_top", "bridge_excluded_top",
         )
+        _HOT_PRESERVE_IF_COLD_EXEC = (
+            "bridge_hit_trace_top", "cold_exec_pool_trace",
+        )
+        _has_cold_exec = bool(payload.get("cold_executable"))
         try:
             if os.path.exists(_COLD_HOT_BRIDGE_PATH):
                 with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _epf:
                     _existing = json.load(_epf)
-                for _hpk in _HOT_PRESERVE_KEYS:
+                for _hpk in _HOT_PRESERVE_ALWAYS:
                     _existing_val = _existing.get(_hpk)
                     if _existing_val and not payload.get(_hpk):
                         payload[_hpk] = _existing_val
+                if _has_cold_exec:
+                    for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
+                        _existing_val = _existing.get(_hpk)
+                        if _existing_val and not payload.get(_hpk):
+                            payload[_hpk] = _existing_val
+                else:
+                    # Explicitly clear stale trace when no cold executables
+                    for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
+                        payload[_hpk] = []
         except Exception:
             pass
         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
@@ -719,8 +734,9 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     hot["bridge_focused_pool_count"] = _bd.get("bridge_focused_pool_count", 0)
     hot["bridge_loaded_candidate_count"] = _bd.get("bridge_loaded_candidate_count", 0)
     # M7.A.5.47o: Gas-hopeless C3 tightening stats at top level.
-    hot["c3_gas_hopeless_skipped"] = _bd.get("c3_gas_hopeless_skipped", 0)
-    hot["c3_gas_hopeless_families"] = _bd.get("c3_gas_hopeless_families", [])
+    # M7.A.5.47p: Guarantee non-None — use `or` fallback for explicit None values.
+    hot["c3_gas_hopeless_skipped"] = _bd.get("c3_gas_hopeless_skipped") or 0
+    hot["c3_gas_hopeless_families"] = _bd.get("c3_gas_hopeless_families") or []
 
     # M7.A.5.47d: Surface bridge miss sample at top level for diagnostics
     hot["bridge_miss_sample_top"] = _bd.get("bridge_miss_sample_top", [])
@@ -831,7 +847,7 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         else:
             _op_reason = None
         _op_info = _ptt_ref.get(_op) if _ptt_ref else None
-        _op_family = f"{_op_info[0]}/{_op_info[1]}" if _op_info and len(_op_info) >= 2 else ""
+        _op_family = f"{_op_info[0]}/{_op_info[1]}" if _op_info and len(_op_info) >= 2 else "family_unresolved"
         _other_trace.append({
             "pool_address": _op,
             "family": _op_family,
@@ -843,6 +859,41 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "reason_if_not_hit": _op_reason,
         })
     hot["other_live_pool_trace_top"] = _other_trace
+
+    # M7.A.5.47p: bridge_selection_diff_top — bidirectional mismatch diagnostic.
+    # Shows: (a) hot-seen pools absent from bridge, (b) bridge pools with zero hot events.
+    _sel_diff: dict = {"hot_seen_not_in_bridge": [], "bridge_selected_but_no_hot_events": []}
+    # (a) Hot-seen pools not in bridge (from other_live_pool_trace)
+    for _ot in _other_trace:
+        if not _ot.get("in_bridge"):
+            _sel_diff["hot_seen_not_in_bridge"].append({
+                "pool_address": _ot["pool_address"],
+                "family": _ot["family"],
+                "hot_events_seen": _ot["hot_events_seen"],
+                "reason_if_absent": _ot.get("reason_if_not_hit", "not_in_bridge"),
+            })
+    # (b) Bridge-selected pools with zero hot events this window
+    _all_event_pools: set = set()
+    for _r in _raw_results:
+        _evt = getattr(_r, "_source_event", None)
+        if _evt:
+            _ep = getattr(_evt, "pool_address", "").lower()
+            if _ep:
+                _all_event_pools.add(_ep)
+    for _sel in _bd.get("bridge_selected_at_assembly", [])[:20]:
+        _sel_pa = (_sel.get("pool_address") or "").lower()
+        if _sel_pa and _sel_pa not in _all_event_pools:
+            _sel_info = _ptt_ref.get(_sel_pa) if _ptt_ref else None
+            _sel_fam = f"{_sel_info[0]}/{_sel_info[1]}" if _sel_info and len(_sel_info) >= 2 else "family_unresolved"
+            _sel_diff["bridge_selected_but_no_hot_events"].append({
+                "pool_address": _sel_pa,
+                "family": _sel_fam,
+                "selected_bucket": _sel.get("bucket"),
+            })
+    # Truncate to top 10 each
+    _sel_diff["hot_seen_not_in_bridge"] = _sel_diff["hot_seen_not_in_bridge"][:10]
+    _sel_diff["bridge_selected_but_no_hot_events"] = _sel_diff["bridge_selected_but_no_hot_events"][:10]
+    hot["bridge_selection_diff_top"] = _sel_diff
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -959,7 +1010,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     except Exception as exc:
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
     # M7.A.5.47n: Return bridge hit trace so caller can merge into bridge file.
-    return _bridge_hit_trace
+    # M7.A.5.47p: Also return other_live_pool_trace for live-miss auto-pin.
+    return _bridge_hit_trace, _other_trace
 
 
 def _compute_headline_level(funnel: dict) -> str:
@@ -2327,13 +2379,35 @@ def run_loop(cli_args) -> None:
                 )
 
                 # M7.A.5.47n: Capture bridge_hit_trace for merge into bridge file.
-                _bridge_hit_trace_data = _write_hot_artifact(
+                # M7.A.5.47p: Also capture other_live_pool_trace for live-miss auto-pin.
+                _bridge_hit_trace_data, _other_live_trace = _write_hot_artifact(
                     artifact, iteration, guard_results,
                     fast_results=fast_results,
                     promoted_pairs=_promoted_pairs.get("execution", []),
                     candidate_pairs=_promoted_pairs.get("candidate", []),
                     bridge_diagnostics=_hot_bridge_diag,
                 )
+
+                # M7.A.5.47p: Auto-pin live-miss pools from other_live_pool_trace.
+                # Pools that had hot events but are not in bridge get pinned so
+                # bridge assembly includes them in bucket B next iteration.
+                _live_miss_pinned = 0
+                for _lmt in (_other_live_trace or []):
+                    if _lmt.get("reason_if_not_hit") == "not_in_bridge":
+                        _lm_pa = (_lmt.get("pool_address") or "").lower()
+                        if _lm_pa and (_lm_pa not in _hot_seen_pin
+                                       or _hot_seen_pin[_lm_pa].get("ttl", 0) <= 1):
+                            _hot_seen_pin[_lm_pa] = {
+                                "ttl": _HOT_SEEN_PIN_TTL_INIT,
+                                "last_iter": iteration,
+                                "source": "live_miss_trace_pin",
+                            }
+                            _live_miss_pinned += 1
+                if _live_miss_pinned > 0:
+                    logger.info(
+                        "Live-miss trace auto-pin: %d pools pinned (iter %d)",
+                        _live_miss_pinned, iteration,
+                    )
 
                 # M7.A.5.47k: Write hot-side diagnostics back into bridge file.
                 # Always merge overlap + selected as lists (never null).
@@ -2356,9 +2430,9 @@ def run_loop(cli_args) -> None:
                         )
                         # M7.A.5.47n: Persist bridge_hit_trace_top + cold_exec_pool_trace
                         # into bridge file so cross-artifact truth is always consistent.
-                        if _bridge_hit_trace_data:
-                            _bridge_update["bridge_hit_trace_top"] = _bridge_hit_trace_data
-                            _bridge_update["cold_exec_pool_trace"] = _bridge_hit_trace_data
+                        # M7.A.5.47p: Always write trace — if empty, explicitly clear stale data.
+                        _bridge_update["bridge_hit_trace_top"] = _bridge_hit_trace_data or []
+                        _bridge_update["cold_exec_pool_trace"] = _bridge_hit_trace_data or []
                         # M7.A.5.47m: Persist cut_stage_top from cold lane artifact
                         # (already written to bridge by cold lane; refresh here
                         # to keep it consistent after hot merge).

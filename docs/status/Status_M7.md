@@ -201,61 +201,15 @@ Counter disentanglement (watchlist_match_count, admitted_to_scoring, fast_path_s
 
 3-bucket bridge ranking (C1=stale_recovery, C2=gas_near_survivor, C3=activity fill). Stale-pin TTL lifecycle. Severe deficit escalation. 3-tier broad fallback interval. 25 tests. CI: 3385 passed.
 
-### M7.A.5.47h (exact-pool stale-recovery + gas-near-survivor + hot-seen promotion)
+### M7.A.5.47h–47n (bridge truth convergence, compressed)
 
-**Hypothesis**: M7.A.5.47h = hot-seen pools and cold exec/stale pools are disjoint sets. Force first bridge hit by: (a) tightening C1 to recoverable_stale only (lag ≤ 2, positive, size_valid), (b) filtering C2 to gross-positive families only, (c) auto-promoting resolved hot-seen pools into the focused bridge via TTL pin.
-
-**Fresh 47g evidence** (10-min nonstop): cold viable_count=2, hot bridge_pool_hit_total=0 (event pools disjoint from bridge). 47h added hot-seen-pin promotion, recoverable_stale C1 tightening, gross-positive C2 filter.
-
-### M7.A.5.47i (anomaly-clean recoverable stale + bridge hit detection isolation)
-
-**Fresh 47h evidence**: cold REGRESSED (viable_count=0). Root cause: 3 bugs — (1) PRICING_ANOMALY at 36927 bps leaking through `_is_stale()` into C1, (2) single try/except wrapping registry-match AND PTT-hit — exception in registry silently killed bridge hit counting, (3) bridge file update using undefined `_bucket_a` etc → NameError silently caught.
-
-**Fixes**: Strict `reject_reason == STALE_POSITIVE` filter, 3 independent try/except blocks for bridge hit detection, safe variable aliases, C2 gas tolerance `-10 bps`, bridge-miss auto-promote. 26 tests. CI: 3437 passed.
-
-### M7.A.5.47j (bridge minimum floor + focused pool count + C2 tightening)
-
-**Diagnosis**: 47i source correct but nonstop ran with pre-47i bytecode (`.pyc` timestamps prove edits applied AFTER nonstop ended).
-
-**Changes**: (1) `_BRIDGE_MIN_FLOOR=20` — floor fill prevents bridge starvation. (2) `bridge_focused_pool_count` metric — tracks actual `len(_bridge_pool_addrs)` (all buckets), disambiguates from `bridge_loaded_candidate_count` (A-bucket only). (3) C2 tolerance tightened `-10` → `-5` bps. (4) All `__pycache__` cleared. (5) 24 tests.
-
-CI: 3461 passed, 6 skipped.
-
-### M7.A.5.47k (session-scoped rollup + stale_sub_reason + auto-pin ALL bridge-miss + route_viable split)
-
-**Diagnosis**: Bridge race condition — cold lane overwrites bridge file without overlap/selected keys. Stale candidates lack sub-classification. Auto-promote only pinned active pools, missing direct bridge-miss events.
-
-**Changes**: (1) Session-scoped hot rollup: `_SESSION_ID` detects supervisor restart, resets session counters. (2) Always emit `overlap`/`selected` as `[]` in cold bridge, not null. (3) `stale_sub_reason`: pipeline_abort / block_lag / state_recheck in `_compact_candidate()`. (4) Auto-pin ALL bridge-miss pools, not just `recent_active`. (5) Recoverable-stale split: `route_viable` / `not_viable` — C1 uses only route_viable. (6) C2 unknown-family safe default: skip, not admit. (7) `bridge_excluded_top` with 4 reason types. (8) 47 new tests (26 for 47k).
-
-CI: 3487 passed, 6 skipped.
-
-### M7.A.5.47l (cold-exec hard-pin + cold_exec_pool_trace + cut_stage_top + C1 block_lag filter)
-
-**Hypothesis**: M7.A.5.47l = first hot bridge hit on the exact cold-executable pool `0xd13040d4fe917ee704158cfcb3338dcd2838b245`.
-
-**Diagnosis**: Fresh 10-minute verification (April 7, 2026) confirms one cold executable-positive candidate (`0x25118290/WETH`, 110.96 bps, verified profitable) but hot conversion remains zero. The system cuts positive moments in three distinct places: broad-universe families die on gas economics (GAS_EXCEEDS_GROSS=20/30), RAIN/WETH-like families die on stale block lag (lag 3..8), and the surviving cold executable pool dies on hot overlap rather than on math.
-
-**Changes**: (1) Cold-exec hard-pin: `_bridge_pool_addrs |= _bucket_a` after all assembly. (2) `bridge_selected_pools_top` populated at assembly time (never empty when bridge_focused_pool_count > 0). (3) `cold_exec_pool_trace` diagnostic: per-pool `in_bridge`, `hot_events_this_window`, `fast_score_attempted`, `registry_match`. (4) C1 stale filter: skip `stale_sub_reason=block_lag` (lag 3..8 not recoverable). (5) `cut_stage_top` artifact: machine-readable summary of WHERE each positive dies — `economics`, `stale_block_lag`, `stale_pipeline_abort`, `stale_state_recheck`, `viable`. (6) `bridge_excluded_top` persisted into bridge file. (7) 21 new tests.
-
-CI: 3508 passed, 6 skipped.
-
-### M7.A.5.47m (truthful bridge diagnostics + run_context + session rollup fix)
-
-**Diagnosis**: Fresh 1-hour nonstop (April 7, 09:36-10:36Z) reveals `cold_executable_positive=3` (19.4505 bps, verified_net=17.6505) but `cold_exec_pool_trace.in_bridge=false` — CODE BUG, not market. Root cause: `list(set)[:30]` truncation makes pool invisible. Bridge artifact null contract broken: `bridge_selected_pools_top=[]`, `bridge_excluded_top=null`, `cut_stage_top=null`. Session rollup fields nested (not at top level). No `run_context` in any M7 artifact.
-
-**Fixes**: (1) Bridge selected ordering: A-bucket first via explicit priority (sorted(A) → B → C1/C2 → C3 → rest). (2) `bridge_hit_trace_top` replaces `cold_exec_pool_trace`: uses full `_bridge_pool_addrs_set` for truthful `in_bridge`, adds `selected_bucket`, `reason_if_not_hit`, separate `fast_score_attempted`/`fast_score_scored`. (3) Bridge null contract: cold-write `bridge_excluded_top=[]`, `cut_stage_top={}`. Hot merge uses assembly-ordered list. (4) `run_context` in all 4 M7 artifact writers. (5) Session rollup flattened to top level. (6) 21 new tests. CI: 3529 passed, 6 skipped.
-
-### M7.A.5.47n (cross-artifact truth + exact-pool session trace)
-
-**Diagnosis**: Fresh 10-min nonstop (April 7, 11:47-11:57Z) confirms 47m fixes: `cold_exec_pool_trace.in_bridge=true`, `bridge_selected_pools_top` has 30 entries in hot artifact. But bridge FILE has `bridge_selected_pools_top=[]` — cold lane overwrites hot-merged values (race condition). No `bridge_hit_trace_top`/`cold_exec_pool_trace` in bridge file. No per-pool session trace. `session_bridge_pool_hit_total=0` (market: no on-chain swaps at exact pool).
-
-**Root cause**: Cold and hot are separate concurrent processes. Cold lane calls `_write_cold_hot_bridge()` with empty `bridge_selected_pools_top=[]` because cold doesn't do bridge assembly. Hot lane merges correctly but next cold iteration clobbers. `bridge_hit_trace_top`/`cold_exec_pool_trace` only written to hot artifact, never merged back.
-
-**Fixes**: (1) Cold bridge preserve: read existing bridge file before overwriting; preserve `bridge_selected_pools_top`, `bridge_hit_trace_top`, `cold_exec_pool_trace`, `bridge_excluded_top` if existing value is truthy and cold payload is falsy. (2) Hot merge writes `bridge_hit_trace_top` + `cold_exec_pool_trace` to bridge file (from `_write_hot_artifact` return value). (3) `exact_pool_trace` in hot rollup: per-window tracking for target pool `0xd13040d4...` — `session_windows_in_bridge`, `session_hot_events_seen`, `in_bridge_every_window`, `reason_if_not_hit`. (4) 22 new tests.
-
-**Evidence** (10-min nonstop, April 7, 12:22-12:32Z): Bridge file `bridge_selected_pools_top`=20 (was `[]`), `bridge_hit_trace_top`=1 entry with `in_bridge=true`. `exact_pool_trace`: `session_windows_in_bridge=5/5`, `in_bridge_every_window=true`, `session_hot_events_seen=0`, `reason_if_not_hit=no_hot_events_at_pool`. Session goal MARKET_BLOCKED: code places pool correctly in bridge every window; no on-chain swaps at this pool during proof window.
-
-CI: 3551 passed, 6 skipped.
+**47h** (exact-pool stale-recovery + hot-seen promotion): C1 tightened to recoverable_stale only, C2 gross-positive filter, hot-seen pin promotion.
+**47i** (anomaly-clean + bridge hit isolation): Fixed PRICING_ANOMALY leak in C1, 3 independent try/except for bridge hit detection, C2 gas tolerance `-10 bps`. CI: 3437.
+**47j** (bridge minimum floor + focused pool count): `_BRIDGE_MIN_FLOOR=20`, `bridge_focused_pool_count` metric, C2 tolerance `-5 bps`. CI: 3461.
+**47k** (session-scoped rollup + auto-pin ALL bridge-miss): `_SESSION_ID` restart detection, `stale_sub_reason` classification, bridge-miss auto-pin, `bridge_excluded_top`. CI: 3487.
+**47l** (cold-exec hard-pin + cold_exec_pool_trace): Cold-exec hard-pin into bridge, `cold_exec_pool_trace` diagnostic, C1 block_lag filter, `cut_stage_top`. CI: 3508.
+**47m** (truthful bridge diagnostics + run_context): Fixed `list(set)[:30]` truncation bug. A-bucket priority ordering. `bridge_hit_trace_top` with full `_bridge_pool_addrs_set` for truthful `in_bridge`. `run_context` in all M7 artifacts. Session rollup flattened. CI: 3529.
+**47n** (cross-artifact truth + exact-pool session trace): Fixed cold/hot race condition — cold preserve of hot-merged keys. Hot merge writes trace to bridge file. `exact_pool_trace` per-window tracking. Evidence: `in_bridge_every_window=true`, `session_hot_events_seen=0`. CI: 3551.
 
 ### M7.A.5.47o (overlap trace + gas-hopeless C3 tightening + session reset)
 
@@ -266,6 +220,16 @@ CI: 3551 passed, 6 skipped.
 **Evidence** (10-min nonstop, April 7, 13:26-13:36Z): Session consistency fixed: `session.session_windows_seen=2` = `exact_pool_trace.session_windows_seen=2`. Bridge counts at top level: `bridge_focused_pool_count=37`, `bridge_loaded_candidate_count=5`. Target pool RAIN/WETH at 47.41 bps in bridge (bucket A_cold_exec, `in_bridge_every_window=true`, 2/2), `session_hot_events_seen=0`, `reason_if_not_hit=no_hot_events_at_pool`. `other_live_pool_trace_top`: 1 non-bridge pool with hot events. Session goal MARKET_BLOCKED: same market overlap — no on-chain swaps at `0xd130...` during proof window.
 
 CI: 3582 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline ALL REQUIRED GATES PASSED.
+
+### M7.A.5.47p (truthful cross-artifact trace + bridge_selection_diff)
+
+**Diagnosis**: Fresh review of 47o artifacts reveals: (a) `bridge_hit_trace_top` stale — unconditionally preserved from previous cold window even when `cold_executable=[]`. (b) Cross-artifact mismatch: `m7_hot_latest.json` has `bridge_hit_trace_top=[]` but bridge file shows populated trace (stale). (c) `other_live_pool_trace_top.family=""` empty string (should be `"family_unresolved"` when PTT absent). (d) `c3_gas_hopeless_skipped=None` and `c3_gas_hopeless_families=None` in hot artifact (explicit None from `_bd`, not caught by `.get(key, default)`). (e) No `bridge_selection_diff_top` — no diagnostic showing whether bridge pools are starved of events or hot events are at non-bridge pools. (f) No live-miss auto-pin: pools seen with hot events but not in bridge are not auto-promoted.
+
+**Fixes**: (1) Conditional cold bridge preserve: split `_HOT_PRESERVE_KEYS` into `_HOT_PRESERVE_ALWAYS` (bridge_selected_pools_top, bridge_excluded_top) and `_HOT_PRESERVE_IF_COLD_EXEC` (bridge_hit_trace_top, cold_exec_pool_trace). When `cold_executable=[]`, trace keys explicitly cleared to `[]`. (2) c3_gas_hopeless: `_bd.get(key) or fallback` pattern handles both absent key and explicit None. (3) `family_unresolved` sentinel replaces empty string `""`. (4) `bridge_selection_diff_top`: new bidirectional diagnostic — `hot_seen_not_in_bridge` + `bridge_selected_but_no_hot_events` (top 10 each). (5) Live-miss auto-pin: pools from `other_live_pool_trace` with `reason_if_not_hit=="not_in_bridge"` auto-pinned to `_hot_seen_pin`. (6) Hot merge unconditional trace write — always clears stale. (7) 27 new tests in `test_47p_cross_artifact_truth.py`.
+
+**Evidence** (10-min nonstop, April 7, 14:19-14:30Z): Cross-artifact truth CONSISTENT — both `m7_hot_latest.json` and `m7_cold_hot_bridge.json` have `bridge_hit_trace_top=[]`. `c3_gas_hopeless_skipped=0` (integer, not None). `bridge_selection_diff_top` present: 10 `bridge_selected_but_no_hot_events` entries showing pools selected for bridge but receiving no hot events (key finding: bridge starvation is at the event layer, not the selection layer). `session_bridge_pool_hit_total=0`, `session_events_seen_total=8`. Session goal MARKET_BLOCKED: bridge pools correctly selected but on-chain swap events land at non-bridge pools.
+
+CI: 3609 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline ALL REQUIRED GATES PASSED.
 
 ---
 
@@ -285,13 +249,13 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **session_bridge_pool_hit_total=0** — 47o confirms pool is in bridge every window (`in_bridge_every_window=true`, 2/2, session-consistent). Blocker is market overlap: no on-chain swaps at `0xd130...` during proof windows. `dominant_hot_miss_reason=no_events_in_window` (31/50 windows had zero events).
-2. **cold_executable_positive=1** — only surviving candidate is RAIN/WETH at 47.41 bps (0xd13040d4...). Gas economics kills other families.
+1. **session_bridge_pool_hit_total=0** — 47p confirms bridge_selection_diff_top shows 10 bridge-selected pools receiving zero hot events. Starvation is at the event layer (no on-chain swaps at bridge pools during proof windows), not at bridge selection. `session_events_seen_total=8` — very low event rate. Cross-artifact truth now CONSISTENT.
+2. **cold_executable_positive fluctuates** — last proof window: `cold_executable=0`. Bridge retains pools from prior cold window but no fresh executables.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. Run longer nonstop (1+ hour) during high-activity periods to increase probability of on-chain swap at target pool.
-2. If bridge hit achieved (`session_bridge_pool_hit_total > 0`), measure hot conversion rate and `fast_score_scored`.
-3. If deficit remains after extended runs, consider onboarding lower-gas chain (Base) or widening adapter surface.
-4. Investigate `events_but_no_bridge_hit` (19/50 windows) — events arrive but at non-bridge pools. `other_live_pool_trace_top` now diagnoses these.
+1. Run longer nonstop (1+ hour) during high-activity periods to increase probability of on-chain swap at bridge pool.
+2. The bridge_selection_diff_top diagnostic now enables diagnosing whether the problem is bridge selection (wrong pools) or market (no swaps at correct pools). Current evidence: market starvation.
+3. Live-miss auto-pin should increase bridge diversity over time by promoting non-bridge pools that show hot events.
+4. If deficit remains after extended runs, consider onboarding lower-gas chain (Base) or widening adapter surface.

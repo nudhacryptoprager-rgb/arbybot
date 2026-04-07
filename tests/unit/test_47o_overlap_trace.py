@@ -187,7 +187,7 @@ def _build_other_live_pool_trace(
         else:
             op_reason = None
         op_info = ptt_ref.get(op) if ptt_ref else None
-        op_family = f"{op_info[0]}/{op_info[1]}" if op_info and len(op_info) >= 2 else ""
+        op_family = f"{op_info[0]}/{op_info[1]}" if op_info and len(op_info) >= 2 else "family_unresolved"
         other_trace.append({
             "pool_address": op,
             "family": op_family,
@@ -280,7 +280,7 @@ class TestOtherLivePoolTrace:
     def test_empty_family_if_no_ptt(self):
         raw = [_FakeResult("0xabc")]
         trace = _build_other_live_pool_trace(raw, set(), set(), ptt_ref=None)
-        assert trace[0]["family"] == ""
+        assert trace[0]["family"] == "family_unresolved"
 
 
 # ---------------------------------------------------------------------------
