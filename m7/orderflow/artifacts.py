@@ -875,6 +875,22 @@ def build_replay_summary(
                     _verified_net_bps = round(_pg.net_bps, 4)
                 except Exception:
                     pass
+        # M7.A.5.47k: Stale sub-reason classification.
+        # Distinguishes WHY a candidate is stale:
+        #   "pipeline_abort" — mid-pipeline wall-clock budget exceeded
+        #   "block_lag" — block_lag > 2 at final classification
+        #   "state_recheck" — same_state_class set to stale by state recheck
+        #   None — not stale
+        _stale_sub = None
+        if getattr(r, "reject_reason", None) == REJECT_STALE_POSITIVE:
+            _stage = getattr(r, "pipeline_stage_latency_ms", None) or {}
+            if _stage.get("mid_pipeline_abort"):
+                _stale_sub = "pipeline_abort"
+            elif _lag(r) > 2:
+                _stale_sub = "block_lag"
+            else:
+                _stale_sub = "state_recheck"
+
         return {
             "event_id": r.event_id,
             "actual_pair": r.actual_pair,
@@ -887,6 +903,7 @@ def build_replay_summary(
             "profit_guard_passed": r.profit_guard_passed,
             "pipeline_latency_ms": r.quote_pipeline_latency_ms,
             "reject_reason": r.reject_reason,
+            "stale_sub_reason": _stale_sub,
             # M7.A.5.43: Pool-address transport for hot lane bridge
             "pool_address": getattr(_evt, 'pool_address', None) if _evt else None,
             # M7.A.5.44: Execution-time local verification
@@ -917,7 +934,7 @@ def build_replay_summary(
     #   size_valid_for_token = true
     # This is the ONLY source for C1 stale-recovery bridge pinning.
     _ANOMALY_REJECTS = {REJECT_PRICING_ANOMALY, REJECT_TOKEN_PAIR_UNRESOLVED}
-    _recoverable_stale_candidates = sorted(
+    _recoverable_stale_all = sorted(
         [
             r for r in results
             if getattr(r, "reject_reason", None) == REJECT_STALE_POSITIVE
@@ -929,7 +946,13 @@ def build_replay_summary(
         key=lambda r: r.best_backrun_net_bps or 0,
         reverse=True,
     )[:_TOP_N]
-    top_recoverable_stale_candidates = [_compact_candidate(r) for r in _recoverable_stale_candidates]
+    # M7.A.5.47k: Split recoverable stale by route_viable.
+    # Only route_viable candidates feed C1 bridge pinning.
+    _recoverable_stale_viable = [r for r in _recoverable_stale_all if r.route_viable]
+    _recoverable_stale_not_viable = [r for r in _recoverable_stale_all if not r.route_viable]
+    top_recoverable_stale_candidates = [_compact_candidate(r) for r in _recoverable_stale_all]
+    top_recoverable_stale_route_viable = [_compact_candidate(r) for r in _recoverable_stale_viable]
+    top_recoverable_stale_not_viable = [_compact_candidate(r) for r in _recoverable_stale_not_viable]
 
     # M7.A.5.43: Near-executable candidates — size_valid + not anomaly,
     # but rejected by GAS_EXCEEDS_GROSS or staleness (net_bps > -50).
@@ -1362,6 +1385,9 @@ def build_replay_summary(
         "top_stale_positive_candidates": top_stale_positive_candidates,
         # M7.A.5.47h: Recoverable stale (lag ≤ 2, positive, size_valid)
         "top_recoverable_stale_candidates": top_recoverable_stale_candidates,
+        # M7.A.5.47k: Route-viable split for C1 bridge pinning
+        "top_recoverable_stale_route_viable": top_recoverable_stale_route_viable,
+        "top_recoverable_stale_not_viable": top_recoverable_stale_not_viable,
         # M7.A.5.43: Near-executable candidates (closest to viable)
         "near_executable_candidates": near_executable_candidates,
         # M7.A.5.44: Micro-refinement results (bounded size sweep for top candidates)

@@ -2698,6 +2698,7 @@ class TestM7A541TopCandidatePersistence:
             "scoring_path", "profit_guard_passed", "pipeline_latency_ms",
             "reject_reason", "pool_address",
             "verified_profitable", "verified_net_bps",
+            "stale_sub_reason",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys

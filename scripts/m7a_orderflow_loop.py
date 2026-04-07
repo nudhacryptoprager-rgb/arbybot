@@ -63,6 +63,11 @@ _HOT_INTENTS_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_intents_lat
 # M7.A.5.47: Cumulative hot rollup — survives across windows so progress is visible.
 _HOT_ROLLUP_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_rollup_latest.json")
 
+# M7.A.5.47k: Session ID — unique per process lifetime, used to reset session
+# counters in the hot rollup when the supervisor restarts.
+import uuid as _uuid
+_SESSION_ID = str(_uuid.uuid4())[:8]
+
 
 def _atomic_json_write(path: str, data: dict, **kwargs) -> None:
     """Write *data* as JSON to *path* atomically (tmp → os.replace).
@@ -132,6 +137,8 @@ def _write_cold_hot_bridge(
         candidates = artifact.get("top_executable_candidates", [])
         stale_pos = artifact.get("top_stale_positive_candidates", [])
         recoverable_stale = artifact.get("top_recoverable_stale_candidates", [])
+        recoverable_stale_viable = artifact.get("top_recoverable_stale_route_viable", [])
+        recoverable_stale_not_viable = artifact.get("top_recoverable_stale_not_viable", [])
         near_exec = artifact.get("near_executable_candidates", [])
 
         # M7.A.5.43: Transport the full _pool_token_cache for hot lane.
@@ -165,6 +172,8 @@ def _write_cold_hot_bridge(
             "cold_executable": candidates,
             "cold_stale_positive": stale_pos,
             "cold_recoverable_stale": recoverable_stale,
+            "cold_recoverable_stale_route_viable": recoverable_stale_viable,
+            "cold_recoverable_stale_not_viable": recoverable_stale_not_viable,
             "near_executable": near_exec,
             "signal_classification": artifact.get("signal_classification", {}),
             "pool_token_transport": _ptt,
@@ -181,6 +190,10 @@ def _write_cold_hot_bridge(
                 "hot_seen_backfill": 0,  # updated below after unresolved computation
                 "ptt_total": len(_ptt),
             },
+            # M7.A.5.47k: Initialize overlap/selected as empty lists so they
+            # are never null. Hot lane merges actual values after hot windows.
+            "hot_seen_vs_bridge_overlap_top": [],
+            "bridge_selected_pools_top": [],
         }
         # M7.A.5.47d: Attach hot_seen_unresolved_pools — pools discovered via
         # hot broad fallback that are NOT in _pool_token_cache. Cold lane uses
@@ -665,6 +678,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
 
     # M7.A.5.47d: Surface bridge miss sample at top level for diagnostics
     hot["bridge_miss_sample_top"] = _bd.get("bridge_miss_sample_top", [])
+    # M7.A.5.47k: Bridge exclusion reasons at top level
+    hot["bridge_excluded_top"] = _bd.get("bridge_excluded_top", [])
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -939,6 +954,24 @@ def _update_hot_rollup(
     rollup.setdefault("first_window_at", ts)
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
     rollup["events_seen_total"] = rollup.get("events_seen_total", 0) + events_count
+
+    # M7.A.5.47k: Session-scoped counters — reset each supervisor start.
+    # Uses _SESSION_ID (generated at import time) to detect new sessions.
+    _prev_sid = rollup.get("session", {}).get("session_id", "")
+    if _prev_sid != _SESSION_ID:
+        rollup["session"] = {"session_id": _SESSION_ID, "session_started_at": ts}
+    _sess = rollup["session"]
+    _sess["session_windows_seen"] = _sess.get("session_windows_seen", 0) + 1
+    _sess["session_events_seen_total"] = (
+        _sess.get("session_events_seen_total", 0) + events_count
+    )
+    _sess["session_bridge_pool_hit_total"] = (
+        _sess.get("session_bridge_pool_hit_total", 0)
+        + _bd.get("bridge_pool_address_hit_count", 0)
+    )
+    _sess["session_fast_path_scored_total"] = (
+        _sess.get("session_fast_path_scored_total", 0) + len(_fast)
+    )
     rollup["bridge_loaded_candidate_count_total"] = (
         rollup.get("bridge_loaded_candidate_count_total", 0)
         + _bd.get("bridge_loaded_candidate_count", 0)
@@ -1430,18 +1463,17 @@ def run_loop(cli_args) -> None:
                             _remaining, key=_activity_score, reverse=True,
                         )
 
-                        # M7.A.5.47h: 3-bucket fill with exact-pool pinning.
-                        # M7.A.5.47i: C1 (stale_recovery): ONLY recoverable stale
-                        #   with reject_reason=STALE_POSITIVE (no PRICING_ANOMALY,
-                        #   no TOKEN_PAIR_UNRESOLVED). Lag ≤ 2, positive, size_valid.
-                        #   Uses cold_recoverable_stale (strict from artifacts.py).
+                        # M7.A.5.47k: C1 (stale_recovery): ONLY recoverable stale
+                        #   with route_viable=true. Pools that are stale due to
+                        #   pipeline abort (route_viable=false) go to diagnostic only.
+                        #   Uses cold_recoverable_stale_route_viable (strict from artifacts.py).
                         #   + TTL-pinned pools from prior iterations.
                         # C2 (gas_near_survivor): near_executable with
                         #   GAS_EXCEEDS_GROSS AND positive gross. Gross-negative excluded.
                         # C3 (activity_fill): remaining PTT by activity score.
                         _ANOMALY_REJECTS = {"PRICING_ANOMALY", "TOKEN_PAIR_UNRESOLVED"}
                         _bucket_c1_stale: set = set()
-                        for _sp in _bridge.get("cold_recoverable_stale", []):
+                        for _sp in _bridge.get("cold_recoverable_stale_route_viable", []):
                             _sp_pa = (_sp.get("pool_address") or "").lower()
                             _sp_rr = _sp.get("reject_reason", "")
                             # Defense-in-depth: skip anomalies even if artifacts leaked them
@@ -1502,6 +1534,8 @@ def run_loop(cli_args) -> None:
                                 _ne_fam = tuple(sorted((_ne_info[0].lower(), _ne_info[1].lower())))
                                 if _ne_fam not in _gas_viable_families:
                                     continue  # gas-hopeless family → skip
+                            else:
+                                continue  # M7.A.5.47k: unknown family → skip (safe default)
                             _bucket_c2_gas_near.add(_ne_pa)
 
                         # Bucket C3: activity fill from remaining (exclude C1/C2)
@@ -1556,6 +1590,33 @@ def run_loop(cli_args) -> None:
                                 if pa not in _bridge_pool_addrs
                             ][:_deficit]
                             _bridge_pool_addrs |= set(_floor_fill)
+
+                        # M7.A.5.47k: Bridge rejection reasons — track why each
+                        # PTT pool was excluded from the focused bridge.
+                        _bridge_excluded: list = []
+                        for _bxr_pa in list(_ptt.keys())[:200]:
+                            _bxr_pa_low = _bxr_pa.lower()
+                            if _bxr_pa_low in _bridge_pool_addrs:
+                                continue
+                            _reason = "unknown"
+                            _ne_info_bx = _ptt.get(_bxr_pa_low) or _ptt.get(_bxr_pa)
+                            _bx_fam = None
+                            if _ne_info_bx and len(_ne_info_bx) >= 2:
+                                _bx_fam = tuple(sorted((_ne_info_bx[0].lower(), _ne_info_bx[1].lower())))
+                            # Check family cap first (most common exclusion)
+                            if _bx_fam and _family_counts.get(_bx_fam, 0) >= _FAMILY_CAP:
+                                _reason = "family_cap"
+                            elif _bxr_pa_low not in set(pa for pa in _remaining_ranked):
+                                _reason = "not_recently_active"
+                            elif _bx_fam and _bx_fam not in _gas_viable_families:
+                                _reason = "gas_too_negative"
+                            else:
+                                _reason = "capacity_limit"
+                            _bridge_excluded.append({
+                                "pool_address": _bxr_pa_low,
+                                "exclude_reason": _reason,
+                            })
+                        _bridge_excluded_top = _bridge_excluded[:10]
 
                         _active_in_filter = sum(
                             1 for pa in _bridge_pool_addrs
@@ -1707,6 +1768,8 @@ def run_loop(cli_args) -> None:
                     # bridge_loaded_candidate_count which is just A-bucket).
                     "bridge_focused_pool_count": len(_bridge_pool_addrs) if _bridge_pool_addrs else 0,
                     "bridge_loaded_candidate_count": 0,
+                    # M7.A.5.47k: Bridge exclusion reasons (why pools were left out)
+                    "bridge_excluded_top": _bridge_excluded_top if '_bridge_excluded_top' in dir() else [],
                     # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
                     "_bridge_cold_executable": _bridge.get("cold_executable", []),
                 }
@@ -1856,10 +1919,11 @@ def run_loop(cli_args) -> None:
                             })
                 _hot_bridge_diag["bridge_miss_sample_top"] = _bridge_miss_sample[:5]
 
-                # M7.A.5.47i: Auto-promote bridge-miss pools that are in
-                # recent_active_pools into _hot_seen_pin for next hot windows.
-                # This is the shortest path to first bridge_pool_hit: if we see
-                # events at a pool that's active, pin it into bucket B.
+                # M7.A.5.47k: Auto-promote ALL bridge-miss pools into
+                # _hot_seen_pin for next hot windows — not just those in
+                # recent_active_pools.  Every pool that generates a hot event
+                # but is missing from the bridge must be pinned so it gets
+                # scored in subsequent windows.
                 _active_pool_set: set = set()
                 for _rap in _bridge.get("recent_active_pools_top", []):
                     _rap_pa = (_rap.get("pool_address") or "").lower()
@@ -1868,14 +1932,18 @@ def run_loop(cli_args) -> None:
                 _auto_promoted = 0
                 for _bms in _bridge_miss_sample[:10]:
                     _bms_pa = (_bms.get("event_pool") or "").lower()
-                    if _bms_pa and _bms_pa in _active_pool_set:
-                        if _bms_pa not in _hot_seen_pin or _hot_seen_pin[_bms_pa].get("ttl", 0) <= 1:
-                            _hot_seen_pin[_bms_pa] = {
-                                "ttl": _HOT_SEEN_PIN_TTL_INIT,
-                                "last_iter": iteration,
-                                "source": "bridge_miss_active_promote",
-                            }
-                            _auto_promoted += 1
+                    if not _bms_pa:
+                        continue
+                    if _bms_pa not in _hot_seen_pin or _hot_seen_pin[_bms_pa].get("ttl", 0) <= 1:
+                        _src = ("bridge_miss_active_promote"
+                                if _bms_pa in _active_pool_set
+                                else "bridge_miss_direct_pin")
+                        _hot_seen_pin[_bms_pa] = {
+                            "ttl": _HOT_SEEN_PIN_TTL_INIT,
+                            "last_iter": iteration,
+                            "source": _src,
+                        }
+                        _auto_promoted += 1
                 if _auto_promoted > 0:
                     logger.info(
                         "Hot bridge-miss auto-promote: %d pools pinned (iter %d)",
@@ -1941,39 +2009,38 @@ def run_loop(cli_args) -> None:
                     bridge_diagnostics=_hot_bridge_diag,
                 )
 
-                # M7.A.5.47i: Write hot-side diagnostics back into bridge file.
-                # The bridge file is cold-written, but overlap/selection diagnostics
-                # are only available from hot lane, so we merge them in.
-                # Uses safe aliases (_ba, _bb, _bc1, _bc2, _ptt_diag) to avoid
-                # NameError when bridge assembly didn't complete.
+                # M7.A.5.47k: Write hot-side diagnostics back into bridge file.
+                # Always merge overlap + selected as lists (never null).
+                # Bridge file is cold-written with [] defaults; hot lane updates.
                 try:
-                    if os.path.exists(_COLD_HOT_BRIDGE_PATH) and _bridge_pool_addrs is not None:
+                    if os.path.exists(_COLD_HOT_BRIDGE_PATH):
                         with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _bf:
                             _bridge_update = json.load(_bf)
                         _bridge_update["hot_seen_vs_bridge_overlap_top"] = _overlap_diag[:5]
                         # M7.A.5.47i: bridge_selected_pools_top — which pools
                         # made it into the focused bridge and why.
                         _bsp_diag: list = []
-                        for _bsp_pa in list(_bridge_pool_addrs)[:30]:
-                            _bsp_bucket = "C3_activity_fill"
-                            if _bsp_pa in _ba:
-                                _bsp_bucket = "A_cold_exec"
-                            elif _bsp_pa in _bb:
-                                _bsp_bucket = "B_hot_seen"
-                            elif _bsp_pa in _bc1:
-                                _bsp_bucket = "C1_stale_recovery"
-                            elif _bsp_pa in _bc2:
-                                _bsp_bucket = "C2_gas_near"
-                            _bsp_info = _ptt_diag.get(_bsp_pa)
-                            _bsp_fam = ""
-                            if _bsp_info and len(_bsp_info) >= 2:
-                                _bsp_fam = f"{_bsp_info[0]}/{_bsp_info[1]}"
-                            _bsp_diag.append({
-                                "pool_address": _bsp_pa,
-                                "bucket": _bsp_bucket,
-                                "family": _bsp_fam,
-                                "selected": True,
-                            })
+                        if _bridge_pool_addrs is not None:
+                            for _bsp_pa in list(_bridge_pool_addrs)[:30]:
+                                _bsp_bucket = "C3_activity_fill"
+                                if _bsp_pa in _ba:
+                                    _bsp_bucket = "A_cold_exec"
+                                elif _bsp_pa in _bb:
+                                    _bsp_bucket = "B_hot_seen"
+                                elif _bsp_pa in _bc1:
+                                    _bsp_bucket = "C1_stale_recovery"
+                                elif _bsp_pa in _bc2:
+                                    _bsp_bucket = "C2_gas_near"
+                                _bsp_info = _ptt_diag.get(_bsp_pa)
+                                _bsp_fam = ""
+                                if _bsp_info and len(_bsp_info) >= 2:
+                                    _bsp_fam = f"{_bsp_info[0]}/{_bsp_info[1]}"
+                                _bsp_diag.append({
+                                    "pool_address": _bsp_pa,
+                                    "bucket": _bsp_bucket,
+                                    "family": _bsp_fam,
+                                    "selected": True,
+                                })
                         _bridge_update["bridge_selected_pools_top"] = _bsp_diag[:20]
                         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, _bridge_update, indent=2)
                 except Exception as _exc_bu:
