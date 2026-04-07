@@ -801,6 +801,9 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "fast_score_attempted": _cet_fast_attempted,
             "fast_score_scored": _cet_fast_scored,
             "reason_if_not_hit": _cet_reason,
+            # M7.A.5.47q: Surface stale_sub_reason so pipeline_abort
+            # is distinguishable from block_lag in the trace.
+            "stale_sub_reason": _cet.get("stale_sub_reason"),
         })
     hot["bridge_hit_trace_top"] = _bridge_hit_trace
     # M7.A.5.47m: Keep backward compat alias
@@ -894,6 +897,49 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     _sel_diff["hot_seen_not_in_bridge"] = _sel_diff["hot_seen_not_in_bridge"][:10]
     _sel_diff["bridge_selected_but_no_hot_events"] = _sel_diff["bridge_selected_but_no_hot_events"][:10]
     hot["bridge_selection_diff_top"] = _sel_diff
+
+    # M7.A.5.47q: bridge_selected_family_diff_top — family-level aggregation.
+    # Groups bridge-selected pools by family, counts total selected, events at ANY
+    # pool of that family this window, and exact hit count. Answers: is the family
+    # starved of events, or just the exact pool?
+    _fam_diff: dict = {}  # family_str -> {selected_pool_count, hot_events_any_pool, exact_hit_count, pools}
+    for _sel in _bd.get("bridge_selected_at_assembly", [])[:30]:
+        _sel_pa = (_sel.get("pool_address") or "").lower()
+        _sel_fam = _sel.get("family") or "family_unresolved"
+        if not _sel_fam or _sel_fam == "":
+            _sel_fam = "family_unresolved"
+        if _sel_fam not in _fam_diff:
+            _fam_diff[_sel_fam] = {
+                "family": _sel_fam,
+                "selected_pool_count": 0,
+                "hot_events_any_pool": 0,
+                "exact_hit_count": 0,
+                "pools": [],
+            }
+        _fd = _fam_diff[_sel_fam]
+        _fd["selected_pool_count"] += 1
+        # Count events at this specific pool
+        _sel_events = 0
+        for _r in _raw_results:
+            _evt = getattr(_r, "_source_event", None)
+            if _evt and getattr(_evt, "pool_address", "").lower() == _sel_pa:
+                _sel_events += 1
+        _fd["hot_events_any_pool"] += _sel_events
+        if _sel_events > 0:
+            _fd["exact_hit_count"] += 1
+        _fd["pools"].append(_sel_pa)
+    # Determine reason_if_zero for families with no events
+    _fam_diff_list = []
+    for _fd in sorted(_fam_diff.values(), key=lambda x: x["selected_pool_count"], reverse=True):
+        _reason_z = None
+        if _fd["hot_events_any_pool"] == 0:
+            _reason_z = "no_events_at_any_family_pool"
+        elif _fd["exact_hit_count"] == 0:
+            _reason_z = "events_at_family_but_no_exact_match"
+        _fd["reason_if_zero"] = _reason_z
+        del _fd["pools"]  # strip internal pool list from artifact
+        _fam_diff_list.append(_fd)
+    hot["bridge_selected_family_diff_top"] = _fam_diff_list[:10]
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -1398,6 +1444,67 @@ def _update_hot_rollup(
     else:
         _ept["reason_if_not_hit"] = None  # Hit! No miss reason.
     rollup["exact_pool_trace"] = _ept
+
+    # M7.A.5.47q: exact_family_trace — family-level session trace.
+    # Tracks whether ANY pool in the same token-pair family as the target pool
+    # receives events, even when the exact pool does not. Answers: is the blocker
+    # pool-specific or family-wide?
+    _ptt_rollup = _bd.get("_ptt", {})
+    _target_info = _ptt_rollup.get(_TARGET_POOL)
+    _target_family = (
+        f"{_target_info[0]}/{_target_info[1]}"
+        if _target_info and len(_target_info) >= 2
+        else "family_unresolved"
+    )
+    _eft = rollup.get("exact_family_trace", {})
+    if _eft.get("family") != _target_family or _prev_sid != _SESSION_ID:
+        _eft = {
+            "family": _target_family,
+            "selected_pools": [],
+            "session_family_events_seen": 0,
+            "session_exact_pool_events_seen": 0,
+            "reason_if_no_exact_hit": None,
+        }
+    # Discover sibling pools: all bridge-selected pools of the same family
+    _sibling_pools_this_window: list = []
+    for _sel in _bd.get("bridge_selected_at_assembly", []):
+        _sp_fam = _sel.get("family", "")
+        if _sp_fam == _target_family or (
+            _target_info and _sp_fam and _target_info[0] in _sp_fam and _target_info[1] in _sp_fam
+        ):
+            _sp_pa = (_sel.get("pool_address") or "").lower()
+            if _sp_pa and _sp_pa not in _eft.get("selected_pools", []):
+                _eft.setdefault("selected_pools", []).append(_sp_pa)
+            _sibling_pools_this_window.append(_sp_pa)
+    # Count events at any sibling pool this window
+    _family_events_this_window = 0
+    _exact_events_this_window = 0
+    for _r in _fast:
+        _evt = getattr(_r, "_source_event", None)
+        if not _evt:
+            continue
+        _ep = getattr(_evt, "pool_address", "").lower()
+        if _ep == _TARGET_POOL:
+            _exact_events_this_window += 1
+            _family_events_this_window += 1
+        elif _ep in _sibling_pools_this_window:
+            _family_events_this_window += 1
+    _eft["session_family_events_seen"] = (
+        _eft.get("session_family_events_seen", 0) + _family_events_this_window
+    )
+    _eft["session_exact_pool_events_seen"] = (
+        _eft.get("session_exact_pool_events_seen", 0) + _exact_events_this_window
+    )
+    # Determine reason
+    if _family_events_this_window == 0 and _exact_events_this_window == 0:
+        _eft["reason_if_no_exact_hit"] = "no_events_at_any_family_pool"
+    elif _family_events_this_window > 0 and _exact_events_this_window == 0:
+        _eft["reason_if_no_exact_hit"] = "events_at_sibling_not_exact_pool"
+    else:
+        _eft["reason_if_no_exact_hit"] = None  # Exact pool had events
+    # Truncate selected_pools list to prevent unbounded growth
+    _eft["selected_pools"] = _eft.get("selected_pools", [])[:20]
+    rollup["exact_family_trace"] = _eft
 
     try:
         _atomic_json_write(_HOT_ROLLUP_PATH, rollup, indent=2, default=str)
@@ -1973,9 +2080,14 @@ def run_loop(cli_args) -> None:
                             elif _bsa_pa in _bucket_c2_gas_near:
                                 _bsa_bucket = "C2_gas_near"
                             _bsa_info = _ptt.get(_bsa_pa) or _ptt.get(_bsa_pa.lower())
-                            _bsa_fam = ""
+                            _bsa_fam = "family_unresolved"
                             if _bsa_info and len(_bsa_info) >= 2:
                                 _bsa_fam = f"{_bsa_info[0]}/{_bsa_info[1]}"
+                            # M7.A.5.47q: Downgrade family_unresolved pools
+                            # from A_cold_exec — unresolved provenance should
+                            # not occupy a high-priority bridge slot.
+                            if _bsa_fam == "family_unresolved" and _bsa_bucket == "A_cold_exec":
+                                _bsa_bucket = "C3_activity_fill"
                             _bridge_selected_at_assembly.append({
                                 "pool_address": _bsa_pa,
                                 "bucket": _bsa_bucket,
@@ -2409,6 +2521,47 @@ def run_loop(cli_args) -> None:
                         _live_miss_pinned, iteration,
                     )
 
+                # M7.A.5.47q: Sibling-pool auto-pin — for surviving/stale-positive
+                # families, pin 1-3 sibling pools of the same family that are in
+                # PTT but not already in bridge. This tests whether the blocker
+                # is pool-specific or family-wide.
+                _sibling_pinned = 0
+                _ptt_for_sibling = _ptt if '_ptt' in dir() else {}
+                if _ptt_for_sibling and _bridge_hit_trace_data:
+                    # Collect families from cold-exec trace
+                    _cold_families: dict = {}  # family_key -> list of pool addresses
+                    for _bht in _bridge_hit_trace_data:
+                        _bht_pa = (_bht.get("pool_address") or "").lower()
+                        _bht_info = _ptt_for_sibling.get(_bht_pa)
+                        if _bht_info and len(_bht_info) >= 2:
+                            _bht_fam = tuple(sorted((_bht_info[0].lower(), _bht_info[1].lower())))
+                            _cold_families.setdefault(_bht_fam, []).append(_bht_pa)
+                    # For each cold-exec family, find siblings in PTT not in bridge
+                    _bridge_set_for_sibling = _bridge_pool_addrs if _bridge_pool_addrs else set()
+                    for _sib_fam, _sib_exec_pools in _cold_families.items():
+                        _sib_candidates = []
+                        for _sib_pa, _sib_info in _ptt_for_sibling.items():
+                            if not _sib_info or len(_sib_info) < 2:
+                                continue
+                            _sib_pa_low = _sib_pa.lower()
+                            _sib_fam_check = tuple(sorted((_sib_info[0].lower(), _sib_info[1].lower())))
+                            if (_sib_fam_check == _sib_fam
+                                    and _sib_pa_low not in _bridge_set_for_sibling
+                                    and _sib_pa_low not in _hot_seen_pin):
+                                _sib_candidates.append(_sib_pa_low)
+                        for _sib_c in _sib_candidates[:3]:
+                            _hot_seen_pin[_sib_c] = {
+                                "ttl": _HOT_SEEN_PIN_TTL_INIT,
+                                "last_iter": iteration,
+                                "source": "family_sibling_pin",
+                            }
+                            _sibling_pinned += 1
+                if _sibling_pinned > 0:
+                    logger.info(
+                        "Family sibling auto-pin: %d pools pinned (iter %d)",
+                        _sibling_pinned, iteration,
+                    )
+
                 # M7.A.5.47k: Write hot-side diagnostics back into bridge file.
                 # Always merge overlap + selected as lists (never null).
                 # Bridge file is cold-written with [] defaults; hot lane updates.
@@ -2433,6 +2586,14 @@ def run_loop(cli_args) -> None:
                         # M7.A.5.47p: Always write trace — if empty, explicitly clear stale data.
                         _bridge_update["bridge_hit_trace_top"] = _bridge_hit_trace_data or []
                         _bridge_update["cold_exec_pool_trace"] = _bridge_hit_trace_data or []
+                        # M7.A.5.47q: Persist c3_gas_hopeless into bridge file
+                        # so it's visible before the hot pass.
+                        _bridge_update["c3_gas_hopeless_skipped"] = (
+                            _hot_bridge_diag.get("c3_gas_hopeless_skipped") or 0
+                        )
+                        _bridge_update["c3_gas_hopeless_families"] = (
+                            _hot_bridge_diag.get("c3_gas_hopeless_families") or []
+                        )
                         # M7.A.5.47m: Persist cut_stage_top from cold lane artifact
                         # (already written to bridge by cold lane; refresh here
                         # to keep it consistent after hot merge).

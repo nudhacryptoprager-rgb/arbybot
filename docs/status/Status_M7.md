@@ -231,6 +231,16 @@ CI: 3582 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline
 
 CI: 3609 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline ALL REQUIRED GATES PASSED.
 
+### M7.A.5.47q (family-level event trace + sibling-pool pinning + stale separation)
+
+**Diagnosis**: Fresh review of 47p artifacts reveals: (a) `bridge_selected_but_no_hot_events=10` — all bridge-selected pools starved. (b) `hot_seen_not_in_bridge=[]` — bridge selection truthful, no missing pools. (c) Starvation could be pool-specific or family-wide — no diagnostic to distinguish. (d) `stale_pipeline_abort` mixed with generic stale — cannot assess if locally fixable. (e) `family_unresolved` pools occupy A_cold_exec bucket — wasting high-priority slots. (f) `c3_gas_hopeless_*` only in hot artifact, not visible in bridge file.
+
+**Fixes**: (1) `bridge_selected_family_diff_top`: family-level aggregation — groups bridge-selected pools by token-pair family, counts selected, events at any pool, exact hit count, reason_if_zero per family. (2) `exact_family_trace` in hot rollup: session-level family trace — resolves target family via PTT, discovers sibling pools, tracks `session_family_events_seen` vs `session_exact_pool_events_seen`, determines `reason_if_no_exact_hit`. Resets on session change. (3) Sibling-pool auto-pin: for each cold-exec family, pins up to 3 sibling pools of the same family from PTT not already in bridge/pin. Source `"family_sibling_pin"`. (4) `stale_sub_reason` surfaced in `bridge_hit_trace_top` entries: differentiates `pipeline_abort`, `block_lag`, `state_recheck`. (5) `family_unresolved` downgrade: pools with unresolved family demoted from A_cold_exec to C3_activity_fill. `_bsa_fam=""` replaced with `"family_unresolved"`. (6) `c3_gas_hopeless_skipped` / `c3_gas_hopeless_families` merged into bridge file with `or` fallback. (7) 36 new tests in `test_47q_family_trace.py`.
+
+**Evidence** (10-min nonstop, April 7, 16:57-17:07Z): `exact_family_trace` confirms family-wide starvation: `session_family_events_seen=0`, `session_exact_pool_events_seen=0`, `reason_if_no_exact_hit="no_events_at_any_family_pool"`. Only 1 pool of target family in bridge — no siblings discovered. `bridge_selected_family_diff_top` shows ALL 10 families with `reason_if_zero="no_events_at_any_family_pool"` — starvation is systemic across all families, not pool-specific. Family_unresolved pool `0xe879...` correctly downgraded to C3_activity_fill. 3/3 processes alive for 10 min, 0 restarts. Session: `session_windows_seen=3`, `session_events_seen_total=2`, `session_bridge_pool_hit_total=0`. Escalation applies: family starvation confirmed — blocker is event-source/architecture, not selection.
+
+CI: 3645 passed, 6 skipped. ci_full_pipeline ALL REQUIRED GATES PASSED.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -249,13 +259,13 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **session_bridge_pool_hit_total=0** — 47p confirms bridge_selection_diff_top shows 10 bridge-selected pools receiving zero hot events. Starvation is at the event layer (no on-chain swaps at bridge pools during proof windows), not at bridge selection. `session_events_seen_total=8` — very low event rate. Cross-artifact truth now CONSISTENT.
+1. **session_bridge_pool_hit_total=0 — CONFIRMED EVENT-SOURCE/ARCHITECTURE blocker** — 47q proves starvation is family-wide and systemic: ALL 10 bridge families show `no_events_at_any_family_pool`. `exact_family_trace` for target RAIN/WETH family shows 0 family events across entire session. Not pool-specific, not selection-related — the bridge simply does not receive on-chain swaps during proof windows. Per 47q escalation rule: blocker officially moves from "selection" to "event-source/architecture".
 2. **cold_executable_positive fluctuates** — last proof window: `cold_executable=0`. Bridge retains pools from prior cold window but no fresh executables.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. Run longer nonstop (1+ hour) during high-activity periods to increase probability of on-chain swap at bridge pool.
-2. The bridge_selection_diff_top diagnostic now enables diagnosing whether the problem is bridge selection (wrong pools) or market (no swaps at correct pools). Current evidence: market starvation.
-3. Live-miss auto-pin should increase bridge diversity over time by promoting non-bridge pools that show hot events.
-4. If deficit remains after extended runs, consider onboarding lower-gas chain (Base) or widening adapter surface.
+1. Escalation path (47q conclusion): bridge selection is truthful and family-wide — no swaps at ANY family pool. Next investigation should focus on event-source architecture (ws-live subscription filter, block range, event type whitelist) or different chain/market (Base, higher-volume pairs).
+2. If choosing to stay on Arbitrum One, run nonstop during peak activity (UTC 14:00-18:00) with wider pair surface — current bridge families may be low-volume tail pairs.
+3. Alternative: onboard Base (higher event rate, lower gas) — `config/onboard_base_stage2.yaml` already prepared.
+4. The `bridge_selected_family_diff_top` diagnostic is now the canonical tool for assessing family-level starvation on any chain.
