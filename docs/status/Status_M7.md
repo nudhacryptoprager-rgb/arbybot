@@ -18,35 +18,22 @@ Steps 1-8 done. Verdict: `recommend_open_m7b: false`, `recommend_freeze_current_
 | M7.A.2 expanded_10 | +DAI/GMX/UNI → 8 nodes | 3 | -11.00 to -20.91 | -3.51 bps | NO-GRADUATE |
 | M7.A.3 temporal regime | medium_activity regime | 3 | -14.16 to -26.46 | -3.51 bps | NO-GRADUATE |
 
-**Key findings**: All cycles negative at all sizes. U-shaped cost curves (gas dominates small, slippage dominates large). 6/6 blockers stable, 0 flapping. All top cycles ARB→USDC→WETH→ARB (concentration=1.0). Route failure rate 33% (VE33/Ramses). Gross sometimes positive (+2.25 bps) but gas+fees always push net negative.
+**Key findings**: All cycles negative at all sizes. U-shaped cost curves. 6/6 blockers stable. All top cycles ARB→USDC→WETH→ARB. Route failure 33%. Gross sometimes positive but gas+fees push net negative. Bounded-scope — does not prove absence of edge on other surfaces/chains.
 
-**Blocker tags** (all stable): `GROSS_NEGATIVE_CORE`, `GAS_DOMINANT_SMALL`, `SLIPPAGE_DOMINANT_LARGE`, `THIRD_LEG_FEE_BINDING`, `SINGLE_TRIPLE_CONCENTRATION`, `QUOTE_FAILURE_BREADTH_LIMIT`.
-
-Artifacts: `data/tmp/m7a_verdict.json`, `m7a_expanded_verdict.json`, `m7a_regime_repeatability.json`.
-
-### Caveats
-
-Market is not static — bounded-scope verdicts do not prove absence of edge on all surfaces, chains, or regimes. L1 gas is static estimate; artifacts are `data/tmp/` provenance.
+**Blocker tags**: `GROSS_NEGATIVE_CORE`, `GAS_DOMINANT_SMALL`, `SLIPPAGE_DOMINANT_LARGE`, `THIRD_LEG_FEE_BINDING`, `SINGLE_TRIPLE_CONCENTRATION`, `QUOTE_FAILURE_BREADTH_LIMIT`.
 
 ### Modules
 
-- `engine/triangular_graph.py` — PoolEdge, PoolGraph, graph builders, universe filters
-- `engine/triangular_cycles.py` — cycle discovery, `score_cycle_measured`, `classify_same_state`, SizeSweepResult
-- `scripts/m7a_enumerate_cycles.py` — CLI: `--source`, `--score`, `--sweep-top`, `--universe`, `--repeatability`, `--verdict`, `--regime-repeatability`
-- `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay: `--offline`, `--replay`, `--online`, `--live-blocks N`, `--ws-live`, `--intent-scout`
-- Tests: 152 in `test_triangular_*.py` (3 files), 369 in `test_orderflow_*.py` (8 files + conftest.py)
+- `engine/triangular_graph.py`, `engine/triangular_cycles.py` — graph, cycle discovery, scoring
+- `scripts/m7a_enumerate_cycles.py` — CLI for sweep/verdict/repeatability
+- `scripts/m7a_orderflow_replay.py` — M7.A.4/M7.A.5 event-driven replay and ws-live
+- Tests: 152 in `test_triangular_*.py`, 369 in `test_orderflow_*.py`
 
 ---
 
 ## M7.A.4: Orderflow-Driven Backrun/Replay Hypothesis
 
-**Hypothesis**: Edge may emerge from event-driven replay (backrun after user trades) rather than from static AMM triangular state.
-
-**Infrastructure**: `OrderflowEvent` (15 fields), `BackrunResult` (23 fields), `IntentSurfaceAssessment` (16 fields). 5 fixture events, offline scoring, intent scout (4 surfaces).
-
-**Offline evidence**: 5 events, best_net=-1.55 bps (better than triangular -14.16, worse than two-leg -3.51). Intent scout: `block_event_backrun` = highest feasibility surface.
-
-**M7.A.4 is a closed bounded baseline** for offline-estimated backrun replay.
+**Offline evidence**: 5 events, best_net=-1.55 bps (better than triangular, worse than two-leg). Intent scout: `block_event_backrun` = highest feasibility. M7.A.4 is a closed bounded baseline.
 
 ---
 
@@ -270,6 +257,16 @@ CI: 3508 passed, 6 skipped.
 
 CI: 3551 passed, 6 skipped.
 
+### M7.A.5.47o (overlap trace + gas-hopeless C3 tightening + session reset)
+
+**Diagnosis**: Fresh review of 47n artifacts reveals: (a) Session-rollup inconsistency — `session.session_windows_seen=2` vs `exact_pool_trace.session_windows_seen=7` (exact_pool_trace did not reset on supervisor restart). (b) `bridge_focused_pool_count` and `bridge_loaded_candidate_count` are None at hot artifact top level (only in `hot_gap_debug`). (c) No trace for non-cold-exec pools that have hot events (why other pools don't convert). (d) C3 bridge fill admits deep-negative GAS_EXCEEDS_GROSS families (wasting attention slots).
+
+**Fixes**: (1) `exact_pool_trace` now resets on session change (`_prev_sid != _SESSION_ID`), consistent with session counters. (2) `bridge_focused_pool_count`/`bridge_loaded_candidate_count` surfaced to hot artifact top level (integers, not None). (3) `other_live_pool_trace_top`: new diagnostic showing top 10 non-cold-exec pools with hot events, family, bridge membership, bucket, and reason_if_not_hit. (4) Gas-hopeless C3 tightening: families where ALL candidates are GAS_EXCEEDS_GROSS with worst gap < -5 bps are excluded from C3 fill. `c3_gas_hopeless_skipped`/`c3_gas_hopeless_families` at hot artifact top level. (5) DEV_REPORT `timestamp_utc` fixed to match `run_summary_latest.run_context.run_timestamp`. (6) 31 new tests.
+
+**Evidence** (10-min nonstop, April 7, 13:26-13:36Z): Session consistency fixed: `session.session_windows_seen=2` = `exact_pool_trace.session_windows_seen=2`. Bridge counts at top level: `bridge_focused_pool_count=37`, `bridge_loaded_candidate_count=5`. Target pool RAIN/WETH at 47.41 bps in bridge (bucket A_cold_exec, `in_bridge_every_window=true`, 2/2), `session_hot_events_seen=0`, `reason_if_not_hit=no_hot_events_at_pool`. `other_live_pool_trace_top`: 1 non-bridge pool with hot events. Session goal MARKET_BLOCKED: same market overlap — no on-chain swaps at `0xd130...` during proof window.
+
+CI: 3582 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline ALL REQUIRED GATES PASSED.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -288,8 +285,8 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **session_bridge_pool_hit_total=0** — 47n confirms pool is in bridge every window (`in_bridge_every_window=true`, 5/5). Blocker is market overlap: no on-chain swaps at `0xd130...` during proof windows.
-2. **cold_executable_positive=1** — pool `0x25118290/WETH` survives at 21.1663 bps, verified_net=19.3663. Gas economics kills other families.
+1. **session_bridge_pool_hit_total=0** — 47o confirms pool is in bridge every window (`in_bridge_every_window=true`, 2/2, session-consistent). Blocker is market overlap: no on-chain swaps at `0xd130...` during proof windows. `dominant_hot_miss_reason=no_events_in_window` (31/50 windows had zero events).
+2. **cold_executable_positive=1** — only surviving candidate is RAIN/WETH at 47.41 bps (0xd13040d4...). Gas economics kills other families.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
@@ -297,3 +294,4 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 1. Run longer nonstop (1+ hour) during high-activity periods to increase probability of on-chain swap at target pool.
 2. If bridge hit achieved (`session_bridge_pool_hit_total > 0`), measure hot conversion rate and `fast_score_scored`.
 3. If deficit remains after extended runs, consider onboarding lower-gas chain (Base) or widening adapter surface.
+4. Investigate `events_but_no_bridge_hit` (19/50 windows) — events arrive but at non-bridge pools. `other_live_pool_trace_top` now diagnoses these.

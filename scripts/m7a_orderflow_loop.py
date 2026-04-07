@@ -715,6 +715,13 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         ),
     }
 
+    # M7.A.5.47o: Surface bridge counts at top level (not just in hot_gap_debug).
+    hot["bridge_focused_pool_count"] = _bd.get("bridge_focused_pool_count", 0)
+    hot["bridge_loaded_candidate_count"] = _bd.get("bridge_loaded_candidate_count", 0)
+    # M7.A.5.47o: Gas-hopeless C3 tightening stats at top level.
+    hot["c3_gas_hopeless_skipped"] = _bd.get("c3_gas_hopeless_skipped", 0)
+    hot["c3_gas_hopeless_families"] = _bd.get("c3_gas_hopeless_families", [])
+
     # M7.A.5.47d: Surface bridge miss sample at top level for diagnostics
     hot["bridge_miss_sample_top"] = _bd.get("bridge_miss_sample_top", [])
     # M7.A.5.47k: Bridge exclusion reasons at top level
@@ -782,6 +789,60 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     hot["bridge_hit_trace_top"] = _bridge_hit_trace
     # M7.A.5.47m: Keep backward compat alias
     hot["cold_exec_pool_trace"] = _bridge_hit_trace
+
+    # M7.A.5.47o: other_live_pool_trace_top — shows live pools (from hot events)
+    # that are NOT in bridge_hit_trace (i.e. not cold-exec pools) but had events.
+    # Answers: why do OTHER live pools not get hit?
+    _cold_exec_addrs = {(c.get("pool_address") or "").lower() for c in _bridge_cold_execs}
+    _ptt_ref = _bd.get("_ptt", {})  # pool_token_transport if available
+    _other_pool_events: dict = {}
+    for _r in _raw_results:
+        _evt = getattr(_r, "_source_event", None)
+        if not _evt:
+            continue
+        _op = getattr(_evt, "pool_address", "").lower()
+        if not _op or _op in _cold_exec_addrs:
+            continue
+        if _op not in _other_pool_events:
+            _other_pool_events[_op] = {"hot_events": 0, "fast_attempted": 0, "fast_scored": 0}
+        _other_pool_events[_op]["hot_events"] += 1
+        if getattr(_r, "scoring_path", None) != "hot_skip":
+            _other_pool_events[_op]["fast_attempted"] += 1
+            if (getattr(_r, "best_backrun_net_bps", None) or 0) != 0:
+                _other_pool_events[_op]["fast_scored"] += 1
+    _other_trace: list = []
+    for _op, _oc in sorted(_other_pool_events.items(), key=lambda x: x[1]["hot_events"], reverse=True)[:10]:
+        _op_in_bridge = _op in _full_bridge_set
+        _op_bucket = None
+        if _op_in_bridge:
+            for _sel in _bd.get("bridge_selected_at_assembly", []):
+                if (_sel.get("pool_address") or "").lower() == _op:
+                    _op_bucket = _sel.get("bucket")
+                    break
+            if _op_bucket is None:
+                _op_bucket = "unlabeled_in_bridge"
+        _op_reason = None
+        if not _op_in_bridge:
+            _op_reason = "not_in_bridge"
+        elif _oc["fast_attempted"] == 0:
+            _op_reason = "hot_skip_no_scoring"
+        elif _oc["fast_scored"] == 0:
+            _op_reason = "scored_but_no_result"
+        else:
+            _op_reason = None
+        _op_info = _ptt_ref.get(_op) if _ptt_ref else None
+        _op_family = f"{_op_info[0]}/{_op_info[1]}" if _op_info and len(_op_info) >= 2 else ""
+        _other_trace.append({
+            "pool_address": _op,
+            "family": _op_family,
+            "in_bridge": _op_in_bridge,
+            "selected_bucket": _op_bucket,
+            "hot_events_seen": _oc["hot_events"],
+            "fast_score_attempted": _oc["fast_attempted"],
+            "fast_score_scored": _oc["fast_scored"],
+            "reason_if_not_hit": _op_reason,
+        })
+    hot["other_live_pool_trace_top"] = _other_trace
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -1235,7 +1296,8 @@ def _update_hot_rollup(
     # Did any hot event arrive at this exact pool across the session?
     _TARGET_POOL = "0xd13040d4fe917ee704158cfcb3338dcd2838b245"
     _ept = rollup.get("exact_pool_trace", {})
-    if _ept.get("pool_address") != _TARGET_POOL:
+    # M7.A.5.47o: Reset exact_pool_trace on session change (consistent with session counters).
+    if _ept.get("pool_address") != _TARGET_POOL or _prev_sid != _SESSION_ID:
         # Fresh trace for this target
         _ept = {
             "pool_address": _TARGET_POOL,
@@ -1726,6 +1788,31 @@ def run_loop(cli_args) -> None:
                             if pa not in _committed
                         ]
 
+                        # M7.A.5.47o: Build gas-hopeless family set — families where
+                        # ALL cold candidates are GAS_EXCEEDS_GROSS and mean_gas_gap
+                        # below -5 bps. These families waste hot attention slots.
+                        _C3_GAS_HOPELESS_BPS = -5
+                        _family_gas_stats: dict = {}  # family -> {"gas_killed": int, "total": int, "worst_gap": float}
+                        for _cand in _bridge.get("candidates", []):
+                            _c_pa = (_cand.get("pool_address") or "").lower()
+                            _c_fam = _pool_family(_c_pa) if _c_pa in _ptt else None
+                            if _c_fam is None:
+                                continue
+                            _fgs = _family_gas_stats.setdefault(_c_fam, {"gas_killed": 0, "total": 0, "worst_gap": 0.0})
+                            _fgs["total"] += 1
+                            if _cand.get("reject_reason") == "GAS_EXCEEDS_GROSS":
+                                _fgs["gas_killed"] += 1
+                                _gfg = _cand.get("gas_floor_gap_bps")
+                                if _gfg is not None:
+                                    _fgs["worst_gap"] = min(_fgs["worst_gap"], _gfg)
+                        _gas_hopeless_families: set = set()
+                        for _ghf, _ghs in _family_gas_stats.items():
+                            if (_ghs["total"] > 0
+                                    and _ghs["gas_killed"] == _ghs["total"]
+                                    and _ghs["worst_gap"] < _C3_GAS_HOPELESS_BPS
+                                    and _ghf not in _gas_viable_families):
+                                _gas_hopeless_families.add(_ghf)
+
                         # M7.A.5.47f: Diversity-aware fill — max _FAMILY_CAP pools
                         # per token-pair family to prevent one family from monopolizing
                         # the focused filter and cementing concentration.
@@ -1745,11 +1832,16 @@ def run_loop(cli_args) -> None:
 
                         _slots_for_fill = max(0, _pool_cap - len(_committed))
                         _diverse_fill: list = []
+                        _c3_gas_hopeless_skipped = 0
                         for _rpa in _remaining_for_fill:
                             if len(_diverse_fill) >= _slots_for_fill:
                                 break
                             _fam = _pool_family(_rpa)
                             if _family_counts.get(_fam, 0) >= _FAMILY_CAP:
+                                continue
+                            # M7.A.5.47o: skip gas-hopeless families in C3 fill
+                            if _fam in _gas_hopeless_families:
+                                _c3_gas_hopeless_skipped += 1
                                 continue
                             _diverse_fill.append(_rpa)
                             _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
@@ -2000,6 +2092,11 @@ def run_loop(cli_args) -> None:
                     "_bucket_a": _bucket_a if '_bucket_a' in dir() else set(),
                     # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
                     "_bridge_cold_executable": _bridge.get("cold_executable", []),
+                    # M7.A.5.47o: Carry PTT reference for family lookup in other_live_pool_trace.
+                    "_ptt": _ptt if '_ptt' in dir() else {},
+                    # M7.A.5.47o: Gas-hopeless family stats from C3 bridge tightening.
+                    "c3_gas_hopeless_skipped": _c3_gas_hopeless_skipped if '_c3_gas_hopeless_skipped' in dir() else 0,
+                    "c3_gas_hopeless_families": sorted(str(f) for f in _gas_hopeless_families) if '_gas_hopeless_families' in dir() and _gas_hopeless_families else [],
                 }
                 # M7.A.5.47i: Split bridge diagnostics into independent blocks
                 # so one failure doesn't kill the bridge hit counter.
