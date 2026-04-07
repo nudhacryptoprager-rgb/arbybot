@@ -258,6 +258,18 @@ CI: 3508 passed, 6 skipped.
 
 **Fixes**: (1) Bridge selected ordering: A-bucket first via explicit priority (sorted(A) → B → C1/C2 → C3 → rest). (2) `bridge_hit_trace_top` replaces `cold_exec_pool_trace`: uses full `_bridge_pool_addrs_set` for truthful `in_bridge`, adds `selected_bucket`, `reason_if_not_hit`, separate `fast_score_attempted`/`fast_score_scored`. (3) Bridge null contract: cold-write `bridge_excluded_top=[]`, `cut_stage_top={}`. Hot merge uses assembly-ordered list. (4) `run_context` in all 4 M7 artifact writers. (5) Session rollup flattened to top level. (6) 21 new tests. CI: 3529 passed, 6 skipped.
 
+### M7.A.5.47n (cross-artifact truth + exact-pool session trace)
+
+**Diagnosis**: Fresh 10-min nonstop (April 7, 11:47-11:57Z) confirms 47m fixes: `cold_exec_pool_trace.in_bridge=true`, `bridge_selected_pools_top` has 30 entries in hot artifact. But bridge FILE has `bridge_selected_pools_top=[]` — cold lane overwrites hot-merged values (race condition). No `bridge_hit_trace_top`/`cold_exec_pool_trace` in bridge file. No per-pool session trace. `session_bridge_pool_hit_total=0` (market: no on-chain swaps at exact pool).
+
+**Root cause**: Cold and hot are separate concurrent processes. Cold lane calls `_write_cold_hot_bridge()` with empty `bridge_selected_pools_top=[]` because cold doesn't do bridge assembly. Hot lane merges correctly but next cold iteration clobbers. `bridge_hit_trace_top`/`cold_exec_pool_trace` only written to hot artifact, never merged back.
+
+**Fixes**: (1) Cold bridge preserve: read existing bridge file before overwriting; preserve `bridge_selected_pools_top`, `bridge_hit_trace_top`, `cold_exec_pool_trace`, `bridge_excluded_top` if existing value is truthy and cold payload is falsy. (2) Hot merge writes `bridge_hit_trace_top` + `cold_exec_pool_trace` to bridge file (from `_write_hot_artifact` return value). (3) `exact_pool_trace` in hot rollup: per-window tracking for target pool `0xd13040d4...` — `session_windows_in_bridge`, `session_hot_events_seen`, `in_bridge_every_window`, `reason_if_not_hit`. (4) 22 new tests.
+
+**Evidence** (10-min nonstop, April 7, 12:22-12:32Z): Bridge file `bridge_selected_pools_top`=20 (was `[]`), `bridge_hit_trace_top`=1 entry with `in_bridge=true`. `exact_pool_trace`: `session_windows_in_bridge=5/5`, `in_bridge_every_window=true`, `session_hot_events_seen=0`, `reason_if_not_hit=no_hot_events_at_pool`. Session goal MARKET_BLOCKED: code places pool correctly in bridge every window; no on-chain swaps at this pool during proof window.
+
+CI: 3551 passed, 6 skipped.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -276,12 +288,12 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **bridge_pool_hit_total=0** — 47m fixes observability (in_bridge was false due to set truncation). Nonstop proof needed to verify truthful bridge hit.
-2. **cold_executable_positive=3** — pool `0xd130...` survives at 19.4505 bps. Gas economics kills other families.
+1. **session_bridge_pool_hit_total=0** — 47n confirms pool is in bridge every window (`in_bridge_every_window=true`, 5/5). Blocker is market overlap: no on-chain swaps at `0xd130...` during proof windows.
+2. **cold_executable_positive=1** — pool `0x25118290/WETH` survives at 21.1663 bps, verified_net=19.3663. Gas economics kills other families.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. Clear `__pycache__`, run 10-min nonstop with 47m bytecode — verify `bridge_hit_trace_top.in_bridge=true`, `session_bridge_pool_hit_total > 0`, `run_context` present.
-2. If bridge hit achieved, measure hot conversion rate.
-3. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface.
+1. Run longer nonstop (1+ hour) during high-activity periods to increase probability of on-chain swap at target pool.
+2. If bridge hit achieved (`session_bridge_pool_hit_total > 0`), measure hot conversion rate and `fast_score_scored`.
+3. If deficit remains after extended runs, consider onboarding lower-gas chain (Base) or widening adapter surface.

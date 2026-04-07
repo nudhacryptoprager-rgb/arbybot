@@ -254,6 +254,24 @@ def _write_cold_hot_bridge(
         payload["hot_seen_unresolved_pools"] = _hot_unresolved
         # M7.A.5.47f: Update hot_seen_backfill count
         payload["candidate_source_breakdown"]["hot_seen_backfill"] = len(_hot_unresolved)
+        # M7.A.5.47n: Preserve hot-derived fields from existing bridge file.
+        # Cold lane writes bridge_selected_pools_top=[] because it doesn't
+        # do bridge assembly (hot-only). Without this, cold overwrites wipe
+        # the hot-merged values every cold iteration.
+        _HOT_PRESERVE_KEYS = (
+            "bridge_selected_pools_top", "bridge_hit_trace_top",
+            "cold_exec_pool_trace", "bridge_excluded_top",
+        )
+        try:
+            if os.path.exists(_COLD_HOT_BRIDGE_PATH):
+                with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _epf:
+                    _existing = json.load(_epf)
+                for _hpk in _HOT_PRESERVE_KEYS:
+                    _existing_val = _existing.get(_hpk)
+                    if _existing_val and not payload.get(_hpk):
+                        payload[_hpk] = _existing_val
+        except Exception:
+            pass
         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
     except Exception as exc:
         logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
@@ -563,7 +581,7 @@ def _run_profit_guard_on_results(results: list) -> list:
 def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
                         fast_results: list = None, promoted_pairs: list = None,
                         candidate_pairs: list = None,
-                        bridge_diagnostics: dict = None) -> None:
+                        bridge_diagnostics: dict = None) -> list:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
@@ -879,6 +897,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         logger.info("Hot lane artifact written to %s", _HOT_ARTIFACT_PATH)
     except Exception as exc:
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
+    # M7.A.5.47n: Return bridge hit trace so caller can merge into bridge file.
+    return _bridge_hit_trace
 
 
 def _compute_headline_level(funnel: dict) -> str:
@@ -1209,6 +1229,61 @@ def _update_hot_rollup(
                 "session_events_seen_total", "session_bridge_pool_hit_total",
                 "session_fast_path_scored_total"):
         rollup[_sk] = _sess.get(_sk)
+
+    # M7.A.5.47n: Exact-pool session trace — per-window tracking for target
+    # cold-executable pool. Answers: is the pool consistently in bridge?
+    # Did any hot event arrive at this exact pool across the session?
+    _TARGET_POOL = "0xd13040d4fe917ee704158cfcb3338dcd2838b245"
+    _ept = rollup.get("exact_pool_trace", {})
+    if _ept.get("pool_address") != _TARGET_POOL:
+        # Fresh trace for this target
+        _ept = {
+            "pool_address": _TARGET_POOL,
+            "session_windows_seen": 0,
+            "session_windows_in_bridge": 0,
+            "session_hot_events_seen": 0,
+            "session_fast_attempted": 0,
+            "session_fast_scored": 0,
+            "in_bridge_every_window": True,
+            "last_seen_window": None,
+            "reason_if_not_hit": None,
+        }
+    _ept["session_windows_seen"] = _ept.get("session_windows_seen", 0) + 1
+    # Check if target pool is in the full bridge set this window
+    _target_in_bridge = _TARGET_POOL in _bd.get("_bridge_pool_addrs_set", set())
+    if _target_in_bridge:
+        _ept["session_windows_in_bridge"] = _ept.get("session_windows_in_bridge", 0) + 1
+    else:
+        _ept["in_bridge_every_window"] = False
+    # Check hot events at target pool this window
+    _target_hot_events = 0
+    _target_fast_attempted = 0
+    _target_fast_scored = 0
+    for _r in _fast:
+        _evt = getattr(_r, "_source_event", None)
+        if _evt and getattr(_evt, "pool_address", "").lower() == _TARGET_POOL:
+            _target_hot_events += 1
+            if getattr(_r, "scoring_path", None) != "hot_skip":
+                _target_fast_attempted += 1
+                if (getattr(_r, "best_backrun_net_bps", None) or 0) != 0:
+                    _target_fast_scored += 1
+    _ept["session_hot_events_seen"] = _ept.get("session_hot_events_seen", 0) + _target_hot_events
+    _ept["session_fast_attempted"] = _ept.get("session_fast_attempted", 0) + _target_fast_attempted
+    _ept["session_fast_scored"] = _ept.get("session_fast_scored", 0) + _target_fast_scored
+    if _target_hot_events > 0:
+        _ept["last_seen_window"] = ts
+    # Determine reason_if_not_hit (latest window's reason)
+    if not _target_in_bridge:
+        _ept["reason_if_not_hit"] = "not_in_bridge"
+    elif _target_hot_events == 0:
+        _ept["reason_if_not_hit"] = "no_hot_events_at_pool"
+    elif _target_fast_attempted == 0:
+        _ept["reason_if_not_hit"] = "hot_skip_no_scoring"
+    elif _target_fast_scored == 0:
+        _ept["reason_if_not_hit"] = "scored_but_no_result"
+    else:
+        _ept["reason_if_not_hit"] = None  # Hit! No miss reason.
+    rollup["exact_pool_trace"] = _ept
 
     try:
         _atomic_json_write(_HOT_ROLLUP_PATH, rollup, indent=2, default=str)
@@ -2154,7 +2229,8 @@ def run_loop(cli_args) -> None:
                     - _hot_bridge_diag.get("canonical_pair_match_count", 0)
                 )
 
-                _write_hot_artifact(
+                # M7.A.5.47n: Capture bridge_hit_trace for merge into bridge file.
+                _bridge_hit_trace_data = _write_hot_artifact(
                     artifact, iteration, guard_results,
                     fast_results=fast_results,
                     promoted_pairs=_promoted_pairs.get("execution", []),
@@ -2181,6 +2257,11 @@ def run_loop(cli_args) -> None:
                         _bridge_update["bridge_excluded_top"] = (
                             _bridge_excluded_top if '_bridge_excluded_top' in dir() else []
                         )
+                        # M7.A.5.47n: Persist bridge_hit_trace_top + cold_exec_pool_trace
+                        # into bridge file so cross-artifact truth is always consistent.
+                        if _bridge_hit_trace_data:
+                            _bridge_update["bridge_hit_trace_top"] = _bridge_hit_trace_data
+                            _bridge_update["cold_exec_pool_trace"] = _bridge_hit_trace_data
                         # M7.A.5.47m: Persist cut_stage_top from cold lane artifact
                         # (already written to bridge by cold lane; refresh here
                         # to keep it consistent after hot merge).
