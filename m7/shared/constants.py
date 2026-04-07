@@ -207,6 +207,10 @@ _DEFAULT_FEE_TIERS = [500, 3000, 100, 10000]
 # Events whose estimated gross < this floor are rejected without quoting.
 GAS_FLOOR_BPS_ARBITRUM = 2.0  # ~2 bps baseline gas cost on Arbitrum
 
+# M7.E1: Base gas floor — significantly cheaper than Arbitrum (no L1 data poster
+# component at current base fee levels; typical swap cost ~0.1-0.3 bps).
+GAS_FLOOR_BPS_BASE = 0.5
+
 # ---------------------------------------------------------------------------
 # M7.A.5.27: Timeboost ordering — Arbitrum express lane constants
 # ---------------------------------------------------------------------------
@@ -248,6 +252,49 @@ HOT_WATCHLIST_PAIRS = [
     ("WETH", "USDT"),
     ("WETH", "ARB"),
 ]
+
+# ---------------------------------------------------------------------------
+# M7.E1: Chain-aware prewarm pairs (event-source pilot)
+# ---------------------------------------------------------------------------
+# Arbitrum: high-frequency DeFi pairs on Arbitrum One
+PREWARM_PAIRS_ARBITRUM = [
+    ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
+    ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
+]
+# Base: narrow stable/wrapped contour from onboard_base_profit.yaml
+PREWARM_PAIRS_BASE = [
+    ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),
+]
+
+# Base Chainlink price feeds (USD, 8 decimals)
+# Reference: https://docs.chain.link/data-feeds/price-feeds/addresses?network=base
+CHAINLINK_FEEDS_BASE: Dict[str, str] = {
+    "WETH": "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70",
+    "USDC": "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B",
+    "DAI":  "0x591e79239a7d679378eC8c847e5038150364C78F",
+    "cbBTC": "0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D",
+}
+
+
+def get_chainlink_feeds(chain: str) -> Dict[str, str]:
+    """Return Chainlink feed addresses for the given chain."""
+    if chain == "base":
+        return CHAINLINK_FEEDS_BASE
+    return CHAINLINK_FEEDS_ARBITRUM
+
+
+def get_gas_floor_bps(chain: str) -> float:
+    """Return gas floor BPS threshold for the given chain."""
+    if chain == "base":
+        return GAS_FLOOR_BPS_BASE
+    return GAS_FLOOR_BPS_ARBITRUM
+
+
+def get_prewarm_pairs(chain: str) -> list:
+    """Return prewarm pair tuples for the given chain."""
+    if chain == "base":
+        return PREWARM_PAIRS_BASE
+    return PREWARM_PAIRS_ARBITRUM
 
 # ---------------------------------------------------------------------------
 # M7.A.5.36: Promoted watchlist rules — cold-to-hot pair promotion

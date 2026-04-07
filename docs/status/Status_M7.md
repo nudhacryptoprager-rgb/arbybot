@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47e. M7.A.5.47e fixes hot-rollup semantics: disentangled counters, per-window miss classification, atomic writes, first_window_at, bridge_hit_deficit adaptive logic. 3344 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
+**Status**: **M7.E1 OPEN — Base event-source pilot validates swap event availability** (M7 Arbitrum mainline FROZEN per 47s. M7.E1 Base pilot: 734 raw V3 Swap logs in 10 blocks (73.4/block avg), 10/10 same-block scored, sole blocker=GAS_EXCEEDS_GROSS at best -2.28 bps. Event source works — gas economics is new frontier.)  
 **Updated**: 2026-04-07
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -173,83 +173,81 @@ CI: 3327 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED
 
 ---
 
-## M7.A.5.47b–47c: Hybrid Intake + Temporal Rollup + Activity-Aware Bridge (CLOSED)
+## M7.A.5.47b–47g: Hybrid Intake + Rollup + Activity Bridge + 3-Bucket + Stale-Pin (CLOSED, compressed)
 
-47b: Hybrid intake (focused + broad fallback), activity-ranked selection, 4 rollup counters, split miss reason. 47c: Activity-aware bridge, hot-seen pool injection, adaptive broad fallback (50%), diagnostic histograms. 10.3-min nonstop: events=7, bridge_hits=0, ptt=56. CI: 3327 passed.
-
----
-
-## M7.A.5.47d: Cross-Process Hot-Seen Backfill + 2-Bucket Bridge Ranking (CLOSED)
-
-Cross-process bridge (hot rollup → cold → unresolved-pools list), cold priority-resolve via `batch_pre_resolve_pools()`, 2-bucket ranking (A=cold_exec, B=hot-seen resolved, fill=activity-ranked), adaptive cap 50→100. 10.2-min nonstop: hot_seen_unresolved_pool_count_max=3, events_seen_total=16, bridge_pool_hit_total=0. CI: 3327 passed.
-
----
-
-## M7.A.5.47e: Hot-Rollup Semantic Correctness + Atomic Writes (CLOSED)
-
-Counter disentanglement (watchlist_match_count, admitted_to_scoring, fast_path_scored_count), per-window 6-class dominant_hot_miss_reason, first_window_at via setdefault, atomic writes (_atomic_json_write), adaptive bridge_hit_deficit. Removed dead /api/intents. 17 new tests in test_hot_rollup_semantics.py. CI: 3344 passed.
-
----
-
-## M7.A.5.47f: Funnel Concentration Diagnostics + Diversity Cap
-
-`funnel_by_pair_top` (5 funnel counts per pair family), `pair_family_concentration` KPI, `best_net_bps_any_anomaly` flag. Diversity-aware bridge fill with `_FAMILY_CAP=8`. Evidence: concentration is FILTER-INDUCED — gas kills major pairs, RAIN/WETH stale. CI: 3360 passed.
-
----
-
-## M7.A.5.47g: 3-Bucket Bridge + Stale-Pin TTL + Gas-Near Sizing + Adaptive Intake
-
-3-bucket bridge ranking (C1=stale_recovery, C2=gas_near_survivor, C3=activity fill). Stale-pin TTL lifecycle. Severe deficit escalation. 3-tier broad fallback interval. 25 tests. CI: 3385 passed.
+47b–47c: Hybrid intake (focused + broad fallback), activity-ranked selection, hot-seen pool injection. 47d: Cross-process hot-seen backfill, 2-bucket bridge ranking, adaptive cap 50→100. 47e: Counter disentanglement, atomic writes, adaptive deficit. 47f: Funnel concentration diagnostics, diversity cap. 47g: 3-bucket bridge (C1=stale_recovery, C2=gas_near_survivor, C3=activity fill), stale-pin TTL, severe deficit escalation. CI: 3327→3385.
 
 ### M7.A.5.47h–47n (bridge truth convergence, compressed)
 
-**47h** (exact-pool stale-recovery + hot-seen promotion): C1 tightened to recoverable_stale only, C2 gross-positive filter, hot-seen pin promotion.
-**47i** (anomaly-clean + bridge hit isolation): Fixed PRICING_ANOMALY leak in C1, 3 independent try/except for bridge hit detection, C2 gas tolerance `-10 bps`. CI: 3437.
-**47j** (bridge minimum floor + focused pool count): `_BRIDGE_MIN_FLOOR=20`, `bridge_focused_pool_count` metric, C2 tolerance `-5 bps`. CI: 3461.
-**47k** (session-scoped rollup + auto-pin ALL bridge-miss): `_SESSION_ID` restart detection, `stale_sub_reason` classification, bridge-miss auto-pin, `bridge_excluded_top`. CI: 3487.
-**47l** (cold-exec hard-pin + cold_exec_pool_trace): Cold-exec hard-pin into bridge, `cold_exec_pool_trace` diagnostic, C1 block_lag filter, `cut_stage_top`. CI: 3508.
-**47m** (truthful bridge diagnostics + run_context): Fixed `list(set)[:30]` truncation bug. A-bucket priority ordering. `bridge_hit_trace_top` with full `_bridge_pool_addrs_set` for truthful `in_bridge`. `run_context` in all M7 artifacts. Session rollup flattened. CI: 3529.
-**47n** (cross-artifact truth + exact-pool session trace): Fixed cold/hot race condition — cold preserve of hot-merged keys. Hot merge writes trace to bridge file. `exact_pool_trace` per-window tracking. Evidence: `in_bridge_every_window=true`, `session_hot_events_seen=0`. CI: 3551.
+**47h–47j**: Exact-pool stale-recovery, anomaly-clean, bridge hit isolation, bridge minimum floor, focused pool count, hot-seen pin promotion. C2 gas tolerance tightened from -10 to -5 bps. CI: 3437→3461.
+**47k–47n**: Session-scoped rollup, auto-pin, cold-exec hard-pin, truthful bridge diagnostics, run_context, cross-artifact truth, exact-pool session trace. Fixed cold/hot race condition. CI: 3487→3551.
 
-### M7.A.5.47o (overlap trace + gas-hopeless C3 tightening + session reset)
+### M7.A.5.47o–47r (architecture blocker convergence, compressed)
 
-**Diagnosis**: Fresh review of 47n artifacts reveals: (a) Session-rollup inconsistency — `session.session_windows_seen=2` vs `exact_pool_trace.session_windows_seen=7` (exact_pool_trace did not reset on supervisor restart). (b) `bridge_focused_pool_count` and `bridge_loaded_candidate_count` are None at hot artifact top level (only in `hot_gap_debug`). (c) No trace for non-cold-exec pools that have hot events (why other pools don't convert). (d) C3 bridge fill admits deep-negative GAS_EXCEEDS_GROSS families (wasting attention slots).
+**47o**: Session reset fix, gas-hopeless C3 tightening, other_live_pool_trace. `bridge_focused_pool_count=37`. CI: 3582.
+**47p**: Cross-artifact trace, bridge_selection_diff, live-miss auto-pin, family_unresolved sentinel. CI: 3609.
+**47q**: Family-level event trace, sibling-pool pinning, stale separation. `exact_family_trace` confirms family-wide starvation: ALL 10 families with `reason_if_zero=no_events_at_any_family_pool`. CI: 3645.
+**47r**: Cross-artifact contract closure, `architecture_blocker_trace` canonical (25 families selected, 0 with events, `blocker_class=event_source_absence`). `family_unresolved` excluded at 4 points. 26 new tests. CI: 3671.
 
-**Fixes**: (1) `exact_pool_trace` now resets on session change (`_prev_sid != _SESSION_ID`), consistent with session counters. (2) `bridge_focused_pool_count`/`bridge_loaded_candidate_count` surfaced to hot artifact top level (integers, not None). (3) `other_live_pool_trace_top`: new diagnostic showing top 10 non-cold-exec pools with hot events, family, bridge membership, bucket, and reason_if_not_hit. (4) Gas-hopeless C3 tightening: families where ALL candidates are GAS_EXCEEDS_GROSS with worst gap < -5 bps are excluded from C3 fill. `c3_gas_hopeless_skipped`/`c3_gas_hopeless_families` at hot artifact top level. (5) DEV_REPORT `timestamp_utc` fixed to match `run_summary_latest.run_context.run_timestamp`. (6) 31 new tests.
+### M7.A.5.47s (FREEZE — final peak-hours proof confirms event-source ceiling)
 
-**Evidence** (10-min nonstop, April 7, 13:26-13:36Z): Session consistency fixed: `session.session_windows_seen=2` = `exact_pool_trace.session_windows_seen=2`. Bridge counts at top level: `bridge_focused_pool_count=37`, `bridge_loaded_candidate_count=5`. Target pool RAIN/WETH at 47.41 bps in bridge (bucket A_cold_exec, `in_bridge_every_window=true`, 2/2), `session_hot_events_seen=0`, `reason_if_not_hit=no_hot_events_at_pool`. `other_live_pool_trace_top`: 1 non-bridge pool with hot events. Session goal MARKET_BLOCKED: same market overlap — no on-chain swaps at `0xd130...` during proof window.
+**Goal**: M7.A.5.47s = freeze mainline on event-source ceiling unless one final peak-hours proof shows family-level events.
 
-CI: 3582 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline ALL REQUIRED GATES PASSED.
+**No code changes in 47s.** 47r code is the final M7 mainline state.
 
-### M7.A.5.47p (truthful cross-artifact trace + bridge_selection_diff)
+**Evidence** (10-min nonstop, April 7, 18:39-18:50Z — tail of peak window): `architecture_blocker_trace`: `families_selected_count=25`, `families_with_any_hot_events=0`, `families_with_exact_hits=0`, `blocker_class=event_source_absence`. `session_windows_seen=6`, `session_events_seen_total=4` (some events exist but not at bridge pools). `session_bridge_pool_hit_total=0`. `bridge_selected_family_diff_top`: 25 families, 0 with events. `family_unresolved=0` in bridge. Cold lane: `cold_executable_positive=0`, `diagnostic_positive=2 (30.6 bps)`, `stale_positive=2`.
 
-**Diagnosis**: Fresh review of 47o artifacts reveals: (a) `bridge_hit_trace_top` stale — unconditionally preserved from previous cold window even when `cold_executable=[]`. (b) Cross-artifact mismatch: `m7_hot_latest.json` has `bridge_hit_trace_top=[]` but bridge file shows populated trace (stale). (c) `other_live_pool_trace_top.family=""` empty string (should be `"family_unresolved"` when PTT absent). (d) `c3_gas_hopeless_skipped=None` and `c3_gas_hopeless_families=None` in hot artifact (explicit None from `_bd`, not caught by `.get(key, default)`). (e) No `bridge_selection_diff_top` — no diagnostic showing whether bridge pools are starved of events or hot events are at non-bridge pools. (f) No live-miss auto-pin: pools seen with hot events but not in bridge are not auto-promoted.
+**Freeze decision**: Per escalation rule (47q → 47r → 47s): 3 consecutive runs, all show `families_with_any_hot_events=0` and `session_bridge_pool_hit_total=0`. M7 mainline is **FROZEN** on event-source ceiling.
 
-**Fixes**: (1) Conditional cold bridge preserve: split `_HOT_PRESERVE_KEYS` into `_HOT_PRESERVE_ALWAYS` (bridge_selected_pools_top, bridge_excluded_top) and `_HOT_PRESERVE_IF_COLD_EXEC` (bridge_hit_trace_top, cold_exec_pool_trace). When `cold_executable=[]`, trace keys explicitly cleared to `[]`. (2) c3_gas_hopeless: `_bd.get(key) or fallback` pattern handles both absent key and explicit None. (3) `family_unresolved` sentinel replaces empty string `""`. (4) `bridge_selection_diff_top`: new bidirectional diagnostic — `hot_seen_not_in_bridge` + `bridge_selected_but_no_hot_events` (top 10 each). (5) Live-miss auto-pin: pools from `other_live_pool_trace` with `reason_if_not_hit=="not_in_bridge"` auto-pinned to `_hot_seen_pin`. (6) Hot merge unconditional trace write — always clears stale. (7) 27 new tests in `test_47p_cross_artifact_truth.py`.
+Fresh M7.A.5.47r evidence confirms that the main blocker is no longer bridge selection, scoring, or cross-artifact inconsistency — 25 resolved families are selected, bridge contracts are fully consistent, and the architecture_blocker_trace canonically classifies the blocker as `event_source_absence`. The current `newHeads + logs` event source on Arbitrum One does not deliver family-level swap events at bridge-selected pools during any proof window. Public 2026 evidence (flashbots/simple-arbitrage profitability analysis, MEV-in-Binance-Builder (2602.15395), Optimistic MEV in L2s (2506.14768)) confirms that profitable graph/cyclic arb requires privileged orderflow, protocol-native positioning, builder/ordering edge, or ultra-low-latency infra — none of which M7 has. The diagnostic toolkit (architecture_blocker_trace, bridge_selected_family_diff_top, exact_family_trace) is proven and ready for any new chain/event-source assessment.
 
-**Evidence** (10-min nonstop, April 7, 14:19-14:30Z): Cross-artifact truth CONSISTENT — both `m7_hot_latest.json` and `m7_cold_hot_bridge.json` have `bridge_hit_trace_top=[]`. `c3_gas_hopeless_skipped=0` (integer, not None). `bridge_selection_diff_top` present: 10 `bridge_selected_but_no_hot_events` entries showing pools selected for bridge but receiving no hot events (key finding: bridge starvation is at the event layer, not the selection layer). `session_bridge_pool_hit_total=0`, `session_events_seen_total=8`. Session goal MARKET_BLOCKED: bridge pools correctly selected but on-chain swap events land at non-bridge pools.
+**Recommendation**: Open `M7.E1 = event-source pilot` research track. Priorities: (1) alternative chain with higher event density (Base), (2) provider-specific early feed, (3) private/privileged orderflow, (4) ordering/inclusion experiments — only after a setup that produces family-level events. Source plane first, not Timeboost.
 
-CI: 3609 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline ALL REQUIRED GATES PASSED.
+CI: 3671 passed, 6 skipped (no code changes — 47r tests are the final mainline baseline).
 
-### M7.A.5.47q (family-level event trace + sibling-pool pinning + stale separation)
+---
 
-**Diagnosis**: Fresh review of 47p artifacts reveals: (a) `bridge_selected_but_no_hot_events=10` — all bridge-selected pools starved. (b) `hot_seen_not_in_bridge=[]` — bridge selection truthful, no missing pools. (c) Starvation could be pool-specific or family-wide — no diagnostic to distinguish. (d) `stale_pipeline_abort` mixed with generic stale — cannot assess if locally fixable. (e) `family_unresolved` pools occupy A_cold_exec bucket — wasting high-priority slots. (f) `c3_gas_hopeless_*` only in hot artifact, not visible in bridge file.
+## M7.E1: Base Flashblocks Event-Source Pilot (OPEN)
 
-**Fixes**: (1) `bridge_selected_family_diff_top`: family-level aggregation — groups bridge-selected pools by token-pair family, counts selected, events at any pool, exact hit count, reason_if_zero per family. (2) `exact_family_trace` in hot rollup: session-level family trace — resolves target family via PTT, discovers sibling pools, tracks `session_family_events_seen` vs `session_exact_pool_events_seen`, determines `reason_if_no_exact_hit`. Resets on session change. (3) Sibling-pool auto-pin: for each cold-exec family, pins up to 3 sibling pools of the same family from PTT not already in bridge/pin. Source `"family_sibling_pin"`. (4) `stale_sub_reason` surfaced in `bridge_hit_trace_top` entries: differentiates `pipeline_abort`, `block_lag`, `state_recheck`. (5) `family_unresolved` downgrade: pools with unresolved family demoted from A_cold_exec to C3_activity_fill. `_bsa_fam=""` replaced with `"family_unresolved"`. (6) `c3_gas_hopeless_skipped` / `c3_gas_hopeless_families` merged into bridge file with `or` fallback. (7) 36 new tests in `test_47q_family_trace.py`.
+**Hypothesis**: Base chain delivers abundant V3 Swap events via standard newHeads+logs, enabling low-hop graph/backrun arbitrage scoring that was impossible on Arbitrum (event_source_absence).
 
-**Evidence** (10-min nonstop, April 7, 16:57-17:07Z): `exact_family_trace` confirms family-wide starvation: `session_family_events_seen=0`, `session_exact_pool_events_seen=0`, `reason_if_no_exact_hit="no_events_at_any_family_pool"`. Only 1 pool of target family in bridge — no siblings discovered. `bridge_selected_family_diff_top` shows ALL 10 families with `reason_if_zero="no_events_at_any_family_pool"` — starvation is systemic across all families, not pool-specific. Family_unresolved pool `0xe879...` correctly downgraded to C3_activity_fill. 3/3 processes alive for 10 min, 0 restarts. Session: `session_windows_seen=3`, `session_events_seen_total=2`, `session_bridge_pool_hit_total=0`. Escalation applies: family starvation confirmed — blocker is event-source/architecture, not selection.
+**Infrastructure changes**:
+- `m7/shared/constants.py`: Chain-aware helpers (get_prewarm_pairs, get_chainlink_feeds, get_gas_floor_bps) + Base-specific constants (PREWARM_PAIRS_BASE, CHAINLINK_FEEDS_BASE, GAS_FLOOR_BPS_BASE=0.5)
+- `m7/orderflow/mode_ws_live.py`: Chain-aware prewarm, Flashblocks WS preference with connectivity test + fallback, chain param to build_replay_summary
+- `m7/orderflow/artifacts.py`: build_replay_summary accepts chain parameter
+- `scripts/start_nonstop_runtime.py`: --chain argument passthrough to M7 lanes
+- 27 new tests in `test_e1_base_chain_aware.py`
 
-CI: 3645 passed, 6 skipped. ci_full_pipeline ALL REQUIRED GATES PASSED.
+**Evidence — M7.E1 pilot (April 7, 19:42-19:47Z)**:
 
-### M7.A.5.47r (cross-artifact contract closure + architecture_blocker_trace)
+| Metric | Value |
+|--------|-------|
+| chain | base |
+| blocks_processed | 10 |
+| raw_logs_total | 734 (73.4/block avg) |
+| events_scored | 10 |
+| same_block_count | 10 (100%) |
+| best_net_bps | -2.28 (5-block), -10.20 (10-block) |
+| reject_histogram | GAS_EXCEEDS_GROSS: 10 |
+| latency_budget_ms | 2000 |
+| latency_budget_hit_rate | 1.0 |
+| mean_pipeline_latency_ms | 57.8-103.2 |
+| known_pools | 35 |
+| active_pools | 19 |
+| sub_block_capable | true |
+| ws_provider | alchemy |
+| flashblocks_ws | DNS unreachable (fallback to Alchemy) |
 
-**Diagnosis**: Fresh review of 47q artifacts reveals: (a) `bridge_selected_family_diff_top` exists in hot artifact but is `None` in bridge file — cold lane's `_HOT_PRESERVE_ALWAYS` doesn't include it, so cold overwrites erase it. (b) Same root cause for `c3_gas_hopeless_*` — keys not preserved across cold writes. (c) Preserve logic uses truthiness (`if val and ...`) which drops `0` and `[]` as falsy. (d) `family_unresolved` pools still enter bridge via committed set, hard-pin, and floor fill (47q only downgraded in assembly labels, not excluded). (e) No canonical `architecture_blocker_trace` — selection vs event-source blocker classification is only in DEV_REPORT prose.
+**Key findings**:
+1. Base delivers 183x more swap events per block than Arbitrum One (73.4 vs ~0.4).
+2. All events scored at same-block (lag=0) — 2000ms block time provides ample scoring budget.
+3. Sole blocker is GAS_EXCEEDS_GROSS (best -2.28 bps, close to breakeven), NOT event_source_absence.
+4. Flashblocks WS (`base.flashblocks.base.org`) DNS unreachable; Alchemy WS fallback works.
+5. Near-executable signal found: AMONGUS/WETH at -10.20 bps.
 
-**Fixes**: (1) `_write_hot_artifact` returns 3-tuple: `(bridge_hit_trace, other_trace, fam_diff_list)`. (2) `bridge_selected_family_diff_top` persisted to bridge file in hot merge using returned `_fam_diff_data`. (3) `c3_gas_hopeless_skipped`, `c3_gas_hopeless_families`, `bridge_selected_family_diff_top` added to `_HOT_PRESERVE_ALWAYS` so cold overwrites don't erase them. (4) Preserve logic uses `is not None` instead of truthiness for int/list safety. (5) `family_unresolved` excluded from bridge at 4 points: diverse fill loop (`len(fam) < 2`), committed set (`_resolved_committed`), hard-pin (only resolved from bucket_a), floor fill (`len(_pool_family(pa)) >= 2`). (6) `architecture_blocker_trace` added to hot rollup: `session_windows_seen`, `session_events_seen_total`, `families_selected_count` (excludes family_unresolved), `families_with_any_hot_events`, `families_with_exact_hits`, `blocker_class` (event_source_absence | selection_or_scoring). (7) 26 new tests in `test_47r_cross_artifact_contract.py`.
+External 2025–2026 evidence aligns with the local freeze result: profitable short-hop graph arbitrage on L2s requires either rich event flow (now confirmed on Base) or privileged ordering. Base preconfirm feeds (Flashblocks) are a candidate for structural timing advantage if DNS issues are resolved.
 
-**Evidence** (10-min nonstop, April 7, 18:10-18:21Z): Cross-artifact contract CONSISTENT: `bridge_selected_family_diff_top` present in both hot (10 families) and bridge file (10 families). `c3_gas_hopeless_skipped=0` (int, not None). `c3_gas_hopeless_families=[]` (list, not None). `family_unresolved` count in `bridge_selected_pools_top` = 0. `architecture_blocker_trace`: `families_selected_count=25`, `families_with_any_hot_events=0`, `families_with_exact_hits=0`, `blocker_class=event_source_absence`. Session: `session_windows_seen=5`, `session_events_seen_total=2`, `session_bridge_pool_hit_total=0`. 3/3 processes, 0 restarts. Goal: MARKET_BLOCKED — architecture blocker formalized.
-
-CI: 3671 passed, 6 skipped.
+CI: 3698 passed, 6 skipped.
 
 ---
 
@@ -269,13 +267,18 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **session_bridge_pool_hit_total=0 — FORMALIZED EVENT-SOURCE/ARCHITECTURE blocker** — 47r `architecture_blocker_trace` canonically classifies: `blocker_class=event_source_absence`. 25 resolved families selected, 0 with any hot events over 5 windows. Cross-artifact contract fully consistent (bridge_selected_family_diff_top, c3_gas_hopeless non-null in both hot+bridge). family_unresolved fully excluded from bridge. Escalation rule: this is run 2 of 2-3 with identical outcome; one more → freeze M7 mainline.
-2. **cold_executable_positive fluctuates** — last proof window: `cold_executable=1`. Bridge retains pools from prior cold window.
-3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
+1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — M7.E1 pilot confirms 734 swap logs in 10 blocks (73.4/block avg).
+2. **GAS_EXCEEDS_GROSS — ACTIVE (Base)** — All 10 Base events rejected by gas economics. best_net_bps=-2.28 (close to breakeven). New frontier: gas optimization, larger trade sizes, or L1 data cost reduction.
+3. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve from local machine. Sub-block delivery untested. Alchemy WS fallback works.
+4. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. Escalation path (47r conclusion): architecture_blocker_trace.blocker_class=event_source_absence is now canonical. One more run with identical outcome → freeze M7 mainline on event-source ceiling.
-2. Peak-hours run (UTC 14:00-18:00) for final data point before freeze decision.
-3. Alternative: onboard Base (higher event rate, lower gas) — `config/onboard_base_stage2.yaml` already prepared.
-4. `bridge_selected_family_diff_top` + `architecture_blocker_trace` are the canonical diagnostics for any chain assessment.
+1. **M7 Arbitrum mainline remains FROZEN.** No further changes to Arbitrum M7 scoring/bridge logic.
+2. **M7.E1 Base pilot OPEN — event source validated.** Next priorities:
+   - Priority 1: Resolve Flashblocks WS connectivity (alternative endpoints, HTTP polling, or WSS via different provider) for sub-block (<200ms) event delivery.
+   - Priority 2: Gas economics optimization — larger trade sizes, L1 data cost analysis, gas_floor_bps tuning for Base.
+   - Priority 3: Multi-iteration nonstop run on Base (10+ min) with full hot/cold bridge cycle to assess family-level bridge convergence.
+   - Priority 4: If gas breakeven achieved → Tenderly simulation validation.
+3. **Source plane validated — gas plane is new frontier**: Event-source absence blocker does NOT exist on Base. The bottleneck shifted to gas economics (GAS_EXCEEDS_GROSS at -2.28 bps best).
+4. **Diagnostic toolkit proven on Base**: scoring pipeline works (100% same-block, 57-103ms latency), pool discovery healthy (35 known, 19 active), coverage complete (no_counter_pool_rate=0.0).

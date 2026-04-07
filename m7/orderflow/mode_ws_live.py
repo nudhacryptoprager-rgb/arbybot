@@ -22,6 +22,8 @@ from m7.shared.constants import (
     REJECT_TOKEN_PAIR_UNRESOLVED,
     SWAP_EVENT_TOPIC,
     UNSCORED_REJECTS,
+    get_chainlink_feeds,
+    get_prewarm_pairs,
 )
 from m7.orderflow.artifacts import build_replay_summary
 from m7.orderflow.coverage import seed_tokens_from_subgraph
@@ -87,16 +89,57 @@ def run_ws_live(
     rpc_host = urlparse(rpc_url).netloc
 
     # Resolve WebSocket for newHeads subscription
-    ws_url, ws_provider, ws_diag = resolve_rpc_ws(
-        chain_id=chain_id,
-        network=args.chain,
-        env=dict(os.environ),
-    )
+    # M7.E1: On Base, prefer Flashblocks WS for sub-block (~200ms) event delivery.
+    # Flashblocks endpoint supports standard eth_subscribe newHeads but delivers
+    # at sub-block granularity, giving a structural latency advantage over 2s blocks.
+    _flashblocks_ws = None
+    if args.chain == "base":
+        from config import load_chains as _load_chains_fb
+        from chains.flashblocks import get_flashblocks_ws_url
+        _base_cfg = _load_chains_fb().get("base", {})
+        _flashblocks_ws = get_flashblocks_ws_url(
+            _base_cfg.get("flashblocks_ws_endpoint")
+        )
+
+    ws_url = None
+    ws_provider = None
+    ws_diag = {}
+    if _flashblocks_ws:
+        ws_url = _flashblocks_ws
+        ws_provider = "flashblocks"
+        ws_diag = {"source": "flashblocks_sub_block", "flashblocks": True}
+        logger.info(
+            "M7.E1: Using Flashblocks WS for Base sub-block newHeads: %s",
+            urlparse(ws_url).netloc,
+        )
+
+    # Verify Flashblocks WS connectivity; fall back to standard WS if unreachable
+    if ws_url and ws_provider == "flashblocks":
+        try:
+            import websocket as _ws_test
+            _test_conn = _ws_test.create_connection(ws_url, timeout=5)
+            _test_conn.close()
+        except Exception as _fb_err:
+            logger.warning(
+                "M7.E1: Flashblocks WS unreachable (%s), falling back to standard WS",
+                str(_fb_err)[:80],
+            )
+            ws_url = None  # trigger standard resolution below
+
+    if not ws_url:
+        ws_url, ws_provider, ws_diag = resolve_rpc_ws(
+            chain_id=chain_id,
+            network=args.chain,
+            env=dict(os.environ),
+        )
     if not ws_url:
         raise SystemExit(
             f"No WebSocket RPC URL found for chain: {args.chain}. "
             "Set ALCHEMY_API_KEY or ALCHEMY_RPC_WS in .env"
         )
+    # Ensure ws_diag is always a dict for downstream .get() calls
+    if not isinstance(ws_diag, dict):
+        ws_diag = {"source": str(ws_diag)}
     ws_host = urlparse(ws_url).netloc
 
     logger.info(
@@ -131,11 +174,8 @@ def run_ws_live(
         session_registry = PoolRegistry()
 
     # M7.A.5.24: Session prewarm — preload high-frequency pairs from known addresses
-    # Core pairs that appear frequently in Arbitrum orderflow
-    _prewarm_pairs = [
-        ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
-        ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
-    ]
+    # M7.E1: Chain-aware prewarm pairs
+    _prewarm_pairs = get_prewarm_pairs(args.chain)
     if _prewarm_count not in (-1, -2):
         _prewarm_count = 0
         try:
@@ -506,7 +546,7 @@ def run_ws_live(
     # Build artifact
     # M7.A.5.46: compact=True skips full results serialization (operational path).
     # Raw BackrunResult objects are carried separately for hot lane downstream.
-    artifact = build_replay_summary(all_events, all_results, mode="ws_live", compact=True)
+    artifact = build_replay_summary(all_events, all_results, mode="ws_live", compact=True, chain=args.chain)
     artifact["_raw_results"] = all_results
     artifact["ws_live_config"] = {
         "ws_blocks_requested": args.ws_blocks,
@@ -950,7 +990,7 @@ def run_ws_live(
                 len(events_with_oracle) / len(live_results), 4
             ) if live_results else 0.0,
             "guard_triggered_count": len(guard_triggered),
-            "oracle_feeds_available": list(CHAINLINK_FEEDS_ARBITRUM.keys()),
+            "oracle_feeds_available": list(get_chainlink_feeds(args.chain).keys()),
         }
 
         # ── M7.A.5.7: Local-sim readiness metrics ──────────────────

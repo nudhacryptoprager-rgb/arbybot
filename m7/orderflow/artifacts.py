@@ -364,6 +364,7 @@ def build_replay_summary(
     results: List[BackrunResult],
     mode: str,
     compact: bool = False,
+    chain: str | None = None,
 ) -> Dict[str, Any]:
     """Build machine-readable artifact from replay results.
 
@@ -1291,7 +1292,7 @@ def build_replay_summary(
             "code_desc": None,
             "evidence_sha": None,
         },
-        "chain": M7A4_CHAIN,
+        "chain": chain or M7A4_CHAIN,
         "events_count": len(events),
         "results_count": len(results),
         "viable_count": viable_count,
