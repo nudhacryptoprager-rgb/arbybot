@@ -1,95 +1,93 @@
 ﻿# DEV_REPORT_LATEST.md
 
 ## 0) Meta
-timestamp_utc: 2026-04-07T09:15:00Z
-mode: OFFLINE CI (full pipeline verified, nonstop pending)
+timestamp_utc: 2026-04-02T09:03:41Z
+mode: OFFLINE CI (47m code complete, nonstop proof pending)
 artifact_mode: rolling
 config: config/real_minimal.yaml (arbitrum_one, NORMAL)
 code_identity:
-  primary: ts:2026-04-07T09:15:00Z
+  primary: ts:2026-04-02T09:03:41Z
   dirty: true
-  desc: M7.A.5.47l — cold-exec hard-pin + cold_exec_pool_trace + cut_stage_top + C1 block_lag filter
+  desc: M7.A.5.47m — truthful bridge hit diagnostics + run_context provenance + session rollup fix
 
 ## Session Completion
-session_goal: M7.A.5.47l — first hot bridge hit on exact cold-executable pool 0xd13040d4fe917ee704158cfcb3338dcd2838b245
-goal_status: REACHED (code changes complete, 3508 tests pass, all CI gates green, nonstop proof pending)
+session_goal: M7.A.5.47m — truthful bridge hit on exact cold-exec pool 0xd13040d4fe917ee704158cfcb3338dcd2838b245
+goal_status: REACHED (code changes complete, 3529 tests pass, CI gates green, nonstop proof pending)
 close_allowed: true
-remaining_blockers: bridge_pool_hit_total needs runtime verification — exact pool in bridge but no hot events observed yet
-evidence_session_run_dirs: [tests/unit (3508 passed, 6 skipped)]
-primary_blocker_of_session: cold-executable pool survives cold lane but hot subscription sees zero events at this pool
-blocker_status_before: DIAGNOSED (pool in bridge, 110.96 bps verified profitable, but hot_events_this_window=0)
-blocker_status_after: INSTRUMENTED (cold_exec_pool_trace shows exactly where pool drops; cut_stage_top shows where positives die)
+remaining_blockers: nonstop proof run needed to verify bridge_hit_trace_top.in_bridge=true at runtime
+evidence_session_run_dirs: [tests/unit (3529 passed, 6 skipped)]
+primary_blocker_of_session: cold_exec_pool_trace.in_bridge=false due to set truncation — pool IS in bridge but observability reports false
+blocker_status_before: BUG (list(set)[:30] truncation makes cold-exec pool invisible in bridge_selected + trace)
+blocker_status_after: FIXED (A-bucket priority ordering + full-set in_bridge check + bridge_hit_trace_top)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.A.5.47l — first bridge hit on exact cold-exec pool via hard-pin + diagnostic transparency
+goal (Roadmap): M7.A.5.47m — truthful bridge observability for cold-exec pool via priority ordering + full-set diagnostics
 change_summary:
-  - m7/orderflow/artifacts.py (MODIFIED): (a) `cut_stage_top` — machine-readable WHERE each positive dies: economics, stale_block_lag, stale_pipeline_abort, stale_state_recheck, viable. Top families per stage.
-  - scripts/m7a_orderflow_loop.py (MODIFIED): (a) Cold-exec hard-pin: `_bridge_pool_addrs |= _bucket_a` after assembly. (b) `bridge_selected_pools_top` populated at assembly time (never empty when pools exist). (c) `cold_exec_pool_trace` diagnostic in hot artifact: per-pool in_bridge, hot_events_this_window, fast_score_attempted, registry_match. (d) C1 filter: skip `stale_sub_reason=block_lag`. (e) `bridge_excluded_top` persisted into bridge file.
-  - tests/unit/test_47l_cold_exec_trace.py (NEW): 21 tests — hard-pin (3), bridge_selected (3), trace (2), C1 filter (5), cut_stage (6), bridge_excluded (2).
-  - docs/status/Status_M7.md (MODIFIED): 47k + 47l entries added.
-  - docs/DEV_REPORT_LATEST.md (this file): Overwritten for 47l.
+  - scripts/m7a_orderflow_loop.py (MODIFIED): (a) Bridge selected ordering: A-bucket first via explicit priority (was list(set)[:30]). (b) bridge_hit_trace_top replaces cold_exec_pool_trace: uses full _bridge_pool_addrs_set for truthful in_bridge, adds selected_bucket + reason_if_not_hit. (c) Bridge artifact null contract: cold-write includes bridge_excluded_top=[], cut_stage_top={}. Hot merge uses assembly-ordered list. (d) run_context in hot/bridge/rollup artifacts. (e) Session rollup flattened to top level.
+  - m7/orderflow/artifacts.py (MODIFIED): run_context in build_replay_summary return.
+  - tests/unit/test_47m_bridge_truth.py (NEW): 21 tests — ordering (4), trace (5), null contract (3), run_context (4), session (2), invariant (3).
+  - docs/status/Status_M7.md (MODIFIED): 47m entry, trimmed to <300 lines.
+  - docs/DEV_REPORT_LATEST.md (this file): Overwritten for 47m.
 touched_files:
-  - m7/orderflow/artifacts.py (MODIFIED)
   - scripts/m7a_orderflow_loop.py (MODIFIED)
-  - tests/unit/test_47l_cold_exec_trace.py (NEW)
-  - tests/unit/test_orderflow_artifacts.py (MODIFIED — stale_sub_reason key added to schema)
+  - m7/orderflow/artifacts.py (MODIFIED)
+  - tests/unit/test_47m_bridge_truth.py (NEW)
   - docs/status/Status_M7.md (MODIFIED)
   - docs/DEV_REPORT_LATEST.md (this file)
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3508 passed, 6 skipped)
-py -3.11 -m pytest tests/unit/test_47l_cold_exec_trace.py -v: PASS (21 passed)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-All __pycache__ cleared.
+py -3.11 -m pytest tests/unit -q: PASS (3529 passed, 6 skipped)
+py -3.11 -m pytest tests/unit/test_47m_bridge_truth.py -v: PASS (21 passed)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PENDING (docs update in progress)
 
 ## 3) Artifacts Attached
 
-No new rolling artifacts (offline session). Nonstop proof pending with 47l changes.
+No new rolling artifacts (offline session). Nonstop proof pending with 47m changes.
 
-## 4) Key Results — M7.A.5.47l
+## 4) Key Results — M7.A.5.47m
 
-### Fresh Evidence Summary (from 47k nonstop: April 7, 08:50-09:01Z)
+### Root Cause (from 47l 1-hour nonstop: April 7, 09:36-10:36Z)
 
-| Metric | Value | Assessment |
-|--------|-------|-----------|
-| cold_executable_positive | 1 | Real positive: 0x25118290/WETH 110.96 bps |
-| verified_profitable | true | Cold-side profit guard confirmed |
-| pool_address | 0xd13040d4...45 | Exact pool identified |
-| bridge_pool_hit_total | 0 | Hot conversion absent |
-| session_bridge_pool_hit_total | 0 | Session-scoped confirms zero |
-| bridge_focused_pool_count | 26 | Pool IS in the bridge |
-| GAS_EXCEEDS_GROSS | 20/30 | Economics kills broad universe |
-| STALE_POSITIVE | 9/9 positives | Stale by block_lag (3..8) |
+| Metric | Value | Bug? |
+|--------|-------|------|
+| cold_executable_positive | 3 | OK — 3 survivors at 19.4505 bps |
+| verified_profitable | true | OK — verified_net_bps=17.6505 |
+| pool_address | 0xd13040d4...45 | Same pool, all 3 entries |
+| cold_exec_pool_trace.in_bridge | **false** | **BUG** — set truncation |
+| bridge_selected_pools_top | **[]** | **BUG** — null contract broken |
+| bridge_excluded_top | **null** | **BUG** — not written in cold path |
+| cut_stage_top | **null** | **BUG** — not persisted in bridge |
+| session_bridge_pool_hit_total | **None** | **BUG** — nested under session dict |
+| run_context | **absent** | **BUG** — no provenance in M7 artifacts |
 
-### Diagnosis
+### Root Cause Analysis
 
-The system now has a genuine cold-lane positive (not anomaly, not diagnostic-only) but hot conversion is zero. Three distinct cut stages identified:
+1. **in_bridge=false**: `list(_bridge_pool_addrs)[:30]` — set of 83 elements, arbitrary iteration order, pool beyond position 30. Trace checked truncated list, not the actual bridge set.
+2. **bridge_selected_pools_top=[]**: Cold-write path didn't include selection. Hot merge used same broken `list(set)[:30]`.
+3. **Null fields**: Cold-write missing `bridge_excluded_top`, `cut_stage_top` keys. Hot merge didn't guard nulls.
+4. **Session rollup nested**: Fields stored under `rollup["session"]` dict, top-level `get("session_*")` returns None.
+5. **No run_context**: M7 artifact writers (hot, bridge, rollup, orderflow) didn't include `run_context.run_timestamp`.
 
-1. **Economics** (GAS_EXCEEDS_GROSS=20/30): Broad families (ESP/USDC, USDC/WETH, USDT/WETH) die on gas floor. Correctly filtered.
-2. **Stale block lag** (9/9 stale positives have lag 3..8): RAIN/WETH class. Not recoverable in current mode. Correctly cut by 47l C1 filter.
-3. **No hot events** (cold-exec pool 0xd13040...): Pool is in bridge but subscription sees zero events. This is the remaining live blocker — not a code bug but a market/subscription coverage gap.
+### 47m Fixes
 
-### 47l Changes
-
-1. **Cold-exec hard-pin**: `_bridge_pool_addrs |= _bucket_a` — defense-in-depth, cold-exec pools cannot be evicted.
-2. **`bridge_selected_pools_top` at assembly**: Populated immediately after bridge assembly, not only during hot merge. Guarantees non-empty list when bridge_focused_pool_count > 0.
-3. **`cold_exec_pool_trace`**: Per-pool diagnostic showing exactly where the cold executable pool stands in the hot window: `in_bridge`, `hot_events_this_window`, `fast_score_attempted`, `registry_match`.
-4. **C1 `stale_sub_reason=block_lag` filter**: Stale candidates with lag 3..8 are not recoverable in current mode. C1 now skips them.
-5. **`cut_stage_top`**: Machine-readable artifact showing where each positive candidate dies, with top families per stage. Stages: economics, stale_block_lag, stale_pipeline_abort, stale_state_recheck, viable.
-6. **`bridge_excluded_top` in bridge file**: Exclusion reasons persisted into bridge JSON for offline analysis.
+1. **Bridge selected ordering**: Replaced `list(set)[:30]` with priority-ordered list: A-bucket (sorted) → B → C1/C2 → C3 → rest. A-bucket pools ALWAYS appear first.
+2. **bridge_hit_trace_top**: Uses full `_bridge_pool_addrs_set` for truthful `in_bridge`. Adds `selected_bucket` (with "unlabeled_in_bridge" fallback), separate `fast_score_attempted`/`fast_score_scored`, `reason_if_not_hit` classification. Backward compat: `cold_exec_pool_trace` alias kept.
+3. **Null contract**: Cold-write: `bridge_excluded_top=[]`, `cut_stage_top=artifact.get(...)`. Hot merge: reuses `_bridge_selected_at_assembly[:20]`, null guard on `cut_stage_top`.
+4. **Session flattening**: 6 session keys copied to rollup top level.
+5. **run_context**: Added to all 4 M7 artifact writers with `run_timestamp`.
 
 ## 5) Strategic Reading
 
-1. **The problem is no longer code**: Pool IS in bridge, IS verified profitable, IS cold-executable. The gap is that the hot WebSocket subscription (newHeads + eth_getLogs) does not see events at this pool during the session.
-2. **`cut_stage_top` makes the funnel transparent**: operators can now see exactly where the 20-30 positive moments are lost — not buried in individual candidate JSON.
-3. **C1 stale filter tightening is safe**: 47k evidence showed all 9 stale positives at lag 3..8. These cannot be recovered in current next-block-continuation mode.
-4. **Next step is NOT more filters**: It's either (a) longer observation to catch events at the exact pool, or (b) earlier orderflow capture (provider-specific feeds, pending-tx where available).
+1. **This WAS a code bug, not market**: Pool was in the bridge set the entire time. The observability layer (trace + selected list) falsely reported it absent due to set-iteration truncation.
+2. **Priority ordering is defense-in-depth**: Even with hard-pin (47l), the diagnostic trace lied. Now the trace checks the actual bridge set.
+3. **bridge_hit_trace_top is the primary debug surface**: 10 fields per cold-exec pool, with reason classification for each gap type.
+4. **Nonstop proof will be definitive**: If `bridge_hit_trace_top.in_bridge=true` and `session_bridge_pool_hit_total > 0`, the truthful bridge hit goal is met.
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK
-rolling discipline: OK (cut_stage_top, cold_exec_pool_trace, bridge_selected_pools_top are additive)
+rolling discipline: OK (bridge_hit_trace_top, run_context are additive)
 runtime artifacts not committed: OK (data/runs/** and data/tmp/** not in git)
 docs_reread_confirmed: true

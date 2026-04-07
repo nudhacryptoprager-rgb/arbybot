@@ -1283,6 +1283,14 @@ def build_replay_summary(
     return {
         "mode": mode,
         "timestamp": ts,
+        # M7.A.5.47m: Provenance — run_context with run_timestamp
+        "run_context": {
+            "run_timestamp": ts,
+            "code_sha": None,
+            "code_dirty": None,
+            "code_desc": None,
+            "evidence_sha": None,
+        },
         "chain": M7A4_CHAIN,
         "events_count": len(events),
         "results_count": len(results),

@@ -194,6 +194,18 @@ def _write_cold_hot_bridge(
             # are never null. Hot lane merges actual values after hot windows.
             "hot_seen_vs_bridge_overlap_top": [],
             "bridge_selected_pools_top": [],
+            # M7.A.5.47m: Always emit these as non-null (empty defaults).
+            # Hot lane merges real values; cold lane guarantees contract.
+            "bridge_excluded_top": [],
+            "cut_stage_top": artifact.get("cut_stage_top", {}),
+            # M7.A.5.47m: Provenance — run_context with run_timestamp
+            "run_context": {
+                "run_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "code_sha": None,
+                "code_dirty": None,
+                "code_desc": None,
+                "evidence_sha": None,
+            },
         }
         # M7.A.5.47d: Attach hot_seen_unresolved_pools — pools discovered via
         # hot broad fallback that are NOT in _pool_token_cache. Cold lane uses
@@ -576,15 +588,24 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             if best is None or net > (best.get("best_backrun_net_bps") if isinstance(best, dict) else getattr(best, "best_backrun_net_bps", 0)):
                 best = r
 
+    _ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     hot = {
         "lane": "hot",
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": _ts_now,
         "loop_iteration": iteration,
         "events_count": artifact.get("events_count", 0),
         "best_net_bps_clean": artifact.get("best_net_bps_clean"),
         "viable_count": artifact.get("viable_count", 0),
         "has_positive": best is not None,
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
+        # M7.A.5.47m: Provenance — run_context with run_timestamp
+        "run_context": {
+            "run_timestamp": _ts_now,
+            "code_sha": None,
+            "code_dirty": None,
+            "code_desc": None,
+            "evidence_sha": None,
+        },
     }
 
     # M7.A.5.46: Compute headline_level for hot artifact.
@@ -683,42 +704,66 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     # M7.A.5.47l: Bridge selected pools at assembly time
     hot["bridge_selected_pools_top"] = _bd.get("bridge_selected_at_assembly", [])
 
-    # M7.A.5.47l: cold_exec_pool_trace — per-pool diagnostic for each
-    # cold_executable pool showing exactly where it stands in the hot window.
-    _cold_exec_trace: list = []
+    # M7.A.5.47m: bridge_hit_trace_top — exact-pool diagnostic for each
+    # cold_executable pool. Uses the FULL bridge set (not truncated list)
+    # so in_bridge is always truthful.
+    _bridge_hit_trace: list = []
     _bridge_cold_execs = _bd.get("_bridge_cold_executable", [])
+    _full_bridge_set = _bd.get("_bridge_pool_addrs_set", set())
+    _bucket_a_set = _bd.get("_bucket_a", set())
     for _cet in _bridge_cold_execs:
         _cet_pa = (_cet.get("pool_address") or "").lower() if isinstance(_cet, dict) else ""
         if not _cet_pa:
             continue
-        # Check: is this pool in the bridge?
-        _cet_in_bridge = _cet_pa in {
-            (e.get("pool_address") or "").lower()
-            for e in _bd.get("bridge_selected_at_assembly", [])
-        }
+        # Check: is this pool in the full bridge set (truthful check)?
+        _cet_in_bridge = _cet_pa in _full_bridge_set
+        # Determine selected bucket
+        _cet_bucket = None
+        if _cet_in_bridge:
+            # Find bucket from assembly list first (labeled)
+            for _sel in _bd.get("bridge_selected_at_assembly", []):
+                if (_sel.get("pool_address") or "").lower() == _cet_pa:
+                    _cet_bucket = _sel.get("bucket")
+                    break
+            if _cet_bucket is None:
+                _cet_bucket = "A_cold_exec" if _cet_pa in _bucket_a_set else "unlabeled_in_bridge"
         # Check: did any hot event arrive at this pool?
         _cet_hot_events = 0
+        _cet_fast_attempted = 0
+        _cet_fast_scored = 0
         for _r in _raw_results:
             _evt = getattr(_r, "_source_event", None)
             if _evt and getattr(_evt, "pool_address", "").lower() == _cet_pa:
                 _cet_hot_events += 1
-        # Check: was it scored?
-        _cet_scored = 0
-        for _r in _raw_results:
-            _evt = getattr(_r, "_source_event", None)
-            if (_evt and getattr(_evt, "pool_address", "").lower() == _cet_pa
-                    and getattr(_r, "scoring_path", None) != "hot_skip"):
-                _cet_scored += 1
-        _cold_exec_trace.append({
+                if getattr(_r, "scoring_path", None) != "hot_skip":
+                    _cet_fast_attempted += 1
+                    if (getattr(_r, "best_backrun_net_bps", None) or 0) != 0:
+                        _cet_fast_scored += 1
+        # Reason if not hit
+        _cet_reason: str | None = None
+        if not _cet_in_bridge:
+            _cet_reason = "not_in_bridge"
+        elif _cet_hot_events == 0:
+            _cet_reason = "no_hot_events_at_pool"
+        elif _cet_fast_attempted == 0:
+            _cet_reason = "hot_skip_no_scoring"
+        elif _cet_fast_scored == 0:
+            _cet_reason = "scored_but_no_result"
+        _bridge_hit_trace.append({
             "pool_address": _cet_pa,
             "actual_pair": _cet.get("actual_pair", ""),
             "cold_net_bps": _cet.get("net_bps", 0),
             "in_bridge": _cet_in_bridge,
-            "hot_events_this_window": _cet_hot_events,
-            "fast_score_attempted": _cet_scored,
-            "registry_match": _bd.get("canonical_pair_match_count", 0) > 0,
+            "selected_bucket": _cet_bucket,
+            "hot_events_seen": _cet_hot_events,
+            "registry_match": _cet_pa in _full_bridge_set,
+            "fast_score_attempted": _cet_fast_attempted,
+            "fast_score_scored": _cet_fast_scored,
+            "reason_if_not_hit": _cet_reason,
         })
-    hot["cold_exec_pool_trace"] = _cold_exec_trace
+    hot["bridge_hit_trace_top"] = _bridge_hit_trace
+    # M7.A.5.47m: Keep backward compat alias
+    hot["cold_exec_pool_trace"] = _bridge_hit_trace
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -1148,6 +1193,22 @@ def _update_hot_rollup(
     rollup["dominant_hot_miss_reason"] = (
         max(_miss_only, key=_miss_only.get) if _miss_only else "none"
     )
+
+    # M7.A.5.47m: Provenance — run_context with run_timestamp
+    rollup["run_context"] = {
+        "run_timestamp": ts,
+        "code_sha": None,
+        "code_dirty": None,
+        "code_desc": None,
+        "evidence_sha": None,
+    }
+
+    # M7.A.5.47m: Flatten session fields to top level for easy access.
+    # Session dict remains as canonical source; top-level keys are aliases.
+    for _sk in ("session_id", "session_started_at", "session_windows_seen",
+                "session_events_seen_total", "session_bridge_pool_hit_total",
+                "session_fast_path_scored_total"):
+        rollup[_sk] = _sess.get(_sk)
 
     try:
         _atomic_json_write(_HOT_ROLLUP_PATH, rollup, indent=2, default=str)
@@ -1670,11 +1731,19 @@ def run_loop(cli_args) -> None:
                             })
                         _bridge_excluded_top = _bridge_excluded[:10]
 
-                        # M7.A.5.47l: Build bridge_selected_pools_top at assembly
-                        # time (not only at hot merge). This ensures the field is
-                        # always populated when bridge_focused_pool_count > 0.
+                        # M7.A.5.47m: Build bridge_selected_pools_top at assembly
+                        # time. Prioritize A-bucket (cold-exec) first so they
+                        # are never truncated by the [:30] reporting cap.
+                        _ordered_for_selected: list = (
+                            sorted(_bucket_a) +
+                            sorted(_bucket_b - _bucket_a) +
+                            sorted((_bucket_c1_stale | _bucket_c2_gas_near) - _bucket_a - _bucket_b) +
+                            [pa for pa in _bridge_pool_addrs
+                             if pa not in _bucket_a and pa not in _bucket_b
+                             and pa not in _bucket_c1_stale and pa not in _bucket_c2_gas_near]
+                        )
                         _bridge_selected_at_assembly: list = []
-                        for _bsa_pa in list(_bridge_pool_addrs)[:30]:
+                        for _bsa_pa in _ordered_for_selected[:30]:
                             _bsa_bucket = "C3_activity_fill"
                             if _bsa_pa in _bucket_a:
                                 _bsa_bucket = "A_cold_exec"
@@ -1849,6 +1918,11 @@ def run_loop(cli_args) -> None:
                     "bridge_excluded_top": _bridge_excluded_top if '_bridge_excluded_top' in dir() else [],
                     # M7.A.5.47l: Bridge selected pools at assembly time
                     "bridge_selected_at_assembly": _bridge_selected_at_assembly if '_bridge_selected_at_assembly' in dir() else [],
+                    # M7.A.5.47m: Full bridge pool set for accurate in_bridge checks
+                    # (the assembly list is truncated to 30; this is the truth set).
+                    "_bridge_pool_addrs_set": _bridge_pool_addrs if '_bridge_pool_addrs' in dir() and _bridge_pool_addrs is not None else set(),
+                    # M7.A.5.47m: Bucket membership for bridge_hit_trace_top
+                    "_bucket_a": _bucket_a if '_bucket_a' in dir() else set(),
                     # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
                     "_bridge_cold_executable": _bridge.get("cold_executable", []),
                 }
@@ -2096,35 +2170,22 @@ def run_loop(cli_args) -> None:
                         with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _bf:
                             _bridge_update = json.load(_bf)
                         _bridge_update["hot_seen_vs_bridge_overlap_top"] = _overlap_diag[:5]
-                        # M7.A.5.47i: bridge_selected_pools_top — which pools
-                        # made it into the focused bridge and why.
-                        _bsp_diag: list = []
-                        if _bridge_pool_addrs is not None:
-                            for _bsp_pa in list(_bridge_pool_addrs)[:30]:
-                                _bsp_bucket = "C3_activity_fill"
-                                if _bsp_pa in _ba:
-                                    _bsp_bucket = "A_cold_exec"
-                                elif _bsp_pa in _bb:
-                                    _bsp_bucket = "B_hot_seen"
-                                elif _bsp_pa in _bc1:
-                                    _bsp_bucket = "C1_stale_recovery"
-                                elif _bsp_pa in _bc2:
-                                    _bsp_bucket = "C2_gas_near"
-                                _bsp_info = _ptt_diag.get(_bsp_pa)
-                                _bsp_fam = ""
-                                if _bsp_info and len(_bsp_info) >= 2:
-                                    _bsp_fam = f"{_bsp_info[0]}/{_bsp_info[1]}"
-                                _bsp_diag.append({
-                                    "pool_address": _bsp_pa,
-                                    "bucket": _bsp_bucket,
-                                    "family": _bsp_fam,
-                                    "selected": True,
-                                })
-                        _bridge_update["bridge_selected_pools_top"] = _bsp_diag[:20]
+                        # M7.A.5.47m: Use assembly-time ordered list (A-bucket first)
+                        # instead of arbitrary set iteration.
+                        _bridge_update["bridge_selected_pools_top"] = (
+                            _bridge_selected_at_assembly[:20]
+                            if '_bridge_selected_at_assembly' in dir()
+                            else []
+                        )
                         # M7.A.5.47l: Also persist bridge_excluded_top into bridge file
                         _bridge_update["bridge_excluded_top"] = (
                             _bridge_excluded_top if '_bridge_excluded_top' in dir() else []
                         )
+                        # M7.A.5.47m: Persist cut_stage_top from cold lane artifact
+                        # (already written to bridge by cold lane; refresh here
+                        # to keep it consistent after hot merge).
+                        if "cut_stage_top" not in _bridge_update or _bridge_update["cut_stage_top"] is None:
+                            _bridge_update["cut_stage_top"] = {}
                         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, _bridge_update, indent=2)
                 except Exception as _exc_bu:
                     logger.debug("Bridge file update failed: %s", str(_exc_bu)[:120])

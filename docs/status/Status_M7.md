@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
 **Status**: **VERDICT READY — NO-GRADUATE** (M7.A through M7.A.5.47e. M7.A.5.47e fixes hot-rollup semantics: disentangled counters, per-window miss classification, atomic writes, first_window_at, bridge_hit_deficit adaptive logic. 3344 tests pass, all CI gates green. `recommend_open_m7b: false`, `recommend_freeze_current_m7a_scope: true`. M7.B closed.)  
-**Updated**: 2026-04-06
+**Updated**: 2026-04-07
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
 ---
@@ -128,11 +128,7 @@ Dashboard Panel 11 reads both cold + m7_hot. Discovery solved (registry_direct=3
 
 ## M7.A.5.32: Unified Nonstop Runtime + Rolling Retention + Hot-Path Slimming
 
-**Hypothesis**: M7.A.5.32 = unified nonstop supervisor, rolling-only retention, hot-path reduction toward first profit_guard pass under 250ms.
-
-**Changes**: (1) `start_nonstop_runtime.py` — unified supervisor (dashboard + start.py + M7 hot/cold). (2) `prune_tmp_artifacts.py` — retention tool for `data/tmp`. (3) Hot lane fast-path via `score_backrun_fast()` with 250ms stage budgets, zero subgraph/oracle/enrichment. (4) `score_backrun_fast()` in scoring_parallel.py: registry O(1) → cached state → local pricing → economics → BackrunResult `scoring_path="registry_fast"`. (5) HOT_BUDGET_* constants, HOT_WATCHLIST_PAIRS (3 pairs). (6) `_rolling/` cleaned to canonical 9 files. (7) +14 tests.
-
-CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
+`start_nonstop_runtime.py` — unified supervisor. `prune_tmp_artifacts.py` — retention. `score_backrun_fast()` with 250ms stage budgets, zero subgraph/oracle/enrichment. HOT_BUDGET_* constants, HOT_WATCHLIST_PAIRS. `_rolling/` cleaned to canonical 9 files. +14 tests. CI: 3163 passed.
 
 ---
 
@@ -160,15 +156,7 @@ CI: 3163 passed, 6 skipped. Safety: PASS. ALL REQUIRED GATES PASSED.
 
 ## M7.A.5.40: Batch Pre-Resolve + Supervisor Fix + Size Valid Cache (CLOSED)
 
-**Hypothesis**: M7.A.5.40 = fresh 10–20 minute runtime proof with resolve_ms, enrichment_ms, registry_preload_ms fully eliminated from per-event scoring path via batch pre-resolve.
-
-**Root cause analysis**: All 4 RPC-heavy stages (resolve ~683ms, enrichment ~105ms, oracle ~125ms, registry_preload ~604ms) executed PER EVENT inside `score_backrun_live_parallel()`. Even with session-scoped caches (M7.A.5.38), first events in each iteration still hit cold cache paths. Solution: batch pre-resolve ALL event pools BEFORE the scoring loop so individual scoring calls hit module-level caches.
-
-**Changes**: (1) `m7/orderflow/resolve.py`: Added `get_cached_decimals(token_addr)` — reads from `_enrichment_cache`, returns cached decimals or None. Added `batch_pre_resolve_pools(pool_addresses, rpc_url, block_num, addr_to_symbol)` — batch-resolves pool tokens via multicall (populates `_pool_token_cache`), batch-enriches unknown tokens (populates `_enrichment_cache`, updates `addr_to_symbol`). Returns `{pool_addr: {token0, token1, fee}}`. (2) `m7/orderflow/mode_ws_live.py`: Added cold-lane pre-pass before scoring loop — collects unique pool addresses from events, calls `batch_pre_resolve_pools()`, batch-preloads each discovered pair into `session_registry.preload_pair()`. All subsequent `score_backrun_live_parallel()` calls hit warm caches. Fixed `_hot_mode` variable ordering (was referenced before assignment). (3) `m7/orderflow/scoring_parallel.py`: Added `get_cached_decimals` import. Added cache fallback for `_token_in_dec` — calls `get_cached_decimals(token_in_addr)` BEFORE the well-known stablecoin heuristic. Fixes `size_valid_for_token=false` for batch-pre-enriched tokens. (4) `scripts/start_nonstop_runtime.py`: Critical blocking I/O fix — changed `stdout=subprocess.PIPE` to `stdout=subprocess.DEVNULL` and made `drain_output()` a no-op. Original blocking `readline()` prevented supervisor from reaching deadline check. (5) `scripts/m7a_orderflow_loop.py`: Hot artifact reporting fix — `_promoted_pairs` updated from `_cross_promoted` for accurate promoted_watchlist display. (6) Rolling canonical files: added `m7_promoted_pairs.json` to allowlists. (7) +14 tests in 4 new M7.A.5.40 classes (TestM7A540BatchPreResolve, TestM7A540GetCachedDecimals, TestM7A540ColdPrePassInModeWsLive, TestM7A540SizeValidCacheFallback).
-
-**Online evidence**: 10.3-min nonstop (0 restarts) + 120-block replay. total_pipeline: 15.62ms warm (97% reduction from 1519ms cold). resolve_ms/enrichment_ms/registry_preload_ms: 0.0ms (100% elimination). Oracle only remaining RPC cost (~16-80ms). size_valid=100% warm. latency_budget_hit_rate=0.89. Promoted: 6 candidate + 6 execution. Supervisor DEVNULL fix eliminates blocking I/O.
-
-CI: 3258 passed, 6 skipped. Safety: PASS (0 warnings). ALL REQUIRED GATES PASSED.
+Batch pre-resolve ALL event pools BEFORE scoring loop — eliminates per-event resolve/enrichment/registry_preload RPC. `batch_pre_resolve_pools()` in resolve.py, cold-lane pre-pass in mode_ws_live.py, `get_cached_decimals()` fallback in scoring_parallel.py. Supervisor blocking I/O fix (PIPE→DEVNULL). Evidence: total_pipeline 15.62ms warm (97% reduction), resolve/enrichment/registry_preload=0ms. CI: 3258 passed.
 
 ---
 
@@ -218,21 +206,13 @@ Counter disentanglement (watchlist_match_count, admitted_to_scoring, fast_path_s
 
 ## M7.A.5.47f: Funnel Concentration Diagnostics + Diversity Cap
 
-**Hypothesis**: M7.A.5.47f = system sees 13 pair families at intake but final executable layer has near-zero — determine whether concentration is market-real or filter/ranking-induced.
-
-**Changes**: (1) `m7/orderflow/artifacts.py`: `funnel_by_pair_top` (top 10 pair families × 5 funnel counts: seen, positive, stale_positive, cold_executable, gas_exceeds_gross), `pair_family_concentration` KPI (top-1 share at 3 funnel stages + unique_pair_families), `best_net_bps_any_anomaly` flag (|value| > 10000 bps → thin-liquidity artifact). (2) `scripts/m7a_orderflow_loop.py`: `candidate_source_breakdown` in bridge payload (cold_exec, near_exec, stale_positive, recent_active, hot_seen_backfill, ptt_total), diversity-aware bridge fill with `_FAMILY_CAP=8` per token-pair family. (3) 16 new tests in `test_pair_concentration.py`. (4) Updated `test_orderflow_artifacts.py` schema for `best_net_bps_any_anomaly`.
-
-**Online evidence (10.2-min nonstop)**: 12 unique pair families seen. Intake concentration moderate (seen_top1_share=0.300). Positive concentration extreme (positive_top1_share=0.900, RAIN/WETH 9/9 stale). cold_executable_top1_share=0.0 — ALL results killed by either gas_exceeds_gross (60%+) or staleness. Bridge source: cold_exec=0, near_exec=5, stale_positive=5, hot_seen_backfill=10. **Diagnosis: concentration is FILTER-INDUCED** — gas economics kills all major pairs, RAIN/WETH survives gas but all stale. CI: 3360 passed, 6 skipped. ALL GATES PASSED.
+`funnel_by_pair_top` (5 funnel counts per pair family), `pair_family_concentration` KPI, `best_net_bps_any_anomaly` flag. Diversity-aware bridge fill with `_FAMILY_CAP=8`. Evidence: concentration is FILTER-INDUCED — gas kills major pairs, RAIN/WETH stale. CI: 3360 passed.
 
 ---
 
 ## M7.A.5.47g: 3-Bucket Bridge + Stale-Pin TTL + Gas-Near Sizing + Adaptive Intake
 
-**Hypothesis**: M7.A.5.47g = split the two filter blockers (gas economics and staleness) and force first hot bridge hit by prioritising stale-recovery and gas-near pools.
-
-**Changes**: (1) `m7/orderflow/artifacts.py`: `cost_by_pair_family_top` (top 10 families by smallest |gas_gap_bps|), `staleness_by_pair_family_top` (top 10 by stale_positive_count), gas-near extended micro-refinement (`[1.0, 1.5, 2.0, 3.0]` for GAS_EXCEEDS_GROSS candidates vs standard `[0.75, 1.0, 1.25, 1.5]`), `is_gas_near` field in micro_refinement results. (2) `scripts/m7a_orderflow_loop.py`: 3-bucket bridge ranking (C1=stale_recovery from cold_stale_positive + TTL pins, C2=gas_near_survivor from near_executable GAS_EXCEEDS_GROSS, C3=diversity-aware activity fill), stale-pin TTL lifecycle (init=4, decrement each hot window, refresh on cold stale_positive), severe deficit escalation (wwe>=3 → bridge_hit_deficit_severe). (3) `m7/orderflow/mode_ws_live.py`: 3-tier broad fallback interval (severe=1, deficit=2, normal=3). (4) 25 new tests in `test_47g_bridge_and_sizing.py`. (5) Non-v3 venue check: V2+Algebra already active; Ve33/IziSwap/SyncSwap/Ambient available but not wired to M7 discovery.
-
-CI: 3385 passed, 6 skipped. ALL GATES PASSED.
+3-bucket bridge ranking (C1=stale_recovery, C2=gas_near_survivor, C3=activity fill). Stale-pin TTL lifecycle. Severe deficit escalation. 3-tier broad fallback interval. 25 tests. CI: 3385 passed.
 
 ### M7.A.5.47h (exact-pool stale-recovery + gas-near-survivor + hot-seen promotion)
 
@@ -272,6 +252,12 @@ CI: 3487 passed, 6 skipped.
 
 CI: 3508 passed, 6 skipped.
 
+### M7.A.5.47m (truthful bridge diagnostics + run_context + session rollup fix)
+
+**Diagnosis**: Fresh 1-hour nonstop (April 7, 09:36-10:36Z) reveals `cold_executable_positive=3` (19.4505 bps, verified_net=17.6505) but `cold_exec_pool_trace.in_bridge=false` — CODE BUG, not market. Root cause: `list(set)[:30]` truncation makes pool invisible. Bridge artifact null contract broken: `bridge_selected_pools_top=[]`, `bridge_excluded_top=null`, `cut_stage_top=null`. Session rollup fields nested (not at top level). No `run_context` in any M7 artifact.
+
+**Fixes**: (1) Bridge selected ordering: A-bucket first via explicit priority (sorted(A) → B → C1/C2 → C3 → rest). (2) `bridge_hit_trace_top` replaces `cold_exec_pool_trace`: uses full `_bridge_pool_addrs_set` for truthful `in_bridge`, adds `selected_bucket`, `reason_if_not_hit`, separate `fast_score_attempted`/`fast_score_scored`. (3) Bridge null contract: cold-write `bridge_excluded_top=[]`, `cut_stage_top={}`. Hot merge uses assembly-ordered list. (4) `run_context` in all 4 M7 artifact writers. (5) Session rollup flattened to top level. (6) 21 new tests. CI: 3529 passed, 6 skipped.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -290,19 +276,12 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **cold_executable_count=2** (improved from 0) — RAIN/WETH and 0x25118290/WETH at `0xd130...` viable at 37-49 bps. Gas economics kills other families.
-2. **bridge_pool_hit_total=0** — hot lane events arrive at pools DISJOINT from cold exec/stale pools. 47h adds hot-seen-pin promotion (auto-bridge resolved hot-seen pools), recoverable_stale C1 tightening, gross-positive C2 filter.
+1. **bridge_pool_hit_total=0** — 47m fixes observability (in_bridge was false due to set truncation). Nonstop proof needed to verify truthful bridge hit.
+2. **cold_executable_positive=3** — pool `0xd130...` survives at 19.4505 bps. Gas economics kills other families.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
-4. **Truth split**: current M7 live mode = `next_block_continuation` (subscribe newHeads → eth_getLogs for mined block). NOT true same-block backrun. If goal is same-block sequencer advantage, separate track needed.
 
 ## Next steps
 
-1. Run 10-min nonstop with 47j bytecode (all `__pycache__` cleared) — verify target fields:
-   - `bridge_pool_hit_total` > 0
-   - `fast_path_scored_total` > 0
-   - `hot_seen_vs_bridge_overlap_top` not null (always list)
-   - `cold_recoverable_stale` contains only STALE_POSITIVE (no PRICING_ANOMALY)
-   - `bridge_focused_pool_count_last` shows actual bridge size (should be ≥ 20 if PTT ≥ 20)
-2. Check `bridge_focused_pool_count_last` vs `bridge_loaded_candidate_count_total` to confirm bridge isn't collapsing.
-3. If first bridge hit achieved, measure conversion rate of stale_recovery vs hot-seen-pin vs gas_near buckets.
-4. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface.
+1. Clear `__pycache__`, run 10-min nonstop with 47m bytecode — verify `bridge_hit_trace_top.in_bridge=true`, `session_bridge_pool_hit_total > 0`, `run_context` present.
+2. If bridge hit achieved, measure hot conversion rate.
+3. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface.
