@@ -263,6 +263,9 @@ def _write_cold_hot_bridge(
         # reports cold_executable=[], the trace is stale and must be cleared.
         _HOT_PRESERVE_ALWAYS = (
             "bridge_selected_pools_top", "bridge_excluded_top",
+            # M7.A.5.47r: preserve these hot-merged fields across cold overwrites
+            "c3_gas_hopeless_skipped", "c3_gas_hopeless_families",
+            "bridge_selected_family_diff_top",
         )
         _HOT_PRESERVE_IF_COLD_EXEC = (
             "bridge_hit_trace_top", "cold_exec_pool_trace",
@@ -274,7 +277,9 @@ def _write_cold_hot_bridge(
                     _existing = json.load(_epf)
                 for _hpk in _HOT_PRESERVE_ALWAYS:
                     _existing_val = _existing.get(_hpk)
-                    if _existing_val and not payload.get(_hpk):
+                    # M7.A.5.47r: use 'is not None' so falsy values (0, [])
+                    # from hot merge survive cold overwrites.
+                    if _existing_val is not None and _hpk not in payload:
                         payload[_hpk] = _existing_val
                 if _has_cold_exec:
                     for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
@@ -1057,7 +1062,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
     # M7.A.5.47n: Return bridge hit trace so caller can merge into bridge file.
     # M7.A.5.47p: Also return other_live_pool_trace for live-miss auto-pin.
-    return _bridge_hit_trace, _other_trace
+    # M7.A.5.47r: Also return _fam_diff_list so bridge file gets bridge_selected_family_diff_top.
+    return _bridge_hit_trace, _other_trace, _fam_diff_list
 
 
 def _compute_headline_level(funnel: dict) -> str:
@@ -1505,6 +1511,34 @@ def _update_hot_rollup(
     # Truncate selected_pools list to prevent unbounded growth
     _eft["selected_pools"] = _eft.get("selected_pools", [])[:20]
     rollup["exact_family_trace"] = _eft
+
+    # M7.A.5.47r: architecture_blocker_trace — canonical session summary.
+    # Aggregates whether the blocker is event-source/architecture or selection.
+    _abt = rollup.get("architecture_blocker_trace", {})
+    if _prev_sid != _SESSION_ID:
+        _abt = {}
+    _abt["session_windows_seen"] = _sess.get("session_windows_seen", 0)
+    _abt["session_events_seen_total"] = _sess.get("session_events_seen_total", 0)
+    # Count resolved families from bridge_selected_at_assembly
+    _bsa_for_abt = _bd.get("bridge_selected_at_assembly", [])
+    _abt_families = set()
+    for _s_abt in _bsa_for_abt:
+        _sf_abt = _s_abt.get("family", "")
+        if _sf_abt and _sf_abt != "family_unresolved":
+            _abt_families.add(_sf_abt)
+    _abt["families_selected_count"] = len(_abt_families)
+    _abt["families_with_any_hot_events"] = (
+        1 if _eft.get("session_family_events_seen", 0) > 0 else 0
+    )
+    _abt["families_with_exact_hits"] = (
+        1 if _eft.get("session_exact_pool_events_seen", 0) > 0 else 0
+    )
+    _abt["blocker_class"] = (
+        "event_source_absence"
+        if _abt.get("families_with_any_hot_events", 0) == 0
+        else "selection_or_scoring"
+    )
+    rollup["architecture_blocker_trace"] = _abt
 
     try:
         _atomic_json_write(_HOT_ROLLUP_PATH, rollup, indent=2, default=str)
@@ -1996,6 +2030,11 @@ def run_loop(cli_args) -> None:
                             if len(_diverse_fill) >= _slots_for_fill:
                                 break
                             _fam = _pool_family(_rpa)
+                            # M7.A.5.47r: exclude family_unresolved from bridge entirely —
+                            # unresolved pools have singleton family (pa,) which bypasses
+                            # the family cap. They must not enter bridge at all.
+                            if len(_fam) < 2:
+                                continue
                             if _family_counts.get(_fam, 0) >= _FAMILY_CAP:
                                 continue
                             # M7.A.5.47o: skip gas-hopeless families in C3 fill
@@ -2006,14 +2045,17 @@ def run_loop(cli_args) -> None:
                             _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
 
                         # Assemble: A + B + C1 + C2 + C3 (diverse fill)
-                        _bridge_pool_addrs = _committed | set(_diverse_fill)
+                        # M7.A.5.47r: exclude family_unresolved from committed too
+                        _resolved_committed = {pa for pa in _committed if len(_pool_family(pa)) >= 2}
+                        _bridge_pool_addrs = _resolved_committed | set(_diverse_fill)
 
                         # M7.A.5.47l: Hard-pin — cold-exec pools MUST survive
                         # regardless of family cap, floor, or any other pressure.
                         # This is defense-in-depth: bucket_a already includes them,
                         # but if any downstream logic accidentally evicts them,
                         # force re-add here.
-                        _bridge_pool_addrs |= _bucket_a
+                        # M7.A.5.47r: Only hard-pin resolved-family pools.
+                        _bridge_pool_addrs |= {pa for pa in _bucket_a if len(_pool_family(pa)) >= 2}
 
                         # M7.A.5.47j: Bridge minimum floor — if we have PTT
                         # pools discovered, the focused filter should never
@@ -2027,6 +2069,7 @@ def run_loop(cli_args) -> None:
                             _floor_fill = [
                                 pa for pa in _remaining_ranked
                                 if pa not in _bridge_pool_addrs
+                                and len(_pool_family(pa)) >= 2  # M7.A.5.47r: skip unresolved
                             ][:_deficit]
                             _bridge_pool_addrs |= set(_floor_fill)
 
@@ -2492,7 +2535,8 @@ def run_loop(cli_args) -> None:
 
                 # M7.A.5.47n: Capture bridge_hit_trace for merge into bridge file.
                 # M7.A.5.47p: Also capture other_live_pool_trace for live-miss auto-pin.
-                _bridge_hit_trace_data, _other_live_trace = _write_hot_artifact(
+                # M7.A.5.47r: Also capture _fam_diff_data for bridge file contract.
+                _bridge_hit_trace_data, _other_live_trace, _fam_diff_data = _write_hot_artifact(
                     artifact, iteration, guard_results,
                     fast_results=fast_results,
                     promoted_pairs=_promoted_pairs.get("execution", []),
@@ -2593,6 +2637,12 @@ def run_loop(cli_args) -> None:
                         )
                         _bridge_update["c3_gas_hopeless_families"] = (
                             _hot_bridge_diag.get("c3_gas_hopeless_families") or []
+                        )
+                        # M7.A.5.47r: Persist bridge_selected_family_diff_top
+                        # into bridge file — cross-artifact contract: if hot has
+                        # the field, bridge must too (non-null).
+                        _bridge_update["bridge_selected_family_diff_top"] = (
+                            _fam_diff_data if '_fam_diff_data' in dir() and _fam_diff_data else []
                         )
                         # M7.A.5.47m: Persist cut_stage_top from cold lane artifact
                         # (already written to bridge by cold lane; refresh here

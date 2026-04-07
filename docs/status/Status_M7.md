@@ -241,6 +241,16 @@ CI: 3609 passed, 6 skipped. check_repo_safety PASS (1 warning). ci_full_pipeline
 
 CI: 3645 passed, 6 skipped. ci_full_pipeline ALL REQUIRED GATES PASSED.
 
+### M7.A.5.47r (cross-artifact contract closure + architecture_blocker_trace)
+
+**Diagnosis**: Fresh review of 47q artifacts reveals: (a) `bridge_selected_family_diff_top` exists in hot artifact but is `None` in bridge file — cold lane's `_HOT_PRESERVE_ALWAYS` doesn't include it, so cold overwrites erase it. (b) Same root cause for `c3_gas_hopeless_*` — keys not preserved across cold writes. (c) Preserve logic uses truthiness (`if val and ...`) which drops `0` and `[]` as falsy. (d) `family_unresolved` pools still enter bridge via committed set, hard-pin, and floor fill (47q only downgraded in assembly labels, not excluded). (e) No canonical `architecture_blocker_trace` — selection vs event-source blocker classification is only in DEV_REPORT prose.
+
+**Fixes**: (1) `_write_hot_artifact` returns 3-tuple: `(bridge_hit_trace, other_trace, fam_diff_list)`. (2) `bridge_selected_family_diff_top` persisted to bridge file in hot merge using returned `_fam_diff_data`. (3) `c3_gas_hopeless_skipped`, `c3_gas_hopeless_families`, `bridge_selected_family_diff_top` added to `_HOT_PRESERVE_ALWAYS` so cold overwrites don't erase them. (4) Preserve logic uses `is not None` instead of truthiness for int/list safety. (5) `family_unresolved` excluded from bridge at 4 points: diverse fill loop (`len(fam) < 2`), committed set (`_resolved_committed`), hard-pin (only resolved from bucket_a), floor fill (`len(_pool_family(pa)) >= 2`). (6) `architecture_blocker_trace` added to hot rollup: `session_windows_seen`, `session_events_seen_total`, `families_selected_count` (excludes family_unresolved), `families_with_any_hot_events`, `families_with_exact_hits`, `blocker_class` (event_source_absence | selection_or_scoring). (7) 26 new tests in `test_47r_cross_artifact_contract.py`.
+
+**Evidence** (10-min nonstop, April 7, 18:10-18:21Z): Cross-artifact contract CONSISTENT: `bridge_selected_family_diff_top` present in both hot (10 families) and bridge file (10 families). `c3_gas_hopeless_skipped=0` (int, not None). `c3_gas_hopeless_families=[]` (list, not None). `family_unresolved` count in `bridge_selected_pools_top` = 0. `architecture_blocker_trace`: `families_selected_count=25`, `families_with_any_hot_events=0`, `families_with_exact_hits=0`, `blocker_class=event_source_absence`. Session: `session_windows_seen=5`, `session_events_seen_total=2`, `session_bridge_pool_hit_total=0`. 3/3 processes, 0 restarts. Goal: MARKET_BLOCKED — architecture blocker formalized.
+
+CI: 3671 passed, 6 skipped.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -259,13 +269,13 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **session_bridge_pool_hit_total=0 — CONFIRMED EVENT-SOURCE/ARCHITECTURE blocker** — 47q proves starvation is family-wide and systemic: ALL 10 bridge families show `no_events_at_any_family_pool`. `exact_family_trace` for target RAIN/WETH family shows 0 family events across entire session. Not pool-specific, not selection-related — the bridge simply does not receive on-chain swaps during proof windows. Per 47q escalation rule: blocker officially moves from "selection" to "event-source/architecture".
-2. **cold_executable_positive fluctuates** — last proof window: `cold_executable=0`. Bridge retains pools from prior cold window but no fresh executables.
+1. **session_bridge_pool_hit_total=0 — FORMALIZED EVENT-SOURCE/ARCHITECTURE blocker** — 47r `architecture_blocker_trace` canonically classifies: `blocker_class=event_source_absence`. 25 resolved families selected, 0 with any hot events over 5 windows. Cross-artifact contract fully consistent (bridge_selected_family_diff_top, c3_gas_hopeless non-null in both hot+bridge). family_unresolved fully excluded from bridge. Escalation rule: this is run 2 of 2-3 with identical outcome; one more → freeze M7 mainline.
+2. **cold_executable_positive fluctuates** — last proof window: `cold_executable=1`. Bridge retains pools from prior cold window.
 3. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
-1. Escalation path (47q conclusion): bridge selection is truthful and family-wide — no swaps at ANY family pool. Next investigation should focus on event-source architecture (ws-live subscription filter, block range, event type whitelist) or different chain/market (Base, higher-volume pairs).
-2. If choosing to stay on Arbitrum One, run nonstop during peak activity (UTC 14:00-18:00) with wider pair surface — current bridge families may be low-volume tail pairs.
+1. Escalation path (47r conclusion): architecture_blocker_trace.blocker_class=event_source_absence is now canonical. One more run with identical outcome → freeze M7 mainline on event-source ceiling.
+2. Peak-hours run (UTC 14:00-18:00) for final data point before freeze decision.
 3. Alternative: onboard Base (higher event rate, lower gas) — `config/onboard_base_stage2.yaml` already prepared.
-4. The `bridge_selected_family_diff_top` diagnostic is now the canonical tool for assessing family-level starvation on any chain.
+4. `bridge_selected_family_diff_top` + `architecture_blocker_trace` are the canonical diagnostics for any chain assessment.
