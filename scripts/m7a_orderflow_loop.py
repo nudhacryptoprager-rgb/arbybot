@@ -647,6 +647,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "bridge_pool_address_hit_count": _bd.get("bridge_pool_address_hit_count", 0),
         "bridge_pair_hit_count": _bd.get("bridge_pair_hit_count", 0),
         "bridge_loaded_candidate_count": _bd.get("bridge_loaded_candidate_count", 0),
+        # M7.A.5.47j: Track actual focused bridge size (all buckets)
+        "bridge_focused_pool_count": _bd.get("bridge_focused_pool_count", 0),
         # M7.A.5.46: Pair-level fallback counter
         "bridge_pair_fallback_count": _bd.get("bridge_pair_fallback_count", 0),
         # M7.A.5.47e: Canonical per-window scoring counters
@@ -1013,6 +1015,8 @@ def _update_hot_rollup(
         rollup.get("bridge_pool_hit_but_registry_miss_total", 0)
         + _bd.get("bridge_pool_hit_but_registry_miss", 0)
     )
+    # M7.A.5.47j: Snapshot of focused bridge size (last window value)
+    rollup["bridge_focused_pool_count_last"] = _bd.get("bridge_focused_pool_count", 0)
 
     # M7.A.5.47c: Hot-seen pool histogram (cumulative top 10)
     # Shows which pools are ACTUALLY active on-chain in hot windows
@@ -1456,11 +1460,11 @@ def run_loop(cli_args) -> None:
                                 _bucket_c1_stale.add(_pin_pa)
 
                         _bucket_c2_gas_near: set = set()
-                        # M7.A.5.47i: Admit near_executable pools whose family
-                        # has positive gross OR is within a small negative gap of
-                        # breakeven. Families with large negative gas gap cannot
-                        # cross zero at any realistic size — exclude them.
-                        _C2_GAS_GAP_TOLERANCE_BPS = -10  # allow families this close to breakeven
+                        # M7.A.5.47j: Tighten C2 — only near_executable pools
+                        # whose family has positive verified_net OR gas_floor_gap
+                        # within a very small tolerance. Families further away
+                        # cannot cross zero at realistic sizes.
+                        _C2_GAS_GAP_TOLERANCE_BPS = -5  # tightened from -10 in 47i
                         _gas_viable_families: set = set()
                         for _mr in _bridge.get("micro_refinement", []):
                             # Primary: verified net > 0 (definitely profitable family)
@@ -1537,6 +1541,21 @@ def run_loop(cli_args) -> None:
 
                         # Assemble: A + B + C1 + C2 + C3 (diverse fill)
                         _bridge_pool_addrs = _committed | set(_diverse_fill)
+
+                        # M7.A.5.47j: Bridge minimum floor — if we have PTT
+                        # pools discovered, the focused filter should never
+                        # collapse below a reasonable fraction of them.
+                        # This prevents the bridge from being starved when
+                        # A/B/C1/C2 are all empty but C3 fill is limited
+                        # by the family cap.
+                        _BRIDGE_MIN_FLOOR = 20
+                        if len(_bridge_pool_addrs) < _BRIDGE_MIN_FLOOR and len(_ptt) >= _BRIDGE_MIN_FLOOR:
+                            _deficit = _BRIDGE_MIN_FLOOR - len(_bridge_pool_addrs)
+                            _floor_fill = [
+                                pa for pa in _remaining_ranked
+                                if pa not in _bridge_pool_addrs
+                            ][:_deficit]
+                            _bridge_pool_addrs |= set(_floor_fill)
 
                         _active_in_filter = sum(
                             1 for pa in _bridge_pool_addrs
@@ -1683,6 +1702,10 @@ def run_loop(cli_args) -> None:
                     # M7.A.5.44: Explicit bridge-hit counters
                     "bridge_pool_address_hit_count": 0,
                     "bridge_pair_hit_count": 0,
+                    # M7.A.5.47j: Focused bridge pool count — the actual number
+                    # of pools in _bridge_pool_addrs (distinct from
+                    # bridge_loaded_candidate_count which is just A-bucket).
+                    "bridge_focused_pool_count": len(_bridge_pool_addrs) if _bridge_pool_addrs else 0,
                     "bridge_loaded_candidate_count": 0,
                     # M7.A.5.46: Carry bridge cold_executable for headline_level computation.
                     "_bridge_cold_executable": _bridge.get("cold_executable", []),

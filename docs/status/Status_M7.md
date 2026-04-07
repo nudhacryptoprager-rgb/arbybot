@@ -238,21 +238,21 @@ CI: 3385 passed, 6 skipped. ALL GATES PASSED.
 
 **Hypothesis**: M7.A.5.47h = hot-seen pools and cold exec/stale pools are disjoint sets. Force first bridge hit by: (a) tightening C1 to recoverable_stale only (lag ≤ 2, positive, size_valid), (b) filtering C2 to gross-positive families only, (c) auto-promoting resolved hot-seen pools into the focused bridge via TTL pin.
 
-**Fresh 47g evidence** (10-min nonstop): cold viable_count=2, best_net_bps_executable=37.6297 (improvement). Hot: events_seen_total=25, windows_with_events=17, bridge_pool_hit_total=0. Root cause: hot-seen pools (`0x7dfa...`, `0x961e...`, etc.) are completely disjoint from cold exec/stale pools (`0xd130...`, `0x3bf5...`). Both sets are in PTT but events arrive at non-bridge pools.
-
-**Changes**: (1) `m7/orderflow/artifacts.py`: `top_recoverable_stale_candidates` (lag ≤ 2, positive, size_valid) — strict subset of stale positives. (2) `scripts/m7a_orderflow_loop.py`: C1 switched from `cold_stale_positive` to `cold_recoverable_stale`. C2 filters to gross-positive families via micro_refinement check. `_hot_seen_pin` dict with TTL=3: auto-pins resolved hot-seen pools into bucket B for 3 hot windows. TTL decrement alongside stale-pin. Bridge carries `cold_recoverable_stale`. `hot_seen_vs_bridge_overlap_top` diagnostic showing overlap between event pools and bridge set with bucket labels and absence reasons.
+**Fresh 47g evidence** (10-min nonstop): cold viable_count=2, hot bridge_pool_hit_total=0 (event pools disjoint from bridge). 47h added hot-seen-pin promotion, recoverable_stale C1 tightening, gross-positive C2 filter.
 
 ### M7.A.5.47i (anomaly-clean recoverable stale + bridge hit detection isolation)
 
-**Fresh 47h evidence** (10-min nonstop): cold REGRESSED (viable_count=0, best_net_bps_executable=null). Hot still blocked (bridge_pool_hit_total=0, fast_path_scored_total=0). Root cause analysis revealed 3 bugs:
+**Fresh 47h evidence**: cold REGRESSED (viable_count=0). Root cause: 3 bugs — (1) PRICING_ANOMALY at 36927 bps leaking through `_is_stale()` into C1, (2) single try/except wrapping registry-match AND PTT-hit — exception in registry silently killed bridge hit counting, (3) bridge file update using undefined `_bucket_a` etc → NameError silently caught.
 
-1. **PRICING_ANOMALY contamination**: `_is_stale()` returned True for `same_state_class=stale` regardless of `reject_reason`. Pool `0x7dfa` had PRICING_ANOMALY at 36927 bps leaking through recoverable_stale into C1.
-2. **Silent exception killing bridge hit detection**: Entire bridge hit block in single `try/except Exception: pass`. Registry ops raising in first loop killed PTT hit counting in second loop. Bridge hits ALWAYS 0.
-3. **Bridge file update using unsafe variables**: `_bucket_a` etc. undefined when bridge assembly failed → NameError → silently caught → `bridge_selected_pools_top` never written.
+**Fixes**: Strict `reject_reason == STALE_POSITIVE` filter, 3 independent try/except blocks for bridge hit detection, safe variable aliases, C2 gas tolerance `-10 bps`, bridge-miss auto-promote. 26 tests. CI: 3437 passed.
 
-**Changes**: (1) `m7/orderflow/artifacts.py`: Strict `reject_reason == STALE_POSITIVE` (not `_is_stale()` class match). `_ANOMALY_REJECTS` exclusion set. (2) `scripts/m7a_orderflow_loop.py`: **CRITICAL** — split bridge hit detection into 3 independent try/except blocks with `logger.debug` on failure. C1 defense-in-depth anomaly skip. C2 gas-near tolerance (`_C2_GAS_GAP_TOLERANCE_BPS = -10`). Bridge file update uses safe aliases (`_ba`, `_bb`, `_bc1`, `_bc2`, `_ptt_diag`). Bridge-miss active auto-promote. Bridge hit diagnostic log line. (3) `tests/unit/test_47i_anomaly_clean.py`: 26 tests covering all 5 fixes.
+### M7.A.5.47j (bridge minimum floor + focused pool count + C2 tightening)
 
-CI: 3437 passed, 6 skipped.
+**Diagnosis**: 47i source correct but nonstop ran with pre-47i bytecode (`.pyc` timestamps prove edits applied AFTER nonstop ended).
+
+**Changes**: (1) `_BRIDGE_MIN_FLOOR=20` — floor fill prevents bridge starvation. (2) `bridge_focused_pool_count` metric — tracks actual `len(_bridge_pool_addrs)` (all buckets), disambiguates from `bridge_loaded_candidate_count` (A-bucket only). (3) C2 tolerance tightened `-10` → `-5` bps. (4) All `__pycache__` cleared. (5) 24 tests.
+
+CI: 3461 passed, 6 skipped.
 
 ---
 
@@ -279,7 +279,12 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Next steps
 
-1. Run 10-min nonstop with 47h changes — verify hot-seen-pin pools appear in bucket B, monitor bridge_pool_hit_total.
-2. Check `hot_seen_vs_bridge_overlap_top` diagnostic to confirm overlap improves.
+1. Run 10-min nonstop with 47j bytecode (all `__pycache__` cleared) — verify target fields:
+   - `bridge_pool_hit_total` > 0
+   - `fast_path_scored_total` > 0
+   - `hot_seen_vs_bridge_overlap_top` not null (always list)
+   - `cold_recoverable_stale` contains only STALE_POSITIVE (no PRICING_ANOMALY)
+   - `bridge_focused_pool_count_last` shows actual bridge size (should be ≥ 20 if PTT ≥ 20)
+2. Check `bridge_focused_pool_count_last` vs `bridge_loaded_candidate_count_total` to confirm bridge isn't collapsing.
 3. If first bridge hit achieved, measure conversion rate of stale_recovery vs hot-seen-pin vs gas_near buckets.
-4. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface (Ve33/SyncSwap).
+4. If deficit remains, consider onboarding lower-gas chain (Base) or widening adapter surface.
