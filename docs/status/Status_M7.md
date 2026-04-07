@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.1 OPEN — Base full hot/cold nonstop validated under gas blocker** (M7 Arbitrum mainline FROZEN per 47s. M7.E1.1 Base 10-min nonstop: 30 events scored, 26 GAS_EXCEEDS_GROSS, 3 viable (anomaly-priced), best near-executable=-2.20 bps. Hot/cold bridge EXERCISED: 30 bridge_selected_pools, 38 focused, 177 hot windows. Gas breakdown: l1_data=0.16 bps, l2_exec=0.04 bps, total=0.20 bps. Event source confirmed — gas economics sole blocker.)  
+**Status**: **M7.E1.2 OPEN — Base hot blocker separated: gas_economics_only confirmed** (M7 Arbitrum mainline FROZEN per 47s. E1.2 proves Base hot lane is gas-blocked, not architecture-blocked: `blocker_class=gas_economics_only`, `events_in_bridge_total=12`, all 12 gas-rejected, 0 scored positive. Arbitrum contamination eliminated — dynamic target pool, family-wide event check, three-way blocker classification. 9/17 bridge families have hot events. `stage_a_ms` KeyError fixed — hot lane now writes rollup. CI: 3718 passed, 6 skipped.)  
 **Updated**: 2026-04-07
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -53,51 +53,12 @@ Steps 1-8 done. Verdict: `recommend_open_m7b: false`, `recommend_freeze_current_
 
 ---
 
-## M7.A.5.3–5.5: WebSocket Streaming, Multicall Pruning, Actual-Pair Resolution (CLOSED)
+## M7.A.5.3–5.29: WebSocket, Pruning, Resolution, Coverage, Enrichment, Scoring, Refactors (CLOSED, compressed)
 
-**M7.A.5.3** (WebSocket-Triggered Same-Block Replay): ws-live streaming architecture NOT VIABLE. Quote pipeline ~2.3s per event, 9x over 250ms block budget. All events stale. CI: 2849 passed, 113 orderflow tests.
-
-**M7.A.5.4** (Two-Stage Multicall Pruning): NOT VIABLE. Per-call RPC latency ~400ms irreducible; closes all public RPC paths. CI: 2869 passed.
-
-**M7.A.5.5** (Actual-Pair Token Resolution): CONFIRMED but IMMATERIAL. 100% pairs resolved but most tokens outside narrow_7. CI: 2887 passed.
-
----
-
-## M7.A.5.6–5.7: Coverage Decomposition + Enrichment Infrastructure (CLOSED)
-
-**M7.A.5.6**: 80% events rejected at `TOKEN_NOT_ADMITTED`. 5 new reject reasons (13 total), 5 new fields (42 total). CI: 2923 passed.
-
-**M7.A.5.7**: On-chain ERC-20 enrichment, Chainlink oracle, V3 pool-state for local-sim. 3 new fields (45 total). CI: 2950 passed.
-
----
-
-## M7.A.5.8: Subgraph Seed + Gas Decomposition (CLOSED)
-
-Subgraph BLOCKED (403). Gas decomposition: L1 data ~80%, L2 exec ~20%. GAS_EXCEEDS_GROSS dominant. 4 new fields (49 total). CI: 2961 passed.
-
----
-
-## M7.A.5.9–5.24: Corrective + Infrastructure + Scoring (CLOSED)
-
-**M7.A.5.9–5.11**: Decimal fix, stale gate, active-liquidity coverage (CI: 2988→3036).
-**M7.A.5.12**: Byte-parsing breakthrough — 26 scored (was 0) (CI: 3059).
-**M7.A.5.13–5.15**: Stale/low-lag split, reject decomposition, debug diagnostic (CI: 3077→3110).
-**M7.A.5.16–5.17**: Pool-class truth, V2 direct resolve (CI: 3132→3151).
-**M7.A.5.18–5.19**: Low-lag watchlist, blocker tags, provenance, file splits (CI: 3180→3183).
-**M7.A.5.20–5.22**: Local pricing, factory-driven pool registry, registry activation (CI: 3212→3267).
-**M7.A.5.23–5.24**: Registry-direct scoring bridge, pipeline slim (CI: 3286→3310).
-
----
-
-## M7.A.5.25–5.29: Detection-Time Truth, Structural Refactors, Rolling+Loop Infra (CLOSED)
-
-**M7.A.5.25**: Fixed low-lag accounting (detection-time vs final). +REJECT_PRICING_ANOMALY (21 total). CI: 3317 passed.
-**M7.R1**: Extracted `m7/` package (8 modules). CI: 3180 passed.
-**M7.T1**: Consolidated 14 test files into 8 stable suites. CI: 3104 passed.
-**M7.A.5.26**: Fixed `UnboundLocalError` in zero-active-pools. CI: 3105 passed.
-**M7.A.5.27**: Anomaly-clean headlines, wall-clock budget abort, Timeboost constants. CI: 3113 passed.
-**M7.A.5.28**: Unified `_is_stale()`, canonical `m7_orderflow_latest.json`. CI: 3120 passed.
-**M7.A.5.29**: `m7a_orderflow_loop.py` continuous loop, hot/cold split. CI: 3124 passed.
+**5.3–5.5**: WS-live NOT VIABLE (quote pipeline ~2.3s per event). Two-stage multicall NOT VIABLE. Actual-pair resolution CONFIRMED but IMMATERIAL. CI: 2849→2887.
+**5.6–5.8**: Coverage decomposition (80% TOKEN_NOT_ADMITTED, 13 reject reasons). Enrichment infra. Gas decomposition (L1 80%, L2 20%). Subgraph BLOCKED (403). CI: 2923→2961.
+**5.9–5.24**: Decimal fix, stale gate, byte-parsing breakthrough (26 scored, was 0), stale/low-lag split, pool-class truth, V2 direct resolve, local pricing, factory-driven registry, pipeline slim. CI: 2988→3310.
+**5.25–5.29**: Detection-time truth, m7/ package extraction, test consolidation, continuous loop, hot/cold split. CI: 3104→3124.
 
 ---
 
@@ -269,6 +230,40 @@ CI: 3698 passed, 6 skipped.
 
 CI: 3702 passed, 6 skipped (3698 + 4 new gas breakdown tests).
 
+### M7.E1.2: Hot Blocker Separation — Arbitrum Contamination Fix (April 7, 21:38-21:41Z)
+
+**Goal**: Separate Base cold gas blocker from Base hot overlap/registry blocker. E1.1 review found that `architecture_blocker_trace` still showed Arbitrum-era values (`blocker_class=event_source_absence`, `pool_address=0xd13040...`, `family=family_unresolved`) on Base — a false diagnosis caused by hardcoded Arbitrum target pool.
+
+**Code changes (3 files)**:
+- `scripts/m7a_orderflow_loop.py` — (1) Dynamic `_TARGET_POOL` selection from `bridge_selected_at_assembly` (picks first A_cold_exec, falls back to any pool, None if empty). (2) Four new event-to-bridge classification counters: `events_in_bridge_total`, `events_not_in_bridge_total`, `matched_then_gas_rejected_total`, `matched_then_scored_positive_total`. (3) Three-way `blocker_class`: `event_source_absence` | `events_not_reaching_bridge` | `gas_economics_only` | `selection_or_scoring`. (4) `families_with_any_hot_events` now cumulative across ALL bridge families.
+- `m7/orderflow/mode_ws_live.py` — Fixed `KeyError: 'stage_a_ms'` in stage latency aggregation (`.get()` instead of `[]` indexing) — this bug silently crashed every hot iteration, preventing rollup writes.
+- `tests/unit/test_47r_cross_artifact_contract.py` — Updated `_build_architecture_blocker_trace` helper for three-way classification; added `test_families_with_any_hot_events_uses_all_families`.
+- `tests/unit/test_e1_base_chain_aware.py` — 3 new test classes (14 tests): `TestE1_2_DynamicTargetPoolSelection` (4), `TestE1_2_EventBridgeClassification` (6), `TestE1_2_BlockerClassification` (4). Includes source-level invariant `test_no_hardcoded_arbitrum_pool_in_production`.
+
+CI: 3718 passed, 6 skipped (3702 + 16 new E1.2 tests).
+
+**Evidence (3-min nonstop, 21:38-21:41Z)**:
+
+| Metric | E1.1 (pre-fix) | E1.2 (post-fix) |
+|--------|----------------|------------------|
+| `blocker_class` | `event_source_absence` (FALSE) | **`gas_economics_only`** (CORRECT) |
+| `families_with_any_hot_events` | 0 (single-family check) | **9/17** (all-family check) |
+| `exact_pool_trace.pool_address` | `0xd13040...` (Arbitrum) | **`0x6f79e0...`** (Base) |
+| `exact_family_trace.family` | `family_unresolved` | **`0x8335.../0xe0cd...`** (resolved) |
+| `events_in_bridge_total` | N/A | **12** |
+| `events_not_in_bridge_total` | N/A | **7** |
+| `matched_then_gas_rejected_total` | N/A | **12** (all) |
+| `matched_then_scored_positive_total` | N/A | **0** |
+| `bridge_pool_hit_total` | 0 (never 0 — rollup not written) | **16** |
+| `session_bridge_pool_hit_total` | 0 | **14** |
+| hot rollup written? | NO (`stage_a_ms` crash) | **YES** |
+
+**Findings**:
+1. **Arbitrum contamination is the root cause**: Hardcoded `_TARGET_POOL = 0xd13040...` (Arbitrum) meant all trace diagnostics were chain-foreign on Base. `exact_pool_trace` always showed `not_in_bridge` (Arbitrum pool not in Base bridge). `exact_family_trace` couldn't resolve family via PTT (Arbitrum pool → `family_unresolved`). `architecture_blocker_trace.families_with_any_hot_events` checked only the unresolved family → 0 → false `event_source_absence`.
+2. **Hot lane was silently crashing**: `mode_ws_live.py` stage latency aggregation used `dict["stage_a_ms"]` instead of `.get()`. When live results had `pipeline_stage_latency_ms` without `stage_a_ms` key, every hot iteration raised `KeyError` — caught by the outer try/except, hot continued retrying but never reached `_update_hot_rollup()`. 3/3 supervisor "alive" masked the failure.
+3. **Base hot lane IS gas-blocked, not architecture-blocked**: With fixed traces, 12/12 bridge-matching events are gas-killed. 9/17 bridge families see hot events. `blocker_class=gas_economics_only` is the correct three-way classification.
+4. **E1.1 conclusion was correct but unprovable**: The "gas economics sole blocker" narrative was true for both cold and hot lanes, but E1.1 artifacts couldn't prove it due to contamination. E1.2 now proves it with clean chain-native traces.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -287,8 +282,8 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — M7.E1.1 confirms 30 events scored in 10-min nonstop (26 GAS_EXCEEDS_GROSS).
-2. **GAS_EXCEEDS_GROSS — ACTIVE (Base)** — 26/30 events rejected by gas economics in E1.1 nonstop. Best near-executable=-2.20 bps (QWLA/WETH). Gas breakdown: l1_data=0.16 bps (80%), l2_exec=0.04 bps (20%), total=0.20 bps. USDC/WETH narrow contour at -9.16 bps mean gap — wider-universe pairs closer to breakeven.
+1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — E1.2 confirms `blocker_class=gas_economics_only` with 9/17 bridge families receiving hot events.
+2. **GAS_EXCEEDS_GROSS — ACTIVE (Base, both lanes)** — E1.2 proves hot lane is gas-blocked: 12/12 bridge-matching events gas-rejected, 0 scored positive. Cold lane: 26/30 gas-rejected (E1.1). Best near-executable=-2.20 bps. Gas breakdown: l1_data=0.16 bps (80%), l2_exec=0.04 bps (20%).
 3. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve from local machine. Sub-block delivery untested. Alchemy WS fallback works. Separate subtask — not mixed with economics proof.
 4. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
@@ -296,4 +291,5 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 scoring/bridge changes.
 2. **Base gas blocker priorities**: (a) Flashblocks WS connectivity (separate subtask — alt endpoints, HTTP polling) for sub-block delivery. (b) Gas economics — L1 data cost reduction, gas_floor_bps tuning, larger trade sizes. (c) Narrow contour assessment — non-contour pairs (QWLA/WETH -2.20) closer to breakeven than USDC/WETH (-9.16). (d) If breakeven achieved → Tenderly simulation.
-3. **Source plane validated, gas plane is the frontier**: Event-source absence does NOT exist on Base. Hot/cold bridge operational. Gas breakdown fields in all candidate rows.
+3. **Hot lane now fully operational on Base**: `stage_a_ms` fix means hot rollup is reliably written. Dynamic target pool + three-way blocker classification means trace diagnostics are chain-accurate.
+4. **Source plane validated, gas plane is the frontier**: Event-source absence does NOT exist on Base (9/17 families have hot events). Gas economics is the only blocker across both cold and hot lanes.

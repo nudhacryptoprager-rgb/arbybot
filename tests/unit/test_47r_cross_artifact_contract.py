@@ -256,8 +256,10 @@ def _build_architecture_blocker_trace(
     eft: dict,
     prev_abt: dict | None = None,
     session_changed: bool = False,
+    rollup: dict | None = None,
+    family_event_counts: dict | None = None,
 ) -> dict:
-    """Mirror of 47r architecture_blocker_trace logic."""
+    """Mirror of M7.E1.2 architecture_blocker_trace logic."""
     abt = prev_abt.copy() if prev_abt and not session_changed else {}
     abt["session_windows_seen"] = sess.get("session_windows_seen", 0)
     abt["session_events_seen_total"] = sess.get("session_events_seen_total", 0)
@@ -269,38 +271,75 @@ def _build_architecture_blocker_trace(
         if sf and sf != "family_unresolved":
             families.add(sf)
     abt["families_selected_count"] = len(families)
+    # M7.E1.2: Count families with ANY events across ALL bridge families
+    _fec = family_event_counts or {}
+    _families_hit = sum(1 for fam in families if _fec.get(fam, 0) > 0)
     abt["families_with_any_hot_events"] = (
-        1 if eft.get("session_family_events_seen", 0) > 0 else 0
+        abt.get("families_with_any_hot_events", 0) + _families_hit
     )
     abt["families_with_exact_hits"] = (
         1 if eft.get("session_exact_pool_events_seen", 0) > 0 else 0
     )
-    abt["blocker_class"] = (
-        "event_source_absence"
-        if abt.get("families_with_any_hot_events", 0) == 0
-        else "selection_or_scoring"
-    )
+    # M7.E1.2: Three-way blocker classification
+    _rollup = rollup or {}
+    _total_events = sess.get("session_events_seen_total", 0)
+    _bridge_hits = sess.get("session_bridge_pool_hit_total", 0)
+    _events_in_bridge = _rollup.get("events_in_bridge_total", 0)
+    if _total_events == 0:
+        abt["blocker_class"] = "event_source_absence"
+    elif _events_in_bridge == 0 and _bridge_hits == 0:
+        abt["blocker_class"] = "events_not_reaching_bridge"
+    elif _rollup.get("matched_then_scored_positive_total", 0) > 0:
+        abt["blocker_class"] = "selection_or_scoring"
+    else:
+        abt["blocker_class"] = "gas_economics_only"
     return abt
 
 
 class TestArchitectureBlockerTrace:
 
-    def test_blocker_class_event_source_when_no_events(self):
-        sess = {"session_windows_seen": 5, "session_events_seen_total": 10}
-        eft = {"session_family_events_seen": 0, "session_exact_pool_events_seen": 0}
+    def test_blocker_class_event_source_when_zero_events(self):
+        sess = {"session_windows_seen": 5, "session_events_seen_total": 0}
+        eft = {}
         bd = {"bridge_selected_at_assembly": [
             {"pool_address": "0xa", "family": "tok0/tok1"},
         ]}
         abt = _build_architecture_blocker_trace(sess, bd, eft)
         assert abt["blocker_class"] == "event_source_absence"
 
-    def test_blocker_class_selection_when_family_events_exist(self):
-        sess = {"session_windows_seen": 5, "session_events_seen_total": 10}
-        eft = {"session_family_events_seen": 3, "session_exact_pool_events_seen": 0}
+    def test_blocker_class_events_not_reaching_bridge(self):
+        sess = {"session_windows_seen": 5, "session_events_seen_total": 10,
+                "session_bridge_pool_hit_total": 0}
+        eft = {}
         bd = {"bridge_selected_at_assembly": [
             {"pool_address": "0xa", "family": "tok0/tok1"},
         ]}
-        abt = _build_architecture_blocker_trace(sess, bd, eft)
+        abt = _build_architecture_blocker_trace(sess, bd, eft,
+                                                rollup={"events_in_bridge_total": 0})
+        assert abt["blocker_class"] == "events_not_reaching_bridge"
+
+    def test_blocker_class_gas_economics_only(self):
+        sess = {"session_windows_seen": 5, "session_events_seen_total": 10,
+                "session_bridge_pool_hit_total": 3}
+        eft = {}
+        bd = {"bridge_selected_at_assembly": [
+            {"pool_address": "0xa", "family": "tok0/tok1"},
+        ]}
+        abt = _build_architecture_blocker_trace(sess, bd, eft,
+                                                rollup={"events_in_bridge_total": 5,
+                                                        "matched_then_scored_positive_total": 0})
+        assert abt["blocker_class"] == "gas_economics_only"
+
+    def test_blocker_class_selection_when_positive_scores_exist(self):
+        sess = {"session_windows_seen": 5, "session_events_seen_total": 10,
+                "session_bridge_pool_hit_total": 3}
+        eft = {}
+        bd = {"bridge_selected_at_assembly": [
+            {"pool_address": "0xa", "family": "tok0/tok1"},
+        ]}
+        abt = _build_architecture_blocker_trace(sess, bd, eft,
+                                                rollup={"events_in_bridge_total": 5,
+                                                        "matched_then_scored_positive_total": 2})
         assert abt["blocker_class"] == "selection_or_scoring"
 
     def test_families_count_excludes_unresolved(self):
@@ -309,7 +348,7 @@ class TestArchitectureBlockerTrace:
             {"pool_address": "0xb", "family": "family_unresolved"},
             {"pool_address": "0xc", "family": "tok2/tok3"},
         ]}
-        eft = {"session_family_events_seen": 0, "session_exact_pool_events_seen": 0}
+        eft = {}
         abt = _build_architecture_blocker_trace({}, bd, eft)
         assert abt["families_selected_count"] == 2
 
@@ -354,6 +393,16 @@ class TestArchitectureBlockerTrace:
         eft = {"session_family_events_seen": 5, "session_exact_pool_events_seen": 2}
         abt = _build_architecture_blocker_trace({}, {}, eft)
         assert abt["families_with_exact_hits"] == 1
+
+    def test_families_with_any_hot_events_uses_all_families(self):
+        """M7.E1.2: families_with_any_hot_events counts across ALL families."""
+        bd = {"bridge_selected_at_assembly": [
+            {"pool_address": "0xa", "family": "tok0/tok1"},
+            {"pool_address": "0xb", "family": "tok2/tok3"},
+        ]}
+        fec = {"tok0/tok1": 3, "tok2/tok3": 0}
+        abt = _build_architecture_blocker_trace({}, bd, {}, family_event_counts=fec)
+        assert abt["families_with_any_hot_events"] == 1
 
 
 # ---------------------------------------------------------------------------

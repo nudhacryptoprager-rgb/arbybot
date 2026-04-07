@@ -331,3 +331,179 @@ class TestNonstopRuntimeChain:
         with mock.patch("sys.argv", ["prog", "--hours", "0.01", "--chain", "base"]):
             args = parse_args()
         assert args.chain == "base"
+
+
+# ---------------------------------------------------------------------------
+# 9. M7.E1.2: Chain-purity invariant — dynamic target pool selection
+# ---------------------------------------------------------------------------
+
+_ARBITRUM_POOL = "0xd13040d4fe917ee704158cfcb3338dcd2838b245"
+
+
+class TestE1_2_DynamicTargetPoolSelection:
+    """M7.E1.2: Target pool is selected from bridge, not hardcoded."""
+
+    def test_target_pool_from_a_cold_exec(self):
+        """First A_cold_exec pool in bridge_selected_at_assembly is chosen."""
+        bsa = [
+            {"pool_address": "0xbase_a1", "bucket": "A_cold_exec", "family": "tok0/tok1"},
+            {"pool_address": "0xbase_b1", "bucket": "B_hot_seen", "family": "tok2/tok3"},
+        ]
+        target = None
+        for sel in bsa:
+            if sel.get("bucket") == "A_cold_exec" and sel.get("pool_address"):
+                target = sel["pool_address"].lower()
+                break
+        assert target == "0xbase_a1"
+
+    def test_fallback_to_any_pool_if_no_a_bucket(self):
+        """If no A_cold_exec, picks first available pool."""
+        bsa = [
+            {"pool_address": "0xbase_b1", "bucket": "B_hot_seen", "family": "tok2/tok3"},
+        ]
+        target = None
+        for sel in bsa:
+            if sel.get("bucket") == "A_cold_exec" and sel.get("pool_address"):
+                target = sel["pool_address"].lower()
+                break
+        if target is None:
+            for sel in bsa:
+                if sel.get("pool_address"):
+                    target = sel["pool_address"].lower()
+                    break
+        assert target == "0xbase_b1"
+
+    def test_empty_bridge_gives_none(self):
+        """Empty bridge_selected_at_assembly → target=None."""
+        bsa = []
+        target = None
+        for sel in bsa:
+            if sel.get("bucket") == "A_cold_exec" and sel.get("pool_address"):
+                target = sel["pool_address"].lower()
+                break
+        assert target is None
+
+    def test_no_hardcoded_arbitrum_pool_in_production(self):
+        """M7.E1.2 chain-purity: production code must NOT contain hardcoded Arbitrum pool."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _update_hot_rollup
+        source = inspect.getsource(_update_hot_rollup)
+        assert _ARBITRUM_POOL not in source, (
+            "Hardcoded Arbitrum pool still in _update_hot_rollup — breaks chain purity"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10. M7.E1.2: Event-to-bridge classification counters
+# ---------------------------------------------------------------------------
+
+class TestE1_2_EventBridgeClassification:
+    """M7.E1.2: Event classification for hot blocker separation."""
+
+    def _make_mock_result(self, pool_address, scoring_path="registry_fast", net_bps=0):
+        class MockEvent:
+            def __init__(self, pa):
+                self.pool_address = pa
+        class MockResult:
+            pass
+        r = MockResult()
+        r._source_event = MockEvent(pool_address)
+        r.scoring_path = scoring_path
+        r.best_backrun_net_bps = net_bps
+        return r
+
+    def test_event_in_bridge_counted(self):
+        bridge_set = {"0xpool_a", "0xpool_b"}
+        fast = [self._make_mock_result("0xpool_a")]
+        in_bridge = sum(
+            1 for r in fast
+            if getattr(r._source_event, "pool_address", "").lower() in bridge_set
+        )
+        assert in_bridge == 1
+
+    def test_event_not_in_bridge_counted(self):
+        bridge_set = {"0xpool_a"}
+        fast = [self._make_mock_result("0xother")]
+        not_in_bridge = sum(
+            1 for r in fast
+            if getattr(r._source_event, "pool_address", "").lower() not in bridge_set
+        )
+        assert not_in_bridge == 1
+
+    def test_matched_hot_skip_counted_as_gas_rejected(self):
+        """Event in bridge but hot_skip → gas_rejected counter."""
+        bridge_set = {"0xpool_a"}
+        fast = [self._make_mock_result("0xpool_a", scoring_path="hot_skip", net_bps=0)]
+        matched_rejected = 0
+        for r in fast:
+            pa = getattr(r._source_event, "pool_address", "").lower()
+            if pa in bridge_set:
+                if r.scoring_path == "hot_skip" or (r.best_backrun_net_bps or 0) <= 0:
+                    matched_rejected += 1
+        assert matched_rejected == 1
+
+    def test_matched_positive_counted(self):
+        """Event in bridge with positive net → scored_positive counter."""
+        bridge_set = {"0xpool_a"}
+        fast = [self._make_mock_result("0xpool_a", scoring_path="registry_fast", net_bps=5.0)]
+        matched_positive = 0
+        for r in fast:
+            pa = getattr(r._source_event, "pool_address", "").lower()
+            if pa in bridge_set:
+                net = r.best_backrun_net_bps or 0
+                if r.scoring_path != "hot_skip" and net > 0:
+                    matched_positive += 1
+        assert matched_positive == 1
+
+    def test_family_event_map_built_correctly(self):
+        """Per-family event map uses PTT for family lookup."""
+        ptt = {"0xpool_a": ["tok0", "tok1", 500], "0xpool_b": ["tok2", "tok3", 3000]}
+        fast = [
+            self._make_mock_result("0xpool_a"),
+            self._make_mock_result("0xpool_a"),
+            self._make_mock_result("0xpool_b"),
+        ]
+        family_counts = {}
+        for r in fast:
+            pa = getattr(r._source_event, "pool_address", "").lower()
+            info = ptt.get(pa)
+            if info and len(info) >= 2:
+                fam = f"{info[0]}/{info[1]}"
+                family_counts[fam] = family_counts.get(fam, 0) + 1
+        assert family_counts == {"tok0/tok1": 2, "tok2/tok3": 1}
+
+
+# ---------------------------------------------------------------------------
+# 11. M7.E1.2: Three-way blocker classification
+# ---------------------------------------------------------------------------
+
+class TestE1_2_BlockerClassification:
+    """M7.E1.2: blocker_class is three-way, not binary."""
+
+    def test_event_source_absence(self):
+        """Zero events → event_source_absence."""
+        assert _classify_blocker(events=0, bridge_hits=0, events_in_bridge=0, positive=0) == "event_source_absence"
+
+    def test_events_not_reaching_bridge(self):
+        """Events exist but none in bridge → events_not_reaching_bridge."""
+        assert _classify_blocker(events=10, bridge_hits=0, events_in_bridge=0, positive=0) == "events_not_reaching_bridge"
+
+    def test_gas_economics_only(self):
+        """Events reach bridge but none scored positive → gas_economics_only."""
+        assert _classify_blocker(events=10, bridge_hits=5, events_in_bridge=5, positive=0) == "gas_economics_only"
+
+    def test_selection_or_scoring(self):
+        """Some events scored positive → selection_or_scoring."""
+        assert _classify_blocker(events=10, bridge_hits=5, events_in_bridge=5, positive=2) == "selection_or_scoring"
+
+
+def _classify_blocker(events: int, bridge_hits: int, events_in_bridge: int, positive: int) -> str:
+    """Mirror of M7.E1.2 blocker classification logic."""
+    if events == 0:
+        return "event_source_absence"
+    elif events_in_bridge == 0 and bridge_hits == 0:
+        return "events_not_reaching_bridge"
+    elif positive > 0:
+        return "selection_or_scoring"
+    else:
+        return "gas_economics_only"

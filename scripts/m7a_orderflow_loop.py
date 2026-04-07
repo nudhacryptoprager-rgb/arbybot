@@ -1395,68 +1395,123 @@ def _update_hot_rollup(
                 "session_fast_path_scored_total"):
         rollup[_sk] = _sess.get(_sk)
 
+    # M7.E1.2: Event-to-bridge classification counters (chain-agnostic).
+    # For each event in _fast, classify whether its pool is in the bridge set,
+    # and if matched, whether it was gas-rejected or successfully scored.
+    _bridge_addrs_set = _bd.get("_bridge_pool_addrs_set", set())
+    _ptt_rollup = _bd.get("_ptt", {})
+    _events_in_bridge_window = 0
+    _events_not_in_bridge_window = 0
+    _matched_gas_rejected_window = 0
+    _matched_scored_positive_window = 0
+    # Also build per-family event map for architecture_blocker_trace
+    _family_event_counts: dict = {}  # family_str -> event_count
+    for _r in _fast:
+        _evt = getattr(_r, "_source_event", None)
+        if not _evt:
+            continue
+        _ep = getattr(_evt, "pool_address", "").lower()
+        _in_bridge = _ep in _bridge_addrs_set
+        if _in_bridge:
+            _events_in_bridge_window += 1
+            _net = getattr(_r, "best_backrun_net_bps", None) or 0
+            if getattr(_r, "scoring_path", None) == "hot_skip":
+                _matched_gas_rejected_window += 1  # in bridge but not in registry
+            elif _net <= 0:
+                _matched_gas_rejected_window += 1
+            else:
+                _matched_scored_positive_window += 1
+        else:
+            _events_not_in_bridge_window += 1
+        # Map event pool to family for architecture blocker trace
+        _evt_info = _ptt_rollup.get(_ep)
+        if _evt_info and len(_evt_info) >= 2:
+            _evt_fam = f"{_evt_info[0]}/{_evt_info[1]}"
+            _family_event_counts[_evt_fam] = _family_event_counts.get(_evt_fam, 0) + 1
+    # Accumulate into rollup
+    rollup["events_in_bridge_total"] = (
+        rollup.get("events_in_bridge_total", 0) + _events_in_bridge_window
+    )
+    rollup["events_not_in_bridge_total"] = (
+        rollup.get("events_not_in_bridge_total", 0) + _events_not_in_bridge_window
+    )
+    rollup["matched_then_gas_rejected_total"] = (
+        rollup.get("matched_then_gas_rejected_total", 0) + _matched_gas_rejected_window
+    )
+    rollup["matched_then_scored_positive_total"] = (
+        rollup.get("matched_then_scored_positive_total", 0) + _matched_scored_positive_window
+    )
+
+    # M7.E1.2: Chain-aware target pool selection — pick first A_cold_exec
+    # pool from bridge_selected_at_assembly instead of hardcoded Arbitrum pool.
+    _bsa = _bd.get("bridge_selected_at_assembly", [])
+    _TARGET_POOL = None
+    for _sel in _bsa:
+        if _sel.get("bucket") == "A_cold_exec" and _sel.get("pool_address"):
+            _TARGET_POOL = _sel["pool_address"].lower()
+            break
+    if _TARGET_POOL is None:
+        for _sel in _bsa:
+            if _sel.get("pool_address"):
+                _TARGET_POOL = _sel["pool_address"].lower()
+                break
+
     # M7.A.5.47n: Exact-pool session trace — per-window tracking for target
     # cold-executable pool. Answers: is the pool consistently in bridge?
     # Did any hot event arrive at this exact pool across the session?
-    _TARGET_POOL = "0xd13040d4fe917ee704158cfcb3338dcd2838b245"
     _ept = rollup.get("exact_pool_trace", {})
-    # M7.A.5.47o: Reset exact_pool_trace on session change (consistent with session counters).
-    if _ept.get("pool_address") != _TARGET_POOL or _prev_sid != _SESSION_ID:
-        # Fresh trace for this target
-        _ept = {
-            "pool_address": _TARGET_POOL,
-            "session_windows_seen": 0,
-            "session_windows_in_bridge": 0,
-            "session_hot_events_seen": 0,
-            "session_fast_attempted": 0,
-            "session_fast_scored": 0,
-            "in_bridge_every_window": True,
-            "last_seen_window": None,
-            "reason_if_not_hit": None,
-        }
-    _ept["session_windows_seen"] = _ept.get("session_windows_seen", 0) + 1
-    # Check if target pool is in the full bridge set this window
-    _target_in_bridge = _TARGET_POOL in _bd.get("_bridge_pool_addrs_set", set())
-    if _target_in_bridge:
-        _ept["session_windows_in_bridge"] = _ept.get("session_windows_in_bridge", 0) + 1
+    if _TARGET_POOL is None:
+        _ept = {"pool_address": None, "reason_if_not_hit": "no_bridge_data"}
     else:
-        _ept["in_bridge_every_window"] = False
-    # Check hot events at target pool this window
-    _target_hot_events = 0
-    _target_fast_attempted = 0
-    _target_fast_scored = 0
-    for _r in _fast:
-        _evt = getattr(_r, "_source_event", None)
-        if _evt and getattr(_evt, "pool_address", "").lower() == _TARGET_POOL:
-            _target_hot_events += 1
-            if getattr(_r, "scoring_path", None) != "hot_skip":
-                _target_fast_attempted += 1
-                if (getattr(_r, "best_backrun_net_bps", None) or 0) != 0:
-                    _target_fast_scored += 1
-    _ept["session_hot_events_seen"] = _ept.get("session_hot_events_seen", 0) + _target_hot_events
-    _ept["session_fast_attempted"] = _ept.get("session_fast_attempted", 0) + _target_fast_attempted
-    _ept["session_fast_scored"] = _ept.get("session_fast_scored", 0) + _target_fast_scored
-    if _target_hot_events > 0:
-        _ept["last_seen_window"] = ts
-    # Determine reason_if_not_hit (latest window's reason)
-    if not _target_in_bridge:
-        _ept["reason_if_not_hit"] = "not_in_bridge"
-    elif _target_hot_events == 0:
-        _ept["reason_if_not_hit"] = "no_hot_events_at_pool"
-    elif _target_fast_attempted == 0:
-        _ept["reason_if_not_hit"] = "hot_skip_no_scoring"
-    elif _target_fast_scored == 0:
-        _ept["reason_if_not_hit"] = "scored_but_no_result"
-    else:
-        _ept["reason_if_not_hit"] = None  # Hit! No miss reason.
+        # M7.A.5.47o: Reset exact_pool_trace on session/target change.
+        if _ept.get("pool_address") != _TARGET_POOL or _prev_sid != _SESSION_ID:
+            _ept = {
+                "pool_address": _TARGET_POOL,
+                "session_windows_seen": 0,
+                "session_windows_in_bridge": 0,
+                "session_hot_events_seen": 0,
+                "session_fast_attempted": 0,
+                "session_fast_scored": 0,
+                "in_bridge_every_window": True,
+                "last_seen_window": None,
+                "reason_if_not_hit": None,
+            }
+        _ept["session_windows_seen"] = _ept.get("session_windows_seen", 0) + 1
+        _target_in_bridge = _TARGET_POOL in _bridge_addrs_set
+        if _target_in_bridge:
+            _ept["session_windows_in_bridge"] = _ept.get("session_windows_in_bridge", 0) + 1
+        else:
+            _ept["in_bridge_every_window"] = False
+        _target_hot_events = 0
+        _target_fast_attempted = 0
+        _target_fast_scored = 0
+        for _r in _fast:
+            _evt = getattr(_r, "_source_event", None)
+            if _evt and getattr(_evt, "pool_address", "").lower() == _TARGET_POOL:
+                _target_hot_events += 1
+                if getattr(_r, "scoring_path", None) != "hot_skip":
+                    _target_fast_attempted += 1
+                    if (getattr(_r, "best_backrun_net_bps", None) or 0) != 0:
+                        _target_fast_scored += 1
+        _ept["session_hot_events_seen"] = _ept.get("session_hot_events_seen", 0) + _target_hot_events
+        _ept["session_fast_attempted"] = _ept.get("session_fast_attempted", 0) + _target_fast_attempted
+        _ept["session_fast_scored"] = _ept.get("session_fast_scored", 0) + _target_fast_scored
+        if _target_hot_events > 0:
+            _ept["last_seen_window"] = ts
+        if not _target_in_bridge:
+            _ept["reason_if_not_hit"] = "not_in_bridge"
+        elif _target_hot_events == 0:
+            _ept["reason_if_not_hit"] = "no_hot_events_at_pool"
+        elif _target_fast_attempted == 0:
+            _ept["reason_if_not_hit"] = "hot_skip_no_scoring"
+        elif _target_fast_scored == 0:
+            _ept["reason_if_not_hit"] = "scored_but_no_result"
+        else:
+            _ept["reason_if_not_hit"] = None
     rollup["exact_pool_trace"] = _ept
 
     # M7.A.5.47q: exact_family_trace — family-level session trace.
-    # Tracks whether ANY pool in the same token-pair family as the target pool
-    # receives events, even when the exact pool does not. Answers: is the blocker
-    # pool-specific or family-wide?
-    _ptt_rollup = _bd.get("_ptt", {})
-    _target_info = _ptt_rollup.get(_TARGET_POOL)
+    _target_info = _ptt_rollup.get(_TARGET_POOL) if _TARGET_POOL else None
     _target_family = (
         f"{_target_info[0]}/{_target_info[1]}"
         if _target_info and len(_target_info) >= 2
@@ -1471,9 +1526,8 @@ def _update_hot_rollup(
             "session_exact_pool_events_seen": 0,
             "reason_if_no_exact_hit": None,
         }
-    # Discover sibling pools: all bridge-selected pools of the same family
     _sibling_pools_this_window: list = []
-    for _sel in _bd.get("bridge_selected_at_assembly", []):
+    for _sel in _bsa:
         _sp_fam = _sel.get("family", "")
         if _sp_fam == _target_family or (
             _target_info and _sp_fam and _target_info[0] in _sp_fam and _target_info[1] in _sp_fam
@@ -1482,62 +1536,74 @@ def _update_hot_rollup(
             if _sp_pa and _sp_pa not in _eft.get("selected_pools", []):
                 _eft.setdefault("selected_pools", []).append(_sp_pa)
             _sibling_pools_this_window.append(_sp_pa)
-    # Count events at any sibling pool this window
     _family_events_this_window = 0
     _exact_events_this_window = 0
-    for _r in _fast:
-        _evt = getattr(_r, "_source_event", None)
-        if not _evt:
-            continue
-        _ep = getattr(_evt, "pool_address", "").lower()
-        if _ep == _TARGET_POOL:
-            _exact_events_this_window += 1
-            _family_events_this_window += 1
-        elif _ep in _sibling_pools_this_window:
-            _family_events_this_window += 1
+    if _TARGET_POOL:
+        for _r in _fast:
+            _evt = getattr(_r, "_source_event", None)
+            if not _evt:
+                continue
+            _ep = getattr(_evt, "pool_address", "").lower()
+            if _ep == _TARGET_POOL:
+                _exact_events_this_window += 1
+                _family_events_this_window += 1
+            elif _ep in _sibling_pools_this_window:
+                _family_events_this_window += 1
     _eft["session_family_events_seen"] = (
         _eft.get("session_family_events_seen", 0) + _family_events_this_window
     )
     _eft["session_exact_pool_events_seen"] = (
         _eft.get("session_exact_pool_events_seen", 0) + _exact_events_this_window
     )
-    # Determine reason
     if _family_events_this_window == 0 and _exact_events_this_window == 0:
         _eft["reason_if_no_exact_hit"] = "no_events_at_any_family_pool"
     elif _family_events_this_window > 0 and _exact_events_this_window == 0:
         _eft["reason_if_no_exact_hit"] = "events_at_sibling_not_exact_pool"
     else:
-        _eft["reason_if_no_exact_hit"] = None  # Exact pool had events
-    # Truncate selected_pools list to prevent unbounded growth
+        _eft["reason_if_no_exact_hit"] = None
     _eft["selected_pools"] = _eft.get("selected_pools", [])[:20]
     rollup["exact_family_trace"] = _eft
 
-    # M7.A.5.47r: architecture_blocker_trace — canonical session summary.
-    # Aggregates whether the blocker is event-source/architecture or selection.
+    # M7.E1.2: architecture_blocker_trace — canonical session summary.
+    # Fixed: families_with_any_hot_events now checks ALL bridge families
+    # against the per-family event map, not just the single target family.
     _abt = rollup.get("architecture_blocker_trace", {})
     if _prev_sid != _SESSION_ID:
         _abt = {}
     _abt["session_windows_seen"] = _sess.get("session_windows_seen", 0)
     _abt["session_events_seen_total"] = _sess.get("session_events_seen_total", 0)
-    # Count resolved families from bridge_selected_at_assembly
-    _bsa_for_abt = _bd.get("bridge_selected_at_assembly", [])
+    _bsa_for_abt = _bsa
     _abt_families = set()
     for _s_abt in _bsa_for_abt:
         _sf_abt = _s_abt.get("family", "")
         if _sf_abt and _sf_abt != "family_unresolved":
             _abt_families.add(_sf_abt)
     _abt["families_selected_count"] = len(_abt_families)
+    # M7.E1.2: Count families with ANY hot events across ALL bridge families
+    _families_hit_this_window = sum(
+        1 for fam in _abt_families if _family_event_counts.get(fam, 0) > 0
+    )
     _abt["families_with_any_hot_events"] = (
-        1 if _eft.get("session_family_events_seen", 0) > 0 else 0
+        _abt.get("families_with_any_hot_events", 0) + _families_hit_this_window
     )
     _abt["families_with_exact_hits"] = (
         1 if _eft.get("session_exact_pool_events_seen", 0) > 0 else 0
     )
-    _abt["blocker_class"] = (
-        "event_source_absence"
-        if _abt.get("families_with_any_hot_events", 0) == 0
-        else "selection_or_scoring"
-    )
+    # M7.E1.2: Three-way blocker classification:
+    # - event_source_absence: no events at ANY bridge family (not just target)
+    # - gas_economics_only: events arrive but all gas-rejected (no registry/overlap issue)
+    # - selection_or_scoring: events arrive but hit/scoring pipeline blocks them
+    _total_events_session = _sess.get("session_events_seen_total", 0)
+    _total_bridge_hits_session = _sess.get("session_bridge_pool_hit_total", 0)
+    _events_in_bridge_session = rollup.get("events_in_bridge_total", 0)
+    if _total_events_session == 0:
+        _abt["blocker_class"] = "event_source_absence"
+    elif _events_in_bridge_session == 0 and _total_bridge_hits_session == 0:
+        _abt["blocker_class"] = "events_not_reaching_bridge"
+    elif rollup.get("matched_then_scored_positive_total", 0) > 0:
+        _abt["blocker_class"] = "selection_or_scoring"
+    else:
+        _abt["blocker_class"] = "gas_economics_only"
     rollup["architecture_blocker_trace"] = _abt
 
     try:

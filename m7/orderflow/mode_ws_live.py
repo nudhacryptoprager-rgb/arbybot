@@ -645,8 +645,8 @@ def run_ws_live(
         if agg_prune:
             artifact["live_state_metrics"]["prune_reason_histogram"] = agg_prune
         # Aggregate stage latency
-        stage_a_times = [r.pipeline_stage_latency_ms["stage_a_ms"] for r in live_results if r.pipeline_stage_latency_ms]
-        stage_b_times = [r.pipeline_stage_latency_ms["stage_b_ms"] for r in live_results if r.pipeline_stage_latency_ms]
+        stage_a_times = [r.pipeline_stage_latency_ms.get("stage_a_ms") for r in live_results if r.pipeline_stage_latency_ms and "stage_a_ms" in r.pipeline_stage_latency_ms]
+        stage_b_times = [r.pipeline_stage_latency_ms.get("stage_b_ms") for r in live_results if r.pipeline_stage_latency_ms and "stage_b_ms" in r.pipeline_stage_latency_ms]
         if stage_a_times:
             artifact["live_state_metrics"]["mean_stage_a_ms"] = round(sum(stage_a_times) / len(stage_a_times), 2)
         if stage_b_times:
