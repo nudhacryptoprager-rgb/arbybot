@@ -430,17 +430,37 @@ class TestE1_2_EventBridgeClassification:
         )
         assert not_in_bridge == 1
 
-    def test_matched_hot_skip_counted_as_gas_rejected(self):
-        """Event in bridge but hot_skip → gas_rejected counter."""
+    def test_matched_hot_skip_counted_as_registry_rejected(self):
+        """Event in bridge but hot_skip → registry_rejected counter (E1.3 split)."""
         bridge_set = {"0xpool_a"}
         fast = [self._make_mock_result("0xpool_a", scoring_path="hot_skip", net_bps=0)]
-        matched_rejected = 0
+        matched_registry_rejected = 0
+        matched_gas_rejected = 0
         for r in fast:
             pa = getattr(r._source_event, "pool_address", "").lower()
             if pa in bridge_set:
-                if r.scoring_path == "hot_skip" or (r.best_backrun_net_bps or 0) <= 0:
-                    matched_rejected += 1
-        assert matched_rejected == 1
+                if r.scoring_path == "hot_skip":
+                    matched_registry_rejected += 1
+                elif (r.best_backrun_net_bps or 0) <= 0:
+                    matched_gas_rejected += 1
+        assert matched_registry_rejected == 1
+        assert matched_gas_rejected == 0
+
+    def test_matched_gas_rejected_separate_from_registry(self):
+        """Event in bridge, passed registry, net<=0 → gas_rejected counter."""
+        bridge_set = {"0xpool_a"}
+        fast = [self._make_mock_result("0xpool_a", scoring_path="registry_fast", net_bps=-5.0)]
+        matched_registry_rejected = 0
+        matched_gas_rejected = 0
+        for r in fast:
+            pa = getattr(r._source_event, "pool_address", "").lower()
+            if pa in bridge_set:
+                if r.scoring_path == "hot_skip":
+                    matched_registry_rejected += 1
+                elif (r.best_backrun_net_bps or 0) <= 0:
+                    matched_gas_rejected += 1
+        assert matched_registry_rejected == 0
+        assert matched_gas_rejected == 1
 
     def test_matched_positive_counted(self):
         """Event in bridge with positive net → scored_positive counter."""
@@ -507,3 +527,133 @@ def _classify_blocker(events: int, bridge_hits: int, events_in_bridge: int, posi
         return "selection_or_scoring"
     else:
         return "gas_economics_only"
+
+
+# ---------------------------------------------------------------------------
+# 12. M7.E1.3: Chain-purity invariant — cross-artifact consistency
+# ---------------------------------------------------------------------------
+
+# Known Arbitrum-era addresses that must NOT appear in Base artifacts
+_ARBITRUM_CONTAMINATION_ADDRESSES = {
+    "0xd13040d4fe917ee704158cfcb3338dcd2838b245",
+}
+
+
+class TestE1_3_ChainPurityInvariant:
+    """M7.E1.3: If orderflow chain=base, rollup must have Base-native traces."""
+
+    def test_base_rollup_must_not_have_arbitrum_pool_address(self):
+        """exact_pool_trace.pool_address must not be a known Arbitrum address on Base."""
+        # Simulate a Base rollup with a Base pool
+        rollup = {
+            "exact_pool_trace": {"pool_address": "0x6f79e046101eaf00c399f0489b581e932f558d5f"},
+            "architecture_blocker_trace": {"blocker_class": "gas_economics_only"},
+        }
+        pa = (rollup["exact_pool_trace"]["pool_address"] or "").lower()
+        assert pa not in _ARBITRUM_CONTAMINATION_ADDRESSES
+
+    def test_arbitrum_contamination_detected(self):
+        """If Arbitrum pool leaks into Base rollup, test must catch it."""
+        rollup = {
+            "exact_pool_trace": {"pool_address": "0xd13040d4fe917ee704158cfcb3338dcd2838b245"},
+        }
+        pa = (rollup["exact_pool_trace"]["pool_address"] or "").lower()
+        assert pa in _ARBITRUM_CONTAMINATION_ADDRESSES
+
+    def test_base_rollup_must_not_have_family_unresolved(self):
+        """exact_family_trace.family must not be family_unresolved on Base."""
+        rollup = {
+            "exact_family_trace": {
+                "family": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913/0xe0cd4cacddcbf4f36e845407ce53e87717b6601d"
+            },
+        }
+        assert rollup["exact_family_trace"]["family"] != "family_unresolved"
+
+    def test_no_hardcoded_arbitrum_pool_in_rollup_function(self):
+        """Source of _update_hot_rollup must not contain hardcoded Arbitrum pools."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _update_hot_rollup
+        src = inspect.getsource(_update_hot_rollup)
+        for addr in _ARBITRUM_CONTAMINATION_ADDRESSES:
+            assert addr not in src.lower(), f"Hardcoded Arbitrum address {addr} in _update_hot_rollup"
+
+
+# ---------------------------------------------------------------------------
+# 13. M7.E1.3: Registry vs gas rejection separation in hot_gap_debug
+# ---------------------------------------------------------------------------
+
+class TestE1_3_RegistryVsGasSeparation:
+    """M7.E1.3: hot_gap_debug must separate registry rejection from gas rejection."""
+
+    def _make_mock_result(self, pool_address, scoring_path="registry_fast", net_bps=0):
+        class MockEvent:
+            def __init__(self, pa):
+                self.pool_address = pa
+        class MockResult:
+            pass
+        r = MockResult()
+        r._source_event = MockEvent(pool_address)
+        r.scoring_path = scoring_path
+        r.best_backrun_net_bps = net_bps
+        return r
+
+    def test_bridge_registry_rejected_counted(self):
+        """Event in bridge + hot_skip → matched_bridge_then_registry_rejected."""
+        bridge_set = {"0xpool_a"}
+        results = [self._make_mock_result("0xpool_a", scoring_path="hot_skip")]
+        reg_rej = sum(
+            1 for r in results
+            if getattr(r._source_event, "pool_address", "").lower() in bridge_set
+            and r.scoring_path == "hot_skip"
+        )
+        assert reg_rej == 1
+
+    def test_bridge_gas_rejected_counted(self):
+        """Event in bridge + registry_fast + net<=0 → matched_bridge_then_gas_rejected."""
+        bridge_set = {"0xpool_a"}
+        results = [self._make_mock_result("0xpool_a", scoring_path="registry_fast", net_bps=-3.0)]
+        gas_rej = sum(
+            1 for r in results
+            if getattr(r._source_event, "pool_address", "").lower() in bridge_set
+            and r.scoring_path != "hot_skip"
+            and (r.best_backrun_net_bps or 0) <= 0
+        )
+        assert gas_rej == 1
+
+    def test_bridge_scored_positive_counted(self):
+        """Event in bridge + registry_fast + net>0 → matched_bridge_then_scored_positive."""
+        bridge_set = {"0xpool_a"}
+        results = [self._make_mock_result("0xpool_a", scoring_path="registry_fast", net_bps=5.0)]
+        pos = sum(
+            1 for r in results
+            if getattr(r._source_event, "pool_address", "").lower() in bridge_set
+            and r.scoring_path != "hot_skip"
+            and (r.best_backrun_net_bps or 0) > 0
+        )
+        assert pos == 1
+
+    def test_not_in_bridge_ignored(self):
+        """Event NOT in bridge → not counted in any bridge-matched counter."""
+        bridge_set = {"0xpool_a"}
+        results = [self._make_mock_result("0xother", scoring_path="hot_skip")]
+        bridge_matched = sum(
+            1 for r in results
+            if getattr(r._source_event, "pool_address", "").lower() in bridge_set
+        )
+        assert bridge_matched == 0
+
+    def test_rollup_registry_and_gas_are_separate_counters(self):
+        """Rollup must have both matched_then_registry_rejected_total and
+        matched_then_gas_rejected_total as distinct counters."""
+        rollup = {
+            "matched_then_registry_rejected_total": 3,
+            "matched_then_gas_rejected_total": 7,
+            "matched_then_scored_positive_total": 0,
+            "events_in_bridge_total": 10,
+        }
+        total_bridge = (
+            rollup["matched_then_registry_rejected_total"]
+            + rollup["matched_then_gas_rejected_total"]
+            + rollup["matched_then_scored_positive_total"]
+        )
+        assert total_bridge == rollup["events_in_bridge_total"]

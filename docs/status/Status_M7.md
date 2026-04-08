@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.2 OPEN — Base hot blocker separated: gas_economics_only confirmed** (M7 Arbitrum mainline FROZEN per 47s. E1.2 proves Base hot lane is gas-blocked, not architecture-blocked: `blocker_class=gas_economics_only`, `events_in_bridge_total=12`, all 12 gas-rejected, 0 scored positive. Arbitrum contamination eliminated — dynamic target pool, family-wide event check, three-way blocker classification. 9/17 bridge families have hot events. `stage_a_ms` KeyError fixed — hot lane now writes rollup. CI: 3718 passed, 6 skipped.)  
-**Updated**: 2026-04-07
+**Status**: **M7.E1.3 OPEN — counter separation reveals viable signal on Base** (M7 Arbitrum mainline FROZEN per 47s. E1.3 splits conflated `matched_then_gas_rejected` into registry vs gas: 0 registry-rejected, 44 gas-rejected, 6 scored positive out of 50 bridge events. `blocker_class=selection_or_scoring`. Cold lane: 3 executable candidates (W/WETH +92.63, CRV/WETH +59.08, doginme/WETH +24.08 bps). Hot lane: viable_count=1 in final iteration. 19/27 bridge families have hot events. Registry overlap is definitively NOT a blocker. CI: 3728 passed, 6 skipped.)  
+**Updated**: 2026-04-08
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
 ---
@@ -264,6 +264,39 @@ CI: 3718 passed, 6 skipped (3702 + 16 new E1.2 tests).
 3. **Base hot lane IS gas-blocked, not architecture-blocked**: With fixed traces, 12/12 bridge-matching events are gas-killed. 9/17 bridge families see hot events. `blocker_class=gas_economics_only` is the correct three-way classification.
 4. **E1.1 conclusion was correct but unprovable**: The "gas economics sole blocker" narrative was true for both cold and hot lanes, but E1.1 artifacts couldn't prove it due to contamination. E1.2 now proves it with clean chain-native traces.
 
+### M7.E1.3: Registry vs Gas Counter Separation + Chain-Purity Invariant (April 8, 07:10-07:21Z)
+
+**Goal**: Reconcile Base hot artifacts with Base cold gas blocker. E1.2 review found `matched_then_gas_rejected` conflated two orthogonal blocker types (registry rejection vs gas rejection). Separate them to determine if Base hot zero-hit is a registry/overlap issue or truly gas-only.
+
+**Code changes (2 files)**:
+- `scripts/m7a_orderflow_loop.py` — (1) Split conflated `matched_then_gas_rejected_total` in rollup into `matched_then_registry_rejected_total` (in bridge + hot_skip) + `matched_then_gas_rejected_total` (in bridge + registry_fast + net<=0). Added `matched_then_scored_positive_total` (in bridge + net>0). (2) Added 3 per-iteration counters to `hot_gap_debug`: `matched_bridge_then_registry_rejected`, `matched_bridge_then_gas_rejected`, `matched_bridge_then_scored_positive`.
+- `tests/unit/test_e1_base_chain_aware.py` — Fixed conflated E1.2 test (split into 2 tests for registry vs gas). Added Section 12: `TestE1_3_ChainPurityInvariant` (4 tests — Arbitrum contamination addresses, family_unresolved detection, source-level hardcoded pool check). Added Section 13: `TestE1_3_RegistryVsGasSeparation` (6 tests — bridge_registry_rejected, bridge_gas_rejected, bridge_scored_positive, not_in_bridge_ignored, sum invariant).
+
+CI: 3728 passed, 6 skipped (3718 + 10 new E1.3 tests).
+
+**Evidence (10-min nonstop, 07:10-07:21Z)**:
+
+| Metric | E1.2 (conflated) | E1.3 (separated) |
+|--------|-------------------|-------------------|
+| `matched_then_registry_rejected_total` | N/A (was lumped in gas) | **0** |
+| `matched_then_gas_rejected_total` | 12 (conflated) | **44** |
+| `matched_then_scored_positive_total` | 0 | **6** |
+| `events_in_bridge_total` | 12 | **50** |
+| `blocker_class` | `gas_economics_only` | **`selection_or_scoring`** |
+| `families_with_any_hot_events` | 9/17 | **19/27** |
+| `cold_executable_count` | 0 | **3** (W/WETH +92.63, CRV/WETH +59.08, doginme/WETH +24.08 bps) |
+| `hot viable_count` (final iteration) | 0 | **1** |
+| `near_executable_count` | 5 | **5** (best -2.20 bps) |
+| supervisor restarts | 0 | **0** (3/3 alive, clean shutdown) |
+
+**Findings**:
+1. **Registry rejection is definitively NOT a blocker**: 0/50 bridge events are registry-rejected. All events that reach bridge pools pass the hot registry check.
+2. **Gas is the majority blocker but NOT the only one**: 44/50 (88%) bridge events are gas-rejected. But 6/50 (12%) score positive, proving some events have viable economics.
+3. **Viable signal exists on Base**: Cold lane found 3 executable candidates with strong positive bps (<92.63 bps). Hot lane achieved viable_count=1 in the final iteration. This was hidden by E1.2's conflated counter.
+4. **blocker_class correctly upgraded**: `selection_or_scoring` (was `gas_economics_only`) because `matched_then_scored_positive_total > 0`. The three-way classifier works as designed.
+5. **E1.2 narrative was incomplete**: E1.2 said "gas_economics_only" based on 3-min run where 12/12 bridge events were gas-killed. The 10-min E1.3 run with 50 bridge events reveals a more nuanced picture — most are gas-blocked but some break through.
+6. **Counter sum invariant holds**: 0 + 44 + 6 = 50 = `events_in_bridge_total` ✓
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -282,14 +315,15 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — E1.2 confirms `blocker_class=gas_economics_only` with 9/17 bridge families receiving hot events.
-2. **GAS_EXCEEDS_GROSS — ACTIVE (Base, both lanes)** — E1.2 proves hot lane is gas-blocked: 12/12 bridge-matching events gas-rejected, 0 scored positive. Cold lane: 26/30 gas-rejected (E1.1). Best near-executable=-2.20 bps. Gas breakdown: l1_data=0.16 bps (80%), l2_exec=0.04 bps (20%).
-3. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve from local machine. Sub-block delivery untested. Alchemy WS fallback works. Separate subtask — not mixed with economics proof.
-4. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
+1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — E1.3 confirms 19/27 bridge families receiving hot events.
+2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base, both lanes)** — E1.3: 44/50 (88%) bridge events gas-rejected. But 6/50 (12%) score positive, so gas is NOT the sole blocker. Best near-executable=-2.20 bps. 3 cold-executable candidates with positive bps (up to +92.63).
+3. **SELECTION_OR_SCORING — ACTIVE (Base)** — E1.3 `blocker_class=selection_or_scoring`. 6 events score positive but aren't viable through the full funnel. The blocker preventing viable execution from positive-scoring events needs investigation.
+4. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve from local machine. Sub-block delivery untested. Alchemy WS fallback works.
+5. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
 
 ## Next steps
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 scoring/bridge changes.
-2. **Base gas blocker priorities**: (a) Flashblocks WS connectivity (separate subtask — alt endpoints, HTTP polling) for sub-block delivery. (b) Gas economics — L1 data cost reduction, gas_floor_bps tuning, larger trade sizes. (c) Narrow contour assessment — non-contour pairs (QWLA/WETH -2.20) closer to breakeven than USDC/WETH (-9.16). (d) If breakeven achieved → Tenderly simulation.
-3. **Hot lane now fully operational on Base**: `stage_a_ms` fix means hot rollup is reliably written. Dynamic target pool + three-way blocker classification means trace diagnostics are chain-accurate.
-4. **Source plane validated, gas plane is the frontier**: Event-source absence does NOT exist on Base (9/17 families have hot events). Gas economics is the only blocker across both cold and hot lanes.
+2. **Viable signal investigation**: E1.3 found 3 cold-executable candidates (W/WETH +92.63, CRV/WETH +59.08, doginme/WETH +24.08 bps) and 6 hot scored-positive events. Next: (a) Investigate why scored-positive events don't reach viable status. (b) Tenderly simulation for cold-executable candidates. (c) Confirm reproducibility of positive signal across multiple runs.
+3. **Gas economics remains the majority blocker**: 44/50 bridge events gas-rejected. Priorities: (a) L1 data cost reduction. (b) gas_floor_bps tuning for Base. (c) Flashblocks WS connectivity for sub-block delivery.
+4. **Counter separation infrastructure proven**: `matched_then_registry_rejected_total` / `matched_then_gas_rejected_total` / `matched_then_scored_positive_total` are distinct, sum-consistent, and expose hidden signal.

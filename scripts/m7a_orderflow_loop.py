@@ -735,6 +735,31 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         ),
     }
 
+    # M7.E1.3: Explicit bridge-matched registry vs gas rejection separation.
+    # This separates hot zero-hit into two orthogonal blocker classes:
+    # (a) event pool is in bridge but NOT in hot registry → registry rejection
+    # (b) event pool is in bridge AND registry but gas-killed → gas rejection
+    _bridge_set_h = _bd.get("_bridge_pool_addrs_set", set())
+    _m_bridge_reg_rejected = 0
+    _m_bridge_gas_rejected = 0
+    _m_bridge_scored_positive = 0
+    for _r_h in _raw_results:
+        _evt_h = getattr(_r_h, "_source_event", None)
+        if not _evt_h:
+            continue
+        _ep_h = getattr(_evt_h, "pool_address", "").lower()
+        if _ep_h not in _bridge_set_h:
+            continue
+        if getattr(_r_h, "scoring_path", None) == "hot_skip":
+            _m_bridge_reg_rejected += 1
+        elif (getattr(_r_h, "best_backrun_net_bps", None) or 0) <= 0:
+            _m_bridge_gas_rejected += 1
+        else:
+            _m_bridge_scored_positive += 1
+    hot["hot_gap_debug"]["matched_bridge_then_registry_rejected"] = _m_bridge_reg_rejected
+    hot["hot_gap_debug"]["matched_bridge_then_gas_rejected"] = _m_bridge_gas_rejected
+    hot["hot_gap_debug"]["matched_bridge_then_scored_positive"] = _m_bridge_scored_positive
+
     # M7.A.5.47o: Surface bridge counts at top level (not just in hot_gap_debug).
     hot["bridge_focused_pool_count"] = _bd.get("bridge_focused_pool_count", 0)
     hot["bridge_loaded_candidate_count"] = _bd.get("bridge_loaded_candidate_count", 0)
@@ -1395,13 +1420,14 @@ def _update_hot_rollup(
                 "session_fast_path_scored_total"):
         rollup[_sk] = _sess.get(_sk)
 
-    # M7.E1.2: Event-to-bridge classification counters (chain-agnostic).
+    # M7.E1.3: Event-to-bridge classification counters (chain-agnostic).
     # For each event in _fast, classify whether its pool is in the bridge set,
-    # and if matched, whether it was gas-rejected or successfully scored.
+    # and if matched, separate registry rejection from gas rejection.
     _bridge_addrs_set = _bd.get("_bridge_pool_addrs_set", set())
     _ptt_rollup = _bd.get("_ptt", {})
     _events_in_bridge_window = 0
     _events_not_in_bridge_window = 0
+    _matched_registry_rejected_window = 0
     _matched_gas_rejected_window = 0
     _matched_scored_positive_window = 0
     # Also build per-family event map for architecture_blocker_trace
@@ -1414,11 +1440,10 @@ def _update_hot_rollup(
         _in_bridge = _ep in _bridge_addrs_set
         if _in_bridge:
             _events_in_bridge_window += 1
-            _net = getattr(_r, "best_backrun_net_bps", None) or 0
             if getattr(_r, "scoring_path", None) == "hot_skip":
-                _matched_gas_rejected_window += 1  # in bridge but not in registry
-            elif _net <= 0:
-                _matched_gas_rejected_window += 1
+                _matched_registry_rejected_window += 1  # in bridge but not in hot registry
+            elif (getattr(_r, "best_backrun_net_bps", None) or 0) <= 0:
+                _matched_gas_rejected_window += 1  # passed registry, gas-killed
             else:
                 _matched_scored_positive_window += 1
         else:
@@ -1434,6 +1459,9 @@ def _update_hot_rollup(
     )
     rollup["events_not_in_bridge_total"] = (
         rollup.get("events_not_in_bridge_total", 0) + _events_not_in_bridge_window
+    )
+    rollup["matched_then_registry_rejected_total"] = (
+        rollup.get("matched_then_registry_rejected_total", 0) + _matched_registry_rejected_window
     )
     rollup["matched_then_gas_rejected_total"] = (
         rollup.get("matched_then_gas_rejected_total", 0) + _matched_gas_rejected_window
