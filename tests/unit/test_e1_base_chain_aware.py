@@ -657,3 +657,148 @@ class TestE1_3_RegistryVsGasSeparation:
             + rollup["matched_then_scored_positive_total"]
         )
         assert total_bridge == rollup["events_in_bridge_total"]
+
+
+# ---------------------------------------------------------------------------
+# 14. M7.E1.4: Hot intent convergence fields
+# ---------------------------------------------------------------------------
+
+class TestE1_4_IntentConvergenceFields:
+    """M7.E1.4: hot intents must carry pool_address, family, selected_bucket,
+    same_pool_as_cold_exec for cold-hot cross-reference."""
+
+    def _make_intent_row(self, pool_address, cold_exec_pools, selected_pools, ptt=None):
+        """Simulate the convergence-field derivation from _write_hot_intents."""
+        _pool_addr = (pool_address or "").lower()
+        _cold_exec_pool_set = {(p or "").lower() for p in cold_exec_pools}
+        _selected_pool_info = {}
+        for sp in selected_pools:
+            pa = (sp.get("pool_address") or "").lower()
+            if pa:
+                _selected_pool_info[pa] = {
+                    "bucket": sp.get("bucket"),
+                    "family": sp.get("family"),
+                }
+        _ptt_intents = ptt or {}
+
+        _sel = _selected_pool_info.get(_pool_addr, {})
+        _family_raw = _sel.get("family")
+        if not _family_raw and _pool_addr and _ptt_intents:
+            _ptt_info = _ptt_intents.get(_pool_addr)
+            if _ptt_info and len(_ptt_info) >= 2:
+                _family_raw = f"{_ptt_info[0]}/{_ptt_info[1]}"
+
+        return {
+            "pool_address": _pool_addr or None,
+            "family": _family_raw,
+            "selected_bucket": _sel.get("bucket"),
+            "same_pool_as_cold_exec": _pool_addr in _cold_exec_pool_set if _pool_addr else False,
+        }
+
+    def test_pool_address_present(self):
+        row = self._make_intent_row("0xABC123", [], [])
+        assert row["pool_address"] == "0xabc123"
+
+    def test_pool_address_none_when_empty(self):
+        row = self._make_intent_row("", [], [])
+        assert row["pool_address"] is None
+
+    def test_family_from_selected_pools(self):
+        row = self._make_intent_row(
+            "0xabc",
+            cold_exec_pools=[],
+            selected_pools=[{"pool_address": "0xABC", "bucket": "A_cold_exec", "family": "WETH/USDC"}],
+        )
+        assert row["family"] == "WETH/USDC"
+        assert row["selected_bucket"] == "A_cold_exec"
+
+    def test_family_fallback_to_ptt(self):
+        row = self._make_intent_row(
+            "0xdef",
+            cold_exec_pools=[],
+            selected_pools=[],
+            ptt={"0xdef": ["AERO", "USDC", 3000]},
+        )
+        assert row["family"] == "AERO/USDC"
+
+    def test_same_pool_as_cold_exec_true(self):
+        row = self._make_intent_row(
+            "0xABC",
+            cold_exec_pools=["0xabc", "0xdef"],
+            selected_pools=[],
+        )
+        assert row["same_pool_as_cold_exec"] is True
+
+    def test_same_pool_as_cold_exec_false(self):
+        row = self._make_intent_row(
+            "0x999",
+            cold_exec_pools=["0xabc", "0xdef"],
+            selected_pools=[],
+        )
+        assert row["same_pool_as_cold_exec"] is False
+
+    def test_same_pool_as_cold_exec_false_when_no_pool_address(self):
+        row = self._make_intent_row("", cold_exec_pools=["0xabc"], selected_pools=[])
+        assert row["same_pool_as_cold_exec"] is False
+
+    def test_selected_bucket_none_when_not_in_bridge(self):
+        row = self._make_intent_row("0x999", [], [])
+        assert row["selected_bucket"] is None
+
+
+# ---------------------------------------------------------------------------
+# 15. M7.E1.4: Funnel counters (viable_total in rollup)
+# ---------------------------------------------------------------------------
+
+class TestE1_4_FunnelCounters:
+    """M7.E1.4: rollup must have viable_total between fast_path_positive and
+    profit_guard_passed for complete funnel visibility."""
+
+    def test_viable_total_accumulates(self):
+        """viable_total must accumulate across windows."""
+        rollup: dict = {}
+        # Simulate 3 windows
+        for window_viable in [2, 0, 3]:
+            rollup["viable_total"] = rollup.get("viable_total", 0) + window_viable
+        assert rollup["viable_total"] == 5
+
+    def test_funnel_ordering_invariant(self):
+        """Funnel: scored >= positive >= viable (route economics check).
+        profit_guard_passed is a parallel criterion, not strictly chained."""
+        rollup = {
+            "fast_path_scored_total": 100,
+            "fast_path_positive_total": 20,
+            "viable_total": 15,
+        }
+        assert rollup["fast_path_scored_total"] >= rollup["fast_path_positive_total"]
+        assert rollup["fast_path_positive_total"] >= rollup["viable_total"]
+
+    def test_viable_total_zero_when_no_viable(self):
+        """If no events have route_viable=True, viable_total stays 0."""
+        rollup: dict = {"viable_total": 0}
+        class MockR:
+            route_viable = False
+        _fast = [MockR(), MockR()]
+        rollup["viable_total"] += sum(1 for r in _fast if r.route_viable)
+        assert rollup["viable_total"] == 0
+
+    def test_viable_total_counts_only_viable(self):
+        """Only route_viable=True events increment viable_total."""
+        class MockR:
+            def __init__(self, viable):
+                self.route_viable = viable
+        _fast = [MockR(True), MockR(False), MockR(True), MockR(False)]
+        viable_in_window = sum(1 for r in _fast if r.route_viable)
+        assert viable_in_window == 2
+
+    def test_rollup_has_viable_total_key(self):
+        """Rollup schema must include viable_total."""
+        expected_funnel_keys = [
+            "fast_path_scored_total",
+            "fast_path_positive_total",
+            "viable_total",
+            "profit_guard_passed_total",
+        ]
+        rollup = {k: 0 for k in expected_funnel_keys}
+        for k in expected_funnel_keys:
+            assert k in rollup

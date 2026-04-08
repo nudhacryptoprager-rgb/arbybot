@@ -1146,11 +1146,39 @@ def _write_hot_intents(
             if _mr_pair:
                 _micro_lookup[_mr_pair] = mr
 
+    # M7.E1.4: Build convergence lookups from bridge for cold-hot cross-reference.
+    _cold_exec_pool_set: set = set()
+    _selected_pool_info: dict = {}  # pool_address -> {bucket, family}
+    _ptt_intents: dict = {}
+    if bridge:
+        for _ce in bridge.get("cold_executable", []):
+            _ce_pa = (_ce.get("pool_address") or "").lower()
+            if _ce_pa:
+                _cold_exec_pool_set.add(_ce_pa)
+        for _sp in bridge.get("bridge_selected_pools_top", []):
+            _sp_pa = (_sp.get("pool_address") or "").lower()
+            if _sp_pa:
+                _selected_pool_info[_sp_pa] = {
+                    "bucket": _sp.get("bucket"),
+                    "family": _sp.get("family"),
+                }
+        _ptt_intents = bridge.get("pool_token_transport", {})
+
     for r in _fast:
         eid = getattr(r, "event_id", None)
         net = getattr(r, "best_backrun_net_bps", None) or 0
         _pair = getattr(r, "actual_pair", None)
         _mr = _micro_lookup.get(_pair, {})
+        # M7.E1.4: Extract pool_address from source event for convergence
+        _evt_src = getattr(r, "_source_event", None)
+        _pool_addr = (getattr(_evt_src, "pool_address", "") or "").lower() if _evt_src else ""
+        # Derive family from PTT or bridge_selected_pools_top
+        _sel = _selected_pool_info.get(_pool_addr, {})
+        _family_raw = _sel.get("family")
+        if not _family_raw and _pool_addr and _ptt_intents:
+            _ptt_info = _ptt_intents.get(_pool_addr)
+            if _ptt_info and len(_ptt_info) >= 2:
+                _family_raw = f"{_ptt_info[0]}/{_ptt_info[1]}"
         rows.append({
             "event_id": eid,
             "actual_pair": _pair,
@@ -1160,6 +1188,11 @@ def _write_hot_intents(
             "scoring_path": getattr(r, "scoring_path", None),
             "pipeline_latency_ms": getattr(r, "quote_pipeline_latency_ms", None),
             "route_viable": getattr(r, "route_viable", False),
+            # M7.E1.4: Convergence fields for cold-hot cross-reference
+            "pool_address": _pool_addr or None,
+            "family": _family_raw,
+            "selected_bucket": _sel.get("bucket"),
+            "same_pool_as_cold_exec": _pool_addr in _cold_exec_pool_set if _pool_addr else False,
             # M7.A.5.47b: Submit-size refinement from cold bridge
             "cold_verified_net_bps": _mr.get("verified_net_bps_after_refinement"),
             "cold_best_submit_size": _mr.get("best_submit_size"),
@@ -1284,6 +1317,11 @@ def _update_hot_rollup(
     rollup["fast_path_positive_total"] = (
         rollup.get("fast_path_positive_total", 0)
         + sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0)
+    )
+    # M7.E1.4: viable_total — funnel step between positive and profit_guard_passed
+    rollup["viable_total"] = (
+        rollup.get("viable_total", 0)
+        + sum(1 for r in _fast if getattr(r, "route_viable", False))
     )
     rollup["profit_guard_passed_total"] = (
         rollup.get("profit_guard_passed_total", 0) + len(_guard)
