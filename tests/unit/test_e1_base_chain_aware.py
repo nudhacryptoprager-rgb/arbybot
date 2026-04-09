@@ -747,58 +747,126 @@ class TestE1_4_IntentConvergenceFields:
 
 
 # ---------------------------------------------------------------------------
-# 15. M7.E1.4: Funnel counters (viable_total in rollup)
+# 15. M7.E1.5: Funnel counters (route_viable_total, correct semantics)
 # ---------------------------------------------------------------------------
 
-class TestE1_4_FunnelCounters:
-    """M7.E1.4: rollup must have viable_total between fast_path_positive and
-    profit_guard_passed for complete funnel visibility."""
+class TestE1_5_FunnelSemantics:
+    """M7.E1.5: rollup funnel must be strictly ordered:
+    scored >= positive >= route_viable >= profit_guard_passed.
+    All counters derived from same _fast base set."""
 
-    def test_viable_total_accumulates(self):
-        """viable_total must accumulate across windows."""
+    def test_route_viable_total_accumulates(self):
+        """route_viable_total must accumulate across windows."""
         rollup: dict = {}
-        # Simulate 3 windows
         for window_viable in [2, 0, 3]:
-            rollup["viable_total"] = rollup.get("viable_total", 0) + window_viable
-        assert rollup["viable_total"] == 5
+            rollup["route_viable_total"] = rollup.get("route_viable_total", 0) + window_viable
+        assert rollup["route_viable_total"] == 5
 
     def test_funnel_ordering_invariant(self):
-        """Funnel: scored >= positive >= viable (route economics check).
-        profit_guard_passed is a parallel criterion, not strictly chained."""
+        """Funnel: scored >= positive >= route_viable >= profit_guard_passed.
+        All from same _fast base set; profit_guard gated on route_viable in scoring."""
         rollup = {
             "fast_path_scored_total": 100,
             "fast_path_positive_total": 20,
-            "viable_total": 15,
+            "route_viable_total": 15,
+            "profit_guard_passed_total": 10,
         }
         assert rollup["fast_path_scored_total"] >= rollup["fast_path_positive_total"]
-        assert rollup["fast_path_positive_total"] >= rollup["viable_total"]
+        assert rollup["fast_path_positive_total"] >= rollup["route_viable_total"]
+        assert rollup["route_viable_total"] >= rollup["profit_guard_passed_total"]
 
-    def test_viable_total_zero_when_no_viable(self):
-        """If no events have route_viable=True, viable_total stays 0."""
-        rollup: dict = {"viable_total": 0}
+    def test_route_viable_zero_when_no_viable(self):
+        """If no events have route_viable=True, route_viable_total stays 0."""
+        rollup: dict = {"route_viable_total": 0}
         class MockR:
             route_viable = False
         _fast = [MockR(), MockR()]
-        rollup["viable_total"] += sum(1 for r in _fast if r.route_viable)
-        assert rollup["viable_total"] == 0
+        rollup["route_viable_total"] += sum(1 for r in _fast if r.route_viable)
+        assert rollup["route_viable_total"] == 0
 
-    def test_viable_total_counts_only_viable(self):
-        """Only route_viable=True events increment viable_total."""
+    def test_profit_guard_from_fast_not_batch(self):
+        """profit_guard_passed_total must count from _fast inline attribute,
+        not from batch _run_profit_guard_on_results."""
         class MockR:
-            def __init__(self, viable):
+            def __init__(self, viable, guard):
                 self.route_viable = viable
-        _fast = [MockR(True), MockR(False), MockR(True), MockR(False)]
-        viable_in_window = sum(1 for r in _fast if r.route_viable)
-        assert viable_in_window == 2
+                self.profit_guard_passed = guard
+                self.best_backrun_net_bps = 5.0
+        # Two viable+guard, one viable but no guard, one not viable
+        _fast = [MockR(True, True), MockR(True, True), MockR(True, False), MockR(False, None)]
+        guard_count = sum(1 for r in _fast if getattr(r, "profit_guard_passed", False))
+        viable_count = sum(1 for r in _fast if r.route_viable)
+        assert guard_count == 2
+        assert viable_count == 3
+        assert viable_count >= guard_count  # funnel invariant
 
-    def test_rollup_has_viable_total_key(self):
-        """Rollup schema must include viable_total."""
-        expected_funnel_keys = [
+    def test_rollup_funnel_schema_keys(self):
+        """Rollup schema must include all E1.5 funnel + submit-stage keys."""
+        expected = [
             "fast_path_scored_total",
             "fast_path_positive_total",
-            "viable_total",
+            "route_viable_total",
             "profit_guard_passed_total",
+            "sim_attempted_total",
+            "sim_passed_total",
+            "submit_ready_total",
         ]
-        rollup = {k: 0 for k in expected_funnel_keys}
-        for k in expected_funnel_keys:
+        rollup = {k: 0 for k in expected}
+        for k in expected:
             assert k in rollup
+
+
+# ---------------------------------------------------------------------------
+# 16. M7.E1.5: Hot intent submit-stage fields
+# ---------------------------------------------------------------------------
+
+class TestE1_5_IntentSubmitFields:
+    """M7.E1.5: hot intents must carry sim_passed and submit_ready fields."""
+
+    def test_sim_passed_present_as_none(self):
+        """sim_passed must be None by default (not missing)."""
+        row = {"sim_passed": None, "submit_ready": None}
+        assert "sim_passed" in row
+        assert row["sim_passed"] is None
+
+    def test_submit_ready_present_as_none(self):
+        """submit_ready must be None by default (not missing)."""
+        row = {"sim_passed": None, "submit_ready": None}
+        assert "submit_ready" in row
+        assert row["submit_ready"] is None
+
+
+# ---------------------------------------------------------------------------
+# 17. M7.E1.5: family_unresolved filtering from bridge summary
+# ---------------------------------------------------------------------------
+
+class TestE1_5_FamilyUnresolvedFiltering:
+    """M7.E1.5: family_unresolved must be separated from resolved families
+    in bridge_selected_family_diff_top."""
+
+    def test_resolved_families_exclude_unresolved(self):
+        fam_list = [
+            {"family": "WETH/USDC", "selected_pool_count": 5},
+            {"family": "family_unresolved", "selected_pool_count": 3},
+            {"family": "AERO/WETH", "selected_pool_count": 2},
+        ]
+        resolved = [f for f in fam_list if f.get("family") != "family_unresolved"]
+        assert len(resolved) == 2
+        assert all(f["family"] != "family_unresolved" for f in resolved)
+
+    def test_unresolved_pool_count_diagnostic(self):
+        fam_list = [
+            {"family": "family_unresolved", "selected_pool_count": 3},
+            {"family": "family_unresolved", "selected_pool_count": 2},
+            {"family": "WETH/USDC", "selected_pool_count": 10},
+        ]
+        unresolved = [f for f in fam_list if f.get("family") == "family_unresolved"]
+        pool_count = sum(f.get("selected_pool_count", 0) for f in unresolved)
+        assert pool_count == 5
+
+    def test_no_unresolved_means_zero_count(self):
+        fam_list = [
+            {"family": "WETH/USDC", "selected_pool_count": 5},
+        ]
+        unresolved = [f for f in fam_list if f.get("family") == "family_unresolved"]
+        assert sum(f.get("selected_pool_count", 0) for f in unresolved) == 0

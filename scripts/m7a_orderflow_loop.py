@@ -969,7 +969,11 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         _fd["reason_if_zero"] = _reason_z
         del _fd["pools"]  # strip internal pool list from artifact
         _fam_diff_list.append(_fd)
-    hot["bridge_selected_family_diff_top"] = _fam_diff_list[:10]
+    # M7.E1.5: Separate family_unresolved from resolved families in bridge summary.
+    _resolved_fam = [f for f in _fam_diff_list if f.get("family") != "family_unresolved"]
+    _unresolved_fam = [f for f in _fam_diff_list if f.get("family") == "family_unresolved"]
+    hot["bridge_selected_family_diff_top"] = _resolved_fam[:10]
+    hot["family_unresolved_pool_count"] = sum(f.get("selected_pool_count", 0) for f in _unresolved_fam)
 
     if fast_results:
         fast_viable = [r for r in fast_results if r.route_viable]
@@ -1087,8 +1091,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
     # M7.A.5.47n: Return bridge hit trace so caller can merge into bridge file.
     # M7.A.5.47p: Also return other_live_pool_trace for live-miss auto-pin.
-    # M7.A.5.47r: Also return _fam_diff_list so bridge file gets bridge_selected_family_diff_top.
-    return _bridge_hit_trace, _other_trace, _fam_diff_list
+    # M7.E1.5: Return resolved families only (family_unresolved filtered out).
+    return _bridge_hit_trace, _other_trace, _resolved_fam
 
 
 def _compute_headline_level(funnel: dict) -> str:
@@ -1197,6 +1201,9 @@ def _write_hot_intents(
             "cold_verified_net_bps": _mr.get("verified_net_bps_after_refinement"),
             "cold_best_submit_size": _mr.get("best_submit_size"),
             "cold_gas_floor_gap_bps": _mr.get("gas_floor_gap_bps"),
+            # M7.E1.5: Submit-stage placeholders (populated when sim infra exists)
+            "sim_passed": None,
+            "submit_ready": None,
         })
 
     # Sort by cold_verified_net_bps (cold-verified first), then net_bps descending
@@ -1318,14 +1325,20 @@ def _update_hot_rollup(
         rollup.get("fast_path_positive_total", 0)
         + sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0)
     )
-    # M7.E1.4: viable_total — funnel step between positive and profit_guard_passed
-    rollup["viable_total"] = (
-        rollup.get("viable_total", 0)
+    # M7.E1.5: route_viable_total — route-level economics check (gas < gross, fee < gross, net > 0)
+    rollup["route_viable_total"] = (
+        rollup.get("route_viable_total", 0)
         + sum(1 for r in _fast if getattr(r, "route_viable", False))
     )
+    # M7.E1.5: profit_guard_passed_total — from _fast inline attribute (gated on route_viable in scoring)
     rollup["profit_guard_passed_total"] = (
-        rollup.get("profit_guard_passed_total", 0) + len(_guard)
+        rollup.get("profit_guard_passed_total", 0)
+        + sum(1 for r in _fast if getattr(r, "profit_guard_passed", False))
     )
+    # M7.E1.5: Submit-stage placeholder counters (populated when sim infra exists)
+    rollup.setdefault("sim_attempted_total", 0)
+    rollup.setdefault("sim_passed_total", 0)
+    rollup.setdefault("submit_ready_total", 0)
     # M7.A.5.47: 6 canonical hot miss counters (cumulative)
     rollup["bridge_candidate_loaded_total"] = (
         rollup.get("bridge_candidate_loaded_total", 0)
