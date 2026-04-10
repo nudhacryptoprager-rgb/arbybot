@@ -1340,3 +1340,256 @@ class TestE1_7_RollupCounterInit:
         idx_try = src.index("_ptt = _bridge.get")
         assert idx_init < idx_try, \
             "_rollup_wwbh must be initialized before bridge assembly try block"
+
+
+# ---------------------------------------------------------------------------
+# Section 27: M7.E1.8 — Chain provenance in hot artifacts
+# ---------------------------------------------------------------------------
+
+class TestE1_8_ChainProvenance:
+    """M7.E1.8: All M7 hot artifact writers must accept and store chain."""
+
+    def test_write_hot_heartbeat_on_error_accepts_chain(self):
+        """_write_hot_heartbeat_on_error signature includes chain param."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_heartbeat_on_error
+        sig = inspect.signature(_write_hot_heartbeat_on_error)
+        assert "chain" in sig.parameters
+
+    def test_write_hot_artifact_accepts_chain(self):
+        """_write_hot_artifact signature includes chain param."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        sig = inspect.signature(_write_hot_artifact)
+        assert "chain" in sig.parameters
+
+    def test_write_hot_intents_accepts_chain(self):
+        """_write_hot_intents signature includes chain param."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _write_hot_intents
+        sig = inspect.signature(_write_hot_intents)
+        assert "chain" in sig.parameters
+
+    def test_update_hot_rollup_accepts_chain(self):
+        """_update_hot_rollup signature includes chain param."""
+        import inspect
+        from scripts.m7a_orderflow_loop import _update_hot_rollup
+        sig = inspect.signature(_update_hot_rollup)
+        assert "chain" in sig.parameters
+
+    def test_heartbeat_from_scratch_includes_chain(self, tmp_path, monkeypatch):
+        """Heartbeat from scratch writes chain field."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        import json
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        loop_mod._write_hot_heartbeat_on_error(
+            iteration=1,
+            window_started_at="2026-01-01T00:00:00Z",
+            window_ended_at="2026-01-01T00:01:00Z",
+            error_msg="test error",
+            chain="base",
+        )
+        with open(hot_path) as f:
+            data = json.load(f)
+        assert data["chain"] == "base"
+        assert data["run_context"]["chain"] == "base"
+
+    def test_heartbeat_from_scratch_zero_state(self, tmp_path, monkeypatch):
+        """Heartbeat from scratch uses 0 for best_net_bps_clean, not None."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        import json
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        loop_mod._write_hot_heartbeat_on_error(
+            iteration=1,
+            window_started_at="2026-01-01T00:00:00Z",
+            window_ended_at="2026-01-01T00:01:00Z",
+            error_msg="test",
+            chain="base",
+        )
+        with open(hot_path) as f:
+            data = json.load(f)
+        assert data["best_net_bps_clean"] == 0
+        # M7.E1.8.1: heartbeat from-scratch now uses 9-key zero dict (not {})
+        sc = data["signal_counts"]
+        assert len(sc) == 9, f"Expected 9 keys, got {len(sc)}: {list(sc.keys())}"
+        assert all(v == 0 for v in sc.values()), f"Expected all 0s: {sc}"
+        assert data["error_counts"]["heartbeat_on_error"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Section 28: M7.E1.8 — Signal counts & error counters zero-state
+# ---------------------------------------------------------------------------
+
+class TestE1_8_ZeroStateSurfaces:
+    """M7.E1.8: signal_counts and error_counts always present, honest 0/{}."""
+
+    def test_hot_artifact_signal_counts_present(self):
+        """_write_hot_artifact always emits signal_counts dict."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._write_hot_artifact)
+        assert '"signal_counts"' in src or "'signal_counts'" in src
+
+    def test_hot_artifact_error_counts_present(self):
+        """_write_hot_artifact always emits error_counts dict."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._write_hot_artifact)
+        assert '"error_counts"' in src or "'error_counts'" in src
+
+    def test_rollup_error_counts_accumulate(self):
+        """_update_hot_rollup tracks error window counts."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._update_hot_rollup)
+        assert "heartbeat_on_error_windows" in src
+        assert "normal_windows" in src
+
+    def test_heartbeat_error_counter_increments(self, tmp_path, monkeypatch):
+        """Heartbeat preserving existing artifact increments error counter."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        import json
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        # Write initial artifact
+        initial = {"lane": "hot", "chain": "base", "timestamp": "T",
+                    "run_context": {"run_timestamp": "T"}, "error_counts": {"heartbeat_on_error": 2}}
+        with open(hot_path, "w") as f:
+            json.dump(initial, f)
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        loop_mod._write_hot_heartbeat_on_error(
+            iteration=5, window_started_at="T", window_ended_at="T",
+            error_msg="err", chain="base",
+        )
+        with open(hot_path) as f:
+            data = json.load(f)
+        assert data["error_counts"]["heartbeat_on_error"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Section 29: M7.E1.8 — Dashboard M7 freshness badge
+# ---------------------------------------------------------------------------
+
+class TestE1_8_DashboardM7Badge:
+    """M7.E1.8: Dashboard HTML contains M7 freshness banner."""
+
+    def test_m7_freshness_banner_div_exists(self):
+        """dashboard.html has the m7-freshness-banner div."""
+        from pathlib import Path
+        html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert 'id="m7-freshness-banner"' in html
+
+    def test_m7_freshness_js_logic(self):
+        """dashboard.html has JS rendering M7 freshness info."""
+        from pathlib import Path
+        html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "M7 ROLLING" in html
+        assert "m7HotTs" in html
+        assert "m7Chain" in html
+
+    def test_m7_chain_read_from_artifact(self):
+        """Dashboard JS reads chain from m7_hot or m7_orderflow."""
+        from pathlib import Path
+        html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "m7Hot?.chain" in html or "m7Cold?.chain" in html
+
+
+# ---------------------------------------------------------------------------
+# Section 30: M7.E1.8.1 — Chain provenance invariants (run_context.chain must match top-level chain)
+# ---------------------------------------------------------------------------
+
+class TestE1_8_1_ChainProvenanceInvariants:
+    """M7.E1.8.1: If top-level 'chain' exists, run_context.chain must match for all hot artifacts."""
+
+    def test_rollup_run_context_has_chain(self):
+        """_update_hot_rollup run_context dict includes chain field."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._update_hot_rollup)
+        # run_context must have "chain": chain
+        assert '"chain": chain' in src or "'chain': chain" in src
+
+    def test_intents_has_run_context(self):
+        """_write_hot_intents payload includes run_context block."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._write_hot_intents)
+        assert '"run_context"' in src or "'run_context'" in src
+
+    def test_intents_run_context_has_chain(self):
+        """_write_hot_intents run_context includes chain field."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._write_hot_intents)
+        # Looking in the run_context dict for chain: chain
+        lines = inspect.getsource(loop_mod._write_hot_intents).split("\n")
+        in_run_context = False
+        found_chain = False
+        for line in lines:
+            if '"run_context"' in line or "'run_context'" in line:
+                in_run_context = True
+            if in_run_context and ('"chain": chain' in line or "'chain': chain" in line):
+                found_chain = True
+                break
+            if in_run_context and line.strip().startswith("}"):
+                in_run_context = False
+        assert found_chain, "_write_hot_intents run_context must contain 'chain': chain"
+
+    def test_intents_run_context_has_run_timestamp(self):
+        """_write_hot_intents run_context includes run_timestamp."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._write_hot_intents)
+        assert '"run_timestamp"' in src or "'run_timestamp'" in src
+
+    def test_rollup_run_context_written_to_disk(self, tmp_path, monkeypatch):
+        """_update_hot_rollup writes run_context.chain to artifact on disk."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        import json
+        rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(loop_mod, "_SESSION_ID", "test-session-001")
+        loop_mod._update_hot_rollup(
+            events_count=0, fast_results=[], guard_results=[],
+            bridge_diagnostics={}, chain="base",
+        )
+        with open(rollup_path) as f:
+            data = json.load(f)
+        assert data["chain"] == "base"
+        assert data["run_context"]["chain"] == "base"
+        assert data["run_context"]["run_timestamp"] is not None
+
+    def test_intents_run_context_written_to_disk(self, tmp_path, monkeypatch):
+        """_write_hot_intents writes run_context.chain to artifact on disk."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        import json
+        intents_path = str(tmp_path / "m7_hot_intents_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_INTENTS_PATH", intents_path)
+        loop_mod._write_hot_intents(
+            fast_results=[], guard_results=[], iteration=1,
+            bridge=None, chain="base",
+        )
+        with open(intents_path) as f:
+            data = json.load(f)
+        assert data["chain"] == "base"
+        assert data["run_context"]["chain"] == "base"
+        assert data["run_context"]["run_timestamp"] is not None
+
+    def test_heartbeat_9key_signal_counts(self, tmp_path, monkeypatch):
+        """Heartbeat from scratch now emits 9-key signal_counts, not {}."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        import json
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        loop_mod._write_hot_heartbeat_on_error(
+            iteration=1, window_started_at="T", window_ended_at="T",
+            error_msg="test", chain="base",
+        )
+        with open(hot_path) as f:
+            data = json.load(f)
+        sc = data["signal_counts"]
+        expected_keys = {"events_count", "fast_scored", "fast_positive", "guard_passed",
+                         "viable_count", "sim_attempted", "sim_passed", "submit_ready", "realized"}
+        assert set(sc.keys()) == expected_keys
+        assert all(v == 0 for v in sc.values())

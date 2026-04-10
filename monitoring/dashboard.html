@@ -54,6 +54,7 @@ tr:hover{background:#1c2128}
 </h1>
 <div class="meta" id="meta-line">Loading...</div>
 <div id="stale-banner" style="display:none;background:#5d3a00;color:#f0c040;border:1px solid #f0c040;border-radius:6px;padding:6px 12px;margin:6px 0;font-size:.78rem"></div>
+<div id="m7-freshness-banner" style="display:none;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px 12px;margin:6px 0;font-size:.78rem"></div>
 <!-- R39q: Focal chain selector — switches panels 3/4/5/9 to selected chain from long_scan_latest -->
 <div id="chain-selector-bar" style="display:none;margin:8px 0;padding:6px 12px;background:#161b22;border:1px solid #30363d;border-radius:6px;font-size:.8rem">
   <label style="color:#8b949e;margin-right:8px">Focal chain:</label>
@@ -262,6 +263,35 @@ function renderRolling(data) {
     staleBanner.style.display = 'block';
   } else {
     staleBanner.style.display = 'none';
+  }
+
+  // M7.E1.8: M7 freshness badge — separate M7 rolling freshness from PRIMARY
+  const m7Banner = $('m7-freshness-banner');
+  const m7Hot = data.m7_hot || latestM7Hot;
+  const m7Cold = data.m7_orderflow;
+  const m7Rollup = latestM7Rollup || data.m7_hot_rollup;
+  const m7HotTs = m7Hot?.current_window_timestamp || m7Hot?.timestamp || '';
+  const m7ColdTs = m7Cold?.timestamp || '';
+  const m7Chain = m7Hot?.chain || m7Cold?.chain || '';
+  const m7SessionEvts = m7Rollup?.session?.session_events_seen_total ?? '?';
+  const m7SessionWin = m7Rollup?.session?.session_windows_seen ?? '?';
+  if (m7HotTs || m7ColdTs) {
+    const hotAge = m7HotTs ? Math.round((Date.now() - new Date(m7HotTs).getTime()) / 60000) : null;
+    const hotFresh = hotAge !== null && hotAge < 10;
+    const hotColor = hotFresh ? '#3fb950' : hotAge !== null && hotAge < 60 ? '#d29922' : '#da3633';
+    const hotLabel = hotAge !== null ? `${hotAge}m ago` : 'N/A';
+    const coldAge = m7ColdTs ? Math.round((Date.now() - new Date(m7ColdTs).getTime()) / 60000) : null;
+    const coldLabel = coldAge !== null ? `${coldAge}m ago` : 'N/A';
+    let bannerHtml = `<span style="color:#58a6ff;font-weight:600">M7 ROLLING</span>`;
+    if (m7Chain) bannerHtml += ` <span style="color:#8b949e">[${m7Chain}]</span>`;
+    bannerHtml += ` | Hot: <span style="color:${hotColor};font-weight:600">${(m7HotTs||'?').slice(0,19)}Z</span> (${hotLabel})`;
+    bannerHtml += ` | Cold: ${(m7ColdTs||'?').slice(0,19)}Z (${coldLabel})`;
+    bannerHtml += ` | Session: ${m7SessionWin} windows, ${m7SessionEvts} events`;
+    if (m7SessionEvts === 0) bannerHtml += ` <span style="color:#d29922">(empty market)</span>`;
+    m7Banner.innerHTML = bannerHtml;
+    m7Banner.style.display = 'block';
+  } else {
+    m7Banner.style.display = 'none';
   }
 
   renderChainStatus(ls);

@@ -612,6 +612,7 @@ def _write_hot_heartbeat_on_error(
     window_started_at: str,
     window_ended_at: str,
     error_msg: str,
+    chain: str = "arbitrum_one",
 ) -> None:
     """M7.E1.7: Write heartbeat hot artifact when run_ws_live() or processing fails.
 
@@ -635,10 +636,15 @@ def _write_hot_heartbeat_on_error(
         # Preserve previous snapshot, just stamp heartbeat fields
         existing["current_window_timestamp"] = _ts_now
         existing["snapshot_preserved"] = True
+        existing.setdefault("chain", chain)
         existing.setdefault(
             "snapshot_run_timestamp",
             existing.get("run_context", {}).get("run_timestamp"),
         )
+        # M7.E1.8: Accumulate error count on heartbeat path
+        _ec = existing.get("error_counts") or {}
+        _ec["heartbeat_on_error"] = _ec.get("heartbeat_on_error", 0) + 1
+        existing["error_counts"] = _ec
         existing["m7_loop_context"] = {
             "lane": "hot",
             "loop_iteration": iteration,
@@ -651,18 +657,32 @@ def _write_hot_heartbeat_on_error(
         # No existing artifact — write minimal heartbeat from scratch
         existing = {
             "lane": "hot",
+            "chain": chain,
             "timestamp": _ts_now,
             "loop_iteration": iteration,
             "events_count": 0,
-            "best_net_bps_clean": None,
+            "best_net_bps_clean": 0,
             "viable_count": 0,
             "has_positive": False,
             "profit_guard_passed_count": 0,
             "current_window_timestamp": _ts_now,
             "snapshot_preserved": True,
             "snapshot_run_timestamp": _ts_now,
+            "signal_counts": {
+                "events_count": 0,
+                "fast_scored": 0,
+                "fast_positive": 0,
+                "guard_passed": 0,
+                "viable_count": 0,
+                "sim_attempted": 0,
+                "sim_passed": 0,
+                "submit_ready": 0,
+                "realized": 0,
+            },
+            "error_counts": {"heartbeat_on_error": 1},
             "run_context": {
                 "run_timestamp": _ts_now,
+                "chain": chain,
                 "code_sha": None,
                 "code_dirty": None,
                 "code_desc": None,
@@ -692,7 +712,8 @@ def _write_hot_heartbeat_on_error(
 def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
                         fast_results: list = None, promoted_pairs: list = None,
                         candidate_pairs: list = None,
-                        bridge_diagnostics: dict = None) -> list:
+                        bridge_diagnostics: dict = None,
+                        chain: str = "arbitrum_one") -> list:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
@@ -721,10 +742,11 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     _events_count = artifact.get("events_count", 0)
     hot = {
         "lane": "hot",
+        "chain": chain,
         "timestamp": _ts_now,
         "loop_iteration": iteration,
         "events_count": _events_count,
-        "best_net_bps_clean": artifact.get("best_net_bps_clean"),
+        "best_net_bps_clean": artifact.get("best_net_bps_clean") or 0,
         "viable_count": artifact.get("viable_count", 0),
         "has_positive": best is not None,
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
@@ -733,9 +755,12 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "snapshot_preserved": _events_count == 0,
         # M7.E1.7: Complete heartbeat contract — same fields as cold lane
         "snapshot_run_timestamp": _ts_now,
+        # M7.E1.8: signal_counts always present (honest 0/{} on empty windows)
+        "signal_counts": {},
         # M7.A.5.47m: Provenance — run_context with run_timestamp
         "run_context": {
             "run_timestamp": _ts_now,
+            "chain": chain,
             "code_sha": None,
             "code_dirty": None,
             "code_desc": None,
@@ -760,6 +785,22 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "profit_guard_passed": _guard_count,
         "realized_onchain_profit": 0,
     })
+
+    # M7.E1.8: signal_counts — always honest 0/{} on empty windows, never null
+    hot["signal_counts"] = {
+        "events_count": _events_count,
+        "fast_scored": _fast_scored,
+        "fast_positive": _fast_positive,
+        "guard_passed": _guard_count,
+        "viable_count": artifact.get("viable_count", 0),
+        "sim_attempted": 0,
+        "sim_passed": 0,
+        "submit_ready": 0,
+        "realized": 0,
+    }
+
+    # M7.E1.8: Error counters — always present (honest 0 on normal path)
+    hot["error_counts"] = {"heartbeat_on_error": 0}
 
     # M7.A.5.39: Two-level promoted watchlist info
     _cand = candidate_pairs or []
@@ -1219,6 +1260,7 @@ def _write_hot_intents(
     guard_results: list | None,
     iteration: int,
     bridge: dict | None = None,
+    chain: str = "arbitrum_one",
 ) -> None:
     """Write hot execution intents artifact — compact rows for hot-scored
     and profit-guard-checked candidates only.
@@ -1331,6 +1373,7 @@ def _write_hot_intents(
 
     payload = {
         "timestamp": ts,
+        "chain": chain,
         "loop_iteration": iteration,
         # M7.E1.6.1: Heartbeat — always-fresh timestamp for reviewer
         "current_window_timestamp": ts,
@@ -1340,6 +1383,15 @@ def _write_hot_intents(
         "profit_guard_passed_count": _guard_passed,
         "cold_executable_pool_count": len(bridge.get("cold_executable", [])) if bridge else 0,
         "intents": rows[:20],  # Cap at 20 rows
+        # M7.E1.8.1: run_context for full provenance (chain + run_timestamp)
+        "run_context": {
+            "run_timestamp": ts,
+            "chain": chain,
+            "code_sha": None,
+            "code_dirty": None,
+            "code_desc": None,
+            "evidence_sha": None,
+        },
     }
 
     try:
@@ -1360,6 +1412,7 @@ def _update_hot_rollup(
     ws_live_stats: dict | None = None,
     hot_active_pools: dict | None = None,
     bridge: dict | None = None,
+    chain: str = "arbitrum_one",
 ) -> None:
     """Update cumulative hot rollup artifact — survives across windows.
 
@@ -1385,6 +1438,8 @@ def _update_hot_rollup(
     _guard = guard_results or []
 
     rollup["last_updated"] = ts
+    # M7.E1.8: Chain provenance — always present in rolling artifacts
+    rollup["chain"] = chain
     # M7.E1.6.1: Heartbeat — always-fresh timestamp for reviewer
     rollup["current_window_timestamp"] = ts
     # M7.E1.7: Complete heartbeat contract — same fields as cold lane
@@ -1393,6 +1448,14 @@ def _update_hot_rollup(
     rollup.setdefault("first_window_at", ts)
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
     rollup["events_seen_total"] = rollup.get("events_seen_total", 0) + events_count
+
+    # M7.E1.8: Error counters — track heartbeat-on-error windows vs normal
+    _is_error_window = (events_count == 0 and fast_results is None and guard_results is None
+                        and bridge_diagnostics is None and ws_live_stats is None)
+    _er = rollup.get("error_counts") or {}
+    _er["heartbeat_on_error_windows"] = _er.get("heartbeat_on_error_windows", 0) + (1 if _is_error_window else 0)
+    _er["normal_windows"] = _er.get("normal_windows", 0) + (0 if _is_error_window else 1)
+    rollup["error_counts"] = _er
 
     # M7.A.5.47k: Session-scoped counters — reset each supervisor start.
     # Uses _SESSION_ID (generated at import time) to detect new sessions.
@@ -1563,6 +1626,7 @@ def _update_hot_rollup(
     # M7.A.5.47m: Provenance — run_context with run_timestamp
     rollup["run_context"] = {
         "run_timestamp": ts,
+        "chain": chain,
         "code_sha": None,
         "code_dirty": None,
         "code_desc": None,
@@ -2798,6 +2862,7 @@ def run_loop(cli_args) -> None:
                     promoted_pairs=_promoted_pairs.get("execution", []),
                     candidate_pairs=_promoted_pairs.get("candidate", []),
                     bridge_diagnostics=_hot_bridge_diag,
+                    chain=cli_args.chain,
                 )
 
                 # M7.A.5.47p: Auto-pin live-miss pools from other_live_pool_trace.
@@ -2919,6 +2984,7 @@ def run_loop(cli_args) -> None:
                     guard_results=guard_results,
                     iteration=iteration,
                     bridge=_bridge,
+                    chain=cli_args.chain,
                 )
 
                 # M7.A.5.47: Update cumulative hot rollup
@@ -2930,6 +2996,7 @@ def run_loop(cli_args) -> None:
                     ws_live_stats=artifact.get("ws_live_stats"),
                     hot_active_pools=_hot_active_pools,
                     bridge=_bridge,
+                    chain=cli_args.chain,
                 )
 
             best = artifact.get("best_net_bps_clean")
@@ -2961,6 +3028,7 @@ def run_loop(cli_args) -> None:
                 _write_hot_heartbeat_on_error(
                     iteration, window_started_at, window_ended_at,
                     str(exc)[:200],
+                    chain=cli_args.chain,
                 )
                 # Also update rollup with a zero-event heartbeat window
                 try:
@@ -2969,6 +3037,7 @@ def run_loop(cli_args) -> None:
                         fast_results=None,
                         guard_results=None,
                         bridge_diagnostics=None,
+                        chain=cli_args.chain,
                     )
                 except Exception as _exc_rollup:
                     logger.debug(

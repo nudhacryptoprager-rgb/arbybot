@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.7 OPEN — hot lane write fix + heartbeat-on-error** (Arbitrum mainline FROZEN per 47s. E1.7: Fixed UnboundLocalError (_rollup_wwe) that silently crashed hot lane on every Base iteration. Added heartbeat-on-error so hot artifacts stay fresh even when run_ws_live() fails. Complete heartbeat contract (current_window_timestamp, snapshot_preserved, snapshot_run_timestamp) in both hot artifact and rollup. 3x Base nonstop: hot artifacts FRESH at 07:12:27Z, zero code-path errors, events_count=0 = honest empty-market windows. CI: 3775 passed, 6 skipped.)  
+**Status**: **M7.E1.8.1 OPEN — provenance completion + zero-state uniformity** (E1.8.1: run_context.chain populated in rollup + intents. Heartbeat signal_counts = 9-key zero dict (was {}). 8 new invariant tests. 3-min Base nonstop: all 3 artifacts chain=base, run_context.chain=base. CI: 3797 passed, 6 skipped.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -235,31 +235,38 @@ CI: 3698 passed, 6 skipped.
 
 ---
 
-### M7.E1.7: Hot Lane Write Fix + Heartbeat-on-Error (April 10, 06:59-07:12Z)
+### M7.E1.7: Hot Lane Write Fix + Heartbeat-on-Error (CLOSED, compressed)
 
-**Goal**: Fix hot lane so it writes fresh artifacts on Base and judge submit-stage readiness.
+Root cause: `UnboundLocalError: _rollup_wwe` — variable scoping bug crashed every hot iteration before `run_ws_live()`. Fix: initialize `_rollup_wwe=0`, `_rollup_wwbh=0` before bridge try block. Added `_write_hot_heartbeat_on_error()` for exception-path writes. 3x Base nonstop: all hot artifacts FRESH at 07:12:27Z, zero code errors. 7 new tests (103 E1 total). CI: 3775 passed.
 
-**Root cause found**: `UnboundLocalError: cannot access local variable '_rollup_wwe'`. Variables `_rollup_wwe` and `_rollup_wwbh` were assigned inside the bridge assembly `try/except NameError: pass` block but referenced outside it. When the bridge file wasn't available (first iterations, or cold lane not yet run), the NameError was caught but left `_rollup_wwe` unbound. Every hot iteration crashed at `_bhd = ... _rollup_wwe > 0` before reaching `run_ws_live()`.
+---
 
-**Code changes (2 files)**:
-- `scripts/m7a_orderflow_loop.py`: (1) Initialize `_rollup_wwe = 0` and `_rollup_wwbh = 0` before bridge try block. (2) New `_write_hot_heartbeat_on_error()` — writes heartbeat artifact on exception path. (3) Outer except block calls heartbeat + rollup on hot lane errors. (4) Added `snapshot_run_timestamp` to happy-path `_write_hot_artifact` and `_update_hot_rollup`.
-- `tests/unit/test_e1_base_chain_aware.py`: 7 new tests (sections 25-26). Total: 103 E1 tests.
+### M7.E1.8: Dashboard M7 Freshness + Chain Provenance + Zero-State (April 10, 09:37-09:40Z)
 
-CI: 3775 passed, 6 skipped.
+**Goal**: Fix dashboard UX (M7-only runs appear dead because primary panels read stale non-M7 artifacts). Add chain provenance to all M7 artifacts. Ensure zero-state surfaces use honest 0/{}, never null.
 
-**Evidence (3x 3-min Base nonstop, 06:59-07:12Z)**:
+**Code changes (3 files)**:
+- `monitoring/dashboard.html`: M7 freshness banner (hot/cold timestamps, chain label, session events, hotness color-coding). Separates PRIMARY vs M7 rolling freshness.
+- `scripts/m7a_orderflow_loop.py`: (1) `chain` param to `_write_hot_artifact`, `_write_hot_heartbeat_on_error`, `_update_hot_rollup`, `_write_hot_intents`. (2) `chain` field in all 4 artifact dicts + `run_context.chain`. (3) `signal_counts` 9-key dict (honest 0s, never null). (4) `error_counts` in hot artifact and rollup (heartbeat_on_error counter, normal_windows/heartbeat_on_error_windows).
+- `tests/unit/test_e1_base_chain_aware.py`: 13 new tests (sections 27-29). Total: 116 E1 tests.
 
-| Run | Hot Timestamp | error_in_window | events |
-|-----|--------------|-----------------|--------|
-| #1 (pre-rollup-fix) | 07:02:39Z | `_rollup_wwe UnboundLocalError` | 0 |
-| #2 (post-fix) | 07:08:32Z | None | 0 |
-| #3 (post-fix) | 07:12:27Z | None | 0 |
+CI: 3790 passed, 6 skipped.
 
-**Findings**:
-1. **Hot lane now writes fresh artifacts** — `_rollup_wwe` UnboundLocalError was the sole blocker, not WS connectivity.
-2. **events_count=0 = honest empty-market windows** — `run_ws_live()` executes successfully. Not a code-path failure.
-3. **Heartbeat-on-error safety net** — future WS failures will still produce fresh `current_window_timestamp` with `error_in_window`.
-4. **Complete heartbeat contract** — hot artifacts have same 3-field contract as cold.
+**Evidence (3-min Base nonstop, 09:37-09:40Z)**:
+
+| Field | Before E1.8 | After E1.8 |
+|-------|-------------|------------|
+| `m7_hot_latest.chain` | absent | **base** |
+| `m7_hot_latest.signal_counts` | absent | **{events_count:0, ...all 0}** |
+| `m7_hot_latest.error_counts` | absent | **{heartbeat_on_error:0}** |
+| `m7_hot_rollup.chain` | absent | **base** |
+| `m7_hot_rollup.error_counts` | absent | **{normal:49, heartbeat:0}** |
+| `m7_hot_intents.chain` | absent | **base** |
+| Dashboard M7 banner | absent | **M7 ROLLING [base] Hot/Cold timestamps** |
+
+**1.5h run evidence (07:49-09:19Z)**: `session_windows_seen=1251`, `session_events_seen_total=0`, `session_bridge_pool_hit_total=0`. Confirms: hot lane writes correctly, market currently empty. Dashboard correctly shows M7 freshness separate from stale PRIMARY rolling.
+
+**E1.8.1 (reviewer fix, April 10 10:49-10:52Z)**: Reviewer found `run_context.chain=None` in rollup/intents and `signal_counts={}` in heartbeat from-scratch. Fixes: (1) Added `"chain": chain` to rollup `run_context` dict. (2) Added full `run_context` block to intents payload. (3) Heartbeat from-scratch: `signal_counts` = 9-key zero dict (was `{}`). 8 new invariant tests (section 30). 3-min nonstop evidence: rollup `run_context.chain=base`, intents `run_context.chain=base`, `run_context.run_timestamp` populated in all 3 artifacts. CI: 3797 passed, 6 skipped.
 
 ---
 
@@ -281,14 +288,16 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
 2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — E1.5: ~7% viable rate (14/196 scored). Near-exec frontier at -2.20 bps.
-3. ~~**HOT LANE NOT WRITING (Base)**~~ — **RESOLVED in E1.7**: Root cause was `UnboundLocalError: _rollup_wwe` (not WS connectivity). Fixed. 3x fresh hot artifacts confirmed.
-4. **NO FRESH NON-EMPTY WINDOW** — Events_count=0 across all Base nonstop runs. Market-dependent, not code-path failure (confirmed by E1.7 hot fix).
+3. ~~**HOT LANE NOT WRITING (Base)**~~ — **RESOLVED in E1.7**.
+4. **NO FRESH NON-EMPTY WINDOW** — 1.5h Base run (1251 windows, 0 events). Market-dependent, not code. Dashboard now correctly surfaces M7 freshness separately.
 5. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
 6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Scaffolded, not wired.
+7. ~~**Dashboard dead appearance**~~ — **RESOLVED in E1.8**: M7 freshness banner separates M7 vs PRIMARY rolling.
+8. ~~**Chain provenance incomplete in run_context**~~ — **RESOLVED in E1.8.1**: rollup + intents now have `run_context.chain` + `run_context.run_timestamp`.
 
 ## Next steps
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
-2. **Non-empty window capture**: Run during peak Base activity hours to populate signal_counts and gate_trace in runtime with scored events.
-3. **E1.8: Submit-stage simulation**: Wire Tenderly fork simulation for profit_guard_passed intents → `sim_passed_total > 0`. Only after fresh non-empty evidence.
+2. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
+3. **E1.9: Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
 4. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
