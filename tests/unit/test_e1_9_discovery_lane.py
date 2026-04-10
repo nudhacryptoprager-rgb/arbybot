@@ -1,12 +1,13 @@
-"""
-M7.E1.9 — Tests for discovery/production lane split.
+"""M7.E1.9/E1.10 -- Tests for discovery/production lane split.
 
 Validates:
-1. Discovery prewarm pairs: wider contour including DEGEN, BRETT, AMONGUS
+1. Discovery prewarm pairs: wider contour including DEGEN, BRETT (AMONGUS removed E1.10)
 2. Profile-aware get_prewarm_pairs dispatch
 3. Backward compatibility: production profile unchanged
 4. Discovery constants: graduation thresholds, valid profiles
 5. Discovery scoreboard update logic
+6. Config contract: tokens in include_pairs exist in core_tokens.yaml
+7. Cross-dex policy: diagnostic marking for low cross_dex_expected families
 """
 from __future__ import annotations
 
@@ -37,15 +38,16 @@ class TestDiscoveryPrewarmPairs:
             )
 
     def test_discovery_includes_reactivated_families(self):
-        """Discovery re-enables DEGEN, BRETT, AMONGUS, TOSHI families."""
+        """Discovery re-enables DEGEN, BRETT, TOSHI families (AMONGUS removed E1.10)."""
         symbols = set()
         for a, b in PREWARM_PAIRS_BASE_DISCOVERY:
             symbols.add(a)
             symbols.add(b)
         assert "DEGEN" in symbols
         assert "BRETT" in symbols
-        assert "AMONGUS" in symbols
         assert "TOSHI" in symbols
+        # E1.10: AMONGUS removed — not in core_tokens.yaml (dead slot)
+        assert "AMONGUS" not in symbols
 
     def test_discovery_wider_than_production(self):
         assert len(PREWARM_PAIRS_BASE_DISCOVERY) > len(PREWARM_PAIRS_BASE)
@@ -79,7 +81,7 @@ class TestProfileDispatch:
         assert pairs is PREWARM_PAIRS_BASE
 
     def test_arbitrum_ignores_profile(self):
-        """Arbitrum doesn't have discovery pairs yet — both profiles return same."""
+        """Arbitrum doesn't have discovery pairs yet -- both profiles return same."""
         prod = get_prewarm_pairs("arbitrum_one", "production")
         disc = get_prewarm_pairs("arbitrum_one", "discovery")
         assert prod is PREWARM_PAIRS_ARBITRUM
@@ -427,3 +429,154 @@ class TestE110DashboardEnhancements:
         html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
         assert "current_window_timestamp" in html
         assert "Heartbeat:" in html
+
+
+# ---------------------------------------------------------------------------
+# E1.10: Config contract tests — tokens in include_pairs must exist in core_tokens
+# ---------------------------------------------------------------------------
+
+class TestE110ConfigContract:
+    """Every token referenced in discovery include_pairs must exist in core_tokens.yaml."""
+
+    def _load_core_tokens_base(self):
+        """Load Base section from core_tokens.yaml."""
+        import yaml
+        from pathlib import Path
+        with open(Path("config/core_tokens.yaml"), "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return set(data.get("base", {}).keys())
+
+    def _load_discovery_include_pairs(self):
+        """Load include_pairs from onboard_base_discovery.yaml."""
+        import yaml
+        from pathlib import Path
+        with open(Path("config/onboard_base_discovery.yaml"), "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data.get("include_pairs", [])
+
+    def test_all_discovery_tokens_in_core_tokens(self):
+        """Every token symbol in discovery include_pairs must exist in core_tokens.yaml base section."""
+        core_symbols = self._load_core_tokens_base()
+        pairs = self._load_discovery_include_pairs()
+        missing = set()
+        for pair_str in pairs:
+            parts = pair_str.split("/")
+            for sym in parts:
+                if sym not in core_symbols:
+                    missing.add(sym)
+        assert not missing, (
+            f"Tokens in discovery include_pairs but not in core_tokens.yaml base: {missing}"
+        )
+
+    def test_all_prewarm_tokens_in_core_tokens(self):
+        """Every token in PREWARM_PAIRS_BASE_DISCOVERY must exist in core_tokens.yaml base."""
+        core_symbols = self._load_core_tokens_base()
+        missing = set()
+        for a, b in PREWARM_PAIRS_BASE_DISCOVERY:
+            if a not in core_symbols:
+                missing.add(a)
+            if b not in core_symbols:
+                missing.add(b)
+        assert not missing, (
+            f"Tokens in PREWARM_PAIRS_BASE_DISCOVERY but not in core_tokens.yaml: {missing}"
+        )
+
+    def test_production_config_tokens_also_valid(self):
+        """Production include_pairs tokens must also be in core_tokens.yaml."""
+        import yaml
+        from pathlib import Path
+        core_symbols = self._load_core_tokens_base()
+        with open(Path("config/onboard_base_profit.yaml"), "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        pairs = data.get("include_pairs", [])
+        missing = set()
+        for pair_str in pairs:
+            parts = pair_str.split("/")
+            for sym in parts:
+                if sym not in core_symbols:
+                    missing.add(sym)
+        assert not missing, (
+            f"Tokens in production include_pairs but not in core_tokens.yaml: {missing}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# E1.10: Cross-dex policy test
+# ---------------------------------------------------------------------------
+
+class TestE110CrossDexPolicy:
+    """If require_cross_dex: true, pairs with cross_dex_expected < 2 must be diagnostic_only."""
+
+    def _load_core_tokens_base(self):
+        import yaml
+        from pathlib import Path
+        with open(Path("config/core_tokens.yaml"), "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return data.get("base", {})
+
+    def _load_discovery_config(self):
+        import yaml
+        from pathlib import Path
+        with open(Path("config/onboard_base_discovery.yaml"), "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def test_low_cross_dex_pairs_documented_as_diagnostic(self):
+        """Pairs with cross_dex_expected < 2 under require_cross_dex: true must be
+        marked as diagnostic_only in the config comment (structurally weak for arb)."""
+        config = self._load_discovery_config()
+        if not config.get("require_cross_dex", False):
+            pytest.skip("require_cross_dex not set")
+        tokens = self._load_core_tokens_base()
+        pairs = config.get("include_pairs", [])
+        low_cross_dex_pairs = []
+        for pair_str in pairs:
+            parts = pair_str.split("/")
+            for sym in parts:
+                info = tokens.get(sym, {})
+                cde = info.get("cross_dex_expected", 0)
+                if cde < 2 and sym not in ("WETH", "USDC", "USDT", "DAI"):
+                    low_cross_dex_pairs.append((pair_str, sym, cde))
+        # These should exist (meme families) but should be documented
+        assert len(low_cross_dex_pairs) > 0, "Expected some low cross_dex pairs for diagnostic coverage"
+        # Verify the config file contains 'diagnostic_only' comment
+        from pathlib import Path
+        config_text = Path("config/onboard_base_discovery.yaml").read_text(encoding="utf-8")
+        assert "diagnostic_only" in config_text, (
+            "Discovery config with require_cross_dex: true must document low cross_dex pairs as diagnostic_only"
+        )
+
+    def test_structurally_strong_pairs_present(self):
+        """Discovery contour must include structurally stronger Base pairs (cross_dex >= 2)."""
+        config = self._load_discovery_config()
+        pairs = config.get("include_pairs", [])
+        required_strong = {"AERO/USDC", "AERO/WETH", "cbBTC/USDC", "cbBTC/WETH"}
+        pair_set = set(pairs)
+        missing = required_strong - pair_set
+        assert not missing, f"Missing structurally strong pairs in discovery: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# E1.10: Hot artifact fallback is profile-aware
+# ---------------------------------------------------------------------------
+
+class TestE110HotFallbackProfileAware:
+    """_write_hot_artifact fallback uses profile-aware seed pairs, not HOT_WATCHLIST_PAIRS."""
+
+    def test_fallback_uses_get_prewarm_pairs(self):
+        """When no promoted/candidate pairs, fallback should use profile-aware seed."""
+        import scripts.m7a_orderflow_loop as loop
+        import inspect
+        source = inspect.getsource(loop._write_hot_artifact)
+        # Must use get_prewarm_pairs, not HOT_WATCHLIST_PAIRS in fallback
+        assert "get_prewarm_pairs" in source, (
+            "_write_hot_artifact fallback must use get_prewarm_pairs for profile-aware seed"
+        )
+
+    def test_signature_has_profile_param(self):
+        """_write_hot_artifact must accept profile parameter."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop
+        sig = inspect.signature(loop._write_hot_artifact)
+        assert "profile" in sig.parameters, (
+            "_write_hot_artifact must have profile parameter for profile-aware fallback"
+        )

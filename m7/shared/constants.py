@@ -265,14 +265,14 @@ PREWARM_PAIRS_ARBITRUM = [
 PREWARM_PAIRS_BASE = [
     ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),
 ]
-# M7.E1.9: Base discovery — wider contour re-enables excluded families
-# (DEGEN, BRETT, AERO, AMONGUS) alongside the production core.
-# Budget-capped by PROMOTED_DISCOVERY_MAX_PAIRS below.
+# M7.E1.10: Base discovery — contour cleanup.
+# Structurally stronger pairs first, meme families (cross_dex_expected=1) after.
+# AMONGUS removed (not in core_tokens.yaml = dead slot).
 PREWARM_PAIRS_BASE_DISCOVERY = [
     ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),  # production core
-    ("DEGEN", "WETH"), ("BRETT", "WETH"), ("AERO", "WETH"),  # re-enabled families
-    ("AMONGUS", "WETH"), ("TOSHI", "WETH"),  # long-tail exploration
-    ("AERO", "USDC"), ("cbBTC", "WETH"),  # diagnostic pairs from profit config
+    ("AERO", "USDC"), ("AERO", "WETH"),  # structurally stronger (cross_dex >= 2)
+    ("cbBTC", "USDC"), ("cbBTC", "WETH"),  # structurally stronger (cross_dex >= 2)
+    ("DEGEN", "WETH"), ("BRETT", "WETH"), ("TOSHI", "WETH"),  # diagnostic_only (cross_dex=1)
 ]
 
 # Base Chainlink price feeds (USD, 8 decimals)

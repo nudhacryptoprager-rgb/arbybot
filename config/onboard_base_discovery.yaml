@@ -53,23 +53,23 @@ dexes:
 discovery_runtime_max_pairs: 30
 require_cross_dex: true
 
-# M7.E1.9: Discovery includes production core + re-enabled families.
-# BRETT, DEGEN, TOSHI exclusions REMOVED (unlike onboard_base_profit.yaml).
+# M7.E1.10: Discovery contour cleanup.
+# Structurally stronger pairs first, meme families as diagnostic_only.
+# AMONGUS removed (not in core_tokens.yaml = dead slot).
 include_pairs:
   # Production core (same as profit lane)
   - "USDC/DAI"
   - "USDC/USDT"
   - "WETH/USDC"
+  # Structurally stronger Base pairs (cross_dex_expected >= 2)
   - "AERO/USDC"
-  # Re-enabled long-tail families (excluded in production)
+  - "AERO/WETH"
+  - "cbBTC/USDC"
+  - "cbBTC/WETH"
+  # diagnostic_only: meme families (cross_dex_expected=1, unlikely cross-dex arb)
   - "DEGEN/WETH"
   - "BRETT/WETH"
   - "TOSHI/WETH"
-  - "AMONGUS/WETH"
-  # Wider exploration
-  - "AERO/WETH"
-  - "cbBTC/WETH"
-  - "cbBTC/USDC"
 
 # NO excluded_pair_hints — discovery lane does not blanket-exclude families.
 # Gas-dominated pairs are filtered at runtime by gas_floor and profit_guard.

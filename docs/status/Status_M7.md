@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.10 OPEN — 1h peak-hours A/B confirms market-window scarcity at scale** (E1.10: 1h production + 1h discovery at 16:05-18:05 UTC, 1953 windows, 0 events. Dashboard enhanced with namespace badge + cold heartbeat. 3831 tests pass.)  
+**Status**: **M7.E1.10 OPEN -- discovery contour cleanup + 20m A/B cadence** (E1.10: AMONGUS dead slot removed, structurally stronger pairs prioritized, hot fallback profile-aware, config contract + cross_dex policy tests. 3838 tests pass.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -142,182 +142,39 @@ CI: 3698 passed, 6 skipped.
 
 ---
 
-### M7.E1.9: Discovery/Production Lane Split (OPEN)
+### M7.E1.9–E1.9.3: Discovery Lane Split + A/B Infrastructure (OPEN, compressed)
 
-**Goal**: Split Base scanning into narrow production lane + wide discovery lane, per reviewer issue: "narrowing the Base profit contour is correct for production convergence, but it should no longer be the only discovery surface."
+**E1.9: Lane Split** — Production (narrow, 4 pairs) and discovery (wide, 10 pairs) profiles. `get_prewarm_pairs(chain, profile)` dispatch. Discovery scoreboard tracks per-family graduation (`min_positive=3`, `min_sessions=2`). 6 files, 20 tests. CI: 3817.
 
-**Principle**: Exploration finds, production proves. Discovery lane identifies viable families via wider contour; production lane proves profitability on a narrow, proven set. Pairs graduate from discovery to production via the family repeatability scoreboard.
+**E1.9.1: Namespace Isolation** — Discovery artifacts use `*_discovery.json` suffix (7 files). Production canonical names unchanged. Sequential A/B proof (12:38-12:59Z): zero cross-contamination, 0 events both (off-peak). CI: 3825.
 
-**Code changes (6 files)**:
-- `m7/shared/constants.py`: `PREWARM_PAIRS_BASE_DISCOVERY` (10 pairs: production core + DEGEN/BRETT/AERO/AMONGUS/TOSHI/cbBTC). `get_prewarm_pairs(chain, profile)` with backward-compatible default. `VALID_PROFILES`, `DISCOVERY_GRADUATE_MIN_POSITIVE`, `DISCOVERY_GRADUATE_MIN_SESSIONS`, `PROMOTED_DISCOVERY_MAX_PAIRS`.
-- `scripts/m7a_orderflow_loop.py`: `--profile production|discovery` CLI arg. Profile-aware seed pairs in hot + cold lane prewarm. Discovery scoreboard read/write/update functions. Scoreboard updated after cold artifact write (discovery profile only). `_DISCOVERY_SCOREBOARD_PATH`.
-- `scripts/start_nonstop_runtime.py`: `--m7-profile` CLI arg, passthrough to M7 hot + cold lane commands.
-- `m7/orderflow/mode_ws_live.py`: Profile-aware prewarm via `getattr(args, "profile", "production")`.
-- `config/onboard_base_discovery.yaml`: Discovery lane config — 11 pairs, no `excluded_pair_hints`, budget-capped at 30 pairs.
-- `tests/unit/test_config_contracts.py`: Added `onboard_base_discovery.yaml` to `ALLOWED_YAML_FILES`.
-- `tests/unit/test_e1_9_discovery_lane.py`: 20 new tests (discovery pairs, profile dispatch, backward compat, constants, scoreboard logic).
+**E1.9.2: Peak-Hours A/B** — 3 sequential pairs (13:23-14:27Z), all 6 runs 0 events. Namespace re-confirmed. **Blocker formalized: market-window scarcity** — 9 proof-runs, all 0 swap events. Market-driven, not code/infra. CI: 3825.
 
-**Discovery scoreboard** (`data/runs/_rolling/m7_discovery_scoreboard.json`):
-Tracks per-family across cold iterations: `total_scored`, `scored_positive`, `route_viable`, `guard_passed`, `sessions_with_signal`, `last_iteration`. Graduation rules: `DISCOVERY_GRADUATE_MIN_POSITIVE=3`, `DISCOVERY_GRADUATE_MIN_SESSIONS=2`.
-
-**Lane split commands**:
-```
-# Production lane (existing behavior, narrow contour)
-py -3.11 scripts/m7a_orderflow_loop.py --lane cold --chain base --profile production
-
-# Discovery lane (wider contour, re-enabled families)
-py -3.11 scripts/m7a_orderflow_loop.py --lane cold --chain base --profile discovery
-
-# Supervisor with discovery profile
-py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --chain base --m7-profile discovery
-```
-
-CI: 3817 passed, 6 skipped.
+**E1.9.3: Session-First Dashboard** — Dashboard "visibly alive" with 0 events: session KPIs primary, production/discovery toggle, cold snapshot banner. `signal_counts` 9-key zero backfill on empty-window heartbeat. 5 files, 4 tests. CI: 3829.
 
 ---
 
-### M7.E1.9.1: Artifact Namespace Isolation (OPEN)
+### M7.E1.10: Extended Peak-Hours A/B + Contour Cleanup (OPEN)
 
-**Goal**: Fix reviewer issue #6 — both production and discovery profiles write to the same canonical rolling files. If run simultaneously (or alternately without cleanup), evidence is contaminated. Discovery must write to a separate artifact namespace.
+**1h proof-run (pair 1 of 3 toward expansion threshold)**:
+Production (16:05-17:05Z) + Discovery (17:05-18:05Z): 1953 windows total, 0 events both, 3/3 workers, 0 restarts, namespace isolated. Historical production: 3573 windows / 290 events / 17 positive / 14 viable -- engine has found signals before, scarcity is market-driven. Dashboard: namespace badge + cold heartbeat age. 2 tests. CI: 3831.
 
-**Policy (reviewer fix step 8)**: Narrowing the production contour is intentional for noise protection. Widening the discovery contour is mandatory for alpha exploration. These are separate concerns that must never share evidence artifacts. Production lane proves profitability; discovery lane identifies viable families. Evidence must be independently attributable.
+**E1.10 contour cleanup (reviewer f5c8faa7)**:
 
-**Implementation**: Profile-aware artifact paths via `_rolling_path(name, profile)` helper. Discovery profile inserts `_discovery` suffix before `.json` in all 7 rolling artifact filenames. Production profile uses existing canonical names (backward compatible). `_init_artifact_paths(profile)` called once at `run_loop()` startup. Cold lane rolling path (`_ROLLING_M7_PATH` in `mode_ws_live.py`) redirected via `_set_rolling_m7_profile(profile)`.
+| Fix | Description | Status |
+|-----|------------|--------|
+| #2 | Remove AMONGUS/WETH dead slot (not in core_tokens.yaml) | DONE |
+| #3 | Mark meme families (DEGEN, BRETT, TOSHI) as diagnostic_only | DONE |
+| #4 | Prioritize structurally stronger pairs (AERO, cbBTC >= 2 DEXes) | DONE |
+| #5 | Hot fallback promoted_watchlist profile-aware | DONE |
+| #6 | Config contract test (tokens in core_tokens.yaml) | DONE (3 tests) |
+| #7 | Cross-dex policy test (diagnostic documentation) | DONE (2 tests) |
 
-**Artifact namespace mapping**:
+**20m A/B after cleanup**: Production (18:42-19:02Z) + Discovery (19:03-19:23Z): 0 events both. Discovery hot confirmed clean seed list (no AMONGUS).
 
-| Production | Discovery |
-|-----------|-----------|
-| m7_hot_latest.json | m7_hot_latest_discovery.json |
-| m7_orderflow_latest.json | m7_orderflow_latest_discovery.json |
-| m7_hot_rollup_latest.json | m7_hot_rollup_latest_discovery.json |
-| m7_hot_intents_latest.json | m7_hot_intents_latest_discovery.json |
-| m7_cold_hot_bridge.json | m7_cold_hot_bridge_discovery.json |
-| m7_promoted_pairs.json | m7_promoted_pairs_discovery.json |
-| m7_discovery_scoreboard.json | m7_discovery_scoreboard_discovery.json |
+**Proof cadence rule**: Default = 20m production + 20m discovery + immediate analysis. If both empty, return to code/config cleanup before next A/B proof.
 
-**Dashboard**: Reads production paths only — discovery artifacts are diagnostic and intentionally excluded.
-
-**Sequential vs parallel A/B**: Both are now safe. Sequential is preferred for cleaner comparison; parallel is safe because artifacts don't collide.
-
-E1.9.1 resolves the structural blocker that previously made honest A/B evidence impossible: discovery now writes to isolated rolling artifacts and no longer contaminates production truth. The next mandatory step is operational, not architectural — run production and discovery proof sessions and compare their funnel metrics directly before making any claim about which contour is closer to a truly profitable case.
-
-**Evidence — E1.9.1 sequential A/B proof (April 10, 12:38-12:59 UTC)**:
-
-| Metric | Production | Discovery |
-|--------|-----------|-----------|
-| run window | 12:38:14Z–12:48:34Z | 12:49:33Z–12:59:53Z |
-| session_windows_seen | 170 | 171 |
-| session_events_seen_total | 0 | 0 |
-| session_bridge_pool_hit_total | 0 | 0 |
-| artifacts written | canonical paths | _discovery namespace |
-| cross-contamination | NONE (timestamps frozen at 12:48Z) | NONE (timestamps at 12:59Z) |
-| scoreboard | N/A | created (families={}, profile=discovery) |
-
-Namespace isolation CONFIRMED in live runtime. Funnel comparison NOT POSSIBLE (0 events in both — off-peak market window). Need peak-hours repeat (14:00-22:00 UTC).
-
-CI: 3825 passed, 6 skipped. ALL GATES PASSED.
-
----
-
-### M7.E1.9.2: Peak-Hours A/B Evidence (OPEN)
-
-**Goal**: Execute 3 sequential A/B pairs (production→discovery) during peak hours. Collect 5 reviewer metrics per run. Formalize blocker if all 3 pairs empty.
-
-**Evidence — E1.9.2 A/B pairs (April 10, 13:23-14:27 UTC)**:
-
-| Run | Profile | Window (UTC) | events_seen | fast_path_positive | route_viable | guard_passed | gas_rejected |
-|-----|---------|-------------|------------|-------------------|-------------|-------------|-------------|
-| Pair 1 | production | 13:23–13:33Z | 0 | 17 | 14 | 14 | 129 |
-| Pair 1 | discovery | 13:34–13:44Z | 0 | 0 | 0 | 0 | 0 |
-| Pair 2 | production | 13:45–13:55Z | 0 | 17 | 14 | 14 | 129 |
-| Pair 2 | discovery | 13:55–14:06Z | 0 | 0 | 0 | 0 | 0 |
-| Pair 3 | production | 14:06–14:16Z | 0 | 17 | 14 | 14 | 129 |
-| Pair 3 | discovery | 14:17–14:27Z | 0 | 0 | 0 | 0 | 0 |
-
-All 6 runs: `session_events_seen_total=0`. Production cumulative totals unchanged from prior sessions. Discovery cumulative totals remain at 0.
-
-**Namespace isolation re-confirmed**: Production last ts=2026-04-10T14:16:45Z, Discovery last ts=2026-04-10T14:27:30Z. Zero cross-contamination across all 6 runs.
-
-**Discovery scoreboard**: `{"families": {}, "updated_at": null, "profile": "discovery"}` — empty (no events to populate).
-
-**Cold artifact asymmetry**: Production cold artifact (`m7_orderflow_latest.json`) preserves April 8 snapshot (old schema, no `signal_counts` key). Discovery cold artifact uses current 9-key schema. Cosmetic — auto-resolves on first non-empty production cold run.
-
-**Blocker formalized — market-window scarcity**: 9 total proof-runs across 2 sessions (E1.9.1 off-peak 12:38-12:59Z + E1.9.2 peak-edge 13:23-14:27Z) all returned 0 swap events for monitored pairs. This is NOT a code, infra, or namespace issue — the monitored Base pairs simply do not produce swap events at sufficient frequency during the observed windows. Pair 3 ran inside peak hours (14:06-14:27Z) and still saw 0 events.
-
-**Funnel comparison**: NOT POSSIBLE — cannot compare production vs discovery conversion rates with 0 events in both profiles.
-
-**Next**: Longer runs (1-2h) during deeper peak (16:00-20:00 UTC), or expand pair universe, to break through event scarcity ceiling.
-
----
-
-### M7.E1.9.3: Session-First Dashboard + Namespace-Aware UI (OPEN)
-
-**Goal**: Per reviewer commit 56aa6de1 — dashboard must be "visibly alive" even with 0 events. Session KPIs primary, historical secondary. Discovery namespace switchable in UI. Cold artifact asymmetry fixed.
-
-**Reviewer issues addressed**:
-
-| Issue | Description | Fix |
-|-------|------------|-----|
-| #1 | Wrong metrics for empty-window regime | Session status block with empty market notice |
-| #4 | Discovery not visible in dashboard | Production/Discovery toggle via switchM7Profile() |
-| #5 | Panel 11 mixes fresh hot with stale cold | COLD SNAPSHOT PRESERVED banner with original ts |
-| #6 | Cold artifact signal_counts=null (production) | Backfill 9-key zero dict in heartbeat path |
-| #7 | No session vs historical distinction | Left=Current Session, Right=Historical Cumulative |
-
-**Code changes (5 files)**:
-- `monitoring/dashboard_server.py`: `/api/discovery` endpoint, `DISCOVERY_ARTIFACT_FILES` dict (6 discovery namespace files).
-- `monitoring/dashboard.html`: Profile switch bar, session status block (`renderM7Session`), empty-window notices, profile-aware banner (`updateM7Banner`), profile-aware rollup, discovery data loading with 15s polling.
-- `m7/orderflow/mode_ws_live.py`: `signal_counts` backfill in `_write_rolling_m7()` heartbeat path — adds 9-key zero dict when key missing from existing snapshot.
-- `tests/unit/test_e1_9_discovery_lane.py`: 4 new tests (`TestE193DashboardContracts`).
-- `tests/unit/test_e1_base_chain_aware.py`: 2 updated assertions for profile-aware dashboard code.
-
-**signal_counts backfill contract**: On empty-window heartbeat (`events_count=0`), if the preserved snapshot lacks `signal_counts`, backfill with `{"scored": 0, "pair_resolved": 0, "size_valid_for_token": 0, "same_block": 0, "positive": 0, "route_viable": 0, "profit_guard_passed": 0, "sim_passed": 0, "submit_ready": 0}`. Existing `signal_counts` are never overwritten.
-
-**E1.9.2 proves that the dashboard stagnation problem is now mostly representational rather than infrastructural** — the scanning infrastructure writes honest zeros, timestamps refresh correctly, and namespace isolation is proven. The dashboard just wasn't surfacing this information in a way that distinguished "alive with no events" from "dead."
-
-CI: 3829 passed, 6 skipped. ALL GATES PASSED.
-
----
-
-### M7.E1.10: Longer Peak-Hours Base A/B Evidence (OPEN)
-
-**Goal**: Per reviewer commit bc388cea — run 1h production + 1h discovery at 16:00-20:00 UTC peak window on Base to test event scarcity ceiling at scale. Dashboard enhanced with namespace badge + cold heartbeat. Threshold: 3 pairs × 1h at peak both zero → justify discovery expansion or OP Mainnet comparative pilot.
-
-**Reviewer status suggestion (bc388cea)**:
-> E1.9.3 closes the UI-side freshness gap. The dominant blocker is no longer artifact truth but market-window scarcity. The best next path is E1.10 with longer peak-hours Base A/B runs, followed by discovery-only expansion or an OP Mainnet comparative pilot if Base remains event-scarce.
-
-**1h proof-run results (pair 1 of 3 toward expansion threshold)**:
-
-| Metric | Production (1h) | Discovery (1h) |
-|--------|-----------------|-----------------|
-| Window | 16:05-17:05 UTC | 17:05-18:05 UTC |
-| Duration | 60 min | 60 min |
-| Windows observed | 991 | 962 |
-| Events observed | 0 | 0 |
-| Workers alive | 3/3 | 3/3 |
-| Worker restarts | 0 | 0 |
-| signal_counts present | Yes (9-key zeros) | Yes (9-key zeros) |
-| snapshot_preserved | Yes | Yes |
-| Namespace isolation | Confirmed | Confirmed |
-
-**Historical cumulative comparison (production only)**:
-- 3573 total windows, 290 events, 17 positive, 14 viable, 14 guard passed
-- 129 gas rejected, 3515 empty windows
-- The engine HAS found signals in prior sessions — current scarcity is market-driven, not code-driven
-
-**Code changes (2 files)**:
-- `monitoring/dashboard.html`: Namespace badge in `renderM7Session()` header (color-coded production/discovery), cold heartbeat age display in `renderM7Orderflow()` COLD SNAPSHOT notice.
-- `tests/unit/test_e1_9_discovery_lane.py`: 2 new tests in `TestE110DashboardEnhancements` (namespace label + cold heartbeat assertions).
-
-**Key conclusions**:
-1. Market-window scarcity now confirmed at 1h resolution at peak hours (16:05-18:05 UTC)
-2. Infrastructure healthy: 3/3 workers, 0 restarts, namespace isolation proven
-3. This is pair 1 of 3 toward reviewer step 5 expansion threshold
-4. Production historical data proves engine capability (290 events in prior sessions)
-5. If pairs 2 + 3 also zero → discovery expansion or OP Mainnet comparative pilot per reviewer step 10
-
-CI: 3831 passed, 6 skipped. ALL GATES PASSED.
+CI after contour cleanup: 3838 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
@@ -349,8 +206,9 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 ## Next steps
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
-2. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
-3. **Discovery A/B evidence**: Run production vs discovery profiles side-by-side. Compare scored_positive, route_viable, gas rejection rates.
-4. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
-5. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
-6. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
+2. **20m A/B proof cadence**: One 20-minute production + one 20-minute discovery, then immediate analysis. No further runs if both empty without contour/code changes.
+3. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
+4. **Discovery expansion decision**: If 2-3 dev sessions with 20m A/B runs + contour cleanup all zero, modest discovery expansion or OP Mainnet comparative pilot (not longer Base runs).
+5. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
+6. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
+7. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.

@@ -848,7 +848,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
                         fast_results: list = None, promoted_pairs: list = None,
                         candidate_pairs: list = None,
                         bridge_diagnostics: dict = None,
-                        chain: str = "arbitrum_one") -> list:
+                        chain: str = "arbitrum_one",
+                        profile: str = "production") -> list:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
@@ -948,9 +949,11 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "candidate_pairs": _cand,
         }
     else:
+        # M7.E1.10: Use profile-aware seed pairs instead of production-only HOT_WATCHLIST_PAIRS.
+        _seed = get_prewarm_pairs(chain, profile)
         hot["promoted_watchlist"] = {
             "count": 0,
-            "pairs": [f"{a}/{b}" for a, b in HOT_WATCHLIST_PAIRS],
+            "pairs": [f"{a}/{b}" for a, b in _seed],
             "candidate_count": 0,
             "candidate_pairs": [],
             "source": "seed_only",
@@ -3017,6 +3020,7 @@ def run_loop(cli_args) -> None:
                     candidate_pairs=_promoted_pairs.get("candidate", []),
                     bridge_diagnostics=_hot_bridge_diag,
                     chain=cli_args.chain,
+                    profile=profile,
                 )
 
                 # M7.A.5.47p: Auto-pin live-miss pools from other_live_pool_trace.

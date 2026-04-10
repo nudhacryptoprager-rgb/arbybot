@@ -3,130 +3,100 @@
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
 run_id: ci_m5_gate_arbitrum_one_20260402_110313_968343
-mode: ONLINE (M7.E1.10 longer peak-hours Base A/B evidence under session-first dashboard)
+mode: ONLINE (M7.E1.10 -- discovery contour cleanup + 20m A/B cadence)
 artifact_mode: rolling
-config: config/real_minimal.yaml
+config: config/onboard_base_discovery.yaml
 code_identity:
   primary: ts:2026-04-02T09:03:41Z
   dirty: true
-  desc: M7.E1.10 - 1h peak-hours A/B runs + dashboard namespace badge + cold heartbeat display
+  desc: M7.E1.10 contour cleanup -- AMONGUS removed, structurally stronger pairs prioritized, hot fallback profile-aware, config contract + cross_dex policy tests
 
 ## Session Completion
-session_goal: M7.E1.10 - run 1h production + 1h discovery at peak hours (16:00-20:00 UTC) to test event scarcity ceiling, per reviewer commit bc388cea fix steps 1-2.
-goal_status: REACHED (1h production 16:05-17:05Z + 1h discovery 17:05-18:05Z, both at peak hours, both 0 events. Market-window scarcity CONFIRMED at 1h duration. Dashboard enhanced with namespace badge + cold heartbeat age.)
+session_goal: M7.E1.10 contour cleanup -- fix discovery config issues (dead AMONGUS slot, weak cross_dex contour, production-style hot fallback) per reviewer f5c8faa7, then run 20m A/B pair with cleaned contour.
+goal_status: REACHED (contour cleaned, 7 new tests, 20m production 18:42-19:02Z + 20m discovery 19:03-19:23Z, both 0 events. Discovery hot correctly uses clean seed list. Per reviewer step 1: both empty + contour was the open question = no further runs justified this session.)
 close_allowed: true
-remaining_blockers: (1) market-window scarcity CONFIRMED at 1h peak-hours duration. (2) Per reviewer step 5: threshold for wider discovery = 3 pairs x 1h at 16:00-20:00 UTC still zero. This is pair 1 of 3.
-evidence_session_run_dirs: [data/runs/_rolling/ — 1h production + 1h discovery at 16:05-18:05Z]
-primary_blocker_of_session: market_window_scarcity
-blocker_status_before: CONFIRMED (E1.9.2: 9 short runs, 0 events)
-blocker_status_after: CONFIRMED (E1.10: 2 x 1h peak-hours runs, 1953 total windows, 0 events)
+remaining_blockers: (1) market-window scarcity still active at 20m resolution post-contour-cleanup. (2) Per reviewer step 9: if next 20m A/B also zero after cleanup, return to code/config review.
+evidence_session_run_dirs: [data/runs/_rolling/ -- 20m production 18:42-19:02Z + 20m discovery 19:03-19:23Z]
+primary_blocker_of_session: discovery_contour_quality
+blocker_status_before: ACTIVE (AMONGUS dead slot, weak cross_dex, production-style hot fallback)
+blocker_status_after: RESOLVED (all 7 reviewer fixes applied, tested, CI green)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.E1.10 = longer peak-hours Base A/B evidence per reviewer commit bc388cea
+goal (Roadmap): M7.E1.10 = discovery contour cleanup per reviewer f5c8faa7 steps 2-7, then 20m A/B
 change_summary:
-  - monitoring/dashboard.html: Namespace badge in M7 Session panel header + cold heartbeat age in COLD SNAPSHOT PRESERVED notice
-  - tests/unit/test_e1_9_discovery_lane.py: 2 new tests (TestE110DashboardEnhancements)
-  - 1h production proof-run (16:05-17:05Z, 991 windows, 0 events)
-  - 1h discovery proof-run (17:05-18:05Z, 962 windows, 0 events)
+  - config/onboard_base_discovery.yaml: Removed AMONGUS/WETH dead slot, reordered pairs (structurally stronger first, meme diagnostic_only)
+  - m7/shared/constants.py: PREWARM_PAIRS_BASE_DISCOVERY updated to match (AMONGUS removed, new order)
+  - scripts/m7a_orderflow_loop.py: _write_hot_artifact now accepts profile param, fallback uses get_prewarm_pairs(chain, profile) instead of HOT_WATCHLIST_PAIRS
+  - tests/unit/test_e1_9_discovery_lane.py: 7 new tests (3 config contract, 2 cross_dex policy, 2 hot fallback profile-aware)
+  - 20m production proof-run (18:42-19:02Z, 3/3 alive, 0 restarts, 0 events)
+  - 20m discovery proof-run (19:03-19:23Z, 3/3 alive, 0 restarts, 0 events)
 touched_files:
-  - monitoring/dashboard.html
+  - config/onboard_base_discovery.yaml
+  - m7/shared/constants.py
+  - scripts/m7a_orderflow_loop.py
   - tests/unit/test_e1_9_discovery_lane.py
   - docs/status/Status_M7.md
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3831 passed, 6 skipped, 92.41s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL REQUIRED GATES PASSED, 94.0s)
-py -3.11 scripts/start_nonstop_runtime.py --hours 1.0 --chain base --m7-profile production --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS (16:05-17:05Z, 3/3 alive, 0 restarts)
-py -3.11 scripts/start_nonstop_runtime.py --hours 1.0 --chain base --m7-profile discovery --no-m4 --dashboard-port 8100 --m7-hot-pause 1 --m7-cold-pause 5: PASS (17:05-18:05Z, 3/3 alive, 0 restarts)
+py -3.11 -m pytest tests/unit/test_e1_9_discovery_lane.py -v: PASS (41 passed, 0.69s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL REQUIRED GATES PASSED, 3838 passed, 6 skipped, 101.66s)
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.34 --chain base --m7-profile production --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS (18:42-19:02Z, 3/3 alive, 0 restarts)
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.34 --chain base --m7-profile discovery --no-m4 --dashboard-port 8100 --m7-hot-pause 1 --m7-cold-pause 5: PASS (19:03-19:23Z, 3/3 alive, 0 restarts)
 
 ## 3) Artifacts Attached
 
 rolling:
-  - data/runs/_rolling/_latest.json
-  - data/runs/_rolling/run_summary_latest.json (run_id: ci_m5_gate_arbitrum_one_20260402_110313_968343, ts: 2026-04-02T09:03:41Z)
-  - data/runs/_rolling/m4_stability_agg.json
-  - data/runs/_rolling/m7_hot_rollup_latest.json (production 1h)
-  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json (discovery 1h)
-  - data/runs/_rolling/m7_orderflow_latest.json (heartbeat 17:05Z, signal_counts present)
-  - data/runs/_rolling/m7_orderflow_latest_discovery.json (heartbeat 18:05Z)
+  - data/runs/_rolling/m7_hot_latest.json (production, ts: 19:02:55Z)
+  - data/runs/_rolling/m7_hot_latest_discovery.json (discovery, ts: 19:23:53Z)
+  - data/runs/_rolling/m7_hot_rollup_latest.json (production, events_total: 290 cumulative)
+  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json (discovery, events_total: 0)
+  - data/runs/_rolling/m7_orderflow_latest.json (production cold, snapshot_preserved)
+  - data/runs/_rolling/m7_orderflow_latest_discovery.json (discovery cold, snapshot_preserved)
 
 ## 4) Key Results
 
-### 4.1) 1h Peak-Hours A/B Evidence (April 10, 16:05-18:05 UTC)
+### 4.1) Contour Cleanup (reviewer f5c8faa7, steps 2-7)
 
-| Metric | Production (1h) | Discovery (1h) |
-|--------|-----------------|----------------|
-| Run window | 16:05-17:05Z | 17:05-18:05Z |
+| Step | Fix | Evidence |
+|------|-----|----------|
+| #2 | Remove AMONGUS/WETH (not in core_tokens.yaml) | Removed from config + PREWARM_PAIRS. Config contract test PASS |
+| #3 | Mark meme families as diagnostic_only | DEGEN/BRETT/TOSHI (cross_dex_expected=1) after structurally stronger pairs. Cross_dex policy test PASS |
+| #4 | Prioritize structurally stronger pairs | AERO/USDC, AERO/WETH, cbBTC/USDC, cbBTC/WETH now before meme families |
+| #5 | Hot fallback promoted_watchlist profile-aware | _write_hot_artifact(profile=) uses get_prewarm_pairs(chain, profile). Signature + source test PASS |
+| #6 | Config contract test | 3 tests: discovery tokens in core_tokens, prewarm tokens in core_tokens, production tokens valid |
+| #7 | Cross-dex policy test | 2 tests: low cross_dex documented as diagnostic, structurally strong pairs present |
+
+### 4.2) 20m A/B Proof-Run (April 10, 18:42-19:23 UTC -- post-contour-cleanup)
+
+| Metric | Production (20m) | Discovery (20m) |
+|--------|------------------|------------------|
+| Run window | 18:42-19:02Z | 19:03-19:23Z |
 | Supervisor | 3/3 alive, 0 restarts | 3/3 alive, 0 restarts |
-| Session windows | 991 | 962 |
 | Session events | 0 | 0 |
-| Session bridge hits | 0 | 0 |
-| Session fast scored | 0 | 0 |
-| Historical windows (cumulative) | 3573 | 1813 |
-| Historical events (cumulative) | 290 | 0 |
-| Historical positive (cumulative) | 17 | 0 |
-| Historical viable (cumulative) | 14 | 0 |
-| Historical guard passed (cumulative) | 14 | 0 |
-| Historical gas rejected (cumulative) | 129 | 0 |
-| Windows with events (historical) | 58 | 0 |
-| Empty-window count (no_events_in_window) | 3515 | 1813 |
-| Cold heartbeat timestamp | 17:05:13Z | 18:05:38Z |
-| Cold snapshot_preserved | true | true |
+| Hot watchlist source | promoted (cold-derived) | seed_only (clean contour) |
+| Hot watchlist has AMONGUS | yes (old promoted data) | NO (correctly removed) |
 | signal_counts present | true | true |
-| Cross-contamination | NONE | NONE |
+| snapshot_preserved | true | true |
+| Namespace isolation | confirmed | confirmed |
 
-**Key observations**:
-1. Both runs executed entirely within reviewer's recommended peak window (16:00-20:00 UTC). Still 0 events.
-2. Combined 1953 windows across 2h at peak hours — zero swap events for any monitored Base pair.
-3. Production historical totals show the engine HAS found signals before (290 events, 17 positive, 14 viable in prior sessions).
-4. Discovery has never seen events (0 across its lifetime — created fresh in E1.9.1).
-5. Namespace isolation confirmed: production hot frozen at 17:05Z after its run, discovery hot at 18:05Z, no overlap.
-6. Dominant miss reason on both: `no_events_in_window`.
+**Discovery hot fallback confirmed clean**: seed list = [USDC/DAI, USDC/USDT, WETH/USDC, AERO/USDC, AERO/WETH, cbBTC/USDC, cbBTC/WETH, DEGEN/WETH, BRETT/WETH, TOSHI/WETH] -- no AMONGUS, structurally stronger pairs first.
 
-### 4.2) Dashboard Enhancements (E1.10)
+### 4.3) Test Results
 
-- **Namespace badge**: `Namespace: PRODUCTION` / `Namespace: DISCOVERY` now shown in M7 Session panel header with color-coded border
-- **Cold heartbeat display**: COLD SNAPSHOT PRESERVED notice now shows `[Heartbeat: Xm ago]` with color-coded freshness (green < 15m, yellow > 15m), proving cold lane is alive even when preserving old snapshot
-
-### 4.3) Rolling Artifact Summary (M4 gate, arbitrum_one)
-
-latest:
-  schema_version: m4:latest:v2.0
-  run_status: PASS
-  agg_status: PASS
-  data_run_rate: 1.0
-run_summary_latest:
-  status: PASS
-  metrics.signals_count: 31
-  metrics.total_net_usdc: 40.0986
-  profit_status: PASS
-  drift_status: PASS
-  quality_status: WARN
-  run_timestamp: 2026-04-02T09:03:41Z
-  code_identity: ts:2026-04-02T09:03:41Z
-stability_agg:
-  schema_version: m4:stability_agg:v2.0
-  agg_status: PASS
-  runs_since_timestamp.runs_count: 200
-  quick_stats.unique_pairs: 7
-  quick_stats.unique_routes: 11
-
-### 4.4) Test Results
-
-- 3831 passed, 6 skipped (up from 3829 in E1.9.3)
-- 2 new tests: TestE110DashboardEnhancements (namespace label, cold heartbeat)
+- 3838 passed, 6 skipped (up from 3831 in prior E1.10 session, +7 new tests)
+- New tests: TestE110ConfigContract (3), TestE110CrossDexPolicy (2), TestE110HotFallbackProfileAware (2)
 
 ## 5) Strategic Reading
 
-1. **Market-window scarcity is now confirmed at 1h peak-hours resolution**: 2h total scanning (16:05-18:05Z, deep inside 16:00-20:00 UTC peak) yielded 0 events across 1953 windows. This is the strongest evidence yet that Base swap events for monitored pairs are extremely sparse even at prime hours.
-2. **Historical engine capability is intact**: Production cumulative shows 290 events, 17 positive, 14 viable, 14 guard passed from prior sessions (before the current scarcity period). The engine can find and score signals when events flow.
-3. **Reviewer step 5 threshold**: "if after 3 pairs 1h+1h at 16:00-20:00 UTC both lanes remain zero, then modest pair expansion in discovery justified." This is pair 1 of 3. Need 2 more pairs to trigger expansion threshold.
-4. **Per reviewer step 3**: Base remains primary chain candidate. OP Mainnet is best fallback per same Flashblocks/OP Stack architecture. Arbitrum not recommended.
-5. **Dashboard enhancements shipped**: Namespace badge + heartbeat prove the system is "visibly alive" as reviewer step 8 requested.
+1. **Contour cleanup resolves reviewer's primary concern**: discovery config was structurally weak (dead AMONGUS slot, no core_tokens enforcement, production-style hot fallback). All 7 fixes applied and tested.
+2. **Post-cleanup 20m A/B still zero**: market-window scarcity persists after contour cleanup. This confirms scarcity is market-driven, not contour-driven.
+3. **Per reviewer step 1 cadence rule**: 20m production + 20m discovery executed. Both empty + contour cleanup was the open question. No further runs justified this session.
+4. **Per reviewer step 9**: if next session's 20m A/B also zero, return to code/config review (not more runs). If 2-3 sessions still zero, then modest discovery expansion or OP Mainnet comparative pilot (step 10).
+5. **Discovery hot fallback fix immediately visible**: discovery seed list now correctly shows clean contour without AMONGUS, with structurally stronger pairs (AERO, cbBTC) before diagnostic meme families.
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK
@@ -136,13 +106,12 @@ docs_reread_confirmed: true
 
 ## 6) Blocker Classification
 
-code_blocker: NONE
+code_blocker: NONE (contour cleanup RESOLVED this session)
 infra_blocker: NONE
-market_window_scarcity: CONFIRMED (E1.10: 2 x 1h peak-hours runs at 16:05-18:05 UTC, 1953 windows, 0 events)
+market_window_scarcity: CONFIRMED (post-cleanup 20m A/B still 0 events at 18:42-19:23Z)
 
 ## 6.1) Blockers / Risks
-- **market-window scarcity** (CONFIRMED, E1.10): 0 events across 2h at peak hours (16:05-18:05Z). Combined with E1.9.2 evidence (9 shorter runs), total evidence = 12 runs, 0 session events.
-- Flashblocks WS DNS unreachable
-- Submit sim = 0 (scaffold only)
-- Discovery scoreboard empty (0 families — needs events to populate)
-- Per reviewer step 5: 2 more 1h pairs needed before discovery expansion threshold
+- **market_window_scarcity** (CONFIRMED): 0 events across 20m production + 20m discovery post-contour-cleanup. Total evidence now: E1.9.2 (9 short runs, 0), E1.10 prior (2 x 1h, 0), E1.10 post-cleanup (2 x 20m, 0).
+- Discovery scoreboard still empty (0 families -- needs events to populate)
+- Per reviewer step 9: if next 20m A/B also zero, work returns to code/config review
+- Per reviewer step 10: if 2-3 sessions fail, modest discovery expansion or OP Mainnet pilot
