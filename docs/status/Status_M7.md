@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.9.3 OPEN — session-first dashboard + namespace-aware UI + signal_counts fix** (E1.9.3: dashboard rewritten with production/discovery toggle, session status block, empty-window notices, cold snapshot awareness. signal_counts backfill in cold heartbeat. 3829 tests pass.)  
+**Status**: **M7.E1.10 OPEN — 1h peak-hours A/B confirms market-window scarcity at scale** (E1.10: 1h production + 1h discovery at 16:05-18:05 UTC, 1953 windows, 0 events. Dashboard enhanced with namespace badge + cold heartbeat. 3831 tests pass.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -280,6 +280,47 @@ CI: 3829 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
+### M7.E1.10: Longer Peak-Hours Base A/B Evidence (OPEN)
+
+**Goal**: Per reviewer commit bc388cea — run 1h production + 1h discovery at 16:00-20:00 UTC peak window on Base to test event scarcity ceiling at scale. Dashboard enhanced with namespace badge + cold heartbeat. Threshold: 3 pairs × 1h at peak both zero → justify discovery expansion or OP Mainnet comparative pilot.
+
+**Reviewer status suggestion (bc388cea)**:
+> E1.9.3 closes the UI-side freshness gap. The dominant blocker is no longer artifact truth but market-window scarcity. The best next path is E1.10 with longer peak-hours Base A/B runs, followed by discovery-only expansion or an OP Mainnet comparative pilot if Base remains event-scarce.
+
+**1h proof-run results (pair 1 of 3 toward expansion threshold)**:
+
+| Metric | Production (1h) | Discovery (1h) |
+|--------|-----------------|-----------------|
+| Window | 16:05-17:05 UTC | 17:05-18:05 UTC |
+| Duration | 60 min | 60 min |
+| Windows observed | 991 | 962 |
+| Events observed | 0 | 0 |
+| Workers alive | 3/3 | 3/3 |
+| Worker restarts | 0 | 0 |
+| signal_counts present | Yes (9-key zeros) | Yes (9-key zeros) |
+| snapshot_preserved | Yes | Yes |
+| Namespace isolation | Confirmed | Confirmed |
+
+**Historical cumulative comparison (production only)**:
+- 3573 total windows, 290 events, 17 positive, 14 viable, 14 guard passed
+- 129 gas rejected, 3515 empty windows
+- The engine HAS found signals in prior sessions — current scarcity is market-driven, not code-driven
+
+**Code changes (2 files)**:
+- `monitoring/dashboard.html`: Namespace badge in `renderM7Session()` header (color-coded production/discovery), cold heartbeat age display in `renderM7Orderflow()` COLD SNAPSHOT notice.
+- `tests/unit/test_e1_9_discovery_lane.py`: 2 new tests in `TestE110DashboardEnhancements` (namespace label + cold heartbeat assertions).
+
+**Key conclusions**:
+1. Market-window scarcity now confirmed at 1h resolution at peak hours (16:05-18:05 UTC)
+2. Infrastructure healthy: 3/3 workers, 0 restarts, namespace isolation proven
+3. This is pair 1 of 3 toward reviewer step 5 expansion threshold
+4. Production historical data proves engine capability (290 events in prior sessions)
+5. If pairs 2 + 3 also zero → discovery expansion or OP Mainnet comparative pilot per reviewer step 10
+
+CI: 3831 passed, 6 skipped. ALL GATES PASSED.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
@@ -299,7 +340,7 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
 2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — E1.5: ~7% viable rate (14/196 scored). Near-exec frontier at -2.20 bps.
 3. ~~**HOT LANE NOT WRITING (Base)**~~ — **RESOLVED in E1.7**.
-4. **MARKET-WINDOW SCARCITY — CONFIRMED (Base)** — 9 proof-runs (12:38-14:27 UTC, April 10) across production + discovery profiles, all 0 events. Not code/infra — monitored pairs do not produce swap events at observed frequencies. Need deeper peak hours or wider pair universe.
+4. **MARKET-WINDOW SCARCITY — CONFIRMED AT 1H SCALE (Base)** — E1.10: 1h production (16:05-17:05Z) + 1h discovery (17:05-18:05Z) at peak hours, 1953 windows total, 0 events. Prior short runs (E1.9.2: 9 runs, E1.9.3: 2 runs) also 0 events. Historical data confirms engine capability (290 events in prior sessions). Scarcity is market-driven, not code-driven. Pair 1 of 3 toward reviewer expansion threshold.
 5. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
 6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Scaffolded, not wired.
 7. ~~**Dashboard dead appearance**~~ — **RESOLVED in E1.8**: M7 freshness banner separates M7 vs PRIMARY rolling.

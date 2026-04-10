@@ -410,3 +410,20 @@ class TestE193DashboardContracts:
         """Dashboard server handler should have _serve_discovery_data method."""
         from monitoring.dashboard_server import DashboardHandler
         assert hasattr(DashboardHandler, "_serve_discovery_data")
+
+
+class TestE110DashboardEnhancements:
+    """E1.10: Namespace badge and heartbeat in dashboard."""
+
+    def test_dashboard_has_namespace_label(self):
+        """Dashboard HTML has explicit Namespace label in session panel."""
+        from pathlib import Path
+        html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "Namespace: ${m7Profile.toUpperCase()}" in html
+
+    def test_dashboard_has_heartbeat_in_cold_notice(self):
+        """Dashboard cold snapshot notice shows heartbeat age."""
+        from pathlib import Path
+        html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
+        assert "current_window_timestamp" in html
+        assert "Heartbeat:" in html

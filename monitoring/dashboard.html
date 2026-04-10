@@ -1088,6 +1088,11 @@ function renderM7Session(rollup, hot, cold) {
   let html = '';
 
   // Current Session Status section
+  const nsBadgeColor = m7Profile === 'discovery' ? '#6e40c9' : '#238636';
+  html += `<div style="padding:4px 10px 6px;margin:0 0 8px;border:1px solid ${nsBadgeColor};border-radius:6px;background:#0d1117;font-size:.78rem">`;
+  html += `<span style="color:${nsBadgeColor};font-weight:600">Namespace: ${m7Profile.toUpperCase()}</span>`;
+  if (sessStart) html += ` <span style="color:#8b949e">| started ${sessStart.slice(11,19)}Z</span>`;
+  html += '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
 
   // Left: Session truth
@@ -1200,10 +1205,15 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
 
   // E1.9.3: Cold snapshot notice — distinguish preserved historical from current empty
   if (snapshotPreserved) {
+    const cwt = m7.current_window_timestamp || '';
+    const cwtAge = cwt ? Math.round((Date.now() - new Date(cwt).getTime()) / 60000) : null;
+    const heartbeatLabel = cwtAge !== null ? `Heartbeat: ${cwtAge}m ago` : 'No heartbeat';
+    const heartbeatColor = cwtAge !== null && cwtAge < 15 ? '#3fb950' : '#d29922';
     html += '<div style="padding:6px 10px;margin:0 0 10px;border:1px solid #d29922;border-radius:6px;background:#1a1500;font-size:.78rem;color:#d29922">';
-    html += '<strong>COLD SNAPSHOT PRESERVED</strong>: Current cold window is empty. Data below is from a prior session';
+    html += `<strong>COLD SNAPSHOT PRESERVED</strong> <span style="color:${heartbeatColor};font-weight:600">[${heartbeatLabel}]</span>`;
+    html += ': Current cold window is empty. Data below is from a prior session';
     if (snapshotTs) html += ' (' + snapshotTs.slice(0,19) + 'Z)';
-    html += '. Values may appear stale but this is intentional \u2014 cold lane preserves the last non-empty snapshot.';
+    html += '. Values may appear stale but cold lane is alive \u2014 preserves the last non-empty snapshot.';
     html += '</div>';
   } else if (evts === 0 && scored === 0) {
     html += '<div style="padding:6px 10px;margin:0 0 10px;border:1px solid #30363d;border-radius:6px;background:#161b22;font-size:.78rem;color:#8b949e">';
