@@ -43,6 +43,7 @@ class TestDiscoveryPrewarmPairs:
         for a, b in PREWARM_PAIRS_BASE_DISCOVERY:
             symbols.add(a)
             symbols.add(b)
+        assert "VIRTUAL" in symbols
         assert "DEGEN" in symbols
         assert "BRETT" in symbols
         assert "TOSHI" in symbols
@@ -549,7 +550,14 @@ class TestE110CrossDexPolicy:
         """Discovery contour must include structurally stronger Base pairs (cross_dex >= 2)."""
         config = self._load_discovery_config()
         pairs = config.get("include_pairs", [])
-        required_strong = {"AERO/USDC", "AERO/WETH", "cbBTC/USDC", "cbBTC/WETH"}
+        required_strong = {
+            "AERO/USDC",
+            "AERO/WETH",
+            "cbBTC/USDC",
+            "cbBTC/WETH",
+            "VIRTUAL/USDC",
+            "WETH/VIRTUAL",
+        }
         pair_set = set(pairs)
         missing = required_strong - pair_set
         assert not missing, f"Missing structurally strong pairs in discovery: {missing}"

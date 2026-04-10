@@ -66,6 +66,8 @@ include_pairs:
   - "AERO/WETH"
   - "cbBTC/USDC"
   - "cbBTC/WETH"
+  - "VIRTUAL/USDC"
+  - "WETH/VIRTUAL"
   # diagnostic_only: meme families (cross_dex_expected=1, unlikely cross-dex arb)
   - "DEGEN/WETH"
   - "BRETT/WETH"

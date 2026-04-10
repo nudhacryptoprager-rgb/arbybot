@@ -272,6 +272,7 @@ PREWARM_PAIRS_BASE_DISCOVERY = [
     ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),  # production core
     ("AERO", "USDC"), ("AERO", "WETH"),  # structurally stronger (cross_dex >= 2)
     ("cbBTC", "USDC"), ("cbBTC", "WETH"),  # structurally stronger (cross_dex >= 2)
+    ("VIRTUAL", "USDC"), ("WETH", "VIRTUAL"),  # structurally stronger (cross_dex >= 2)
     ("DEGEN", "WETH"), ("BRETT", "WETH"), ("TOSHI", "WETH"),  # diagnostic_only (cross_dex=1)
 ]
 

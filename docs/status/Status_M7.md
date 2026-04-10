@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.10 OPEN -- discovery contour cleanup + 20m A/B cadence** (E1.10: AMONGUS dead slot removed, structurally stronger pairs prioritized, hot fallback profile-aware, config contract + cross_dex policy tests. 3838 tests pass.)  
+**Status**: **M7.E1.10 OPEN -- VIRTUAL expansion + 20m A/B cadence** (E1.10: VIRTUAL/USDC + WETH/VIRTUAL added to discovery contour per config audit. Prior: AMONGUS removed, hot fallback profile-aware, config contract + cross_dex policy tests. 3838 tests pass.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -176,6 +176,12 @@ Production (16:05-17:05Z) + Discovery (17:05-18:05Z): 1953 windows total, 0 even
 
 CI after contour cleanup: 3838 passed, 6 skipped. ALL GATES PASSED.
 
+**E1.10 VIRTUAL expansion (config audit finding)**:
+
+A full Base config audit (validate_universe + warm_pool_cache --check-liquidity) does not support a broad stale addresses/factories/pools diagnosis: 9/9 canonical intent pairs with cross-DEX coverage, zero no-token/no-pool failures. The concrete config issue found: discovery contour omitted the structurally strong VIRTUAL family despite strong local pool coverage. VIRTUAL/USDC and WETH/VIRTUAL added to discovery prewarm + config. Production cold lane independently found VIRTUAL/WETH in candidate_pairs, validating the finding.
+
+**20m A/B after VIRTUAL expansion (19:56-20:37Z)**: Production (19:56-20:16Z, 327 windows, 0 events) + Discovery (20:16-20:37Z, 277 windows, 0 events, 12-pair seed with VIRTUAL confirmed). Market-window scarcity persists post-expansion. Per cadence rule: both empty, no further runs this session.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -197,7 +203,7 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
 2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — E1.5: ~7% viable rate (14/196 scored). Near-exec frontier at -2.20 bps.
 3. ~~**HOT LANE NOT WRITING (Base)**~~ — **RESOLVED in E1.7**.
-4. **MARKET-WINDOW SCARCITY — CONFIRMED AT 1H SCALE (Base)** — E1.10: 1h production (16:05-17:05Z) + 1h discovery (17:05-18:05Z) at peak hours, 1953 windows total, 0 events. Prior short runs (E1.9.2: 9 runs, E1.9.3: 2 runs) also 0 events. Historical data confirms engine capability (290 events in prior sessions). Scarcity is market-driven, not code-driven. Pair 1 of 3 toward reviewer expansion threshold.
+4. **MARKET-WINDOW SCARCITY — CONFIRMED POST-CONTOUR-FIX (Base)** — E1.10: after contour cleanup (AMONGUS removed, meme diagnostic_only) AND VIRTUAL expansion (VIRTUAL/USDC + WETH/VIRTUAL added), 20m A/B still 0 events. Total evidence: E1.9.2 (9 short runs, 0), E1.10 (1h pair, 0), E1.10 contour cleanup A/B (0), E1.10 VIRTUAL A/B (19:56-20:37Z, 0). Scarcity confirmed market-driven, not contour-driven.
 5. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
 6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Scaffolded, not wired.
 7. ~~**Dashboard dead appearance**~~ — **RESOLVED in E1.8**: M7 freshness banner separates M7 vs PRIMARY rolling.
