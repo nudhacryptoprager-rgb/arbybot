@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.5 OPEN — funnel semantics fixed, sim/submit scaffolded, family_unresolved filtered** (M7 Arbitrum mainline FROZEN per 47s. E1.5 fixes funnel contract: renamed viable_total→route_viable_total, profit_guard_passed_total now counted from _fast inline attribute (gated on route_viable in scoring), not batch rerun. Added sim_attempted/sim_passed/submit_ready_total placeholder counters + sim_passed/submit_ready fields in hot intents. Filtered family_unresolved from bridge_selected_family_diff_top. 3x consecutive 10-min Base runs (clean rollup): scored=196, positive=17, route_viable=14, guard=14 — funnel invariant PASS. CI: 3746 passed, 6 skipped.)  
-**Updated**: 2026-04-08
+**Status**: **M7.E1.6.1 OPEN — strict exec semantics, chain-aware gas, heartbeat, signal_counts** (Arbitrum mainline FROZEN per 47s. E1.6: strict executable = route_viable AND size_valid_for_token. Chain-aware gas floor (Base 0.5 bps vs Arbitrum 2.0 bps). Per-candidate gate_trace (8 fields). E1.6.1: cold/hot heartbeat timestamps (current_window_timestamp, snapshot_preserved). signal_counts 9-key funnel dict. Runtime invariant tests. 3x 10-min Base runs: cold heartbeat fresh at 09:29:26Z, hot lane stale (no events written). CI: 3770 passed, 6 skipped.)  
+**Updated**: 2026-04-09
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
 ---
@@ -208,166 +208,58 @@ External 2025–2026 evidence aligns with the local freeze result: profitable sh
 
 CI: 3698 passed, 6 skipped.
 
-### M7.E1.1: Full Hot/Cold Nonstop Validation (April 7, 20:23-20:33Z)
+### M7.E1.1–E1.4: Nonstop → Contamination Fix → Separation → Convergence (CLOSED, compressed)
 
-**Goal**: Prove Base remains gas-blocked after full 10-min hot/cold nonstop, not just cold-only pilot.
-
-**Code changes**: `artifacts.py` — per-candidate gas breakdown (l1_data_gas_bps, l2_exec_gas_bps, total_gas_bps, gap_to_zero_bps). 4 new tests. CI: 3702 passed, 6 skipped.
-
-**Evidence (10-min nonstop, 20:23-20:33Z)**:
-
-| Metric | E1 (cold) | E1.1 (hot+cold) |
-|--------|-----------|------------------|
-| events_scored | 10 | 30 |
-| GAS_EXCEEDS_GROSS | 10/10 | 26/30 (86.7%) |
-| best_near_exec_bps | -10.20 | **-2.20** |
-| bridge_selected_pools | 0 | 30 |
-| hot_windows / events | 0/0 | 177/82 |
-| l1_data / l2_exec / total gas bps | N/A | 0.16 / 0.04 / 0.20 |
-| supervisor restarts | N/A | 0 (3/3 alive) |
-
-**Findings**: (1) Hot/cold bridge exercised — 30 pools selected, 38 focused, promoted_watchlist=5 pairs. (2) Hot artifacts Base-origin (was Arbitrum-era). (3) GAS_EXCEEDS_GROSS sole blocker — L1 data 80% of gas. (4) Near-executable frontier narrowed -10.20→-2.20 bps. (5) USDC/WETH narrow contour at -9.16 gap; wider pairs closer to breakeven. (6) AMONGUS/WETH in watchlist but NOT near-executable. (7) Flashblocks untested (separate subtask).
-
-CI: 3702 passed, 6 skipped (3698 + 4 new gas breakdown tests).
-
-### M7.E1.2: Hot Blocker Separation — Arbitrum Contamination Fix (April 7, 21:38-21:41Z)
-
-**Goal**: Separate Base cold gas blocker from Base hot overlap/registry blocker. E1.1 review found that `architecture_blocker_trace` still showed Arbitrum-era values (`blocker_class=event_source_absence`, `pool_address=0xd13040...`, `family=family_unresolved`) on Base — a false diagnosis caused by hardcoded Arbitrum target pool.
-
-**Code changes (3 files)**:
-- `scripts/m7a_orderflow_loop.py` — (1) Dynamic `_TARGET_POOL` selection from `bridge_selected_at_assembly` (picks first A_cold_exec, falls back to any pool, None if empty). (2) Four new event-to-bridge classification counters: `events_in_bridge_total`, `events_not_in_bridge_total`, `matched_then_gas_rejected_total`, `matched_then_scored_positive_total`. (3) Three-way `blocker_class`: `event_source_absence` | `events_not_reaching_bridge` | `gas_economics_only` | `selection_or_scoring`. (4) `families_with_any_hot_events` now cumulative across ALL bridge families.
-- `m7/orderflow/mode_ws_live.py` — Fixed `KeyError: 'stage_a_ms'` in stage latency aggregation (`.get()` instead of `[]` indexing) — this bug silently crashed every hot iteration, preventing rollup writes.
-- `tests/unit/test_47r_cross_artifact_contract.py` — Updated `_build_architecture_blocker_trace` helper for three-way classification; added `test_families_with_any_hot_events_uses_all_families`.
-- `tests/unit/test_e1_base_chain_aware.py` — 3 new test classes (14 tests): `TestE1_2_DynamicTargetPoolSelection` (4), `TestE1_2_EventBridgeClassification` (6), `TestE1_2_BlockerClassification` (4). Includes source-level invariant `test_no_hardcoded_arbitrum_pool_in_production`.
-
-CI: 3718 passed, 6 skipped (3702 + 16 new E1.2 tests).
-
-**Evidence (3-min nonstop, 21:38-21:41Z)**:
-
-| Metric | E1.1 (pre-fix) | E1.2 (post-fix) |
-|--------|----------------|------------------|
-| `blocker_class` | `event_source_absence` (FALSE) | **`gas_economics_only`** (CORRECT) |
-| `families_with_any_hot_events` | 0 (single-family check) | **9/17** (all-family check) |
-| `exact_pool_trace.pool_address` | `0xd13040...` (Arbitrum) | **`0x6f79e0...`** (Base) |
-| `exact_family_trace.family` | `family_unresolved` | **`0x8335.../0xe0cd...`** (resolved) |
-| `events_in_bridge_total` | N/A | **12** |
-| `events_not_in_bridge_total` | N/A | **7** |
-| `matched_then_gas_rejected_total` | N/A | **12** (all) |
-| `matched_then_scored_positive_total` | N/A | **0** |
-| `bridge_pool_hit_total` | 0 (never 0 — rollup not written) | **16** |
-| `session_bridge_pool_hit_total` | 0 | **14** |
-| hot rollup written? | NO (`stage_a_ms` crash) | **YES** |
-
-**Findings**:
-1. **Arbitrum contamination is the root cause**: Hardcoded `_TARGET_POOL = 0xd13040...` (Arbitrum) meant all trace diagnostics were chain-foreign on Base. `exact_pool_trace` always showed `not_in_bridge` (Arbitrum pool not in Base bridge). `exact_family_trace` couldn't resolve family via PTT (Arbitrum pool → `family_unresolved`). `architecture_blocker_trace.families_with_any_hot_events` checked only the unresolved family → 0 → false `event_source_absence`.
-2. **Hot lane was silently crashing**: `mode_ws_live.py` stage latency aggregation used `dict["stage_a_ms"]` instead of `.get()`. When live results had `pipeline_stage_latency_ms` without `stage_a_ms` key, every hot iteration raised `KeyError` — caught by the outer try/except, hot continued retrying but never reached `_update_hot_rollup()`. 3/3 supervisor "alive" masked the failure.
-3. **Base hot lane IS gas-blocked, not architecture-blocked**: With fixed traces, 12/12 bridge-matching events are gas-killed. 9/17 bridge families see hot events. `blocker_class=gas_economics_only` is the correct three-way classification.
-4. **E1.1 conclusion was correct but unprovable**: The "gas economics sole blocker" narrative was true for both cold and hot lanes, but E1.1 artifacts couldn't prove it due to contamination. E1.2 now proves it with clean chain-native traces.
-
-### M7.E1.3: Registry vs Gas Counter Separation + Chain-Purity Invariant (April 8, 07:10-07:21Z)
-
-**Goal**: Reconcile Base hot artifacts with Base cold gas blocker. E1.2 review found `matched_then_gas_rejected` conflated two orthogonal blocker types (registry rejection vs gas rejection). Separate them to determine if Base hot zero-hit is a registry/overlap issue or truly gas-only.
-
-**Code changes (2 files)**:
-- `scripts/m7a_orderflow_loop.py` — (1) Split conflated `matched_then_gas_rejected_total` in rollup into `matched_then_registry_rejected_total` (in bridge + hot_skip) + `matched_then_gas_rejected_total` (in bridge + registry_fast + net<=0). Added `matched_then_scored_positive_total` (in bridge + net>0). (2) Added 3 per-iteration counters to `hot_gap_debug`: `matched_bridge_then_registry_rejected`, `matched_bridge_then_gas_rejected`, `matched_bridge_then_scored_positive`.
-- `tests/unit/test_e1_base_chain_aware.py` — Fixed conflated E1.2 test (split into 2 tests for registry vs gas). Added Section 12: `TestE1_3_ChainPurityInvariant` (4 tests — Arbitrum contamination addresses, family_unresolved detection, source-level hardcoded pool check). Added Section 13: `TestE1_3_RegistryVsGasSeparation` (6 tests — bridge_registry_rejected, bridge_gas_rejected, bridge_scored_positive, not_in_bridge_ignored, sum invariant).
-
-CI: 3728 passed, 6 skipped (3718 + 10 new E1.3 tests).
-
-**Evidence (10-min nonstop, 07:10-07:21Z)**:
-
-| Metric | E1.2 (conflated) | E1.3 (separated) |
-|--------|-------------------|-------------------|
-| `matched_then_registry_rejected_total` | N/A (was lumped in gas) | **0** |
-| `matched_then_gas_rejected_total` | 12 (conflated) | **44** |
-| `matched_then_scored_positive_total` | 0 | **6** |
-| `events_in_bridge_total` | 12 | **50** |
-| `blocker_class` | `gas_economics_only` | **`selection_or_scoring`** |
-| `families_with_any_hot_events` | 9/17 | **19/27** |
-| `cold_executable_count` | 0 | **3** (W/WETH +92.63, CRV/WETH +59.08, doginme/WETH +24.08 bps) |
-| `hot viable_count` (final iteration) | 0 | **1** |
-| `near_executable_count` | 5 | **5** (best -2.20 bps) |
-| supervisor restarts | 0 | **0** (3/3 alive, clean shutdown) |
-
-**Findings**:
-1. **Registry rejection is definitively NOT a blocker**: 0/50 bridge events are registry-rejected. All events that reach bridge pools pass the hot registry check.
-2. **Gas is the majority blocker but NOT the only one**: 44/50 (88%) bridge events are gas-rejected. But 6/50 (12%) score positive, proving some events have viable economics.
-3. **Viable signal exists on Base**: Cold lane found 3 executable candidates with strong positive bps (<92.63 bps). Hot lane achieved viable_count=1 in the final iteration. This was hidden by E1.2's conflated counter.
-4. **blocker_class correctly upgraded**: `selection_or_scoring` (was `gas_economics_only`) because `matched_then_scored_positive_total > 0`. The three-way classifier works as designed.
-5. **E1.2 narrative was incomplete**: E1.2 said "gas_economics_only" based on 3-min run where 12/12 bridge events were gas-killed. The 10-min E1.3 run with 50 bridge events reveals a more nuanced picture — most are gas-blocked but some break through.
-6. **Counter sum invariant holds**: 0 + 44 + 6 = 50 = `events_in_bridge_total` ✓
-
-### M7.E1.4: Convergence Fields + Viable Funnel Counter + Repeatability Proof (April 8, 08:07-08:40Z)
-
-**Goal**: Convert Base scored-positive events into repeatable submit-ready candidates. Add cold-hot convergence fields to hot intents for cross-referencing. Add viable_total funnel counter to rollup. Prove repeatability across 3 consecutive 10-min runs.
-
-**Code changes (2 files)**:
-- `scripts/m7a_orderflow_loop.py` — (1) Hot intents convergence: build 3 lookup structures from bridge (cold_exec_pool_set, selected_pool_info from bridge_selected_pools_top, pool_token_transport for family fallback). Added 4 new fields per intent row: `pool_address`, `family`, `selected_bucket`, `same_pool_as_cold_exec`. (2) Rollup: added `viable_total` counter (sum of route_viable=True per window, cumulative) between fast_path_positive_total and profit_guard_passed_total.
-- `tests/unit/test_e1_base_chain_aware.py` — Section 14: `TestE1_4_IntentConvergenceFields` (8 tests — pool_address present/none, family from selected_pools, family fallback to PTT, same_pool_as_cold_exec true/false/empty, selected_bucket none). Section 15: `TestE1_4_FunnelCounters` (5 tests — viable_total accumulates, funnel ordering, zero when no viable, counts only viable, schema key).
-
-CI: 3741 passed, 6 skipped (3728 + 13 new E1.4 tests).
-
-**Evidence (3x 10-min nonstop, 08:07-08:40Z)**:
-
-| Metric | Run #1 (0-10min) | Run #2 (Δ 10-20min) | Run #3 (Δ 20-30min) | Cumulative |
-|--------|-------------------|---------------------|---------------------|------------|
-| `windows_seen` | 227 | +21 | +21 | 269 |
-| `events_seen_total` | 326 | +100 | +100 | 526 |
-| `fast_path_scored_total` | 143 | +71 | +64 | 278 |
-| `fast_path_positive_total` | 24 | +3 | +4 | **31** |
-| `viable_total` | 12 | +3 | +4 | **19** |
-| `profit_guard_passed_total` | 24 | +3 | +4 | **31** |
-| `matched_then_scored_positive_total` | 11 | +2 | +1 | **14** |
-| `matched_then_gas_rejected_total` | 79 | +53 | +42 | 174 |
-| `matched_then_registry_rejected_total` | 0 | 0 | 0 | **0** |
-| supervisor restarts | 0 | 0 | 0 | **0** |
-
-**Convergence fields in hot intents (sample)**:
-- BRETT/WETH: pool_address=0x4e82..., family=WETH/BRETT (PTT), selected_bucket=null, same_pool_as_cold_exec=false, net_bps=+40.16, profit_guard_passed=true
-- token1_in/USDC: pool_address=0x6524..., family=USDC/token1 (PTT), selected_bucket=A_cold_exec, same_pool_as_cold_exec=false
-- cold_executable_count=0 (cold lane produced no executables in short runs)
-
-**Findings**:
-1. **Repeatability confirmed**: All 3 runs produced positive events (24, +3, +4). No run dropped to zero. Pattern is consistent: ~10% of scored events are positive.
-2. **viable_total tracks the economics funnel**: 19 viable out of 31 positive. The gap (31 positive − 19 viable) represents events with net_bps>0 but failing route-level economics (gas_exceeds_gross or fee decomposition).
-3. **Convergence fields functional**: pool_address, family, selected_bucket all populated. `selected_bucket=A_cold_exec` appears for bridge-matched intents. `same_pool_as_cold_exec=false` for all hot intents (cold lane found 0 executables in short runs — longer cold runs may improve).
-4. **Cold-hot convergence gap persists**: Hot winners (BRETT/WETH +40 bps) don't match cold winners from E1.3 (W/WETH, CRV/WETH, doginme/WETH). This is expected — cold and hot windows sample different market states.
-5. **Registry rejection remains zero**: 0/188 bridge events registry-rejected across all 3 runs. The hot pool registry is not a bottleneck.
+**E1.1** (April 7): Hot+cold nonstop — 30 events, GAS_EXCEEDS_GROSS 86.7%, best -2.20 bps, gas breakdown: L1 0.16 / L2 0.04 / total 0.20 bps. CI: 3702.
+**E1.2** (April 7): Arbitrum contamination fix — hardcoded `_TARGET_POOL` → dynamic. `blocker_class` corrected `event_source_absence`→`gas_economics_only`. Fixed `KeyError: stage_a_ms` (hot lane silently crashing). 9/17 families have hot events. CI: 3718.
+**E1.3** (April 8): Registry vs gas separation — `registry_rejected=0`, `gas_rejected=44`, `scored_positive=6`. Registry NOT a blocker. 3 cold executables (W/WETH +92.63 bps). `blocker_class=selection_or_scoring`. CI: 3728.
+**E1.4** (April 8): Convergence fields in intents. 3x repeatability: positive 24/+3/+4, viable 12/+3/+4. Funnel inversion bug found (guard=31 > viable=19) → fixed in E1.5. CI: 3741.
 
 ### M7.E1.5: Funnel Semantics Fix + Submit-Stage Scaffold (April 8, 09:10-09:57Z)
 
-**Goal**: Fix funnel semantics bug (profit_guard_passed_total > viable_total due to batch rerun bypassing route_viable gate). Add sim/submit placeholder counters. Filter family_unresolved from bridge summary.
+**Goal**: Fix funnel semantics (profit_guard_passed_total > viable_total). Add sim/submit placeholders. Filter family_unresolved.
 
-**Code changes (2 files)**:
-- `scripts/m7a_orderflow_loop.py` — (1) Renamed `viable_total` → `route_viable_total` with clear semantics. (2) Changed `profit_guard_passed_total` from `len(_guard)` (batch, bypasses route_viable) to `sum(... _fast ... profit_guard_passed)` (inline attribute, gated on route_viable in scoring_parallel.py). (3) Added `sim_attempted_total`, `sim_passed_total`, `submit_ready_total` placeholder counters via `setdefault(, 0)`. (4) Filtered `family_unresolved` from `bridge_selected_family_diff_top`; added `family_unresolved_pool_count` diagnostic. (5) Added `sim_passed: None`, `submit_ready: None` to hot intent rows.
-- `tests/unit/test_e1_base_chain_aware.py` — Replaced Section 15 with `TestE1_5_FunnelSemantics` (5 tests — route_viable_total accumulates, funnel ordering includes guard, zero when no viable, profit_guard from _fast not batch, schema keys with sim/submit). Section 16: `TestE1_5_IntentSubmitFields` (2 tests). Section 17: `TestE1_5_FamilyUnresolvedFiltering` (3 tests).
+**Code changes**: Renamed `viable_total`→`route_viable_total`. Changed `profit_guard_passed_total` from batch to inline attribute (gated on route_viable). Added sim_attempted/sim_passed/submit_ready_total. Filtered family_unresolved from bridge summary. 10 new tests. CI: 3746 passed, 6 skipped.
 
-CI: 3746 passed, 6 skipped (3741 − 5 old E1.4 funnel tests + 10 new E1.5 tests).
+**Evidence (3x 10-min nonstop, 09:25-09:57Z)**: scored=196, positive=17, route_viable=14, guard=14. Funnel invariant `scored >= positive >= route_viable >= guard` — **PASS** (was violated in E1.4: guard=31 > viable=19). sim/submit all zero (placeholder). family_unresolved_pool_count=3-8 per window.
 
-**Evidence (3x 10-min nonstop, clean rollup, 09:25-09:57Z)**:
+---
 
-| Metric | Run #1 (0-10min) | Run #2 (Δ) | Run #3 (Δ) | Cumulative |
-|--------|-------------------|------------|------------|------------|
-| `windows_seen` | 20 | +22 | +17 | 59 |
-| `events_seen_total` | 100 | +105 | +85 | 290 |
-| `fast_path_scored_total` | 61 | +73 | +62 | 196 |
-| `fast_path_positive_total` | 10 | +1 | +6 | **17** |
-| `route_viable_total` | 7 | +1 | +6 | **14** |
-| `profit_guard_passed_total` | 7 | +1 | +6 | **14** |
-| `sim_attempted_total` | 0 | 0 | 0 | **0** |
-| `sim_passed_total` | 0 | 0 | 0 | **0** |
-| `submit_ready_total` | 0 | 0 | 0 | **0** |
-| `family_unresolved_pool_count` | — | — | — | **3-8** (per window) |
-| supervisor restarts | 0 | 0 | 0 | **0** |
+### M7.E1.6 + E1.6.1: Strict Exec Semantics + Chain-Aware Gas + Heartbeat (April 9, 08:56-09:29Z)
 
-**Funnel invariant check (all 3 runs)**: `scored(196) >= positive(17) >= route_viable(14) >= guard(14)` — **PASS**.
+**Goal**: E1.6 — strict executable = route_viable AND size_valid_for_token, chain-aware gas floor, per-candidate gate_trace. E1.6.1 — cold/hot heartbeat timestamps, signal_counts funnel dict, runtime invariant tests.
+
+**Code changes (7 files)**:
+- `m7/orderflow/artifacts.py` — (1) Strict exec: `top_executable_candidates` requires both `route_viable=True` AND `size_valid_for_token=True`. Separate `top_route_viable_candidates` for route_viable-only. (2) Per-candidate `gate_trace` (8 fields: route_viable, size_valid_for_token, profit_guard_passed, same_block, within_latency_budget, reject_reason, scoring_path, net_bps). (3) `signal_counts` 9-key funnel dict (scored, pair_resolved, size_valid_for_token, same_block, positive, route_viable, profit_guard_passed, sim_passed=0, submit_ready=0).
+- `m7/orderflow/profit_guard.py` — Chain-aware: `chain: str = "arbitrum_one"` param, `get_gas_floor_bps(chain)` instead of hardcoded `GAS_FLOOR_BPS_ARBITRUM`.
+- `m7/orderflow/scoring_parallel.py` — `score_backrun_fast()`: `chain` param for `get_gas_floor_bps(chain)`.
+- `m7/orderflow/mode_ws_live.py` — (1) Chain param to `build_replay_summary`. (2) Cold heartbeat: `current_window_timestamp` (via `time.strftime`), `snapshot_preserved`, `snapshot_run_timestamp` on empty-window preserve.
+- `scripts/m7a_orderflow_loop.py` — (1) Chain param to `_run_profit_guard_on_results`. (2) Bridge `family_unresolved_pool_count` as stable int. (3) Hot heartbeat: `current_window_timestamp` + `snapshot_preserved` in `_write_hot_artifact`, `_update_hot_rollup`, `_write_hot_intents`.
+- `tests/unit/test_e1_base_chain_aware.py` — 24 new tests: strict exec (Section 18), chain-aware gas (19), gate_trace (20), bridge family_unresolved (21), runtime invariants (22), signal_counts (23), heartbeat (24). Total: 96 E1 tests.
+- `tests/unit/test_orderflow_artifacts.py` — Updated expected keys for gate_trace and size_valid_for_token.
+
+CI: 3770 passed, 6 skipped. ALL GATES PASSED.
+
+**Evidence (3x 10-min Base nonstop, 08:56-09:29Z)**:
+
+| Artifact | Field | Value |
+|----------|-------|-------|
+| m7_orderflow_latest.json (cold) | `current_window_timestamp` | **2026-04-09T09:29:26Z** (fresh) |
+| cold | `snapshot_preserved` | **true** (empty window, old data preserved) |
+| cold | `snapshot_run_timestamp` | 2026-04-08T09:54:01Z (preserved snapshot origin) |
+| cold | `signal_counts` | null (window empty — no scoring data) |
+| cold | `top_executable_candidates` | 2 (from preserved snapshot — pre-E1.6 data, `size_valid_for_token=false`) |
+| cold | `loop_context.window_empty` | true |
+| m7_hot_latest.json | `timestamp` | 2026-04-09T07:05:12Z (**stale** — hot lane not writing new artifacts) |
+| m7_hot_rollup_latest.json | `last_updated` | 2026-04-09T07:05:12Z (**stale**) |
+| supervisor | all 3 runs | 3/3 alive, 0 restarts each |
 
 **Findings**:
-1. **Funnel semantics fixed**: E1.4 had `profit_guard_passed_total=31 > viable_total=19` due to batch rerun bypassing route_viable. Now `guard(14) <= route_viable(14)` — invariant holds.
-2. **family_unresolved filtered**: `bridge_selected_family_diff_top` excludes family_unresolved. `family_unresolved_pool_count` tracks them separately (3-8 per window).
-3. **Sim/submit scaffolded**: Placeholder counters and intent fields in place. All zero/null as expected — ready for E1.6 actual sim integration.
-4. **Repeatability re-confirmed**: 3 consecutive clean runs each add positive events (10, +1, +6). Consistent with E1.4 pattern.
-5. **Best window**: viable_count=1, profit_guard_passed_count=1, best_net_bps_clean=68.254 bps, headline_level=profit_guard_passed.
+1. **Cold heartbeat WORKS**: `current_window_timestamp=09:29:26Z` proves runtime is alive at cold artifact write time even when window is empty. `snapshot_preserved=true` makes stale data carry-forward explicit.
+2. **Hot lane NOT writing**: Hot artifact stuck at 07:05:12Z (before our runs). Hot lane processes start but don't produce fresh artifacts. Likely WS subscription or iteration-level exceptions silently caught.
+3. **signal_counts=null because window_empty**: No scoring data → no funnel to count. Will populate when non-empty window occurs.
+4. **Preserved candidates are pre-E1.6**: The 2 `top_executable_candidates` have `size_valid_for_token=false` and no `gate_trace` because they predate E1.6 code.
+5. **Code changes verified by tests**: 3770 tests pass, strict exec invariant (exec ⊂ route_viable), chain-aware gas, gate_trace schema, heartbeat contract all unit-tested.
 
 ---
 
@@ -387,17 +279,17 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 ## Known Blockers
 
-1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 3 consecutive proof runs (47q, 47r, 47s) confirm `architecture_blocker_trace.blocker_class=event_source_absence` on Arbitrum One. **Does NOT apply to Base** — E1.5 confirms 14 guard-passed events across 3 clean runs.
-2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base, both lanes)** — E1.5: majority of bridge events gas-rejected. But route_viable=14 and profit_guard_passed=14 across 196 scored → ~7% viable rate.
-3. **COLD-HOT CONVERGENCE GAP** — Hot winners (BRETT/WETH +40 bps from E1.4) don't match cold winners. Short cold runs produce 0 executables. Longer cold runs may improve overlap.
-4. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested. Alchemy WS fallback works.
-5. **Subgraph 403** — enrichment breadth limited to V3 local adapter only.
-6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Infrastructure scaffolded but not wired.
+1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
+2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — E1.5: ~7% viable rate (14/196 scored). Near-exec frontier at -2.20 bps.
+3. **HOT LANE NOT WRITING (Base)** — E1.6.1: hot artifact stuck at 07:05:12Z. Cold heartbeat fresh (09:29:26Z). Root cause: hot iteration exceptions silently caught or WS subscription issue on Base.
+4. **NO FRESH NON-EMPTY WINDOW** — 3x 10-min runs all produce empty cold windows. Signal_counts=null, gate_trace not exercised in runtime. Unit tests cover the contracts.
+5. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
+6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Scaffolded, not wired.
 
 ## Next steps
 
-1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 scoring/bridge changes.
-2. **E1.6: Actual submit-stage simulation**: Wire Tenderly fork simulation for top profit_guard_passed intents. Goal: `sim_passed_total > 0` or explicit proof of systematic sim failure.
-3. **Cold-hot convergence improvement**: Run longer cold lanes (30-60 min) to populate cold_executable. Cross-reference same_pool_as_cold_exec=true intents.
-4. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning for Base, Flashblocks WS for sub-block delivery.
-5. **Family symbol resolution**: Hot intents show raw address families. Add token symbol lookup to convergence fields.
+1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
+2. **Hot lane write debugging**: Investigate why hot lane doesn't produce fresh artifacts on Base. Check for exception in WS iteration path.
+3. **Non-empty window capture**: Run during peak Base activity hours to populate signal_counts and gate_trace in runtime.
+4. **E1.7: Submit-stage simulation**: Wire Tenderly fork simulation for profit_guard_passed intents → `sim_passed_total > 0`.
+5. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.

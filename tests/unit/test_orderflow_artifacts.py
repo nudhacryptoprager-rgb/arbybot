@@ -2701,6 +2701,8 @@ class TestM7A541TopCandidatePersistence:
             "stale_sub_reason",
             # M7.E1.1: Gas breakdown fields
             "l1_data_gas_bps", "l2_exec_gas_bps", "total_gas_bps", "gap_to_zero_bps",
+            # M7.E1.6: Per-candidate gate trace
+            "gate_trace",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys
@@ -2714,6 +2716,7 @@ class TestM7A541TopCandidatePersistence:
             _make_result(
                 event_id=f"e_viable_{i}",
                 route_viable=True,
+                size_valid_for_token=True,
                 best_backrun_net_bps=float(i),
                 block_lag=0,
                 same_state_class="same_block",

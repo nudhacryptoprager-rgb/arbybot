@@ -194,6 +194,9 @@ def _write_cold_hot_bridge(
             # are never null. Hot lane merges actual values after hot windows.
             "hot_seen_vs_bridge_overlap_top": [],
             "bridge_selected_pools_top": [],
+            # M7.E1.6: Always emit family_unresolved_pool_count as stable int (0 default).
+            # Hot lane updates it via _HOT_PRESERVE_ALWAYS.
+            "family_unresolved_pool_count": 0,
             # M7.A.5.47m: Always emit these as non-null (empty defaults).
             # Hot lane merges real values; cold lane guarantees contract.
             "bridge_excluded_top": [],
@@ -266,6 +269,8 @@ def _write_cold_hot_bridge(
             # M7.A.5.47r: preserve these hot-merged fields across cold overwrites
             "c3_gas_hopeless_skipped", "c3_gas_hopeless_families",
             "bridge_selected_family_diff_top",
+            # M7.E1.6: preserve family_unresolved_pool_count across cold overwrites
+            "family_unresolved_pool_count",
         )
         _HOT_PRESERVE_IF_COLD_EXEC = (
             "bridge_hit_trace_top", "cold_exec_pool_trace",
@@ -292,6 +297,10 @@ def _write_cold_hot_bridge(
                         payload[_hpk] = []
         except Exception:
             pass
+        # M7.E1.6: After hot-preserve, update breakdown with actual bridge_selected count
+        # so cold_exec=0 with bridge_selected_pools_count=20 is self-consistent.
+        _bsp = payload.get("bridge_selected_pools_top", [])
+        payload["candidate_source_breakdown"]["bridge_selected_pools_count"] = len(_bsp)
         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
     except Exception as exc:
         logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
@@ -556,7 +565,7 @@ def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) 
     }
 
 
-def _run_profit_guard_on_results(results: list) -> list:
+def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
     """Run profit_guard on all scored results with positive net_bps.
 
     Returns list of (result_dict, ProfitGuardResult) for candidates that
@@ -591,7 +600,7 @@ def _run_profit_guard_on_results(results: list) -> list:
         pipeline_ms = r.get("quote_pipeline_latency_ms") if isinstance(r, dict) else getattr(r, "quote_pipeline_latency_ms", None)
         guard = check_profit_guard(
             buy_amount_wei=buy, sell_amount_wei=sell, backrun_size_wei=size,
-            pipeline_latency_ms=pipeline_ms,
+            pipeline_latency_ms=pipeline_ms, chain=chain,
         )
         if guard.passed:
             passed.append((r, guard))
@@ -627,15 +636,19 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
                 best = r
 
     _ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _events_count = artifact.get("events_count", 0)
     hot = {
         "lane": "hot",
         "timestamp": _ts_now,
         "loop_iteration": iteration,
-        "events_count": artifact.get("events_count", 0),
+        "events_count": _events_count,
         "best_net_bps_clean": artifact.get("best_net_bps_clean"),
         "viable_count": artifact.get("viable_count", 0),
         "has_positive": best is not None,
         "profit_guard_passed_count": len(guard_results) if guard_results else 0,
+        # M7.E1.6.1: Always-fresh heartbeat timestamp so reviewer knows runtime is alive
+        "current_window_timestamp": _ts_now,
+        "snapshot_preserved": _events_count == 0,
         # M7.A.5.47m: Provenance — run_context with run_timestamp
         "run_context": {
             "run_timestamp": _ts_now,
@@ -1092,7 +1105,9 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     # M7.A.5.47n: Return bridge hit trace so caller can merge into bridge file.
     # M7.A.5.47p: Also return other_live_pool_trace for live-miss auto-pin.
     # M7.E1.5: Return resolved families only (family_unresolved filtered out).
-    return _bridge_hit_trace, _other_trace, _resolved_fam
+    # M7.E1.6: Also return family_unresolved_pool_count for bridge contract.
+    _family_unresolved_count = hot.get("family_unresolved_pool_count", 0)
+    return _bridge_hit_trace, _other_trace, _resolved_fam, _family_unresolved_count
 
 
 def _compute_headline_level(funnel: dict) -> str:
@@ -1233,6 +1248,8 @@ def _write_hot_intents(
     payload = {
         "timestamp": ts,
         "loop_iteration": iteration,
+        # M7.E1.6.1: Heartbeat — always-fresh timestamp for reviewer
+        "current_window_timestamp": ts,
         "headline_level": headline_level,
         "hot_scored_count": _hot_scored,
         "hot_positive_count": _hot_positive,
@@ -1284,6 +1301,8 @@ def _update_hot_rollup(
     _guard = guard_results or []
 
     rollup["last_updated"] = ts
+    # M7.E1.6.1: Heartbeat — always-fresh timestamp for reviewer
+    rollup["current_window_timestamp"] = ts
     # M7.A.5.47e: Track first window timestamp for dashboard
     rollup.setdefault("first_window_at", ts)
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
@@ -2344,7 +2363,8 @@ def run_loop(cli_args) -> None:
             if lane == "hot":
                 # M7.A.5.46: Use _raw_results for profit guard (compact mode).
                 guard_results = _run_profit_guard_on_results(
-                    artifact.get("_raw_results", artifact.get("results", []))
+                    artifact.get("_raw_results", artifact.get("results", [])),
+                    chain=cli_args.chain,
                 )
 
                 # M7.A.5.34: Extract fast-path results directly from artifact.
@@ -2681,7 +2701,8 @@ def run_loop(cli_args) -> None:
                 # M7.A.5.47n: Capture bridge_hit_trace for merge into bridge file.
                 # M7.A.5.47p: Also capture other_live_pool_trace for live-miss auto-pin.
                 # M7.A.5.47r: Also capture _fam_diff_data for bridge file contract.
-                _bridge_hit_trace_data, _other_live_trace, _fam_diff_data = _write_hot_artifact(
+                # M7.E1.6: Also capture _family_unresolved_count for bridge contract.
+                _bridge_hit_trace_data, _other_live_trace, _fam_diff_data, _family_unresolved_count = _write_hot_artifact(
                     artifact, iteration, guard_results,
                     fast_results=fast_results,
                     promoted_pairs=_promoted_pairs.get("execution", []),
@@ -2788,6 +2809,10 @@ def run_loop(cli_args) -> None:
                         # the field, bridge must too (non-null).
                         _bridge_update["bridge_selected_family_diff_top"] = (
                             _fam_diff_data if '_fam_diff_data' in dir() and _fam_diff_data else []
+                        )
+                        # M7.E1.6: Persist family_unresolved_pool_count into bridge.
+                        _bridge_update["family_unresolved_pool_count"] = (
+                            _family_unresolved_count if '_family_unresolved_count' in dir() else 0
                         )
                         # M7.A.5.47m: Persist cut_stage_top from cold lane artifact
                         # (already written to bridge by cold lane; refresh here

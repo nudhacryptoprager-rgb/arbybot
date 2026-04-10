@@ -47,6 +47,7 @@ from m7.shared.constants import (
     _DEFAULT_FEE_TIERS,
     _FALLBACK_ETH_PRICE_USD,
     M7A4_CHAIN,
+    get_gas_floor_bps,
 )
 from m7.orderflow.contracts import BackrunResult, OrderflowEvent
 from m7.orderflow.pricing import (
@@ -1220,6 +1221,7 @@ def score_backrun_fast(
     event_detected_at_block: Optional[int] = None,
     block_time_ms: Optional[float] = None,
     addr_to_symbol: Optional[Dict[str, str]] = None,
+    chain: str = "arbitrum_one",
 ) -> Optional[BackrunResult]:
     """Score a backrun using pre-warmed registry only. Zero RPC in hot path.
 
@@ -1355,7 +1357,7 @@ def score_backrun_fast(
 
     if backrun_size_wei > 0:
         gross_bps = (gross_wei / backrun_size_wei) * 10000
-        gas_bps = GAS_FLOOR_BPS_ARBITRUM
+        gas_bps = get_gas_floor_bps(chain)  # M7.E1.6: chain-aware gas floor
         net_bps = gross_bps - gas_bps
     else:
         return None
@@ -1378,6 +1380,7 @@ def score_backrun_fast(
             sell_amount_wei=sell_amount,
             backrun_size_wei=backrun_size_wei,
             pipeline_latency_ms=pipeline_ms,
+            chain=chain,  # M7.E1.6: chain-aware gas floor
         )
         _profit_guard_passed = _guard.passed
     _profit_guard_ms = round((time.monotonic() - _guard_start) * 1000, 2)
@@ -1461,7 +1464,7 @@ def score_backrun_fast(
         registry_pools_found=len(entries),
         registry_pools_active=len(active_entries),
         gas_floor_exceeded=(net_bps <= 0),
-        gas_floor_bps=GAS_FLOOR_BPS_ARBITRUM,
+        gas_floor_bps=get_gas_floor_bps(chain),  # M7.E1.6: chain-aware gas floor
         scoring_path="registry_fast",
         profit_guard_passed=_profit_guard_passed,
     )

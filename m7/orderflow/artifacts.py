@@ -871,6 +871,7 @@ def build_replay_summary(
                         sell_amount_wei=_sell,
                         backrun_size_wei=_size,
                         pipeline_latency_ms=r.quote_pipeline_latency_ms,
+                        chain=chain or "arbitrum_one",
                     )
                     _verified = _pg.passed
                     _verified_net_bps = round(_pg.net_bps, 4)
@@ -923,15 +924,34 @@ def build_replay_summary(
             "l2_exec_gas_bps": round(_l2_gas, 4) if _l2_gas is not None else None,
             "total_gas_bps": round(_total_gas, 4) if _total_gas is not None else None,
             "gap_to_zero_bps": _gap_to_zero,
+            # M7.E1.6: Per-candidate gate trace — which gates does this candidate pass?
+            "gate_trace": {
+                "pair_resolved": bool(getattr(r, "pair_resolved", False)),
+                "size_valid_for_token": bool(getattr(r, "size_valid_for_token", False)),
+                "same_block": (r.block_lag or 99) == 0,
+                "positive": (_net > 0),
+                "route_viable": bool(r.route_viable),
+                "profit_guard_passed": bool(getattr(r, "profit_guard_passed", False)),
+                "sim_passed": None,
+                "submit_ready": None,
+            },
         }
 
     _TOP_N = 5
+    # M7.E1.6: Strict executable = route_viable AND size_valid_for_token.
+    # Loose route_viable set preserved as top_route_viable_candidates for diagnostics.
     _exec_candidates = sorted(
-        [r for r in results if r.route_viable],
+        [r for r in results if r.route_viable and r.size_valid_for_token],
         key=lambda r: r.best_backrun_net_bps or 0,
         reverse=True,
     )[:_TOP_N]
     top_executable_candidates = [_compact_candidate(r) for r in _exec_candidates]
+    _route_viable_candidates = sorted(
+        [r for r in results if r.route_viable],
+        key=lambda r: r.best_backrun_net_bps or 0,
+        reverse=True,
+    )[:_TOP_N]
+    top_route_viable_candidates = [_compact_candidate(r) for r in _route_viable_candidates]
 
     _stale_candidates = sorted(
         [r for r in results if _is_stale(r) and r.best_backrun_net_bps > 0],
@@ -1024,6 +1044,7 @@ def build_replay_summary(
                     buy_amount_wei=_test_size,
                     sell_amount_wei=_test_sell,
                     backrun_size_wei=_test_size,
+                    chain=chain or "arbitrum_one",
                 )
                 _sizes_tried += 1
                 if _pg.passed:
@@ -1105,6 +1126,25 @@ def build_replay_summary(
             _hl = _s
             break
     execution_funnel["headline_level"] = _hl
+
+    # M7.E1.6.1: signal_counts — per-gate funnel summary so reviewer sees
+    # gate breakdown without manual forensic reading of individual candidates.
+    _pair_resolved_count = sum(1 for r in results if getattr(r, "pair_resolved", False))
+    _size_valid_count = sum(1 for r in results if r.size_valid_for_token)
+    _same_block_count = sum(1 for r in results if (_lag(r) == 0))
+    _positive_count = sum(1 for r in results if (r.best_backrun_net_bps or 0) > 0)
+    _route_viable_count = sum(1 for r in results if r.route_viable)
+    signal_counts = {
+        "scored": len(results),
+        "pair_resolved": _pair_resolved_count,
+        "size_valid_for_token": _size_valid_count,
+        "same_block": _same_block_count,
+        "positive": _positive_count,
+        "route_viable": _route_viable_count,
+        "profit_guard_passed": _profit_guard_passed_count,
+        "sim_passed": 0,  # placeholder until Tenderly wiring
+        "submit_ready": 0,  # placeholder until Tenderly wiring
+    }
 
     # M7.A.5.42: Diagnostic-raw block — metrics that are informational but MUST NOT
     # be treated as headline or execution-readiness signals.
@@ -1448,6 +1488,8 @@ def build_replay_summary(
         },
         # M7.A.5.41: Compact top-candidate rows (survive _ROLLING_EXCLUDE_KEYS)
         "top_executable_candidates": top_executable_candidates,
+        # M7.E1.6: Looser set — route_viable only (may include size_valid=false)
+        "top_route_viable_candidates": top_route_viable_candidates,
         "top_stale_positive_candidates": top_stale_positive_candidates,
         # M7.A.5.47h: Recoverable stale (lag ≤ 2, positive, size_valid)
         "top_recoverable_stale_candidates": top_recoverable_stale_candidates,
@@ -1462,6 +1504,8 @@ def build_replay_summary(
         "signal_classification": signal_classification,
         # M7.A.5.44: Execution funnel (5-stage strict subset progression)
         "execution_funnel": execution_funnel,
+        # M7.E1.6.1: Per-gate funnel summary (reviewer-facing quick view)
+        "signal_counts": signal_counts,
         "diagnostic_raw": diagnostic_raw,
         # M7.A.5.47f: Per-pair funnel + concentration KPI
         "funnel_by_pair_top": funnel_by_pair_top,

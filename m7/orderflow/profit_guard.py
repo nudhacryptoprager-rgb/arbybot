@@ -29,6 +29,7 @@ from m7.shared.constants import (
     DEFAULT_GAS_PRICE_GWEI,
     GAS_FLOOR_BPS_ARBITRUM,
     TIMEBOOST_ELIGIBLE_BUDGET_MS,
+    get_gas_floor_bps,
 )
 
 logger = logging.getLogger("m7.orderflow.profit_guard")
@@ -60,6 +61,7 @@ def check_profit_guard(
     token_decimals: int = 18,
     min_net_bps: float = 0.0,
     pipeline_latency_ms: Optional[float] = None,
+    chain: str = "arbitrum_one",
 ) -> ProfitGuardResult:
     """Check whether the ending balance exceeds starting balance after gas.
 
@@ -89,7 +91,8 @@ def check_profit_guard(
 
     # Convert gas cost from ETH wei to token wei (simplified: assume 1:1 for ETH-denominated)
     # For non-ETH tokens, this needs a price oracle — currently uses gas_floor_bps as proxy
-    gas_bps = GAS_FLOOR_BPS_ARBITRUM  # conservative floor
+    # M7.E1.6: Chain-aware gas floor — Base has ~0.5 bps vs Arbitrum ~2.0 bps
+    gas_bps = get_gas_floor_bps(chain)
 
     if backrun_size_wei > 0:
         gross_bps = (gross_pnl_wei / backrun_size_wei) * 10000

@@ -448,6 +448,7 @@ def run_ws_live(
                         event_detected_at_block=detected_block,
                         block_time_ms=block_time_ms,
                         addr_to_symbol=addr_to_symbol,
+                        chain=args.chain,  # M7.E1.6: chain-aware gas floor
                     )
                     # M7.A.5.34: Hot mode — no parallel fallback. If fast path
                     # returns None (pair not in registry / no state), create a
@@ -1152,6 +1153,10 @@ def _write_rolling_m7(artifact: dict) -> None:
     M7.A.5.29: Anti-bad-overwrite — if the window is empty (events_count == 0),
     do NOT overwrite a previous useful snapshot. Instead, only update the
     m7_loop_context metadata in the existing file (if any).
+
+    M7.E1.6.1: On empty-window preserve, stamp current_window_timestamp and
+    snapshot_preserved=true so reviewers can distinguish "fresh runtime with
+    empty window preserving old snapshot" from "stale artifact not running".
     """
     try:
         events_count = artifact.get("events_count", 0)
@@ -1169,11 +1174,19 @@ def _write_rolling_m7(artifact: dict) -> None:
                     existing["m7_loop_context"] = loop_ctx
                     existing.setdefault("last_nonempty_timestamp",
                                         existing.get("timestamp"))
+                    # M7.E1.6.1: Heartbeat — stamp fresh timestamps even on
+                    # empty windows so reviewer sees the runtime is alive.
+                    _now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    existing["current_window_timestamp"] = _now
+                    existing["snapshot_preserved"] = True
+                    # Keep snapshot_run_timestamp as the original scoring timestamp
+                    existing.setdefault("snapshot_run_timestamp",
+                                        existing.get("run_context", {}).get("run_timestamp"))
                     with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:
                         json.dump(existing, f, indent=2, default=str)
                     logger.info(
                         "Rolling M7: empty window — preserved previous snapshot, "
-                        "updated loop_context only"
+                        "updated loop_context + heartbeat at %s", _now,
                     )
                 except Exception as exc2:
                     logger.warning(
@@ -1191,6 +1204,14 @@ def _write_rolling_m7(artifact: dict) -> None:
         rolling["last_nonempty_timestamp"] = artifact.get(
             "timestamp", rolling.get("timestamp")
         )
+        # M7.E1.6.1: On non-empty write, clear preserved-snapshot flags
+        rolling["current_window_timestamp"] = artifact.get(
+            "timestamp", rolling.get("timestamp")
+        )
+        rolling["snapshot_preserved"] = False
+        rolling["snapshot_run_timestamp"] = artifact.get(
+            "run_context", {}
+        ).get("run_timestamp", rolling.get("timestamp"))
 
         os.makedirs(os.path.dirname(_ROLLING_M7_PATH), exist_ok=True)
         with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:

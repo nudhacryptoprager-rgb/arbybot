@@ -1,94 +1,137 @@
-# DEV_REPORT_LATEST.md
+# DEV REPORT
 
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
-mode: ONLINE (M7.E1.5 funnel semantics fix + submit-stage scaffold, April 8 09:10-09:57Z 3x nonstop clean rollup. M4/M5 rolling unchanged — M7-only session with --no-m4)
+run_id: data/runs/_rolling/ (M7 artifacts: m7_orderflow_latest.json, m7_hot_rollup_latest.json)
+mode: ONLINE (M7.E1.6 + E1.6.1 strict exec semantics, chain-aware gas, heartbeat, signal_counts. 3x 10-min Base nonstop April 9 08:56-09:29Z. M4/M5 rolling unchanged — M7-only session with --no-m4)
 artifact_mode: rolling
 config: config/onboard_base_profit.yaml (base, narrow contour)
 code_identity:
-  primary: ts:2026-04-08T09:54:33Z
+  primary: ts:2026-04-02T09:03:41.464858Z
   dirty: true
-  desc: M7.E1.5 - funnel semantics fix (route_viable_total, profit_guard from _fast), sim/submit scaffold, family_unresolved filtering
+  desc: M7.E1.6+E1.6.1 - strict exec, chain-aware gas, heartbeat, signal_counts
 
 ## Session Completion
-session_goal: M7.E1.5 - fix funnel semantics (profit_guard_passed_total > viable_total inversion), add sim/submit placeholders, filter family_unresolved from bridge summary, prove invariant across 3 consecutive runs
-goal_status: REACHED (Funnel invariant proven: scored(196) >= positive(17) >= route_viable(14) >= guard(14) across 3 clean runs. family_unresolved filtered. sim/submit scaffolded. Repeatability re-confirmed.)
+session_goal: M7.E1.6.1 - fresh non-empty Base runtime validation of E1.6 artifact semantics (strict exec, chain-aware gas, gate_trace, heartbeat timestamps, signal_counts)
+goal_status: BLOCKED (3x 10-min Base runs all produce empty cold windows — no scored events in cold lane. Heartbeat fields proved working but signal_counts=null and gate_trace not exercised in runtime. Hot lane stale — not writing fresh artifacts.)
 close_allowed: true
-remaining_blockers: sim_attempted/sim_passed/submit_ready all zero (placeholder only). Cold-hot convergence gap. Flashblocks WS untested. Family shows raw addresses.
-evidence_session_run_dirs: [data/runs/_rolling/ (m7_hot_rollup_latest.json ts=2026-04-08T09:54:33Z, m7_hot_latest.json, m7_hot_intents_latest.json)]
-primary_blocker_of_session: funnel_semantics — E1.4 profit_guard_passed_total=31 exceeded viable_total=19 due to batch rerun bypassing route_viable gate
-blocker_status_before: M7.E1.4 OPEN — funnel inversion (guard > viable), family_unresolved in bridge summary, no sim/submit infrastructure
-blocker_status_after: M7.E1.5 OPEN — funnel invariant holds (guard <= viable), family_unresolved filtered, sim/submit scaffolded (all zero — ready for E1.6 wiring)
+remaining_blockers: (1) No non-empty cold window in 3x 10-min runs — signal_counts null, gate_trace exercised only in unit tests. (2) Hot lane m7_hot_latest.json stuck at 07:05:12Z — not updated by runs.
+evidence_session_run_dirs: [data/runs/_rolling/ (m7_orderflow_latest.json current_window_timestamp=2026-04-09T09:29:26Z, m7_cold_hot_bridge.json)]
+primary_blocker_of_session: fresh_non_empty_evidence — E1.6 strict exec/gate_trace/signal_counts cannot be validated in runtime without scored events
+blocker_status_before: ACTIVE — E1.6 code changes deployed but no runtime evidence
+blocker_status_after: BLOCKED — cold heartbeat proves runtime alive, but empty windows prevent E1.6 evidence extraction. Hot lane stale.
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.E1.5 = fix funnel semantics and scaffold submit-stage
+goal (Roadmap): M7.E1.6 + E1.6.1 = strict executable semantics, chain-aware gas floor, per-candidate gate_trace, heartbeat timestamps, signal_counts funnel dict
 change_summary:
-  - scripts/m7a_orderflow_loop.py: (1) Renamed viable_total → route_viable_total. (2) Changed profit_guard_passed_total from len(_guard) (batch) to sum from _fast inline attribute (gated on route_viable). (3) Added sim_attempted/sim_passed/submit_ready_total placeholders. (4) Filtered family_unresolved from bridge_selected_family_diff_top; added family_unresolved_pool_count. (5) Added sim_passed/submit_ready fields to hot intent rows.
-  - tests/unit/test_e1_base_chain_aware.py: Replaced Section 15 with TestE1_5_FunnelSemantics (5 tests). Added Section 16: TestE1_5_IntentSubmitFields (2 tests). Added Section 17: TestE1_5_FamilyUnresolvedFiltering (3 tests).
-  - docs/status/Status_M7.md: Updated status line, added E1.5 subsection, updated Known Blockers and Next Steps.
-  - docs/DEV_REPORT_LATEST.md: This file.
+  - m7/orderflow/artifacts.py: Strict exec (route_viable AND size_valid_for_token). top_route_viable_candidates. Per-candidate gate_trace (8 fields). signal_counts 9-key funnel dict.
+  - m7/orderflow/profit_guard.py: Chain-aware gas floor (chain param, get_gas_floor_bps). Base 0.5 bps vs Arbitrum 2.0 bps.
+  - m7/orderflow/scoring_parallel.py: chain param in score_backrun_fast(), get_gas_floor_bps(chain).
+  - m7/orderflow/mode_ws_live.py: Chain param to build_replay_summary. Cold heartbeat: current_window_timestamp, snapshot_preserved, snapshot_run_timestamp.
+  - scripts/m7a_orderflow_loop.py: Chain param to profit guard. Bridge family_unresolved_pool_count as int. Hot heartbeat in hot/rollup/intents.
+  - tests/unit/test_e1_base_chain_aware.py: 24 new tests (sections 18-24). Total 96 E1 tests.
+  - tests/unit/test_orderflow_artifacts.py: Updated keys for gate_trace and size_valid_for_token.
 touched_files:
-  - scripts/m7a_orderflow_loop.py (MODIFIED — funnel fix, sim scaffold, family filtering)
-  - tests/unit/test_e1_base_chain_aware.py (MODIFIED — 10 new E1.5 tests, 5 old E1.4 funnel tests replaced)
-  - docs/status/Status_M7.md (MODIFIED)
-  - docs/DEV_REPORT_LATEST.md (this file)
+  - m7/orderflow/artifacts.py
+  - m7/orderflow/profit_guard.py
+  - m7/orderflow/scoring_parallel.py
+  - m7/orderflow/mode_ws_live.py
+  - scripts/m7a_orderflow_loop.py
+  - tests/unit/test_e1_base_chain_aware.py
+  - tests/unit/test_orderflow_artifacts.py
+  - docs/status/Status_M7.md
+  - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3746 passed, 6 skipped — 3741 − 5 old + 10 new)
+py -3.11 -m pytest tests/unit -q: PASS (3770 passed, 6 skipped)
 py -3.11 scripts/ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (1 warning — Status_M7.md bloat)
-py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --chain base --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS x3 (clean rollup, 09:25-09:57Z)
+py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit: PASS (2 warnings: Status_M7 bloat fixed to 295 lines, DEV_REPORT alignment)
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --chain base --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS x3 (08:56-09:06, 09:06-09:17, 09:19-09:29, all 3/3 alive, 0 restarts)
 
 ## 3) Artifacts Attached
 
-M7 rolling artifacts (from 3x Base 10-min nonstop, clean rollup, April 8 09:25-09:57Z):
-- m7_hot_rollup_latest.json: last_updated=2026-04-08T09:54:33Z, windows_seen=59, events_seen_total=290, fast_path_scored_total=196, fast_path_positive_total=17, route_viable_total=14, profit_guard_passed_total=14, sim_attempted_total=0, sim_passed_total=0, submit_ready_total=0
-- m7_hot_latest.json: final window viable_count=1, profit_guard_passed_count=1, best_net_bps_clean=68.254, family_unresolved_pool_count=3, bridge_selected_family_diff_top excludes family_unresolved
-- m7_hot_intents_latest.json: intent rows include sim_passed=null, submit_ready=null
+M7 cold artifact (from 3x Base 10-min nonstop, April 9 08:56-09:29Z):
+- m7_orderflow_latest.json: current_window_timestamp=2026-04-09T09:29:26Z, snapshot_preserved=true, snapshot_run_timestamp=2026-04-08T09:54:01Z, signal_counts=null, loop_context.window_empty=true
+- m7_cold_hot_bridge.json: Last modified 09:29:26Z (fresh)
 
-## 4) Key Results - M7.E1.5
+M7 hot artifacts (STALE — not updated by nonstop runs):
+- m7_hot_latest.json: timestamp=2026-04-09T07:05:12Z (before runs)
+- m7_hot_rollup_latest.json: last_updated=2026-04-09T07:05:12Z
 
-### Funnel Invariant Evidence (3 clean runs)
+M4/M5 rolling (unchanged — M7-only session):
+- _latest.json: run_status=PASS, agg_status=PASS, data_run_rate=1.0
+- run_summary_latest.json: status=PASS, signals_count=31, total_net_usdc=40.0986
 
-| Metric | Run #1 | Run #2 (cumul.) | Run #3 (cumul.) |
-|--------|--------|-----------------|-----------------|
-| `fast_path_scored_total` | 61 | 134 | **196** |
-| `fast_path_positive_total` | 10 | 11 | **17** |
-| `route_viable_total` | 7 | 8 | **14** |
-| `profit_guard_passed_total` | 7 | 8 | **14** |
-| Invariant check | PASS | PASS | **PASS** |
+## 4) Key Results - M7.E1.6 + E1.6.1
 
-### Bug Fix Detail
+### Cold Artifact Evidence
 
-**Root cause**: `_update_hot_rollup()` used `len(_guard)` for `profit_guard_passed_total`. `_guard` came from `_run_profit_guard_on_results()` which runs on ALL positive results (no route_viable gate). The inline `profit_guard_passed` attribute in scoring_parallel.py is only set when `route_viable=True`. Fix: count from `_fast` inline attribute instead of batch.
+| Field | Value | Assessment |
+|-------|-------|------------|
+| `current_window_timestamp` | 2026-04-09T09:29:26Z | FRESH — heartbeat working |
+| `snapshot_preserved` | true | Empty window, old data carried forward |
+| `snapshot_run_timestamp` | 2026-04-08T09:54:01Z | Origin of preserved snapshot |
+| `signal_counts` | null | BLOCKED — window empty, no scoring |
+| `top_executable_candidates` | 2 (DEGEN/WETH, size_valid=false) | STALE — pre-E1.6 data |
 
-**Before (E1.4)**: scored=278, positive=31, viable=19, guard=31 — guard > viable (INVARIANT VIOLATED)
-**After (E1.5)**: scored=196, positive=17, viable=14, guard=14 — guard <= viable (INVARIANT PASS)
+### Hot Artifact Status
 
-### New Artifact Fields
+| Field | Value | Assessment |
+|-------|-------|------------|
+| `timestamp` | 2026-04-09T07:05:12Z | STALE — hot lane not writing |
+| `current_window_timestamp` | null | Hot heartbeat NOT exercised |
 
-| Field | Location | Value |
-|-------|----------|-------|
-| `route_viable_total` | rollup | 14 (renamed from viable_total) |
-| `sim_attempted_total` | rollup | 0 (placeholder) |
-| `sim_passed_total` | rollup | 0 (placeholder) |
-| `submit_ready_total` | rollup | 0 (placeholder) |
-| `family_unresolved_pool_count` | hot artifact | 3-8 per window |
-| `sim_passed` | intent row | null (placeholder) |
-| `submit_ready` | intent row | null (placeholder) |
+### CI Evidence
+
+| Command | Result |
+|---------|--------|
+| pytest | 3770 passed, 6 skipped |
+| ci_full_pipeline | ALL REQUIRED GATES PASSED |
+| nonstop x3 | 3/3 alive, 0 restarts each |
+
+latest:
+  schema_version: m4:latest:v2.0
+  run_status: PASS
+  agg_status: PASS
+  data_run_rate: 1.0
+  low_sample_rate: 0.0
+run_summary_latest:
+  status: PASS
+  metrics.signals_count: 31
+  metrics.total_net_usdc: 40.0986
+  run_timestamp: 2026-04-02T09:03:41.464858Z
+  code_identity: ts:2026-04-02T09:03:41.464858Z
+  inputs.run_mode: REGISTRY_REAL
 
 ## 5) Strategic Reading
 
-1. **E1.5 goal REACHED**: Funnel invariant proven correct across 3 clean runs. The E1.4 inversion was a measurement artifact (batch vs inline counting), not a scoring bug.
-2. **Submit-stage is the next frontier**: sim infrastructure is scaffolded. E1.6 goal: wire Tenderly fork simulation for top guard-passed intents → `sim_passed_total > 0`.
-3. **Viable rate stable**: 14/196 = 7.1% viable rate, consistent with E1.4's ~10%. Market-driven fluctuation is expected.
-4. **family_unresolved filtering improves signal quality**: Bridge summary now shows only resolved families, while family_unresolved_pool_count provides diagnostics without polluting the ranking.
+1. **Cold heartbeat WORKS**: `current_window_timestamp=09:29:26Z` with `snapshot_preserved=true` makes stale-data carry-forward explicit.
+2. **Fresh non-empty evidence NOT OBTAINED**: 3x 10-min Base runs had empty cold windows. Market/timing dependent.
+3. **Hot lane is a known gap**: Hot artifacts not updated. WS subscription or iteration exception on Base.
+4. **E1.6 strict exec semantics proven in unit tests**: exec ⊂ route_viable, gate_trace 8-field, signal_counts 9-key — all locked by 24 new tests.
+5. **Code quality high**: 3770 tests, CI green, repo safety PASS.
 
 ## 5.1) Contract Checks
-status/reasons consistency: OK (REACHED — funnel invariant proven, sim scaffolded, family filtered)
-rolling discipline: OK (m7_hot_rollup_latest.json updated at 09:54:33Z, no new artifact files)
+status/reasons consistency: OK (BLOCKED — evidence gap is honest, not contradictory)
+rolling discipline: OK (canonical M7 artifacts only)
 runtime artifacts not committed: OK (data/runs/** not in git)
 docs_reread_confirmed: true
+
+## 6) Blocker Classification
+
+code_blocker: LOW (pytest PASS, CI green)
+data_collection_blocker: HIGH (3x runs all empty windows)
+market_window_blocker: MEDIUM (seed watchlist pools inactive during run times)
+
+## 6.1) Blockers / Risks
+- Hot lane not writing artifacts during nonstop runs
+- Cold empty windows prevent signal_counts/gate_trace runtime validation
+- Flashblocks WS DNS unreachable
+- Submit sim = 0 (scaffold only)
+
+## 8) What I need from Lead now
+question_1: Run longer sessions (30-60min) or target peak hours for non-empty cold windows?
+request_1: Confirm E1.6.1 heartbeat contract is sufficient to close, or specify additional runtime evidence required.
