@@ -40,7 +40,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from core.env import load_root_dotenv
 from core.logging import get_logger
-from m7.orderflow.mode_ws_live import run_ws_live, _write_rolling_m7
+from m7.orderflow.mode_ws_live import run_ws_live, _write_rolling_m7, _set_rolling_m7_profile
 from m7.orderflow.profit_guard import check_profit_guard
 from m7.orderflow.scoring_parallel import score_backrun_fast
 from m7.shared.constants import (
@@ -54,20 +54,52 @@ from m7.shared.constants import (
 
 logger = get_logger("m7.orderflow.loop")
 
-_HOT_ARTIFACT_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_latest.json")
+# ---------------------------------------------------------------------------
+# M7.E1.9: Profile-aware artifact paths
+# ---------------------------------------------------------------------------
+# Production profile uses canonical names; discovery profile uses _discovery
+# suffix to prevent evidence contamination during parallel runs.
+
+def _rolling_path(name: str, profile: str = "production") -> str:
+    """Build rolling artifact path, inserting _discovery suffix when needed."""
+    if profile == "discovery":
+        base, ext = os.path.splitext(name)
+        name = f"{base}_discovery{ext}"
+    return os.path.join("data", "runs", "_rolling", name)
+
+
+_HOT_ARTIFACT_PATH = _rolling_path("m7_hot_latest.json")
 # M7.A.5.39: Cross-lane promoted pairs file — cold writes, hot reads.
-_PROMOTED_PAIRS_PATH = os.path.join("data", "runs", "_rolling", "m7_promoted_pairs.json")
+_PROMOTED_PAIRS_PATH = _rolling_path("m7_promoted_pairs.json")
 # M7.A.5.42: Cold→hot bridge queue — top executable candidates with TTL for hot lane consumption.
-_COLD_HOT_BRIDGE_PATH = os.path.join("data", "runs", "_rolling", "m7_cold_hot_bridge.json")
+_COLD_HOT_BRIDGE_PATH = _rolling_path("m7_cold_hot_bridge.json")
 # M7.A.5.45: Hot execution intents — compact rows for hot-scored + profit-guard-checked candidates.
-_HOT_INTENTS_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_intents_latest.json")
+_HOT_INTENTS_PATH = _rolling_path("m7_hot_intents_latest.json")
 # M7.A.5.47: Cumulative hot rollup — survives across windows so progress is visible.
-_HOT_ROLLUP_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_rollup_latest.json")
+_HOT_ROLLUP_PATH = _rolling_path("m7_hot_rollup_latest.json")
 # M7.E1.9: Discovery family repeatability scoreboard — tracks per-family stats
 # across cold iterations for promotion decisions.
-_DISCOVERY_SCOREBOARD_PATH = os.path.join(
-    "data", "runs", "_rolling", "m7_discovery_scoreboard.json"
-)
+_DISCOVERY_SCOREBOARD_PATH = _rolling_path("m7_discovery_scoreboard.json")
+
+
+def _init_artifact_paths(profile: str) -> None:
+    """Re-bind module-level artifact paths for the given profile.
+
+    M7.E1.9: Discovery profile writes to separate files (e.g.
+    m7_hot_latest_discovery.json) so parallel runs don't contaminate
+    production evidence.
+    """
+    global _HOT_ARTIFACT_PATH, _PROMOTED_PAIRS_PATH, _COLD_HOT_BRIDGE_PATH
+    global _HOT_INTENTS_PATH, _HOT_ROLLUP_PATH, _DISCOVERY_SCOREBOARD_PATH
+
+    _HOT_ARTIFACT_PATH = _rolling_path("m7_hot_latest.json", profile)
+    _PROMOTED_PAIRS_PATH = _rolling_path("m7_promoted_pairs.json", profile)
+    _COLD_HOT_BRIDGE_PATH = _rolling_path("m7_cold_hot_bridge.json", profile)
+    _HOT_INTENTS_PATH = _rolling_path("m7_hot_intents_latest.json", profile)
+    _HOT_ROLLUP_PATH = _rolling_path("m7_hot_rollup_latest.json", profile)
+    _DISCOVERY_SCOREBOARD_PATH = _rolling_path("m7_discovery_scoreboard.json", profile)
+    # M7.E1.9.1: Also redirect the cold lane rolling path in mode_ws_live
+    _set_rolling_m7_profile(profile)
 
 # M7.A.5.47k: Session ID — unique per process lifetime, used to reset session
 # counters in the hot rollup when the supervisor restarts.
@@ -1971,6 +2003,7 @@ def run_loop(cli_args) -> None:
     pause = cli_args.pause
     lane = cli_args.lane
     profile = getattr(cli_args, "profile", "production")
+    _init_artifact_paths(profile)  # M7.E1.9.1: namespace isolation
     infinite = iterations == 0
 
     # M7.E1.9: Build seed pairs from profile-aware prewarm list.

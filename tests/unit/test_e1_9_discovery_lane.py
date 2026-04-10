@@ -204,3 +204,113 @@ class TestDiscoveryScoreboard:
         sb = update(sb, artifact, 1)
         degen = sb["families"]["DEGEN"]
         assert degen["sessions_with_signal"].count(1) == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. M7.E1.9.1 — Artifact namespace isolation
+# ---------------------------------------------------------------------------
+
+class TestArtifactNamespaceIsolation:
+    """Verify _rolling_path and _init_artifact_paths produce correct paths."""
+
+    def _import_path_funcs(self):
+        from scripts.m7a_orderflow_loop import _rolling_path, _init_artifact_paths
+        return _rolling_path, _init_artifact_paths
+
+    def test_rolling_path_production_unchanged(self):
+        _rolling_path, _ = self._import_path_funcs()
+        import os
+        result = _rolling_path("m7_hot_latest.json", "production")
+        assert result == os.path.join("data", "runs", "_rolling", "m7_hot_latest.json")
+
+    def test_rolling_path_discovery_suffix(self):
+        _rolling_path, _ = self._import_path_funcs()
+        import os
+        result = _rolling_path("m7_hot_latest.json", "discovery")
+        assert result == os.path.join("data", "runs", "_rolling", "m7_hot_latest_discovery.json")
+
+    def test_rolling_path_default_is_production(self):
+        _rolling_path, _ = self._import_path_funcs()
+        default = _rolling_path("m7_hot_latest.json")
+        prod = _rolling_path("m7_hot_latest.json", "production")
+        assert default == prod
+
+    def test_init_artifact_paths_production(self):
+        """Production profile keeps canonical names."""
+        import scripts.m7a_orderflow_loop as loop
+        _, _init = self._import_path_funcs()
+        _init("production")
+        assert "m7_hot_latest.json" in loop._HOT_ARTIFACT_PATH
+        assert "_discovery" not in loop._HOT_ARTIFACT_PATH
+        assert "_discovery" not in loop._PROMOTED_PAIRS_PATH
+        assert "_discovery" not in loop._COLD_HOT_BRIDGE_PATH
+        assert "_discovery" not in loop._HOT_INTENTS_PATH
+        assert "_discovery" not in loop._HOT_ROLLUP_PATH
+        # _DISCOVERY_SCOREBOARD_PATH base name contains "_discovery" inherently
+        # (it's the scoreboard FOR discovery). Check it doesn't have the
+        # namespace _discovery suffix (i.e. no _discovery_discovery).
+        assert "_discovery_discovery" not in loop._DISCOVERY_SCOREBOARD_PATH
+
+    def test_init_artifact_paths_discovery(self):
+        """Discovery profile redirects all 6 paths to _discovery suffix."""
+        import scripts.m7a_orderflow_loop as loop
+        _, _init = self._import_path_funcs()
+        _init("discovery")
+        assert "_discovery.json" in loop._HOT_ARTIFACT_PATH
+        assert "_discovery.json" in loop._PROMOTED_PAIRS_PATH
+        assert "_discovery.json" in loop._COLD_HOT_BRIDGE_PATH
+        assert "_discovery.json" in loop._HOT_INTENTS_PATH
+        assert "_discovery.json" in loop._HOT_ROLLUP_PATH
+        assert "_discovery.json" in loop._DISCOVERY_SCOREBOARD_PATH
+        # Restore production to not break other tests
+        _init("production")
+
+    def test_no_overlap_between_profiles(self):
+        """Production and discovery paths must never collide."""
+        import scripts.m7a_orderflow_loop as loop
+        _, _init = self._import_path_funcs()
+
+        _init("production")
+        prod_paths = {
+            loop._HOT_ARTIFACT_PATH,
+            loop._PROMOTED_PAIRS_PATH,
+            loop._COLD_HOT_BRIDGE_PATH,
+            loop._HOT_INTENTS_PATH,
+            loop._HOT_ROLLUP_PATH,
+            loop._DISCOVERY_SCOREBOARD_PATH,
+        }
+
+        _init("discovery")
+        disc_paths = {
+            loop._HOT_ARTIFACT_PATH,
+            loop._PROMOTED_PAIRS_PATH,
+            loop._COLD_HOT_BRIDGE_PATH,
+            loop._HOT_INTENTS_PATH,
+            loop._HOT_ROLLUP_PATH,
+            loop._DISCOVERY_SCOREBOARD_PATH,
+        }
+
+        assert prod_paths.isdisjoint(disc_paths), (
+            f"Overlap: {prod_paths & disc_paths}"
+        )
+        # Restore production
+        _init("production")
+
+
+class TestModeWsLiveProfilePath:
+    """Verify _set_rolling_m7_profile redirects cold lane artifact."""
+
+    def test_production_path_canonical(self):
+        from m7.orderflow.mode_ws_live import _set_rolling_m7_profile
+        import m7.orderflow.mode_ws_live as ws
+        _set_rolling_m7_profile("production")
+        assert "m7_orderflow_latest.json" in ws._ROLLING_M7_PATH
+        assert "_discovery" not in ws._ROLLING_M7_PATH
+
+    def test_discovery_path_namespaced(self):
+        from m7.orderflow.mode_ws_live import _set_rolling_m7_profile
+        import m7.orderflow.mode_ws_live as ws
+        _set_rolling_m7_profile("discovery")
+        assert "m7_orderflow_latest_discovery.json" in ws._ROLLING_M7_PATH
+        # Restore
+        _set_rolling_m7_profile("production")

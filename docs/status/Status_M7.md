@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.9 OPEN — discovery/production lane split** (E1.9: split Base scanning into narrow production lane + wide discovery lane. `--profile production|discovery` arg on m7a_orderflow_loop.py + start_nonstop_runtime.py. Discovery prewarm pairs re-enable DEGEN/BRETT/AERO/AMONGUS/TOSHI families. Family repeatability scoreboard (`m7_discovery_scoreboard.json`). `onboard_base_discovery.yaml` config. 20 new tests. CI: 3817 passed, 6 skipped.)  
+**Status**: **M7.E1.9.1 OPEN — artifact namespace isolation for discovery/production parallel safety** (E1.9.1: discovery profile writes to separate rolling files with _discovery suffix. 7 artifacts namespaced. Production paths unchanged. Dashboard reads production only. Prerequisite for honest A/B evidence.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -261,6 +261,32 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --chain base --m7
 ```
 
 CI: 3817 passed, 6 skipped.
+
+---
+
+### M7.E1.9.1: Artifact Namespace Isolation (OPEN)
+
+**Goal**: Fix reviewer issue #6 — both production and discovery profiles write to the same canonical rolling files. If run simultaneously (or alternately without cleanup), evidence is contaminated. Discovery must write to a separate artifact namespace.
+
+**Policy (reviewer fix step 8)**: Narrowing the production contour is intentional for noise protection. Widening the discovery contour is mandatory for alpha exploration. These are separate concerns that must never share evidence artifacts. Production lane proves profitability; discovery lane identifies viable families. Evidence must be independently attributable.
+
+**Implementation**: Profile-aware artifact paths via `_rolling_path(name, profile)` helper. Discovery profile inserts `_discovery` suffix before `.json` in all 7 rolling artifact filenames. Production profile uses existing canonical names (backward compatible). `_init_artifact_paths(profile)` called once at `run_loop()` startup. Cold lane rolling path (`_ROLLING_M7_PATH` in `mode_ws_live.py`) redirected via `_set_rolling_m7_profile(profile)`.
+
+**Artifact namespace mapping**:
+
+| Production | Discovery |
+|-----------|-----------|
+| m7_hot_latest.json | m7_hot_latest_discovery.json |
+| m7_orderflow_latest.json | m7_orderflow_latest_discovery.json |
+| m7_hot_rollup_latest.json | m7_hot_rollup_latest_discovery.json |
+| m7_hot_intents_latest.json | m7_hot_intents_latest_discovery.json |
+| m7_cold_hot_bridge.json | m7_cold_hot_bridge_discovery.json |
+| m7_promoted_pairs.json | m7_promoted_pairs_discovery.json |
+| m7_discovery_scoreboard.json | m7_discovery_scoreboard_discovery.json |
+
+**Dashboard**: Reads production paths only — discovery artifacts are diagnostic and intentionally excluded.
+
+**Sequential vs parallel A/B**: Both are now safe. Sequential is preferred for cleaner comparison; parallel is safe because artifacts don't collide.
 
 ---
 

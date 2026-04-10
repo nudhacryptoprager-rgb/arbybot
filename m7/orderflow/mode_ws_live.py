@@ -1137,6 +1137,15 @@ def run_ws_live(
 
 _ROLLING_M7_PATH = os.path.join("data", "runs", "_rolling", "m7_orderflow_latest.json")
 
+
+def _set_rolling_m7_profile(profile: str) -> None:
+    """M7.E1.9.1: Redirect the cold lane rolling path for discovery profile."""
+    global _ROLLING_M7_PATH
+    name = "m7_orderflow_latest.json"
+    if profile == "discovery":
+        name = "m7_orderflow_latest_discovery.json"
+    _ROLLING_M7_PATH = os.path.join("data", "runs", "_rolling", name)
+
 # Keys to exclude from the rolling dashboard artifact.
 # M7.A.5.46: Legacy hypothesis blocks are no longer created in runtime path.
 # Only _raw_results and heavy debug arrays need exclusion.
