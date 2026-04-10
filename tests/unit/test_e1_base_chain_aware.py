@@ -1216,3 +1216,127 @@ class TestE1_6_1_HeartbeatFields:
         """_write_rolling_m7 must be importable from mode_ws_live."""
         from m7.orderflow.mode_ws_live import _write_rolling_m7
         assert callable(_write_rolling_m7)
+
+
+# ---------------------------------------------------------------------------
+# 25. M7.E1.7 — Hot heartbeat on error (exception-path write)
+# ---------------------------------------------------------------------------
+
+class TestE1_7_HotHeartbeatOnError:
+    """M7.E1.7: When run_ws_live() throws, the hot artifact must still get
+    a fresh heartbeat so reviewers see the loop is alive."""
+
+    def test_heartbeat_function_importable(self):
+        """_write_hot_heartbeat_on_error must be importable."""
+        from scripts.m7a_orderflow_loop import _write_hot_heartbeat_on_error
+        assert callable(_write_hot_heartbeat_on_error)
+
+    def test_heartbeat_writes_fresh_artifact_no_existing(self, tmp_path, monkeypatch):
+        """With no existing hot artifact, heartbeat writes a minimal artifact."""
+        import scripts.m7a_orderflow_loop as loop_mod
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+
+        loop_mod._write_hot_heartbeat_on_error(
+            iteration=3,
+            window_started_at="2026-04-10T10:00:00Z",
+            window_ended_at="2026-04-10T10:00:05Z",
+            error_msg="WebSocket subscription failed",
+        )
+
+        import json
+        with open(hot_path) as f:
+            data = json.load(f)
+        assert data["current_window_timestamp"] is not None
+        assert data["snapshot_preserved"] is True
+        assert data["snapshot_run_timestamp"] is not None
+        assert data["lane"] == "hot"
+        assert data["events_count"] == 0
+        assert data["m7_loop_context"]["error_in_window"] == "WebSocket subscription failed"
+        assert data["m7_loop_context"]["loop_iteration"] == 3
+
+    def test_heartbeat_preserves_existing_artifact(self, tmp_path, monkeypatch):
+        """With existing hot artifact, heartbeat preserves snapshot and stamps fresh fields."""
+        import json
+        import scripts.m7a_orderflow_loop as loop_mod
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+
+        # Write an existing artifact with some data
+        existing = {
+            "lane": "hot",
+            "timestamp": "2026-04-09T07:05:12Z",
+            "events_count": 5,
+            "best_net_bps_clean": 1.23,
+            "current_window_timestamp": "2026-04-09T07:05:12Z",
+            "snapshot_preserved": False,
+            "run_context": {"run_timestamp": "2026-04-09T07:05:12Z"},
+        }
+        with open(hot_path, "w") as f:
+            json.dump(existing, f)
+
+        loop_mod._write_hot_heartbeat_on_error(
+            iteration=10,
+            window_started_at="2026-04-10T12:00:00Z",
+            window_ended_at="2026-04-10T12:00:05Z",
+            error_msg="Connection refused",
+        )
+
+        with open(hot_path) as f:
+            data = json.load(f)
+        # Old data preserved
+        assert data["events_count"] == 5
+        assert data["best_net_bps_clean"] == 1.23
+        # Heartbeat fields updated
+        assert data["current_window_timestamp"] != "2026-04-09T07:05:12Z"
+        assert data["snapshot_preserved"] is True
+        assert data["snapshot_run_timestamp"] == "2026-04-09T07:05:12Z"
+        assert data["m7_loop_context"]["error_in_window"] == "Connection refused"
+        assert data["m7_loop_context"]["loop_iteration"] == 10
+
+    def test_happy_path_artifact_has_snapshot_run_timestamp(self):
+        """Normal _write_hot_artifact must include snapshot_run_timestamp."""
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+        # Call with minimal artifact — it should write snapshot_run_timestamp
+        import scripts.m7a_orderflow_loop as loop_mod
+        # Just verify the field exists in the function body (contract check)
+        import inspect
+        src = inspect.getsource(loop_mod._write_hot_artifact)
+        assert "snapshot_run_timestamp" in src
+
+    def test_rollup_has_snapshot_run_timestamp(self):
+        """_update_hot_rollup must write snapshot_run_timestamp."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod._update_hot_rollup)
+        assert "snapshot_run_timestamp" in src
+
+
+# ---------------------------------------------------------------------------
+# 26. M7.E1.7 — Rollup counter initialization (UnboundLocalError fix)
+# ---------------------------------------------------------------------------
+
+class TestE1_7_RollupCounterInit:
+    """M7.E1.7: _rollup_wwe and _rollup_wwbh must be initialized before the
+    bridge assembly try block so they're always defined."""
+
+    def test_rollup_wwe_init_before_try(self):
+        """Verify _rollup_wwe is initialized before the bridge try block."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod.run_loop)
+        # _rollup_wwe = 0 must appear before the bridge try block
+        idx_init = src.index("_rollup_wwe = 0")
+        idx_try = src.index("_ptt = _bridge.get")
+        assert idx_init < idx_try, \
+            "_rollup_wwe must be initialized before bridge assembly try block"
+
+    def test_rollup_wwbh_init_before_try(self):
+        """Verify _rollup_wwbh is initialized before the bridge try block."""
+        import inspect
+        import scripts.m7a_orderflow_loop as loop_mod
+        src = inspect.getsource(loop_mod.run_loop)
+        idx_init = src.index("_rollup_wwbh = 0")
+        idx_try = src.index("_ptt = _bridge.get")
+        assert idx_init < idx_try, \
+            "_rollup_wwbh must be initialized before bridge assembly try block"

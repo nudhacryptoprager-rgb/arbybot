@@ -607,6 +607,88 @@ def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> 
     return passed
 
 
+def _write_hot_heartbeat_on_error(
+    iteration: int,
+    window_started_at: str,
+    window_ended_at: str,
+    error_msg: str,
+) -> None:
+    """M7.E1.7: Write heartbeat hot artifact when run_ws_live() or processing fails.
+
+    Ensures hot artifacts always carry a fresh current_window_timestamp so
+    reviewers can distinguish "runtime alive but WS failed" from "runtime dead".
+    Same heartbeat contract as cold lane (current_window_timestamp,
+    snapshot_preserved, snapshot_run_timestamp).
+    """
+    _ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Try to preserve existing artifact (anti-bad-overwrite, like cold lane)
+    existing: dict | None = None
+    if os.path.exists(_HOT_ARTIFACT_PATH):
+        try:
+            with open(_HOT_ARTIFACT_PATH, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = None
+
+    if existing is not None:
+        # Preserve previous snapshot, just stamp heartbeat fields
+        existing["current_window_timestamp"] = _ts_now
+        existing["snapshot_preserved"] = True
+        existing.setdefault(
+            "snapshot_run_timestamp",
+            existing.get("run_context", {}).get("run_timestamp"),
+        )
+        existing["m7_loop_context"] = {
+            "lane": "hot",
+            "loop_iteration": iteration,
+            "window_started_at": window_started_at,
+            "window_ended_at": window_ended_at,
+            "window_empty": True,
+            "error_in_window": error_msg,
+        }
+    else:
+        # No existing artifact — write minimal heartbeat from scratch
+        existing = {
+            "lane": "hot",
+            "timestamp": _ts_now,
+            "loop_iteration": iteration,
+            "events_count": 0,
+            "best_net_bps_clean": None,
+            "viable_count": 0,
+            "has_positive": False,
+            "profit_guard_passed_count": 0,
+            "current_window_timestamp": _ts_now,
+            "snapshot_preserved": True,
+            "snapshot_run_timestamp": _ts_now,
+            "run_context": {
+                "run_timestamp": _ts_now,
+                "code_sha": None,
+                "code_dirty": None,
+                "code_desc": None,
+                "evidence_sha": None,
+            },
+            "headline_level": "none",
+            "m7_loop_context": {
+                "lane": "hot",
+                "loop_iteration": iteration,
+                "window_started_at": window_started_at,
+                "window_ended_at": window_ended_at,
+                "window_empty": True,
+                "error_in_window": error_msg,
+            },
+        }
+
+    try:
+        _atomic_json_write(_HOT_ARTIFACT_PATH, existing, indent=2, default=str)
+        logger.info(
+            "Hot heartbeat written on error (iter %d): %s",
+            iteration, _HOT_ARTIFACT_PATH,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write hot heartbeat: %s", str(exc)[:120])
+
+
 def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = None,
                         fast_results: list = None, promoted_pairs: list = None,
                         candidate_pairs: list = None,
@@ -649,6 +731,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         # M7.E1.6.1: Always-fresh heartbeat timestamp so reviewer knows runtime is alive
         "current_window_timestamp": _ts_now,
         "snapshot_preserved": _events_count == 0,
+        # M7.E1.7: Complete heartbeat contract — same fields as cold lane
+        "snapshot_run_timestamp": _ts_now,
         # M7.A.5.47m: Provenance — run_context with run_timestamp
         "run_context": {
             "run_timestamp": _ts_now,
@@ -1303,6 +1387,8 @@ def _update_hot_rollup(
     rollup["last_updated"] = ts
     # M7.E1.6.1: Heartbeat — always-fresh timestamp for reviewer
     rollup["current_window_timestamp"] = ts
+    # M7.E1.7: Complete heartbeat contract — same fields as cold lane
+    rollup["snapshot_run_timestamp"] = ts
     # M7.A.5.47e: Track first window timestamp for dashboard
     rollup.setdefault("first_window_at", ts)
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
@@ -1994,6 +2080,10 @@ def run_loop(cli_args) -> None:
             #             resolved hot-seen pools
             # Remaining PTT pools fill up to the cap, ranked by activity.
             _bridge_pool_addrs: set | None = None
+            # M7.E1.7: Initialize rollup counters before bridge try block
+            # so they're always defined even if bridge assembly raises NameError.
+            _rollup_wwe = 0
+            _rollup_wwbh = 0
             if lane == "hot":
                 try:
                     _ptt = _bridge.get("pool_token_transport", {})
@@ -2865,6 +2955,26 @@ def run_loop(cli_args) -> None:
                 lane.upper(), iteration, str(exc)[:200],
                 exc_info=True,
             )
+            # M7.E1.7: Write heartbeat artifacts even on failure so hot
+            # artifacts stay fresh and reviewers see the loop is alive.
+            if lane == "hot":
+                _write_hot_heartbeat_on_error(
+                    iteration, window_started_at, window_ended_at,
+                    str(exc)[:200],
+                )
+                # Also update rollup with a zero-event heartbeat window
+                try:
+                    _update_hot_rollup(
+                        events_count=0,
+                        fast_results=None,
+                        guard_results=None,
+                        bridge_diagnostics=None,
+                    )
+                except Exception as _exc_rollup:
+                    logger.debug(
+                        "Hot rollup heartbeat failed: %s",
+                        str(_exc_rollup)[:120],
+                    )
 
         if infinite or iteration < iterations:
             logger.info("Pausing %ds before next window...", pause)
