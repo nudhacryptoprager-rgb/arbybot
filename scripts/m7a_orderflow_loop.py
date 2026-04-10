@@ -893,6 +893,10 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "snapshot_run_timestamp": _ts_now,
         # M7.E1.8: signal_counts always present (honest 0/{} on empty windows)
         "signal_counts": {},
+        # M7.E1.10: WS connection health — critical for distinguishing
+        # "no market events" from "couldn't connect to data source"
+        "ws_connection_status": artifact.get("ws_connection_status", "unknown"),
+        "blocks_processed": (artifact.get("ws_live_stats") or {}).get("blocks_processed", 0),
         # M7.A.5.47m: Provenance — run_context with run_timestamp
         "run_context": {
             "run_timestamp": _ts_now,
@@ -1612,6 +1616,17 @@ def _update_hot_rollup(
     _sess["session_fast_path_scored_total"] = (
         _sess.get("session_fast_path_scored_total", 0) + len(_fast)
     )
+    # M7.E1.10: Track WS connection failures in session
+    _ws_status = (ws_live_stats or {}).get("ws_connection_status", "unknown")
+    _sess["session_ws_connected_windows"] = (
+        _sess.get("session_ws_connected_windows", 0)
+        + (1 if _ws_status == "connected" else 0)
+    )
+    _sess["session_ws_failed_windows"] = (
+        _sess.get("session_ws_failed_windows", 0)
+        + (1 if _ws_status.startswith("failed") else 0)
+    )
+    _sess["last_ws_connection_status"] = _ws_status
     rollup["bridge_loaded_candidate_count_total"] = (
         rollup.get("bridge_loaded_candidate_count_total", 0)
         + _bd.get("bridge_loaded_candidate_count", 0)
@@ -1775,7 +1790,9 @@ def _update_hot_rollup(
     # Session dict remains as canonical source; top-level keys are aliases.
     for _sk in ("session_id", "session_started_at", "session_windows_seen",
                 "session_events_seen_total", "session_bridge_pool_hit_total",
-                "session_fast_path_scored_total"):
+                "session_fast_path_scored_total",
+                "session_ws_connected_windows", "session_ws_failed_windows",
+                "last_ws_connection_status"):
         rollup[_sk] = _sess.get(_sk)
 
     # M7.E1.3: Event-to-bridge classification counters (chain-agnostic).

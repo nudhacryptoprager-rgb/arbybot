@@ -37,6 +37,17 @@ _PUBLIC_FALLBACKS = {
     "zksync": "https://mainnet.era.zksync.io",
 }
 
+# Public WS fallbacks (free, no API key required).
+# Used when Alchemy WS is unavailable (e.g. 429 rate limit).
+_PUBLIC_WS_FALLBACKS = {
+    "arbitrum": "wss://arbitrum-one-rpc.publicnode.com",
+    "base": "wss://base-rpc.publicnode.com",
+    "linea": "wss://linea-rpc.publicnode.com",
+    "mantle": "wss://mantle-rpc.publicnode.com",
+    "scroll": "wss://scroll-rpc.publicnode.com",
+    "zksync": "wss://zksync-mainnet-rpc.publicnode.com",
+}
+
 
 def _normalize_network(network: Optional[str]) -> Optional[str]:
     if not network:
@@ -230,6 +241,11 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
         if url:
             diagnostics["source"] = "alchemy_api_key"
             return url, "alchemy", diagnostics
+
+    # Fallback to public WS endpoints
+    if net and net in _PUBLIC_WS_FALLBACKS:
+        diagnostics["source"] = "public_ws_fallback"
+        return _PUBLIC_WS_FALLBACKS[net], "public", diagnostics
 
     diagnostics["source"] = "none"
     return None, "unknown", diagnostics

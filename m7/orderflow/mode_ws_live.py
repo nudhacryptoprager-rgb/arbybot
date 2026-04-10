@@ -88,6 +88,30 @@ def run_ws_live(
         raise SystemExit(f"No HTTP RPC URL found for chain: {args.chain}")
     rpc_host = urlparse(rpc_url).netloc
 
+    # M7.E1.10: Verify HTTP RPC is reachable; fallback to public if 429'd.
+    # Alchemy accounts can get rate-limited on both WS and HTTP simultaneously.
+    try:
+        from web3 import Web3 as _W3_test
+        _w3_test = _W3_test(_W3_test.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
+        _w3_test.eth.block_number  # simple connectivity test
+    except Exception as _rpc_test_exc:
+        _rpc_err = str(_rpc_test_exc)[:200]
+        if "429" in _rpc_err or "Too Many Requests" in _rpc_err:
+            from core.rpc_urls import public_fallback_for, _normalize_network
+            _pub_http = public_fallback_for(_normalize_network(args.chain))
+            if _pub_http:
+                logger.warning(
+                    "HTTP RPC 429 rate limit on %s, falling back to public RPC: %s",
+                    rpc_host, _pub_http,
+                )
+                rpc_url = _pub_http
+                rpc_provider = "public_fallback"
+                rpc_host = urlparse(rpc_url).netloc
+            else:
+                logger.error("HTTP RPC 429 on %s and no public fallback available", rpc_host)
+        else:
+            logger.debug("HTTP RPC test failed: %s (proceeding anyway)", _rpc_err[:80])
+
     # Resolve WebSocket for newHeads subscription
     # M7.E1: On Base, prefer Flashblocks WS for sub-block (~200ms) event delivery.
     # Flashblocks endpoint supports standard eth_subscribe newHeads but delivers
@@ -246,6 +270,9 @@ def run_ws_live(
     all_results = []
     blocks_processed = 0
     raw_logs_total = 0
+    # M7.E1.10: WS connection health tracking — distinguish ws_failed from market_empty
+    _ws_connection_status = "not_attempted"  # not_attempted | connected | failed_429 | failed_other
+    _ws_error_detail: str | None = None
     # M7.A.5.47: Hybrid intake diagnostics
     _broad_blocks = 0       # blocks scanned with broad (no address filter)
     _focused_blocks = 0     # blocks scanned with focused (address filter)
@@ -259,7 +286,48 @@ def run_ws_live(
     _session_low_lag_pairs: Dict[str, Dict] = {}  # pair -> tracking info
 
     try:
-        ws_conn = ws_mod.create_connection(ws_url, timeout=10)
+        # M7.E1.10: WS connection with automatic fallback on 429/connection failure
+        _ws_tried_urls = [(ws_url, ws_provider)]
+        _ws_connected = False
+        ws_conn = None
+        for _try_ws_url, _try_ws_name in _ws_tried_urls:
+            try:
+                ws_conn = ws_mod.create_connection(_try_ws_url, timeout=10)
+                _ws_connected = True
+                if _try_ws_url != ws_url:
+                    logger.info(
+                        "WS fallback to %s succeeded: %s",
+                        _try_ws_name, urlparse(_try_ws_url).netloc,
+                    )
+                    ws_url = _try_ws_url
+                    ws_provider = _try_ws_name
+                    ws_host = urlparse(ws_url).netloc
+                break
+            except Exception as _conn_exc:
+                _conn_err = str(_conn_exc)[:200]
+                if "429" in _conn_err:
+                    logger.warning(
+                        "WS 429 rate limit on %s (%s), trying fallback...",
+                        _try_ws_name, urlparse(_try_ws_url).netloc,
+                    )
+                    # Add public WS fallback if not already tried
+                    from core.rpc_urls import _PUBLIC_WS_FALLBACKS, _normalize_network, _NETWORK_ALIASES
+                    _net_key = _NETWORK_ALIASES.get(args.chain.lower())
+                    _pub_ws = _PUBLIC_WS_FALLBACKS.get(_net_key) if _net_key else None
+                    if _pub_ws and (_pub_ws, "public_fallback") not in _ws_tried_urls:
+                        _ws_tried_urls.append((_pub_ws, "public_fallback"))
+                    continue
+                else:
+                    logger.warning("WS connection failed on %s: %s", _try_ws_name, _conn_err[:100])
+                    continue
+
+        if not _ws_connected or ws_conn is None:
+            raise RuntimeError(
+                f"All WS endpoints failed. Tried: "
+                f"{', '.join(urlparse(u).netloc for u, _ in _ws_tried_urls)}"
+            )
+
+        _ws_connection_status = "connected"
         sub_msg = json.dumps({
             "jsonrpc": "2.0",
             "id": 1,
@@ -532,12 +600,23 @@ def run_ws_live(
                 break
 
     except Exception as exc:
-        logger.warning(
-            "WebSocket error: %s (scored %d events from %d blocks)",
-            str(exc)[:200],
-            len(all_results),
-            blocks_processed,
-        )
+        _ws_err_str = str(exc)[:200]
+        if "429" in _ws_err_str:
+            _ws_connection_status = "failed_429"
+            _ws_error_detail = "Alchemy WS rate limit (429 Too Many Requests)"
+            logger.error(
+                "WebSocket 429 rate limit: %s (scored %d events from %d blocks). "
+                "This makes events_count=0 UNRELIABLE — it's a connection failure, not market state.",
+                _ws_err_str[:100], len(all_results), blocks_processed,
+            )
+        else:
+            if _ws_connection_status == "not_attempted":
+                _ws_connection_status = "failed_other"
+            _ws_error_detail = _ws_err_str
+            logger.warning(
+                "WebSocket error: %s (scored %d events from %d blocks)",
+                _ws_err_str, len(all_results), blocks_processed,
+            )
     finally:
         try:
             ws_conn.close()
@@ -562,6 +641,10 @@ def run_ws_live(
         "normalized_events": len(all_events),
         "events_scored": len(all_results),
         "ws_elapsed_seconds": round(ws_elapsed, 2),
+        # M7.E1.10: WS connection health — critical for distinguishing
+        # "no market events" from "couldn't connect to data source"
+        "ws_connection_status": _ws_connection_status,
+        "ws_error_detail": _ws_error_detail,
         # M7.A.5.47: Hybrid intake diagnostics
         "broad_blocks": _broad_blocks,
         "focused_blocks": _focused_blocks,
@@ -573,6 +656,8 @@ def run_ws_live(
             key=lambda x: x["count"], reverse=True,
         )[:20],
     }
+    # M7.E1.10: Surface connection status at artifact top level
+    artifact["ws_connection_status"] = _ws_connection_status
     # M7.A.5.22: Registry session stats
     artifact["registry_session_stats"] = {
         "preload_calls": session_registry.preload_calls,
