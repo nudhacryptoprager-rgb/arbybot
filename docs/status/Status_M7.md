@@ -62,107 +62,19 @@ Steps 1-8 done. Verdict: `recommend_open_m7b: false`, `recommend_freeze_current_
 
 ---
 
-## M7.A.5.30: Hot Execution Lane + Latency Telemetry + Profit Guard (CLOSED)
+## M7.A.5.30–5.47s: Hot Execution + Bridge Truth + Freeze (CLOSED, Arbitrum FROZEN)
 
-Fixed `last_nonempty_timestamp` + `BLOCKER_LOW_LAG_REMOTE_QUOTER_LATENCY` semantics. Added `resolve_ms`/`enrichment_ms` timers + `m7a530_latency_breakdown`. Hot/cold lane split: `--lane cold` (full diagnostic) vs `--lane hot` (tight window, m7_hot_latest.json). Created `m7/orderflow/profit_guard.py` (Flashbots simple-blind-arb pattern). +11 tests. CI: 3140 passed.
-
----
-
-## M7.A.5.31: Hot Lane to Decision + Profit Guard + Timeboost Eligibility (CLOSED)
-
-Dashboard Panel 11 reads both cold + m7_hot. Discovery solved (registry_direct=30/30), viable_count=0 due to completion latency ~1544ms vs 250ms. Fixed `last_nonempty_timestamp` and `REMOTE_QUOTER_LATENCY` bugs. Latency: resolve_ms≈935, registry_preload_ms≈449, oracle_ms≈117. `run_ws_live()` accepts `external_registry` for hot lane prewarm. CI: 3155 passed.
-
----
-
-## M7.A.5.32: Unified Nonstop Runtime + Rolling Retention + Hot-Path Slimming
-
-`start_nonstop_runtime.py` — unified supervisor. `prune_tmp_artifacts.py` — retention. `score_backrun_fast()` with 250ms stage budgets, zero subgraph/oracle/enrichment. HOT_BUDGET_* constants, HOT_WATCHLIST_PAIRS. `_rolling/` cleaned to canonical 9 files. +14 tests. CI: 3163 passed.
-
----
-
-## M7.A.5.33–5.35: Hot Fast-Path + No-Fallback + Artifact Isolation + Promoted Watchlist (CLOSED)
-
-**M7.A.5.33**: Fixed profit_guard dead code (wrong field names). Added `score_backrun_fast()` with per-stage timing. Hot-mode fast path via `external_registry`. CI: 3172 passed.
-
-**M7.A.5.34**: Hot mode no-fallback (hot_skip instead of 1330ms parallel). PRICING_ANOMALY hard-exclude. Stage 5 timing split (tx_build/calldata/sign). CI: 3179 passed.
-
-**M7.A.5.35**: Fixed hot lane overwriting cold rolling artifact. Two-level promoted watchlist (candidate + execution). `stale_positive_count_clean` fix. CI: 3186 passed.
-
----
-
-## M7.A.5.36–5.39: Budget Abort + Caching + Promotion + Hot Prewarm (CLOSED)
-
-**M7.A.5.36**: Per-stage hard budget abort in `score_backrun_fast()` (4 aborts: registry≤25ms, pool_state≤50ms, local_math≤10ms, profit_guard≤40ms). p50/p90 tracking. Promoted rules (MIN_COLD_APPEARANCES=2, MIN_NET_BPS=-50). Evidence: hot fast_path gated by `if fast_results:` (observability gap). CI: 3200 passed.
-
-**M7.A.5.37**: Critical fix — `_write_hot_artifact()` now always emits `fast_path` block (zeros when empty). Process-level `_pool_token_cache` (resolve.py), block-proximity `_oracle_cache` (pricing.py), persistent `_cold_registry`. Evidence: cache benefit strongest within-iteration; cross-iteration resolve cache effective for recurring pools. CI: 3219 passed.
-
-**M7.A.5.38**: Session-scoped enrichment cache, oracle stale threshold 50→5000 blocks, registry stale_threshold_blocks. Evidence: latency_budget_hit_rate peaks 0.80, total_pipeline 275-290ms. CI: 3228 passed.
-
-**M7.A.5.39**: Cold lane registry fix (was using `_hot_registry` instead of None). Two-level promotion (candidate cap 20, execution cap 10). `m7_promoted_pairs.json` for cross-lane communication. Web3 HTTPProvider reuse. CI: 3244 passed.
-
----
-
-## M7.A.5.40: Batch Pre-Resolve + Supervisor Fix + Size Valid Cache (CLOSED)
-
-Batch pre-resolve ALL event pools BEFORE scoring loop — eliminates per-event resolve/enrichment/registry_preload RPC. `batch_pre_resolve_pools()` in resolve.py, cold-lane pre-pass in mode_ws_live.py, `get_cached_decimals()` fallback in scoring_parallel.py. Supervisor blocking I/O fix (PIPE→DEVNULL). Evidence: total_pipeline 15.62ms warm (97% reduction), resolve/enrichment/registry_preload=0ms. CI: 3258 passed.
-
----
-
-## M7.A.5.41–46: Hot-Lane Activation → Execution Funnel (CLOSED, compressed)
-
-**M7.A.5.41**: Persist top candidates, fix hot fast_path token resolution (_pool_token_cache lookup instead of broken token_addresses.get). +top_executable_candidates, top_stale_positive_candidates, top_hot_candidates. CI: 3272 passed.
-
-**M7.A.5.42**: Signal classification (4 tiers), diagnostic_raw (7 metrics), _ROLLING_EXCLUDE_KEYS, m7_cold_hot_bridge.json, hot_gap_debug counters, 3-section dashboard. CI: 3277 passed.
-
-**M7.A.5.43**: Bridge-driven hot registry — pool_token_transport (63 entries), pool-address-first matching, near_executable tier, 3 hot-miss counters. Evidence: cold_executable_positive.count=3, best=68.69 bps. CI: 3291 passed.
-
-**M7.A.5.44**: Execution funnel (5 stages), micro_refinement (5 size multipliers), verified_profitable check, bridge-hit counters. Evidence: first verified_profitable candidates (77.65, 73.81 bps). CI: 3310 passed.
-
-**M7.A.5.45**: Bridge execution queue (priority_pools), hot intents artifact, headline_level enforcement. Evidence: schema intact, cold_executable_pool_count=2. CI: 3327 passed.
-
-**M7.A.5.46**: Strip 13 legacy hypothesis blocks from live-path, compact build_replay_summary, fix hot cold_executable_positive semantic (reads from bridge, not synthesized), bridge pair fallback counter, dashboard restructure. CI: 3327 passed, 6 skipped. Safety: PASS.
-
----
-
-## M7.A.5.47: Focused Hot Intake + Cumulative Rollup + Submit-Size Refinement (CLOSED)
-
-**Changes**: Focused event intake (`bridge_pool_addresses` filter, up to 50 pools). Cumulative hot rollup (`m7_hot_rollup_latest.json`). 6 canonical hot miss counters. Submit-size refinement (multipliers, `gas_floor_gap_bps`, `verified_net_bps_after_refinement`). Dashboard rollup section.
-
-**Online evidence**: Pending nonstop verification. CI: 3327 passed, 6 skipped. ALL GATES PASSED.
-
----
-
-## M7.A.5.47b–47g: Hybrid Intake + Rollup + Activity Bridge + 3-Bucket + Stale-Pin (CLOSED, compressed)
-
-47b–47c: Hybrid intake (focused + broad fallback), activity-ranked selection, hot-seen pool injection. 47d: Cross-process hot-seen backfill, 2-bucket bridge ranking, adaptive cap 50→100. 47e: Counter disentanglement, atomic writes, adaptive deficit. 47f: Funnel concentration diagnostics, diversity cap. 47g: 3-bucket bridge (C1=stale_recovery, C2=gas_near_survivor, C3=activity fill), stale-pin TTL, severe deficit escalation. CI: 3327→3385.
-
-### M7.A.5.47h–47n (bridge truth convergence, compressed)
-
-**47h–47j**: Exact-pool stale-recovery, anomaly-clean, bridge hit isolation, bridge minimum floor, focused pool count, hot-seen pin promotion. C2 gas tolerance tightened from -10 to -5 bps. CI: 3437→3461.
-**47k–47n**: Session-scoped rollup, auto-pin, cold-exec hard-pin, truthful bridge diagnostics, run_context, cross-artifact truth, exact-pool session trace. Fixed cold/hot race condition. CI: 3487→3551.
-
-### M7.A.5.47o–47r (architecture blocker convergence, compressed)
-
-**47o**: Session reset fix, gas-hopeless C3 tightening, other_live_pool_trace. `bridge_focused_pool_count=37`. CI: 3582.
-**47p**: Cross-artifact trace, bridge_selection_diff, live-miss auto-pin, family_unresolved sentinel. CI: 3609.
-**47q**: Family-level event trace, sibling-pool pinning, stale separation. `exact_family_trace` confirms family-wide starvation: ALL 10 families with `reason_if_zero=no_events_at_any_family_pool`. CI: 3645.
-**47r**: Cross-artifact contract closure, `architecture_blocker_trace` canonical (25 families selected, 0 with events, `blocker_class=event_source_absence`). `family_unresolved` excluded at 4 points. 26 new tests. CI: 3671.
-
-### M7.A.5.47s (FREEZE — final peak-hours proof confirms event-source ceiling)
-
-**Goal**: M7.A.5.47s = freeze mainline on event-source ceiling unless one final peak-hours proof shows family-level events.
-
-**No code changes in 47s.** 47r code is the final M7 mainline state.
-
-**Evidence** (10-min nonstop, April 7, 18:39-18:50Z — tail of peak window): `architecture_blocker_trace`: `families_selected_count=25`, `families_with_any_hot_events=0`, `families_with_exact_hits=0`, `blocker_class=event_source_absence`. `session_windows_seen=6`, `session_events_seen_total=4` (some events exist but not at bridge pools). `session_bridge_pool_hit_total=0`. `bridge_selected_family_diff_top`: 25 families, 0 with events. `family_unresolved=0` in bridge. Cold lane: `cold_executable_positive=0`, `diagnostic_positive=2 (30.6 bps)`, `stale_positive=2`.
-
-**Freeze decision**: Per escalation rule (47q → 47r → 47s): 3 consecutive runs, all show `families_with_any_hot_events=0` and `session_bridge_pool_hit_total=0`. M7 mainline is **FROZEN** on event-source ceiling.
-
-Fresh M7.A.5.47r evidence confirms that the main blocker is no longer bridge selection, scoring, or cross-artifact inconsistency — 25 resolved families are selected, bridge contracts are fully consistent, and the architecture_blocker_trace canonically classifies the blocker as `event_source_absence`. The current `newHeads + logs` event source on Arbitrum One does not deliver family-level swap events at bridge-selected pools during any proof window. Public 2026 evidence (flashbots/simple-arbitrage profitability analysis, MEV-in-Binance-Builder (2602.15395), Optimistic MEV in L2s (2506.14768)) confirms that profitable graph/cyclic arb requires privileged orderflow, protocol-native positioning, builder/ordering edge, or ultra-low-latency infra — none of which M7 has. The diagnostic toolkit (architecture_blocker_trace, bridge_selected_family_diff_top, exact_family_trace) is proven and ready for any new chain/event-source assessment.
-
-**Recommendation**: Open `M7.E1 = event-source pilot` research track. Priorities: (1) alternative chain with higher event density (Base), (2) provider-specific early feed, (3) private/privileged orderflow, (4) ordering/inclusion experiments — only after a setup that produces family-level events. Source plane first, not Timeboost.
-
-CI: 3671 passed, 6 skipped (no code changes — 47r tests are the final mainline baseline).
+**5.30**: Hot/cold lane split, profit guard, latency telemetry. CI: 3140.
+**5.31**: Hot lane decision, discovery solved (registry_direct=30/30), completion latency ~1544ms. CI: 3155.
+**5.32**: Nonstop supervisor, retention pruning, `score_backrun_fast()` 250ms budgets. CI: 3163.
+**5.33–5.35**: Hot fast-path, no-fallback, artifact isolation, two-level promoted watchlist. CI: 3172→3186.
+**5.36–5.39**: Per-stage budget abort, caching (pool_token, oracle, cold_registry), promotion rules, Web3 reuse. CI: 3200→3244.
+**5.40**: Batch pre-resolve (97% latency reduction, 15.62ms warm). Supervisor I/O fix. CI: 3258.
+**5.41–5.46**: Hot-lane activation, execution funnel (5 stages), bridge-driven hot registry, micro-refinement, first verified_profitable (77.65 bps). CI: 3272→3327.
+**5.47–5.47g**: Focused hot intake, cumulative rollup, hybrid intake, 3-bucket bridge, stale-pin TTL. CI: 3327→3385.
+**5.47h–5.47n**: Bridge truth convergence, session-scoped rollup, auto-pin, cold-exec hard-pin, cross-artifact truth. CI: 3437→3551.
+**5.47o–5.47r**: Architecture blocker convergence, family-level event trace, cross-artifact contract closure. `blocker_class=event_source_absence` (25 families selected, 0 with events). CI: 3582→3671.
+**5.47s (FREEZE)**: Peak-hours proof (April 7, 18:39-18:50Z) confirms event-source ceiling on Arbitrum One. `families_with_any_hot_events=0`, `session_bridge_pool_hit_total=0`. M7 mainline FROZEN. Recommendation: open M7.E1 event-source pilot on Base.
 
 ---
 
@@ -287,6 +199,24 @@ CI: 3817 passed, 6 skipped.
 **Dashboard**: Reads production paths only — discovery artifacts are diagnostic and intentionally excluded.
 
 **Sequential vs parallel A/B**: Both are now safe. Sequential is preferred for cleaner comparison; parallel is safe because artifacts don't collide.
+
+E1.9.1 resolves the structural blocker that previously made honest A/B evidence impossible: discovery now writes to isolated rolling artifacts and no longer contaminates production truth. The next mandatory step is operational, not architectural — run production and discovery proof sessions and compare their funnel metrics directly before making any claim about which contour is closer to a truly profitable case.
+
+**Evidence — E1.9.1 sequential A/B proof (April 10, 12:38-12:59 UTC)**:
+
+| Metric | Production | Discovery |
+|--------|-----------|-----------|
+| run window | 12:38:14Z–12:48:34Z | 12:49:33Z–12:59:53Z |
+| session_windows_seen | 170 | 171 |
+| session_events_seen_total | 0 | 0 |
+| session_bridge_pool_hit_total | 0 | 0 |
+| artifacts written | canonical paths | _discovery namespace |
+| cross-contamination | NONE (timestamps frozen at 12:48Z) | NONE (timestamps at 12:59Z) |
+| scoreboard | N/A | created (families={}, profile=discovery) |
+
+Namespace isolation CONFIRMED in live runtime. Funnel comparison NOT POSSIBLE (0 events in both — off-peak market window). Need peak-hours repeat (14:00-22:00 UTC).
+
+CI: 3825 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 

@@ -52,6 +52,15 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m7_cold_hot_bridge.json",
             "m7_hot_intents_latest.json",
             "m7_hot_rollup_latest.json",
+            # M7.E1.9.1: Discovery namespace files
+            "m7_orderflow_latest_discovery.json",
+            "m7_hot_latest_discovery.json",
+            "m7_promoted_pairs_discovery.json",
+            "m7_cold_hot_bridge_discovery.json",
+            "m7_hot_intents_latest_discovery.json",
+            "m7_hot_rollup_latest_discovery.json",
+            "m7_discovery_scoreboard.json",
+            "m7_discovery_scoreboard_discovery.json",
         }
         
         # Archive files are allowed (created on reset)
@@ -63,6 +72,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
         
         # Filter out archive and log files
         non_archive_files = {f for f in all_files if not archive_pattern(f) and not log_pattern(f)}
+        # Filter out temp files (atomic-write intermediaries)
+        non_archive_files = {f for f in non_archive_files if not f.endswith(".tmp")}
         
         # Check that canonical files exist
         for canon in canonical_files:
