@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.8.1 OPEN — provenance completion + zero-state uniformity** (E1.8.1: run_context.chain populated in rollup + intents. Heartbeat signal_counts = 9-key zero dict (was {}). 8 new invariant tests. 3-min Base nonstop: all 3 artifacts chain=base, run_context.chain=base. CI: 3797 passed, 6 skipped.)  
+**Status**: **M7.E1.9 OPEN — discovery/production lane split** (E1.9: split Base scanning into narrow production lane + wide discovery lane. `--profile production|discovery` arg on m7a_orderflow_loop.py + start_nonstop_runtime.py. Discovery prewarm pairs re-enable DEGEN/BRETT/AERO/AMONGUS/TOSHI families. Family repeatability scoreboard (`m7_discovery_scoreboard.json`). `onboard_base_discovery.yaml` config. 20 new tests. CI: 3817 passed, 6 skipped.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -215,58 +215,52 @@ CI: 3698 passed, 6 skipped.
 **E1.3** (April 8): Registry vs gas separation — `registry_rejected=0`, `gas_rejected=44`, `scored_positive=6`. Registry NOT a blocker. 3 cold executables (W/WETH +92.63 bps). `blocker_class=selection_or_scoring`. CI: 3728.
 **E1.4** (April 8): Convergence fields in intents. 3x repeatability: positive 24/+3/+4, viable 12/+3/+4. Funnel inversion bug found (guard=31 > viable=19) → fixed in E1.5. CI: 3741.
 
-### M7.E1.5: Funnel Semantics Fix + Submit-Stage Scaffold (April 8, 09:10-09:57Z)
+### M7.E1.5–E1.7: Funnel Fix → Strict Exec → Hot Write Fix (CLOSED, compressed)
 
-**Goal**: Fix funnel semantics (profit_guard_passed_total > viable_total). Add sim/submit placeholders. Filter family_unresolved.
-
-**Code changes**: Renamed `viable_total`→`route_viable_total`. Changed `profit_guard_passed_total` from batch to inline attribute (gated on route_viable). Added sim_attempted/sim_passed/submit_ready_total. Filtered family_unresolved from bridge summary. 10 new tests. CI: 3746 passed, 6 skipped.
-
-**Evidence (3x 10-min nonstop, 09:25-09:57Z)**: scored=196, positive=17, route_viable=14, guard=14. Funnel invariant `scored >= positive >= route_viable >= guard` — **PASS** (was violated in E1.4: guard=31 > viable=19). sim/submit all zero (placeholder). family_unresolved_pool_count=3-8 per window.
+**E1.5**: Fixed funnel inversion (guard > viable). Renamed viable_total→route_viable_total, inline guard attribute. sim/submit scaffolded. Evidence: scored=196, positive=17, viable=14, guard=14. Invariant PASS. CI: 3746.
+**E1.6+E1.6.1**: Strict exec = route_viable AND size_valid_for_token. Chain-aware gas floor (Base 0.5 vs Arb 2.0). Per-candidate gate_trace. signal_counts 9-key. Cold/hot heartbeat. CI: 3770.
+**E1.7**: Hot lane write fix (UnboundLocalError on `_rollup_wwe`). heartbeat-on-error fallback. 3x Base nonstop: all hot artifacts FRESH. CI: 3775.
 
 ---
 
-### M7.E1.6 + E1.6.1: Strict Exec + Chain-Aware Gas + Heartbeat (CLOSED, compressed)
+### M7.E1.8 + E1.8.1: Dashboard Freshness + Chain Provenance + Zero-State (CLOSED, compressed)
 
-**E1.6**: Strict exec = route_viable AND size_valid_for_token. Chain-aware gas floor (Base 0.5 vs Arb 2.0 bps). Per-candidate gate_trace (8 fields). signal_counts 9-key funnel. **E1.6.1**: Cold/hot heartbeat (current_window_timestamp, snapshot_preserved, snapshot_run_timestamp). Runtime invariant tests. 7 files changed. CI: 3770 passed.
-
-**Evidence**: 3x 10-min Base nonstop (April 9): cold heartbeat fresh (09:29:26Z), hot stale (07:05:12Z). Empty windows — signal_counts=null, gate_trace unit-tested only.
-
-**Findings**: Cold heartbeat works; hot lane NOT writing (→ fixed in E1.7). signal_counts/gate_trace need non-empty windows.
+**E1.8**: Dashboard M7 freshness banner (hot/cold timestamps, chain label). `chain` + `run_context.chain` in all 4 hot artifacts. `signal_counts` 9-key zero dict. `error_counts`. 13 new tests. CI: 3790.
+**E1.8.1**: run_context.chain in rollup/intents (was None). Heartbeat signal_counts = 9-key zero dict (was {}). 8 invariant tests. Evidence: all 3 artifacts chain=base. CI: 3797.
 
 ---
 
-### M7.E1.7: Hot Lane Write Fix + Heartbeat-on-Error (CLOSED, compressed)
+### M7.E1.9: Discovery/Production Lane Split (OPEN)
 
-Root cause: `UnboundLocalError: _rollup_wwe` — variable scoping bug crashed every hot iteration before `run_ws_live()`. Fix: initialize `_rollup_wwe=0`, `_rollup_wwbh=0` before bridge try block. Added `_write_hot_heartbeat_on_error()` for exception-path writes. 3x Base nonstop: all hot artifacts FRESH at 07:12:27Z, zero code errors. 7 new tests (103 E1 total). CI: 3775 passed.
+**Goal**: Split Base scanning into narrow production lane + wide discovery lane, per reviewer issue: "narrowing the Base profit contour is correct for production convergence, but it should no longer be the only discovery surface."
 
----
+**Principle**: Exploration finds, production proves. Discovery lane identifies viable families via wider contour; production lane proves profitability on a narrow, proven set. Pairs graduate from discovery to production via the family repeatability scoreboard.
 
-### M7.E1.8: Dashboard M7 Freshness + Chain Provenance + Zero-State (April 10, 09:37-09:40Z)
+**Code changes (6 files)**:
+- `m7/shared/constants.py`: `PREWARM_PAIRS_BASE_DISCOVERY` (10 pairs: production core + DEGEN/BRETT/AERO/AMONGUS/TOSHI/cbBTC). `get_prewarm_pairs(chain, profile)` with backward-compatible default. `VALID_PROFILES`, `DISCOVERY_GRADUATE_MIN_POSITIVE`, `DISCOVERY_GRADUATE_MIN_SESSIONS`, `PROMOTED_DISCOVERY_MAX_PAIRS`.
+- `scripts/m7a_orderflow_loop.py`: `--profile production|discovery` CLI arg. Profile-aware seed pairs in hot + cold lane prewarm. Discovery scoreboard read/write/update functions. Scoreboard updated after cold artifact write (discovery profile only). `_DISCOVERY_SCOREBOARD_PATH`.
+- `scripts/start_nonstop_runtime.py`: `--m7-profile` CLI arg, passthrough to M7 hot + cold lane commands.
+- `m7/orderflow/mode_ws_live.py`: Profile-aware prewarm via `getattr(args, "profile", "production")`.
+- `config/onboard_base_discovery.yaml`: Discovery lane config — 11 pairs, no `excluded_pair_hints`, budget-capped at 30 pairs.
+- `tests/unit/test_config_contracts.py`: Added `onboard_base_discovery.yaml` to `ALLOWED_YAML_FILES`.
+- `tests/unit/test_e1_9_discovery_lane.py`: 20 new tests (discovery pairs, profile dispatch, backward compat, constants, scoreboard logic).
 
-**Goal**: Fix dashboard UX (M7-only runs appear dead because primary panels read stale non-M7 artifacts). Add chain provenance to all M7 artifacts. Ensure zero-state surfaces use honest 0/{}, never null.
+**Discovery scoreboard** (`data/runs/_rolling/m7_discovery_scoreboard.json`):
+Tracks per-family across cold iterations: `total_scored`, `scored_positive`, `route_viable`, `guard_passed`, `sessions_with_signal`, `last_iteration`. Graduation rules: `DISCOVERY_GRADUATE_MIN_POSITIVE=3`, `DISCOVERY_GRADUATE_MIN_SESSIONS=2`.
 
-**Code changes (3 files)**:
-- `monitoring/dashboard.html`: M7 freshness banner (hot/cold timestamps, chain label, session events, hotness color-coding). Separates PRIMARY vs M7 rolling freshness.
-- `scripts/m7a_orderflow_loop.py`: (1) `chain` param to `_write_hot_artifact`, `_write_hot_heartbeat_on_error`, `_update_hot_rollup`, `_write_hot_intents`. (2) `chain` field in all 4 artifact dicts + `run_context.chain`. (3) `signal_counts` 9-key dict (honest 0s, never null). (4) `error_counts` in hot artifact and rollup (heartbeat_on_error counter, normal_windows/heartbeat_on_error_windows).
-- `tests/unit/test_e1_base_chain_aware.py`: 13 new tests (sections 27-29). Total: 116 E1 tests.
+**Lane split commands**:
+```
+# Production lane (existing behavior, narrow contour)
+py -3.11 scripts/m7a_orderflow_loop.py --lane cold --chain base --profile production
 
-CI: 3790 passed, 6 skipped.
+# Discovery lane (wider contour, re-enabled families)
+py -3.11 scripts/m7a_orderflow_loop.py --lane cold --chain base --profile discovery
 
-**Evidence (3-min Base nonstop, 09:37-09:40Z)**:
+# Supervisor with discovery profile
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --chain base --m7-profile discovery
+```
 
-| Field | Before E1.8 | After E1.8 |
-|-------|-------------|------------|
-| `m7_hot_latest.chain` | absent | **base** |
-| `m7_hot_latest.signal_counts` | absent | **{events_count:0, ...all 0}** |
-| `m7_hot_latest.error_counts` | absent | **{heartbeat_on_error:0}** |
-| `m7_hot_rollup.chain` | absent | **base** |
-| `m7_hot_rollup.error_counts` | absent | **{normal:49, heartbeat:0}** |
-| `m7_hot_intents.chain` | absent | **base** |
-| Dashboard M7 banner | absent | **M7 ROLLING [base] Hot/Cold timestamps** |
-
-**1.5h run evidence (07:49-09:19Z)**: `session_windows_seen=1251`, `session_events_seen_total=0`, `session_bridge_pool_hit_total=0`. Confirms: hot lane writes correctly, market currently empty. Dashboard correctly shows M7 freshness separate from stale PRIMARY rolling.
-
-**E1.8.1 (reviewer fix, April 10 10:49-10:52Z)**: Reviewer found `run_context.chain=None` in rollup/intents and `signal_counts={}` in heartbeat from-scratch. Fixes: (1) Added `"chain": chain` to rollup `run_context` dict. (2) Added full `run_context` block to intents payload. (3) Heartbeat from-scratch: `signal_counts` = 9-key zero dict (was `{}`). 8 new invariant tests (section 30). 3-min nonstop evidence: rollup `run_context.chain=base`, intents `run_context.chain=base`, `run_context.run_timestamp` populated in all 3 artifacts. CI: 3797 passed, 6 skipped.
+CI: 3817 passed, 6 skipped.
 
 ---
 
@@ -299,5 +293,7 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
 2. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
-3. **E1.9: Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
-4. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
+3. **Discovery A/B evidence**: Run production vs discovery profiles side-by-side. Compare scored_positive, route_viable, gas rejection rates.
+4. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
+5. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
+6. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.

@@ -261,9 +261,18 @@ PREWARM_PAIRS_ARBITRUM = [
     ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
     ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
 ]
-# Base: narrow stable/wrapped contour from onboard_base_profit.yaml
+# Base production: narrow stable/wrapped contour from onboard_base_profit.yaml
 PREWARM_PAIRS_BASE = [
     ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),
+]
+# M7.E1.9: Base discovery — wider contour re-enables excluded families
+# (DEGEN, BRETT, AERO, AMONGUS) alongside the production core.
+# Budget-capped by PROMOTED_DISCOVERY_MAX_PAIRS below.
+PREWARM_PAIRS_BASE_DISCOVERY = [
+    ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),  # production core
+    ("DEGEN", "WETH"), ("BRETT", "WETH"), ("AERO", "WETH"),  # re-enabled families
+    ("AMONGUS", "WETH"), ("TOSHI", "WETH"),  # long-tail exploration
+    ("AERO", "USDC"), ("cbBTC", "WETH"),  # diagnostic pairs from profit config
 ]
 
 # Base Chainlink price feeds (USD, 8 decimals)
@@ -290,9 +299,17 @@ def get_gas_floor_bps(chain: str) -> float:
     return GAS_FLOOR_BPS_ARBITRUM
 
 
-def get_prewarm_pairs(chain: str) -> list:
-    """Return prewarm pair tuples for the given chain."""
+def get_prewarm_pairs(chain: str, profile: str = "production") -> list:
+    """Return prewarm pair tuples for the given chain and profile.
+
+    Parameters
+    ----------
+    chain : chain key (e.g. "base", "arbitrum_one").
+    profile : "production" (narrow, default) or "discovery" (wider contour).
+    """
     if chain == "base":
+        if profile == "discovery":
+            return PREWARM_PAIRS_BASE_DISCOVERY
         return PREWARM_PAIRS_BASE
     return PREWARM_PAIRS_ARBITRUM
 
@@ -319,4 +336,16 @@ PROMOTED_MIN_COLD_APPEARANCES = 2  # minimum cold iterations to qualify
 PROMOTED_MAX_PAIRS = 10            # cap promoted watchlist size
 PROMOTED_MIN_NET_BPS = -50.0       # minimum best_net_bps to qualify (not total garbage)
 PROMOTED_CANDIDATE_MAX_PAIRS = 20  # cap candidate watchlist (wider than execution)
+
+# ---------------------------------------------------------------------------
+# M7.E1.9: Discovery lane budget + promotion rules
+# ---------------------------------------------------------------------------
+# Discovery profile uses wider prewarm but caps how many can be promoted.
+PROMOTED_DISCOVERY_MAX_PAIRS = 15  # discovery cap (wider than production)
+# Family repeatability: minimum scored-positive occurrences to graduate
+# from discovery lane into production consideration.
+DISCOVERY_GRADUATE_MIN_POSITIVE = 3    # min scored_positive across sessions
+DISCOVERY_GRADUATE_MIN_SESSIONS = 2    # min distinct sessions with signal
+# A "profile" is either "production" (narrow, proven) or "discovery" (wide, exploratory).
+VALID_PROFILES = ("production", "discovery")
 

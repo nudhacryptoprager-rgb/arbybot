@@ -49,6 +49,7 @@ from m7.shared.constants import (
     PROMOTED_MAX_PAIRS,
     PROMOTED_MIN_COLD_APPEARANCES,
     PROMOTED_MIN_NET_BPS,
+    get_prewarm_pairs,
 )
 
 logger = get_logger("m7.orderflow.loop")
@@ -62,6 +63,11 @@ _COLD_HOT_BRIDGE_PATH = os.path.join("data", "runs", "_rolling", "m7_cold_hot_br
 _HOT_INTENTS_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_intents_latest.json")
 # M7.A.5.47: Cumulative hot rollup — survives across windows so progress is visible.
 _HOT_ROLLUP_PATH = os.path.join("data", "runs", "_rolling", "m7_hot_rollup_latest.json")
+# M7.E1.9: Discovery family repeatability scoreboard — tracks per-family stats
+# across cold iterations for promotion decisions.
+_DISCOVERY_SCOREBOARD_PATH = os.path.join(
+    "data", "runs", "_rolling", "m7_discovery_scoreboard.json"
+)
 
 # M7.A.5.47k: Session ID — unique per process lifetime, used to reset session
 # counters in the hot rollup when the supervisor restarts.
@@ -116,6 +122,97 @@ def _read_promoted_pairs() -> dict:
     except Exception as exc:
         logger.debug("Failed to read promoted pairs: %s", str(exc)[:80])
     return {"candidate": [], "execution": []}
+
+
+# ---------------------------------------------------------------------------
+# M7.E1.9: Discovery family repeatability scoreboard
+# ---------------------------------------------------------------------------
+
+def _read_discovery_scoreboard() -> dict:
+    """Read the discovery scoreboard from rolling artifact."""
+    try:
+        if os.path.exists(_DISCOVERY_SCOREBOARD_PATH):
+            with open(_DISCOVERY_SCOREBOARD_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as exc:
+        logger.debug("Failed to read discovery scoreboard: %s", str(exc)[:80])
+    return {"families": {}, "updated_at": None, "profile": "discovery"}
+
+
+def _update_discovery_scoreboard(
+    scoreboard: dict, artifact: dict, iteration: int
+) -> dict:
+    """Update scoreboard from a cold lane artifact's scored results.
+
+    Tracks per-family:
+      - total_scored: times the family appeared in scored results
+      - scored_positive: times best_net_bps > 0
+      - route_viable: times at least one route was quotable
+      - guard_passed: times profit guard passed
+      - sessions_with_signal: distinct iteration numbers where scored_positive
+      - gas_gap_median_bps: latest median gas gap (informational)
+      - last_iteration: most recent iteration this family was seen
+    """
+    families = scoreboard.get("families", {})
+    results = artifact.get("results", [])
+    if not results:
+        return scoreboard
+
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        pair = r.get("pair_key") or r.get("pair", "")
+        if not pair:
+            continue
+        # Family = base token of the pair (e.g., DEGEN from DEGEN/WETH)
+        parts = pair.split("/")
+        if len(parts) != 2:
+            continue
+        family = parts[0]
+
+        rec = families.get(family, {
+            "total_scored": 0,
+            "scored_positive": 0,
+            "route_viable": 0,
+            "guard_passed": 0,
+            "sessions_with_signal": [],
+            "last_iteration": 0,
+        })
+
+        rec["total_scored"] = rec.get("total_scored", 0) + 1
+        rec["last_iteration"] = iteration
+
+        best_net = r.get("best_net_bps", r.get("net_bps"))
+        if best_net is not None and best_net > 0:
+            rec["scored_positive"] = rec.get("scored_positive", 0) + 1
+            sessions = rec.get("sessions_with_signal", [])
+            if iteration not in sessions:
+                sessions.append(iteration)
+            rec["sessions_with_signal"] = sessions[-20:]  # cap history
+
+        # Route viable if scored (not rejected before quoting)
+        reject = r.get("reject_reason", "")
+        if not reject or reject in ("GAS_EXCEEDS_GROSS", "SLIPPAGE_EXCEEDS_GROSS",
+                                     "INSUFFICIENT_IMPACT", "GAS_FLOOR_EXCEEDED"):
+            rec["route_viable"] = rec.get("route_viable", 0) + 1
+
+        if r.get("profit_guard_passed"):
+            rec["guard_passed"] = rec.get("guard_passed", 0) + 1
+
+        families[family] = rec
+
+    scoreboard["families"] = families
+    scoreboard["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    scoreboard["iteration"] = iteration
+    return scoreboard
+
+
+def _write_discovery_scoreboard(scoreboard: dict) -> None:
+    """Write the discovery scoreboard to rolling artifact."""
+    try:
+        _atomic_json_write(_DISCOVERY_SCOREBOARD_PATH, scoreboard, indent=2)
+    except Exception as exc:
+        logger.debug("Failed to write discovery scoreboard: %s", str(exc)[:80])
 
 
 def _write_cold_hot_bridge(
@@ -429,6 +526,11 @@ def parse_args():
         "--pause", type=int, default=None,
         help="Seconds to pause between windows (default: 5 cold, 1 hot)",
     )
+    parser.add_argument(
+        "--profile", type=str, default="production",
+        choices=["production", "discovery"],
+        help="Pair profile: production (narrow, default) or discovery (wider contour)",
+    )
     return parser.parse_args()
 
 
@@ -454,6 +556,7 @@ def _build_ws_args(cli_args) -> SimpleNamespace:
         ws_blocks=cli_args.ws_blocks,
         ws_timeout=cli_args.ws_timeout,
         max_events=cli_args.max_events,
+        profile=getattr(cli_args, "profile", "production"),
     )
 
 
@@ -1867,7 +1970,12 @@ def run_loop(cli_args) -> None:
     iterations = cli_args.iterations
     pause = cli_args.pause
     lane = cli_args.lane
+    profile = getattr(cli_args, "profile", "production")
     infinite = iterations == 0
+
+    # M7.E1.9: Build seed pairs from profile-aware prewarm list.
+    # Discovery profile gets wider contour; production uses HOT_WATCHLIST_PAIRS.
+    _seed_pairs = get_prewarm_pairs(cli_args.chain, profile)
 
     # M7.A.5.31: Hot lane maintains cross-iteration state
     _accumulated_pairs: dict = {}  # pair_key -> session_low_lag_pairs info
@@ -1910,10 +2018,11 @@ def run_loop(cli_args) -> None:
 
     iteration = 0
     logger.info(
-        "M7 %s loop starting: chain=%s ws_blocks=%d timeout=%ds max_events=%d "
-        "iterations=%s pause=%ds",
-        lane.upper(), cli_args.chain, cli_args.ws_blocks, cli_args.ws_timeout,
+        "M7 %s loop starting: chain=%s profile=%s ws_blocks=%d timeout=%ds max_events=%d "
+        "iterations=%s pause=%ds seed_pairs=%d",
+        lane.upper(), cli_args.chain, profile, cli_args.ws_blocks, cli_args.ws_timeout,
         cli_args.max_events, "infinite" if infinite else iterations, pause,
+        len(_seed_pairs),
     )
 
     while infinite or iteration < iterations:
@@ -1956,9 +2065,9 @@ def run_loop(cli_args) -> None:
                         _cold_exec_pools.add(_pa.lower())
 
                 _hot_pairs_to_prewarm: dict = {}
-                # 1. Seed defaults on first iteration
+                # 1. Seed defaults on first iteration (profile-aware)
                 if iteration == 1:
-                    for sym_a, sym_b in HOT_WATCHLIST_PAIRS:
+                    for sym_a, sym_b in _seed_pairs:
                         pk = f"{sym_a}/{sym_b}"
                         _hot_pairs_to_prewarm[pk] = {"pair": pk, "seen_count": 0}
                 # 2. Add accumulated hot pairs from prior hot iterations
@@ -2036,9 +2145,9 @@ def run_loop(cli_args) -> None:
                     if ppair not in _pairs_to_prewarm:
                         _pairs_to_prewarm[ppair] = {"pair": ppair, "seen_count": 0}
 
-                # Seed defaults on first iteration only
+                # Seed defaults on first iteration only (profile-aware)
                 if iteration == 1:
-                    for sym_a, sym_b in HOT_WATCHLIST_PAIRS:
+                    for sym_a, sym_b in _seed_pairs:
                         pk = f"{sym_a}/{sym_b}"
                         if pk not in _pairs_to_prewarm:
                             _pairs_to_prewarm[pk] = {"pair": pk, "seen_count": 0}
@@ -2563,6 +2672,18 @@ def run_loop(cli_args) -> None:
                     cold_active_pools=_cold_active_pools,
                     hot_active_pools=_hot_active_pools,
                 )
+
+                # M7.E1.9: Update discovery scoreboard (only in discovery profile)
+                if profile == "discovery":
+                    _disc_sb = _read_discovery_scoreboard()
+                    _disc_sb = _update_discovery_scoreboard(
+                        _disc_sb, artifact, iteration
+                    )
+                    _write_discovery_scoreboard(_disc_sb)
+                    logger.info(
+                        "Discovery scoreboard updated: %d families tracked",
+                        len(_disc_sb.get("families", {})),
+                    )
 
                 # M7.A.5.47: Track pool addresses seen in cold events for
                 # activity-based ranking. Hot lane uses this to prioritize

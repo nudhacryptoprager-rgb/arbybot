@@ -1,0 +1,75 @@
+# PATH: config/onboard_base_discovery.yaml
+#
+# BASE DISCOVERY LANE — wider contour for exploration
+#
+# M7.E1.9: Discovery lane re-enables excluded families (BRETT, DEGEN, TOSHI)
+# alongside the narrow production core. Runs in parallel with
+# onboard_base_profit.yaml (production lane).
+#
+# PRINCIPLE: "Exploration finds, production proves."
+# Discovery lane finds viable families; production lane proves profitability.
+# Pairs graduate from discovery to production via family repeatability scoreboard.
+#
+# ADAPTER READINESS:
+#   uniswap_v3 → UniswapV3Adapter: PRODUCTION
+#   sushiswap_v3 → UniswapV3Adapter: PRODUCTION
+#   pancakeswap_v3 → UniswapV3Adapter: PRODUCTION
+#   aerodrome → Ve33Adapter: PRODUCTION (R27.4)
+#
+# PURPOSE: Discover viable long-tail families on Base. Budget-capped.
+# RUN_KIND: COVERAGE
+#
+# WORKFLOW:
+#   py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_base_discovery.yaml --minutes 10 --cycles 1
+
+chain: base
+chain_id: 8453
+
+run_kind: COVERAGE
+
+rpc_endpoints:
+  - "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+  - "https://base.drpc.org"
+  - "https://base.publicnode.com"
+  - "https://mainnet.base.org"
+  - "https://base.public.blastapi.io"
+
+rpc_timeout_seconds: 10
+rpc_retries: 3
+rpc_backoff_base_ms: 500
+
+flashblocks_ws_endpoint: "wss://base.flashblocks.base.org/ws"
+flashblocks_http_endpoint: "https://base.flashblocks.base.org"
+
+universe_source: discovery_runtime
+
+dexes:
+  - uniswap_v3
+  - sushiswap_v3
+  - pancakeswap_v3
+  - aerodrome
+
+# Budget-capped: wider than production but not unbounded
+discovery_runtime_max_pairs: 30
+require_cross_dex: true
+
+# M7.E1.9: Discovery includes production core + re-enabled families.
+# BRETT, DEGEN, TOSHI exclusions REMOVED (unlike onboard_base_profit.yaml).
+include_pairs:
+  # Production core (same as profit lane)
+  - "USDC/DAI"
+  - "USDC/USDT"
+  - "WETH/USDC"
+  - "AERO/USDC"
+  # Re-enabled long-tail families (excluded in production)
+  - "DEGEN/WETH"
+  - "BRETT/WETH"
+  - "TOSHI/WETH"
+  - "AMONGUS/WETH"
+  # Wider exploration
+  - "AERO/WETH"
+  - "cbBTC/WETH"
+  - "cbBTC/USDC"
+
+# NO excluded_pair_hints — discovery lane does not blanket-exclude families.
+# Gas-dominated pairs are filtered at runtime by gas_floor and profit_guard.

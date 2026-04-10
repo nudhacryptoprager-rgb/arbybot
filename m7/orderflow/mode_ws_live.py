@@ -175,7 +175,9 @@ def run_ws_live(
 
     # M7.A.5.24: Session prewarm — preload high-frequency pairs from known addresses
     # M7.E1: Chain-aware prewarm pairs
-    _prewarm_pairs = get_prewarm_pairs(args.chain)
+    # M7.E1.9: Profile-aware — discovery profile uses wider contour
+    _profile = getattr(args, "profile", "production")
+    _prewarm_pairs = get_prewarm_pairs(args.chain, _profile)
     if _prewarm_count not in (-1, -2):
         _prewarm_count = 0
         try:

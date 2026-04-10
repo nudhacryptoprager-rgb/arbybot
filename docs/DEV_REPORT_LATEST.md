@@ -3,101 +3,102 @@
 ## 0) Meta
 timestamp_utc: 2026-04-02T09:03:41Z
 run_id: data/runs/ci_m5_gate_arbitrum_one_20260402_110313_968343
-mode: ONLINE (M7.E1.8.1 provenance completion + zero-state uniformity. 3-min Base nonstop April 10 10:49-10:52Z. M4/M5 rolling unchanged — M7-only session with --no-m4)
+mode: OFFLINE (M7.E1.9 discovery/production lane split. Code + tests only. No new online runtime.)
 artifact_mode: rolling
-config: config/onboard_base_profit.yaml (base, narrow contour)
+config: config/onboard_base_discovery.yaml (base, discovery contour) + config/onboard_base_profit.yaml (base, production contour)
 code_identity:
-  primary: ts:2026-04-02T09:03:41.464858Z
+  primary: ts:2026-04-02T09:03:41Z
   dirty: true
-  desc: M7.E1.8.1 - run_context.chain in rollup/intents, heartbeat 9-key signal_counts, invariant tests
+  desc: M7.E1.9 - discovery/production lane split, family repeatability scoreboard
 
 ## Session Completion
-session_goal: M7.E1.8.1 - complete chain provenance (run_context.chain in rollup + intents), uniform zero-state (heartbeat 9-key signal_counts), invariant tests
-goal_status: REACHED (all 3 code fixes verified in fresh 3-min nonstop: rollup run_context.chain=base, intents run_context.chain=base + run_timestamp, heartbeat signal_counts=9-key zero dict. 3797 passed.)
+session_goal: M7.E1.9 - split Base into discovery lane + production lane per reviewer 10 fix steps. Add --profile arg, discovery prewarm pairs, family scoreboard, onboard_base_discovery.yaml, 20 new tests.
+goal_status: REACHED (all code changes implemented, 3817 tests pass, 6 skipped. Lane split wired end-to-end: constants → CLI → mode_ws_live → cold artifact → scoreboard.)
 close_allowed: true
-remaining_blockers: (1) No non-empty windows — signal_counts all 0, market timing. (2) Flashblocks WS DNS unreachable. (3) Submit sim = 0. (4) Cold artifact lacks signal_counts (asymmetric honesty).
-evidence_session_run_dirs: [data/runs/_rolling/ (m7_hot_rollup_latest.json run_context.chain=base, m7_hot_intents_latest.json run_context.chain=base run_context.run_timestamp=2026-04-10T10:52:39Z, m7_hot_latest.json signal_counts=9-key)]
-primary_blocker_of_session: chain_provenance_incomplete — RESOLVED (run_context.chain was None in rollup and intents; heartbeat signal_counts was {} instead of 9-key zero dict)
-blocker_status_before: ACTIVE — reviewer confirmed run_context.chain=None in rollup/intents artifacts
-blocker_status_after: RESOLVED — all 3 hot artifacts have consistent chain=base and run_context.chain=base
+remaining_blockers: (1) Online A/B evidence pending — discovery vs production profiles need side-by-side nonstop run. (2) Scoreboard graduation untested in live runtime — needs fresh non-empty windows with discovery profile. (3) Flashblocks WS DNS unreachable. (4) Submit sim = 0.
+evidence_session_run_dirs: [N/A — offline code session. 3817 tests pass.]
+primary_blocker_of_session: narrow_production_as_sole_discovery_surface — RESOLVED (discovery lane now available)
+blocker_status_before: ACTIVE — reviewer identified production contour as only discovery surface, excluding DEGEN/BRETT/TOSHI families that showed signal in cold truth
+blocker_status_after: RESOLVED — discovery profile provides wider contour; production profile unchanged (backward compatible)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.E1.8.1 = reviewer fix steps 2 (rollup run_context.chain), 3 (intents run_context.run_timestamp), 4 (heartbeat 9-key signal_counts), 5 (invariant tests)
+goal (Roadmap): M7.E1.9 = discovery/production lane split, per reviewer commit 93ca61e606dc3709cc04691f28a53518ce854b8b
 change_summary:
-  - scripts/m7a_orderflow_loop.py: (1) Added "chain": chain to _update_hot_rollup run_context dict. (2) Added full run_context block to _write_hot_intents payload (chain + run_timestamp). (3) Heartbeat from-scratch signal_counts changed from {} to 9-key zero dict.
-  - tests/unit/test_e1_base_chain_aware.py: 8 new tests in section 30 (chain invariants: rollup/intents run_context on disk, heartbeat 9-key). Updated heartbeat from-scratch test for 9-key assertion. Total: 123 E1 tests.
+  - m7/shared/constants.py: PREWARM_PAIRS_BASE_DISCOVERY (10 pairs), get_prewarm_pairs(chain, profile) with backward-compatible default, VALID_PROFILES, graduation thresholds, PROMOTED_DISCOVERY_MAX_PAIRS
+  - scripts/m7a_orderflow_loop.py: --profile CLI arg, profile-aware _seed_pairs in run_loop, discovery scoreboard (read/write/update), _DISCOVERY_SCOREBOARD_PATH, scoreboard update after cold artifact write (discovery profile only)
+  - scripts/start_nonstop_runtime.py: --m7-profile CLI arg, passthrough to M7 hot + cold lane commands
+  - m7/orderflow/mode_ws_live.py: Profile-aware prewarm via getattr(args, "profile", "production")
+  - config/onboard_base_discovery.yaml: Discovery lane config (11 pairs, no excluded_pair_hints, 30 max pairs)
+  - tests/unit/test_config_contracts.py: Added onboard_base_discovery.yaml to ALLOWED_YAML_FILES
+  - tests/unit/test_e1_9_discovery_lane.py: 20 new tests (5 sections)
 touched_files:
+  - m7/shared/constants.py
   - scripts/m7a_orderflow_loop.py
-  - tests/unit/test_e1_base_chain_aware.py
+  - scripts/start_nonstop_runtime.py
+  - m7/orderflow/mode_ws_live.py
+  - config/onboard_base_discovery.yaml
+  - tests/unit/test_config_contracts.py
+  - tests/unit/test_e1_9_discovery_lane.py
   - docs/status/Status_M7.md
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3797 passed, 6 skipped)
-py -3.11 scripts/start_nonstop_runtime.py --hours 0.05 --chain base --no-m4 --dashboard-port 8099 --m7-hot-pause 1 --m7-cold-pause 5: PASS (10:49-10:52Z, 3/3 alive, 0 restarts)
+py -3.11 -m pytest tests/unit/test_e1_9_discovery_lane.py -v: PASS (20 passed)
+py -3.11 -m pytest tests/unit -q: PASS (3817 passed, 6 skipped)
 
 ## 3) Artifacts Attached
 
-M7 hot artifacts (FRESH — provenance complete):
-- m7_hot_latest.json: chain=base, run_context.chain=base, signal_counts=9-key (all 0), error_counts={heartbeat_on_error:0}
-- m7_hot_rollup_latest.json: chain=base, run_context.chain=base, run_context.run_timestamp=2026-04-10T10:52:39Z
-- m7_hot_intents_latest.json: chain=base, run_context.chain=base, run_context.run_timestamp=2026-04-10T10:52:39Z
+No runtime artifacts — offline code session. Rolling artifacts unchanged from E1.8.1.
 
-M4/M5 rolling (unchanged — M7-only session):
-- _latest.json: run_status=PASS, agg_status=PASS, data_run_rate=1.0
-- run_summary_latest.json: status=PASS, signals_count=31, total_net_usdc=40.0986
-
-## 4) Key Results - M7.E1.8.1
+## 4) Key Results - M7.E1.9
 
 ### Reviewer Issues Addressed
 
 | Issue | Description | Status |
 |-------|-------------|--------|
-| #2 | Session contract inconsistency (Status OPEN vs DEV_REPORT REACHED) | FIXED (both now aligned for E1.8.1) |
-| #3 | run_context.chain=None in rollup | FIXED (now "base") |
-| #4 | run_context.chain=None, run_timestamp=None in intents | FIXED (both populated) |
-| #5 | Heartbeat signal_counts={} while docs claim 9-key | FIXED (now 9-key zero dict) |
+| #1 | Production contour is the only discovery surface | FIXED (discovery lane added) |
+| #2 | Base profit config hard-excludes BRETT/DEGEN | FIXED (no exclusions in discovery) |
+| #3 | AMONGUS/WETH near-executable — long-tail signal | FIXED (included in discovery prewarm) |
+| #4 | Contour lock too rigid for discovery | FIXED (discovery profile bypasses contour lock) |
+| #5 | Blindly broadening is bad (129 gas-rejected vs 8 positive) | ADDRESSED (budget cap, scoreboard tracks viability) |
+| #6 | Hot intents still empty | ACKNOWLEDGED (needs live evidence, not code) |
+| #7 | Stable/wrapped pairs as production prior, not discovery proof | FIXED (separate lane semantics) |
+| #8 | One config mixes primary/benchmark/diagnostic | FIXED (two configs: profit + discovery) |
+| #9 | Overfitting risk: competitive majors OR noisy long-tail | FIXED (production for majors, discovery for long-tail) |
+| #10 | Correct frame: exploration vs production lane | IMPLEMENTED (--profile production|discovery) |
 
-### Artifact Evidence
+### Reviewer Fix Steps Addressed
 
-| Artifact | Field | Before E1.8.1 | After E1.8.1 |
-|----------|-------|---------------|--------------|
-| m7_hot_rollup | `run_context.chain` | **None** | **base** |
-| m7_hot_intents | `run_context.chain` | **None** | **base** |
-| m7_hot_intents | `run_context.run_timestamp` | **None** | **2026-04-10T10:52:39Z** |
-| heartbeat from-scratch | `signal_counts` | **{}** | **{9 keys, all 0}** |
+| Step | Description | Status |
+|------|-------------|--------|
+| 1 | Open M7.E1.9 = discovery/production lane split | DONE |
+| 2 | Keep onboard_base_profit.yaml narrow (production) | DONE (unchanged) |
+| 3 | Create Base discovery lane config | DONE (onboard_base_discovery.yaml) |
+| 4 | Re-enable DEGEN, BRETT, AERO, AMONGUS in discovery | DONE (PREWARM_PAIRS_BASE_DISCOVERY) |
+| 5 | Rule: exploration finds, production proves | DONE (graduation thresholds) |
+| 6 | Budget/slot split between lanes | DONE (PROMOTED_DISCOVERY_MAX_PAIRS=15) |
+| 7 | Family-level repeatability scoreboard | DONE (m7_discovery_scoreboard.json) |
+| 8 | Blanket exclusions only in production config | DONE (discovery has no excluded_pair_hints) |
+| 9 | A/B evidence (profit vs discovery) | PENDING (needs online run) |
+| 10 | Document narrow production + wide discovery principle | DONE (Status_M7.md + DEV_REPORT) |
 
 ### CI Evidence
 
 | Command | Result |
 |---------|--------|
-| pytest | 3797 passed, 6 skipped |
-| nonstop 3-min | 3/3 alive, 0 restarts |
-
-latest:
-  schema_version: m4:latest:v2.0
-  run_status: PASS
-  agg_status: PASS
-  data_run_rate: 1.0
-  low_sample_rate: 0.0
-run_summary_latest:
-  status: PASS
-  metrics.signals_count: 31
-  metrics.total_net_usdc: 40.0986
-  run_timestamp: 2026-04-02T09:03:41Z
-  code_identity: ts:2026-04-02T09:03:41.464858Z
-  inputs.run_mode: REGISTRY_REAL
+| pytest (new tests) | 20 passed |
+| pytest (full suite) | 3817 passed, 6 skipped |
 
 ## 5) Strategic Reading
 
-1. **Chain provenance now complete across all hot artifacts**: rollup, intents, and hot artifact all have consistent `chain` + `run_context.chain` + `run_context.run_timestamp`. Reviewer can audit any artifact knowing exactly which chain and when.
-2. **Zero-state contract truly uniform**: Heartbeat from-scratch now emits 9-key `signal_counts` dict (was `{}`). All paths — normal, heartbeat-on-error, from-scratch — produce the same 9-key structure.
-3. **Session contract aligned**: Status_M7.md and DEV_REPORT_LATEST.md now agree on session state. Previous mismatch (OPEN vs REACHED) resolved.
-4. **Operational truthfulness is real improvement, not throughput proof**: E1.8/E1.8.1 improved observability and contract consistency. Fresh profitable-case detection still requires non-empty hot windows during peak hours.
-5. **Cold artifact asymmetry remains**: `m7_orderflow_latest.json` still has `signal_counts=None`. This is a known lower-priority gap (reviewer fix step 6).
+1. **Discovery/production split is structural, not contour-expansion**: The change adds a second operational profile, not wider production scanning. Production lane is byte-identical. No risk to existing profit convergence.
+2. **Scoreboard enables data-driven graduation**: Instead of human guesses about which families to promote, the scoreboard tracks `scored_positive`, `route_viable`, `guard_passed`, `sessions_with_signal` per family. Graduation thresholds (3 positives, 2 sessions) prevent premature promotion.
+3. **Budget cap prevents discovery noise flood**: `PROMOTED_DISCOVERY_MAX_PAIRS=15` and `discovery_runtime_max_pairs=30` keep discovery bounded. The reviewer's concern about "129 gas-rejected vs 8 positive" is addressed by runtime filtering, not blanket exclusion.
+4. **Backward compatible**: `--profile production` (default) produces identical behavior to pre-E1.9. All existing commands, artifacts, and CI gates are unaffected.
+5. **Next action is A/B evidence**: Run `--profile discovery` vs `--profile production` side-by-side during peak Base hours. Compare scoreboard output. This is the proof the reviewer asked for in fix step 9.
 
 ## 5.1) Contract Checks
 status/reasons consistency: OK (REACHED — provenance complete with fresh evidence)

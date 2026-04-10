@@ -48,6 +48,10 @@ def parse_args():
     ap.add_argument("--no-m7-cold", action="store_true", help="Skip M7 cold lane")
     ap.add_argument("--chain", type=str, default="arbitrum_one",
                     help="Chain for M7 lanes (default: arbitrum_one)")
+    ap.add_argument("--m7-profile", type=str, default="production",
+                    choices=["production", "discovery"],
+                    dest="m7_profile",
+                    help="M7 pair profile: production (narrow) or discovery (wider contour)")
     ap.add_argument("--restart-delay", type=int, default=5, help="Seconds before restarting a crashed process")
     ap.add_argument("--max-restarts", type=int, default=10, help="Max restarts per process before giving up")
     return ap.parse_args()
@@ -165,6 +169,7 @@ def main():
             py, "scripts/m7a_orderflow_loop.py",
             "--lane", "hot",
             "--chain", args.chain,
+            "--profile", args.m7_profile,
             "--ws-blocks", str(args.m7_hot_blocks),
             "--pause", str(args.m7_hot_pause),
         ],
@@ -180,6 +185,7 @@ def main():
                 py, "scripts/m7a_orderflow_loop.py",
                 "--lane", "cold",
                 "--chain", args.chain,
+                "--profile", args.m7_profile,
                 "--ws-blocks", str(args.m7_cold_blocks),
                 "--pause", str(args.m7_cold_pause),
             ],
