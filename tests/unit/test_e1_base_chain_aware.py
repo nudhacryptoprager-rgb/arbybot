@@ -1484,15 +1484,15 @@ class TestE1_8_DashboardM7Badge:
         """dashboard.html has JS rendering M7 freshness info."""
         from pathlib import Path
         html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
-        assert "M7 ROLLING" in html
+        assert "M7 ${profileLabel}" in html
         assert "m7HotTs" in html
         assert "m7Chain" in html
 
     def test_m7_chain_read_from_artifact(self):
-        """Dashboard JS reads chain from m7_hot or m7_orderflow."""
+        """Dashboard JS reads chain from m7_hot or m7_orderflow (profile-aware)."""
         from pathlib import Path
         html = Path("monitoring/dashboard.html").read_text(encoding="utf-8")
-        assert "m7Hot?.chain" in html or "m7Cold?.chain" in html
+        assert "activeHot?.chain" in html or "activeCold?.chain" in html
 
 
 # ---------------------------------------------------------------------------

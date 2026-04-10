@@ -314,3 +314,99 @@ class TestModeWsLiveProfilePath:
         assert "m7_orderflow_latest_discovery.json" in ws._ROLLING_M7_PATH
         # Restore
         _set_rolling_m7_profile("production")
+
+
+class TestE193DashboardContracts:
+    """E1.9.3: Tests for signal_counts backfill and dashboard server discovery endpoint."""
+
+    def test_signal_counts_backfill_on_empty_window(self, tmp_path):
+        """Cold lane heartbeat on old snapshot without signal_counts should add it."""
+        import json
+        import m7.orderflow.mode_ws_live as ws
+
+        # Create an old-style artifact without signal_counts
+        old_artifact = {
+            "mode": "ws_live",
+            "timestamp": "2026-04-08T09:54:01Z",
+            "run_context": {"run_timestamp": "2026-04-08T09:54:01Z"},
+            "events_count": 5,
+            "results_count": 3,
+        }
+        rolling_path = str(tmp_path / "m7_orderflow_latest.json")
+        with open(rolling_path, "w") as f:
+            json.dump(old_artifact, f)
+
+        # Patch module-level path and call _write_rolling_m7 with empty artifact
+        original_path = ws._ROLLING_M7_PATH
+        try:
+            ws._ROLLING_M7_PATH = rolling_path
+            empty_artifact = {
+                "events_count": 0,
+                "m7_loop_context": {"iteration": 42},
+            }
+            ws._write_rolling_m7(empty_artifact)
+
+            with open(rolling_path) as f:
+                result = json.load(f)
+
+            assert "signal_counts" in result
+            assert result["signal_counts"]["scored"] == 0
+            assert result["signal_counts"]["submit_ready"] == 0
+            assert result["snapshot_preserved"] is True
+        finally:
+            ws._ROLLING_M7_PATH = original_path
+
+    def test_signal_counts_preserved_when_already_exists(self, tmp_path):
+        """Cold lane heartbeat should not overwrite existing signal_counts."""
+        import json
+        import m7.orderflow.mode_ws_live as ws
+
+        existing_artifact = {
+            "mode": "ws_live",
+            "timestamp": "2026-04-09T10:00:00Z",
+            "run_context": {"run_timestamp": "2026-04-09T10:00:00Z"},
+            "events_count": 10,
+            "signal_counts": {
+                "scored": 10, "pair_resolved": 8,
+                "size_valid_for_token": 7, "same_block": 10,
+                "positive": 3, "route_viable": 2,
+                "profit_guard_passed": 1, "sim_passed": 0,
+                "submit_ready": 0,
+            },
+        }
+        rolling_path = str(tmp_path / "m7_orderflow_latest.json")
+        with open(rolling_path, "w") as f:
+            json.dump(existing_artifact, f)
+
+        original_path = ws._ROLLING_M7_PATH
+        try:
+            ws._ROLLING_M7_PATH = rolling_path
+            empty_artifact = {
+                "events_count": 0,
+                "m7_loop_context": {"iteration": 99},
+            }
+            ws._write_rolling_m7(empty_artifact)
+
+            with open(rolling_path) as f:
+                result = json.load(f)
+
+            # signal_counts should be unchanged (preserving the historical data)
+            assert result["signal_counts"]["scored"] == 10
+            assert result["signal_counts"]["positive"] == 3
+        finally:
+            ws._ROLLING_M7_PATH = original_path
+
+    def test_dashboard_server_discovery_files(self):
+        """Dashboard server has DISCOVERY_ARTIFACT_FILES dict with correct paths."""
+        from monitoring.dashboard_server import DISCOVERY_ARTIFACT_FILES
+        assert "m7_hot" in DISCOVERY_ARTIFACT_FILES
+        assert "m7_hot_rollup" in DISCOVERY_ARTIFACT_FILES
+        assert "m7_orderflow" in DISCOVERY_ARTIFACT_FILES
+        assert "m7_discovery_scoreboard" in DISCOVERY_ARTIFACT_FILES
+        for key, path in DISCOVERY_ARTIFACT_FILES.items():
+            assert "_discovery" in str(path), f"{key} path should contain _discovery"
+
+    def test_dashboard_server_has_discovery_endpoint(self):
+        """Dashboard server handler should have _serve_discovery_data method."""
+        from monitoring.dashboard_server import DashboardHandler
+        assert hasattr(DashboardHandler, "_serve_discovery_data")

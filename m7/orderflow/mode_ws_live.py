@@ -1193,6 +1193,16 @@ def _write_rolling_m7(artifact: dict) -> None:
                     # Keep snapshot_run_timestamp as the original scoring timestamp
                     existing.setdefault("snapshot_run_timestamp",
                                         existing.get("run_context", {}).get("run_timestamp"))
+                    # E1.9.3: Ensure signal_counts exists even on old snapshots
+                    # so dashboard A/B comparison is symmetric.
+                    if "signal_counts" not in existing:
+                        existing["signal_counts"] = {
+                            "scored": 0, "pair_resolved": 0,
+                            "size_valid_for_token": 0, "same_block": 0,
+                            "positive": 0, "route_viable": 0,
+                            "profit_guard_passed": 0, "sim_passed": 0,
+                            "submit_ready": 0,
+                        }
                     with open(_ROLLING_M7_PATH, "w", encoding="utf-8") as f:
                         json.dump(existing, f, indent=2, default=str)
                     logger.info(

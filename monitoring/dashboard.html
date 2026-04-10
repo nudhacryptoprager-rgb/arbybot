@@ -132,6 +132,20 @@ tr:hover{background:#1c2128}
     <div id="probes-body"></div>
   </div>
 
+  <!-- E1.9.3: M7 Profile Switch Bar -->
+  <div id="m7-profile-bar" style="grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:8px 14px;background:#161b22;border:1px solid #30363d;border-radius:8px;font-size:.8rem">
+    <label style="color:#58a6ff;font-weight:600">M7 Profile:</label>
+    <button id="btn-m7-production" class="refresh-btn" style="background:#238636;color:#fff;border-color:#238636" onclick="switchM7Profile('production')">Production</button>
+    <button id="btn-m7-discovery" class="refresh-btn" onclick="switchM7Profile('discovery')">Discovery</button>
+    <span id="m7-profile-info" style="color:#8b949e;font-size:.72rem"></span>
+  </div>
+
+  <!-- E1.9.3: M7 Session Status Block -->
+  <div class="panel" id="p-m7-session" style="grid-column:1/-1">
+    <h2>M7 Session Status <span class="src-badge" id="m7-session-source">(production)</span></h2>
+    <div id="m7-session-body"></div>
+  </div>
+
   <!-- Panel 11: M7 Orderflow (cold snapshot + hot lane) -->
   <div class="panel" id="p-m7" style="grid-column:1/-1">
     <h2>11. M7 Orderflow <span class="src-badge">(m7_orderflow + m7_hot + m7_hot_intents, 1s poll)</span></h2>
@@ -153,9 +167,68 @@ let latestM7Intents = null;
 let latestM7Rollup = null;
 let focalChain = '';  // R39q: '' = PRIMARY, else chain key from long_scan
 
+// E1.9.3: Discovery namespace state
+let m7Profile = 'production';  // 'production' or 'discovery'
+let latestDiscovery = null;    // Discovery namespace artifacts from /api/discovery
+let discoveryM7Hot = null;
+let discoveryM7Intents = null;
+let discoveryM7Rollup = null;
+let discoveryM7Orderflow = null;
+
+function switchM7Profile(profile) {
+  m7Profile = profile;
+  const btnProd = $('btn-m7-production');
+  const btnDisc = $('btn-m7-discovery');
+  if (profile === 'production') {
+    btnProd.style.background = '#238636'; btnProd.style.color = '#fff'; btnProd.style.borderColor = '#238636';
+    btnDisc.style.background = '#21262d'; btnDisc.style.color = '#c9d1d9'; btnDisc.style.borderColor = '#30363d';
+  } else {
+    btnDisc.style.background = '#6e40c9'; btnDisc.style.color = '#fff'; btnDisc.style.borderColor = '#6e40c9';
+    btnProd.style.background = '#21262d'; btnProd.style.color = '#c9d1d9'; btnProd.style.borderColor = '#30363d';
+  }
+  $('m7-session-source').textContent = `(${profile})`;
+  renderActiveM7();
+}
+
+function renderActiveM7() {
+  if (m7Profile === 'production') {
+    renderM7Session(latestM7Rollup, latestM7Hot, latestRolling?.m7_orderflow);
+    renderM7Orderflow(latestRolling?.m7_orderflow, latestM7Hot, latestM7Intents);
+  } else {
+    renderM7Session(discoveryM7Rollup, discoveryM7Hot, discoveryM7Orderflow);
+    renderM7Orderflow(discoveryM7Orderflow, discoveryM7Hot, discoveryM7Intents);
+  }
+  updateM7Banner();
+}
+
+function loadDiscoveryData() {
+  fetch('/api/discovery')
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      latestDiscovery = data;
+      discoveryM7Hot = data?.m7_hot || discoveryM7Hot;
+      discoveryM7Intents = data?.m7_hot_intents || discoveryM7Intents;
+      discoveryM7Rollup = data?.m7_hot_rollup || discoveryM7Rollup;
+      discoveryM7Orderflow = data?.m7_orderflow || discoveryM7Orderflow;
+      if (m7Profile === 'discovery') renderActiveM7();
+      updateM7ProfileInfo();
+    })
+    .catch(() => {});  // Silent — discovery may not exist yet
+}
+
+function updateM7ProfileInfo() {
+  const info = $('m7-profile-info');
+  const prodTs = latestM7Rollup?.last_updated || latestM7Hot?.timestamp || '';
+  const discTs = discoveryM7Rollup?.last_updated || discoveryM7Hot?.timestamp || '';
+  const prodEvts = latestM7Rollup?.session?.session_events_seen_total ?? '?';
+  const discEvts = discoveryM7Rollup?.session?.session_events_seen_total ?? '?';
+  info.innerHTML = `Prod: ${prodTs ? prodTs.slice(0,19)+'Z' : 'N/A'} (${prodEvts} events) | Disc: ${discTs ? discTs.slice(0,19)+'Z' : 'N/A'} (${discEvts} events)`;
+}
+
 function loadData() {
   loadRollingData();
   loadHotData();
+  loadDiscoveryData();
 }
 
 function loadRollingData() {
@@ -166,7 +239,7 @@ function loadRollingData() {
       latestRolling = data;
       renderRolling(data);
       if (!latestM7Hot && data?.m7_hot) latestM7Hot = data.m7_hot;
-      renderM7Orderflow(data.m7_orderflow, latestM7Hot || data?.m7_hot || null, latestM7Intents);
+      renderActiveM7();
       if (!latestHot && data?.hot_loop) renderHotLoop(data.hot_loop);
     })
     .catch(e => { $('error-msg').textContent = 'Failed to load rolling data: ' + e.message; });
@@ -180,7 +253,7 @@ function loadHotData() {
       latestM7Hot = data?.m7_hot || latestM7Hot || null;
       latestM7Intents = data?.m7_hot_intents || latestM7Intents || null;
       latestM7Rollup = data?.m7_hot_rollup || latestM7Rollup || null;
-      renderM7Orderflow(latestRolling?.m7_orderflow || null, latestM7Hot, latestM7Intents);
+      renderActiveM7();
     })
     .catch(e => {
       if (!latestRolling) $('error-msg').textContent = 'Failed to load hot stream: ' + e.message;
@@ -265,34 +338,8 @@ function renderRolling(data) {
     staleBanner.style.display = 'none';
   }
 
-  // M7.E1.8: M7 freshness badge — separate M7 rolling freshness from PRIMARY
-  const m7Banner = $('m7-freshness-banner');
-  const m7Hot = data.m7_hot || latestM7Hot;
-  const m7Cold = data.m7_orderflow;
-  const m7Rollup = latestM7Rollup || data.m7_hot_rollup;
-  const m7HotTs = m7Hot?.current_window_timestamp || m7Hot?.timestamp || '';
-  const m7ColdTs = m7Cold?.timestamp || '';
-  const m7Chain = m7Hot?.chain || m7Cold?.chain || '';
-  const m7SessionEvts = m7Rollup?.session?.session_events_seen_total ?? '?';
-  const m7SessionWin = m7Rollup?.session?.session_windows_seen ?? '?';
-  if (m7HotTs || m7ColdTs) {
-    const hotAge = m7HotTs ? Math.round((Date.now() - new Date(m7HotTs).getTime()) / 60000) : null;
-    const hotFresh = hotAge !== null && hotAge < 10;
-    const hotColor = hotFresh ? '#3fb950' : hotAge !== null && hotAge < 60 ? '#d29922' : '#da3633';
-    const hotLabel = hotAge !== null ? `${hotAge}m ago` : 'N/A';
-    const coldAge = m7ColdTs ? Math.round((Date.now() - new Date(m7ColdTs).getTime()) / 60000) : null;
-    const coldLabel = coldAge !== null ? `${coldAge}m ago` : 'N/A';
-    let bannerHtml = `<span style="color:#58a6ff;font-weight:600">M7 ROLLING</span>`;
-    if (m7Chain) bannerHtml += ` <span style="color:#8b949e">[${m7Chain}]</span>`;
-    bannerHtml += ` | Hot: <span style="color:${hotColor};font-weight:600">${(m7HotTs||'?').slice(0,19)}Z</span> (${hotLabel})`;
-    bannerHtml += ` | Cold: ${(m7ColdTs||'?').slice(0,19)}Z (${coldLabel})`;
-    bannerHtml += ` | Session: ${m7SessionWin} windows, ${m7SessionEvts} events`;
-    if (m7SessionEvts === 0) bannerHtml += ` <span style="color:#d29922">(empty market)</span>`;
-    m7Banner.innerHTML = bannerHtml;
-    m7Banner.style.display = 'block';
-  } else {
-    m7Banner.style.display = 'none';
-  }
+  // M7.E1.8 + E1.9.3: M7 freshness badge — profile-aware
+  updateM7Banner();
 
   renderChainStatus(ls);
   renderFrontier(ls);
@@ -963,6 +1010,138 @@ function renderRejects(rs, focalPc) {
 
 // Panel 11: M7 Orderflow — 3-section split (M7.A.5.42)
 // M7.A.5.46: +intents section, execution_funnel is sole headline truth
+// E1.9.3: M7 freshness banner — profile-aware with namespace/snapshot info
+function updateM7Banner() {
+  const m7Banner = $('m7-freshness-banner');
+  // Pick artifacts based on active profile
+  const activeHot = m7Profile === 'discovery' ? discoveryM7Hot : (latestM7Hot || latestRolling?.m7_hot);
+  const activeCold = m7Profile === 'discovery' ? discoveryM7Orderflow : latestRolling?.m7_orderflow;
+  const activeRollup = m7Profile === 'discovery' ? discoveryM7Rollup : latestM7Rollup;
+  const m7HotTs = activeHot?.current_window_timestamp || activeHot?.timestamp || '';
+  const m7ColdTs = activeCold?.timestamp || '';
+  const m7Chain = activeHot?.chain || activeCold?.chain || '';
+  const sess = activeRollup?.session || {};
+  const m7SessionEvts = sess.session_events_seen_total ?? activeRollup?.session_events_seen_total ?? '?';
+  const m7SessionWin = sess.session_windows_seen ?? activeRollup?.session_windows_seen ?? '?';
+  const snapshotPreserved = activeCold?.snapshot_preserved === true;
+  const windowEmpty = (m7SessionEvts === 0 || m7SessionEvts === '?');
+  const profileLabel = m7Profile === 'discovery' ? 'DISCOVERY' : 'PRODUCTION';
+  const profileColor = m7Profile === 'discovery' ? '#6e40c9' : '#238636';
+
+  if (m7HotTs || m7ColdTs) {
+    const hotAge = m7HotTs ? Math.round((Date.now() - new Date(m7HotTs).getTime()) / 60000) : null;
+    const hotFresh = hotAge !== null && hotAge < 10;
+    const hotColor = hotFresh ? '#3fb950' : hotAge !== null && hotAge < 60 ? '#d29922' : '#da3633';
+    const hotLabel = hotAge !== null ? `${hotAge}m ago` : 'N/A';
+    const coldAge = m7ColdTs ? Math.round((Date.now() - new Date(m7ColdTs).getTime()) / 60000) : null;
+    const coldLabel = coldAge !== null ? `${coldAge}m ago` : 'N/A';
+    let h = `<span style="color:${profileColor};font-weight:600">M7 ${profileLabel}</span>`;
+    if (m7Chain) h += ` <span style="color:#8b949e">[${m7Chain}]</span>`;
+    h += ` | Hot: <span style="color:${hotColor};font-weight:600">${(m7HotTs||'?').slice(0,19)}Z</span> (${hotLabel})`;
+    h += ` | Cold: ${(m7ColdTs||'?').slice(0,19)}Z (${coldLabel})`;
+    if (snapshotPreserved) h += ` <span style="color:#d29922">[snapshot preserved]</span>`;
+    h += ` | Session: ${m7SessionWin} windows, ${m7SessionEvts} events`;
+    if (windowEmpty) h += ` <span style="color:#d29922">(empty market)</span>`;
+    m7Banner.innerHTML = h;
+    m7Banner.style.display = 'block';
+  } else {
+    m7Banner.style.display = 'none';
+  }
+}
+
+// E1.9.3: Session Status Block — session KPIs primary, historical secondary
+function renderM7Session(rollup, hot, cold) {
+  const body = $('m7-session-body');
+  if (!rollup && !hot) {
+    body.innerHTML = '<em class="na">No M7 session data available. Run nonstop runtime to populate.</em>';
+    return;
+  }
+
+  const sess = rollup?.session || {};
+  const sessWin = sess.session_windows_seen ?? rollup?.session_windows_seen ?? 0;
+  const sessEvts = sess.session_events_seen_total ?? rollup?.session_events_seen_total ?? 0;
+  const sessBridge = sess.session_bridge_pool_hit_total ?? rollup?.session_bridge_pool_hit_total ?? 0;
+  const sessScored = sess.session_fast_path_scored_total ?? rollup?.session_fast_path_scored_total ?? 0;
+  const sessStart = sess.session_started_at ?? rollup?.session_started_at ?? '';
+  const sessId = sess.session_id ?? rollup?.session_id ?? '';
+
+  // Historical cumulative
+  const histWin = rollup?.windows_seen ?? 0;
+  const histEvts = rollup?.events_seen_total ?? 0;
+  const histPositive = rollup?.fast_path_positive_total ?? 0;
+  const histViable = rollup?.route_viable_total ?? 0;
+  const histGuard = rollup?.profit_guard_passed_total ?? 0;
+  const histGasRej = rollup?.matched_then_gas_rejected_total ?? 0;
+  const histWinWithEvts = rollup?.windows_with_events ?? 0;
+
+  // Empty window streak
+  const noEvtsWindows = (rollup?.window_miss_classes?.no_events_in_window) ?? 0;
+  const lastNonEmpty = rollup?.last_nonempty_window_at ?? '';
+  const windowEmpty = sessEvts === 0;
+
+  // Hot lane status
+  const hotFresh = hot?.timestamp ? (Date.now() - new Date(hot.timestamp).getTime()) < 600000 : false;
+  // Cold lane status
+  const coldFresh = cold?.timestamp ? (Date.now() - new Date(cold.timestamp).getTime()) < 600000 : false;
+  const snapshotPreserved = cold?.snapshot_preserved === true;
+
+  let html = '';
+
+  // Current Session Status section
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+
+  // Left: Session truth
+  html += '<div>';
+  html += '<h3 style="font-size:.85rem;color:#3fb950;margin-bottom:6px">Current Session</h3>';
+  if (windowEmpty) {
+    html += '<div style="padding:6px 10px;margin:0 0 8px;border:1px solid #d29922;border-radius:6px;background:#1a1500;font-size:.78rem;color:#d29922">';
+    html += '<strong>EMPTY MARKET</strong>: 0 swap events detected this session. Run counter is incrementing (alive), but no scoring activity.';
+    html += '</div>';
+  }
+  html += `<div class="kpi">
+    <div class="kpi-item"><div class="kpi-val">${sessWin}</div><div class="kpi-lbl">Session windows</div></div>
+    <div class="kpi-item"><div class="kpi-val ${sessEvts > 0 ? 'pos' : ''}">${sessEvts}</div><div class="kpi-lbl">Session events</div></div>
+    <div class="kpi-item"><div class="kpi-val">${sessBridge}</div><div class="kpi-lbl">Bridge hits</div></div>
+    <div class="kpi-item"><div class="kpi-val">${sessScored}</div><div class="kpi-lbl">Fast scored</div></div>
+  </div>`;
+  html += '<table style="margin-top:8px"><tr><th>Check</th><th>Status</th></tr>';
+  html += `<tr><td>Hot lane fresh</td><td>${hotFresh ? '<span class="badge pass">YES</span>' : '<span class="badge warn">STALE</span>'}</td></tr>`;
+  html += `<tr><td>Cold lane fresh</td><td>${coldFresh ? '<span class="badge pass">YES</span>' : '<span class="badge warn">STALE</span>'} ${snapshotPreserved ? '(snapshot preserved)' : ''}</td></tr>`;
+  html += `<tr><td>Events this session</td><td>${sessEvts > 0 ? '<span class="badge pass">'+sessEvts+'</span>' : '<span class="badge warn">0</span>'}</td></tr>`;
+  html += `<tr><td>Market empty</td><td>${windowEmpty ? '<span class="badge warn">YES</span>' : '<span class="badge pass">NO</span>'}</td></tr>`;
+  html += `<tr><td>Session ID</td><td style="font-size:.72rem;color:#8b949e">${sessId || 'N/A'}</td></tr>`;
+  html += `<tr><td>Session started</td><td style="font-size:.72rem;color:#8b949e">${sessStart ? sessStart.slice(0,19)+'Z' : 'N/A'}</td></tr>`;
+  html += '</table>';
+  html += '</div>';
+
+  // Right: Historical cumulative (secondary)
+  html += '<div>';
+  html += '<h3 style="font-size:.85rem;color:#8b949e;margin-bottom:6px">Historical Cumulative</h3>';
+  html += `<div class="kpi">
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histWin}</div><div class="kpi-lbl">Total windows</div></div>
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histEvts}</div><div class="kpi-lbl">Total events</div></div>
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histPositive}</div><div class="kpi-lbl">Positive total</div></div>
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histViable}</div><div class="kpi-lbl">Viable total</div></div>
+  </div>`;
+  html += `<div class="kpi" style="margin-top:8px">
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histGuard}</div><div class="kpi-lbl">Guard passed total</div></div>
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histGasRej}</div><div class="kpi-lbl">Gas rejected total</div></div>
+    <div class="kpi-item"><div class="kpi-val" style="color:#8b949e">${histWinWithEvts}</div><div class="kpi-lbl">Windows with events</div></div>
+  </div>`;
+  // Empty-window streak info
+  html += '<table style="margin-top:8px"><tr><th>Metric</th><th>Value</th></tr>';
+  html += `<tr><td>Empty-window count</td><td>${noEvtsWindows}</td></tr>`;
+  const emptyRate = histWin > 0 ? (noEvtsWindows / histWin * 100).toFixed(1) + '%' : '—';
+  html += `<tr><td>Empty-window rate</td><td>${emptyRate}</td></tr>`;
+  html += `<tr><td>Last non-empty session</td><td style="font-size:.72rem">${lastNonEmpty ? lastNonEmpty.slice(0,19)+'Z' : 'unknown'}</td></tr>`;
+  html += `<tr><td>Dominant miss</td><td>${rollup?.dominant_hot_miss_reason ?? 'N/A'}</td></tr>`;
+  html += '</table>';
+  html += '</div>';
+
+  html += '</div>';
+  body.innerHTML = html;
+}
+
 function renderM7Orderflow(m7, m7Hot, m7Intents) {
   if (!m7) { $('m7-body').innerHTML = '<em class="na">No M7 data (m7_orderflow_latest.json not found \u2014 run ws-live mode to populate)</em>'; return; }
 
@@ -972,6 +1151,8 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
   const results = m7.results_count || 0;
   const viable = m7.viable_count || 0;
   const scored = m7.scored_results_count || 0;
+  const snapshotPreserved = m7.snapshot_preserved === true;
+  const snapshotTs = m7.snapshot_run_timestamp || '';
 
   // Signal classification (M7.A.5.42)
   const sc = m7.signal_classification || {};
@@ -1016,6 +1197,19 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
   const topExecCandidates = m7.top_executable_candidates || [];
 
   let html = '';
+
+  // E1.9.3: Cold snapshot notice — distinguish preserved historical from current empty
+  if (snapshotPreserved) {
+    html += '<div style="padding:6px 10px;margin:0 0 10px;border:1px solid #d29922;border-radius:6px;background:#1a1500;font-size:.78rem;color:#d29922">';
+    html += '<strong>COLD SNAPSHOT PRESERVED</strong>: Current cold window is empty. Data below is from a prior session';
+    if (snapshotTs) html += ' (' + snapshotTs.slice(0,19) + 'Z)';
+    html += '. Values may appear stale but this is intentional \u2014 cold lane preserves the last non-empty snapshot.';
+    html += '</div>';
+  } else if (evts === 0 && scored === 0) {
+    html += '<div style="padding:6px 10px;margin:0 0 10px;border:1px solid #30363d;border-radius:6px;background:#161b22;font-size:.78rem;color:#8b949e">';
+    html += '<strong>EMPTY WINDOW</strong>: No swap events in current cold window. Counters below reflect this window only.';
+    html += '</div>';
+  }
 
   // \u2500\u2500 Section 1: Hot Execution Ready \u2500\u2500
   const hotScored = m7Hot?.fast_path?.scored || 0;
@@ -1146,9 +1340,10 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
       html += '<div style="font-size:.75rem;color:#8b949e">No hot-scored intents this window.</div>';
     }
   }
-  // M7.A.5.47: Hot Cumulative Rollup section — from /api/hot m7_hot_rollup
-  if (latestM7Rollup) {
-    const ru = latestM7Rollup;
+  // M7.A.5.47 + E1.9.3: Hot Cumulative Rollup section — profile-aware
+  const activeRollup = m7Profile === 'discovery' ? discoveryM7Rollup : latestM7Rollup;
+  if (activeRollup) {
+    const ru = activeRollup;
     html += '<h3 style="font-size:.85rem;color:#bc8cff;margin:14px 0 4px">Hot Cumulative Rollup</h3>';
     html += `<div class="kpi">
       <div class="kpi-item"><div class="kpi-val">${ru.windows_seen ?? 0}</div><div class="kpi-lbl">Windows</div></div>
@@ -1202,7 +1397,9 @@ function renderM7Orderflow(m7, m7Hot, m7Intents) {
   }
 
   // Footer meta
-  html += `<div style="margin-top:12px;font-size:.7rem;color:#6e7681">Chain: ${chain} | Events: ${evts} | Scored: ${scored} | Updated: ${ts.slice(0,19)}Z</div>`;
+  const profileTag = m7Profile === 'discovery' ? ' | Profile: DISCOVERY' : ' | Profile: PRODUCTION';
+  const snapTag = snapshotPreserved ? ' | Snapshot: preserved from ' + (snapshotTs || 'unknown').slice(0,19) + 'Z' : '';
+  html += `<div style="margin-top:12px;font-size:.7rem;color:#6e7681">Chain: ${chain} | Events: ${evts} | Scored: ${scored} | Updated: ${ts.slice(0,19)}Z${profileTag}${snapTag}</div>`;
 
   $('m7-body').innerHTML = html;
 }
@@ -1244,6 +1441,8 @@ loadData();
 setInterval(loadHotData, 1000);
 // Slower full rolling refresh for heavy panels
 setInterval(loadRollingData, 15000);
+// E1.9.3: Discovery namespace refresh (same cadence as rolling)
+setInterval(loadDiscoveryData, 15000);
 </script>
 </body>
 </html>

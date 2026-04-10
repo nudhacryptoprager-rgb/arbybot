@@ -32,6 +32,16 @@ ARTIFACT_FILES = {
     "m7_hot_rollup": ROLLING_DIR / "m7_hot_rollup_latest.json",
 }
 
+# E1.9.3: Discovery namespace artifacts (parallel to production)
+DISCOVERY_ARTIFACT_FILES = {
+    "m7_orderflow": ROLLING_DIR / "m7_orderflow_latest_discovery.json",
+    "m7_hot": ROLLING_DIR / "m7_hot_latest_discovery.json",
+    "m7_hot_intents": ROLLING_DIR / "m7_hot_intents_latest_discovery.json",
+    "m7_cold_hot_bridge": ROLLING_DIR / "m7_cold_hot_bridge_discovery.json",
+    "m7_hot_rollup": ROLLING_DIR / "m7_hot_rollup_latest_discovery.json",
+    "m7_discovery_scoreboard": ROLLING_DIR / "m7_discovery_scoreboard_discovery.json",
+}
+
 DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"
 
 
@@ -45,6 +55,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._serve_rolling_data()
         elif self.path == "/api/hot":
             self._serve_hot_data()
+        elif self.path == "/api/discovery":
+            self._serve_discovery_data()
         else:
             self.send_error(404)
 
@@ -97,6 +109,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 result[key] = None
         payload = json.dumps(result, default=str).encode("utf-8")
 
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_discovery_data(self):
+        """E1.9.3: Serve discovery namespace M7 artifacts."""
+        result = {}
+        for key, path in DISCOVERY_ARTIFACT_FILES.items():
+            if path.is_file():
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        result[key] = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    result[key] = None
+            else:
+                result[key] = None
+        payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))

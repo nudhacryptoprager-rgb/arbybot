@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.9.1 OPEN — artifact namespace isolation for discovery/production parallel safety** (E1.9.1: discovery profile writes to separate rolling files with _discovery suffix. 7 artifacts namespaced. Production paths unchanged. Dashboard reads production only. Prerequisite for honest A/B evidence.)  
+**Status**: **M7.E1.9.3 OPEN — session-first dashboard + namespace-aware UI + signal_counts fix** (E1.9.3: dashboard rewritten with production/discovery toggle, session status block, empty-window notices, cold snapshot awareness. signal_counts backfill in cold heartbeat. 3829 tests pass.)  
 **Updated**: 2026-04-10
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -220,6 +220,66 @@ CI: 3825 passed, 6 skipped. ALL GATES PASSED.
 
 ---
 
+### M7.E1.9.2: Peak-Hours A/B Evidence (OPEN)
+
+**Goal**: Execute 3 sequential A/B pairs (production→discovery) during peak hours. Collect 5 reviewer metrics per run. Formalize blocker if all 3 pairs empty.
+
+**Evidence — E1.9.2 A/B pairs (April 10, 13:23-14:27 UTC)**:
+
+| Run | Profile | Window (UTC) | events_seen | fast_path_positive | route_viable | guard_passed | gas_rejected |
+|-----|---------|-------------|------------|-------------------|-------------|-------------|-------------|
+| Pair 1 | production | 13:23–13:33Z | 0 | 17 | 14 | 14 | 129 |
+| Pair 1 | discovery | 13:34–13:44Z | 0 | 0 | 0 | 0 | 0 |
+| Pair 2 | production | 13:45–13:55Z | 0 | 17 | 14 | 14 | 129 |
+| Pair 2 | discovery | 13:55–14:06Z | 0 | 0 | 0 | 0 | 0 |
+| Pair 3 | production | 14:06–14:16Z | 0 | 17 | 14 | 14 | 129 |
+| Pair 3 | discovery | 14:17–14:27Z | 0 | 0 | 0 | 0 | 0 |
+
+All 6 runs: `session_events_seen_total=0`. Production cumulative totals unchanged from prior sessions. Discovery cumulative totals remain at 0.
+
+**Namespace isolation re-confirmed**: Production last ts=2026-04-10T14:16:45Z, Discovery last ts=2026-04-10T14:27:30Z. Zero cross-contamination across all 6 runs.
+
+**Discovery scoreboard**: `{"families": {}, "updated_at": null, "profile": "discovery"}` — empty (no events to populate).
+
+**Cold artifact asymmetry**: Production cold artifact (`m7_orderflow_latest.json`) preserves April 8 snapshot (old schema, no `signal_counts` key). Discovery cold artifact uses current 9-key schema. Cosmetic — auto-resolves on first non-empty production cold run.
+
+**Blocker formalized — market-window scarcity**: 9 total proof-runs across 2 sessions (E1.9.1 off-peak 12:38-12:59Z + E1.9.2 peak-edge 13:23-14:27Z) all returned 0 swap events for monitored pairs. This is NOT a code, infra, or namespace issue — the monitored Base pairs simply do not produce swap events at sufficient frequency during the observed windows. Pair 3 ran inside peak hours (14:06-14:27Z) and still saw 0 events.
+
+**Funnel comparison**: NOT POSSIBLE — cannot compare production vs discovery conversion rates with 0 events in both profiles.
+
+**Next**: Longer runs (1-2h) during deeper peak (16:00-20:00 UTC), or expand pair universe, to break through event scarcity ceiling.
+
+---
+
+### M7.E1.9.3: Session-First Dashboard + Namespace-Aware UI (OPEN)
+
+**Goal**: Per reviewer commit 56aa6de1 — dashboard must be "visibly alive" even with 0 events. Session KPIs primary, historical secondary. Discovery namespace switchable in UI. Cold artifact asymmetry fixed.
+
+**Reviewer issues addressed**:
+
+| Issue | Description | Fix |
+|-------|------------|-----|
+| #1 | Wrong metrics for empty-window regime | Session status block with empty market notice |
+| #4 | Discovery not visible in dashboard | Production/Discovery toggle via switchM7Profile() |
+| #5 | Panel 11 mixes fresh hot with stale cold | COLD SNAPSHOT PRESERVED banner with original ts |
+| #6 | Cold artifact signal_counts=null (production) | Backfill 9-key zero dict in heartbeat path |
+| #7 | No session vs historical distinction | Left=Current Session, Right=Historical Cumulative |
+
+**Code changes (5 files)**:
+- `monitoring/dashboard_server.py`: `/api/discovery` endpoint, `DISCOVERY_ARTIFACT_FILES` dict (6 discovery namespace files).
+- `monitoring/dashboard.html`: Profile switch bar, session status block (`renderM7Session`), empty-window notices, profile-aware banner (`updateM7Banner`), profile-aware rollup, discovery data loading with 15s polling.
+- `m7/orderflow/mode_ws_live.py`: `signal_counts` backfill in `_write_rolling_m7()` heartbeat path — adds 9-key zero dict when key missing from existing snapshot.
+- `tests/unit/test_e1_9_discovery_lane.py`: 4 new tests (`TestE193DashboardContracts`).
+- `tests/unit/test_e1_base_chain_aware.py`: 2 updated assertions for profile-aware dashboard code.
+
+**signal_counts backfill contract**: On empty-window heartbeat (`events_count=0`), if the preserved snapshot lacks `signal_counts`, backfill with `{"scored": 0, "pair_resolved": 0, "size_valid_for_token": 0, "same_block": 0, "positive": 0, "route_viable": 0, "profit_guard_passed": 0, "sim_passed": 0, "submit_ready": 0}`. Existing `signal_counts` are never overwritten.
+
+**E1.9.2 proves that the dashboard stagnation problem is now mostly representational rather than infrastructural** — the scanning infrastructure writes honest zeros, timestamps refresh correctly, and namespace isolation is proven. The dashboard just wasn't surfacing this information in a way that distinguished "alive with no events" from "dead."
+
+CI: 3829 passed, 6 skipped. ALL GATES PASSED.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
@@ -239,7 +299,7 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
 2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — E1.5: ~7% viable rate (14/196 scored). Near-exec frontier at -2.20 bps.
 3. ~~**HOT LANE NOT WRITING (Base)**~~ — **RESOLVED in E1.7**.
-4. **NO FRESH NON-EMPTY WINDOW** — 1.5h Base run (1251 windows, 0 events). Market-dependent, not code. Dashboard now correctly surfaces M7 freshness separately.
+4. **MARKET-WINDOW SCARCITY — CONFIRMED (Base)** — 9 proof-runs (12:38-14:27 UTC, April 10) across production + discovery profiles, all 0 events. Not code/infra — monitored pairs do not produce swap events at observed frequencies. Need deeper peak hours or wider pair universe.
 5. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
 6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Scaffolded, not wired.
 7. ~~**Dashboard dead appearance**~~ — **RESOLVED in E1.8**: M7 freshness banner separates M7 vs PRIMARY rolling.
