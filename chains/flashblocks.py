@@ -34,8 +34,13 @@ from typing import Any, Optional
 logger = logging.getLogger("chains.flashblocks")
 
 # Default Flashblocks endpoints (public, rate-limited — read-path only)
-DEFAULT_FLASHBLOCKS_WS = "wss://base.flashblocks.base.org/ws"
-DEFAULT_FLASHBLOCKS_HTTP = "https://base.flashblocks.base.org"
+# E1.12.1: Fixed URL from incorrect base.flashblocks.base.org to
+# mainnet.flashblocks.base.org (infrastructure stream).
+# NOTE: The infrastructure stream is for node operators only.
+# For production, use a Flashblocks-aware RPC provider (Alchemy, Quicknode)
+# via ARBY_FLASHBLOCKS_WS env var.
+DEFAULT_FLASHBLOCKS_WS = "wss://mainnet.flashblocks.base.org/ws"
+DEFAULT_FLASHBLOCKS_HTTP = "https://mainnet.flashblocks.base.org"
 
 # Sub-block interval on Base with Flashblocks (~200ms)
 FLASHBLOCKS_SUB_BLOCK_MS = 200

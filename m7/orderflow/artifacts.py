@@ -374,7 +374,7 @@ def build_replay_summary(
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    viable_count = sum(1 for r in results if r.route_viable)
+    viable_count = sum(1 for r in results if r.route_viable and r.size_valid_for_token)
     positive_net_count = sum(1 for r in results if r.best_backrun_net_bps > 0)
 
     # M7.A.5.10/5.11/5.12: Unscored reject reasons — results that never got economic scoring
@@ -384,7 +384,7 @@ def build_replay_summary(
     scored_results = [r for r in results if r.reject_reason not in _UNSCORED_REJECTS]
     scored_net_bps = [r.best_backrun_net_bps for r in scored_results]
     all_net_bps = [r.best_backrun_net_bps for r in results]
-    viable_net_bps = [r.best_backrun_net_bps for r in results if r.route_viable]
+    viable_net_bps = [r.best_backrun_net_bps for r in results if r.route_viable and r.size_valid_for_token]
 
     # M7.A.5.27: Anomaly-clean scored results — exclude PRICING_ANOMALY from headlines
     # PRICING_ANOMALY (|net_bps| > 10000) is an artifact of thin-liquidity local pricing,

@@ -89,30 +89,56 @@ def run_ws_live(
     rpc_host = urlparse(rpc_url).netloc
 
     # M7.E1.10: Verify HTTP RPC is reachable; fallback to public if 429'd.
+    # M7.E1.12.1: Retry with exponential backoff before falling back to public.
     # Alchemy accounts can get rate-limited on both WS and HTTP simultaneously.
-    try:
-        from web3 import Web3 as _W3_test
-        _w3_test = _W3_test(_W3_test.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
-        _w3_test.eth.block_number  # simple connectivity test
-    except Exception as _rpc_test_exc:
-        _rpc_err = str(_rpc_test_exc)[:200]
-        if "429" in _rpc_err or "Too Many Requests" in _rpc_err:
-            from core.rpc_urls import public_fallback_for, _normalize_network
-            _pub_http = public_fallback_for(_normalize_network(args.chain))
-            if _pub_http:
-                logger.warning(
-                    "HTTP RPC 429 rate limit on %s, falling back to public RPC: %s",
-                    rpc_host, _pub_http,
-                )
-                _original_provider = rpc_provider
-                rpc_url = _pub_http
-                rpc_provider = classify_provider(_pub_http)
-                rpc_host = urlparse(rpc_url).netloc
-                rpc_diag = {"source": "public_http_fallback", "original_source": rpc_diag.get("source", "unknown"), "original_provider": _original_provider, "fallback_reason": "http_429"}
+    _http_premium_only = os.environ.get("ARBY_RPC_PREMIUM_ONLY", "") == "1"
+    _http_429_retries = 0
+    _http_429_max_retries = 3
+    _http_connected = False
+    for _retry_i in range(_http_429_max_retries + 1):
+        try:
+            from web3 import Web3 as _W3_test
+            _w3_test = _W3_test(_W3_test.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
+            _w3_test.eth.block_number  # simple connectivity test
+            _http_connected = True
+            break
+        except Exception as _rpc_test_exc:
+            _rpc_err = str(_rpc_test_exc)[:200]
+            if "429" in _rpc_err or "Too Many Requests" in _rpc_err:
+                _http_429_retries += 1
+                if _retry_i < _http_429_max_retries:
+                    import time as _time_mod
+                    _backoff_s = 2 ** _retry_i  # 1, 2, 4 seconds
+                    logger.warning(
+                        "HTTP RPC 429 on %s, retry %d/%d in %ds",
+                        rpc_host, _retry_i + 1, _http_429_max_retries, _backoff_s,
+                    )
+                    _time_mod.sleep(_backoff_s)
+                    continue
+                # All retries exhausted — fall back to public (unless premium-only)
+                if _http_premium_only:
+                    raise SystemExit(
+                        f"HTTP RPC 429 on {rpc_host} after {_http_429_max_retries} retries, "
+                        "ARBY_RPC_PREMIUM_ONLY=1 prevents public fallback"
+                    )
+                from core.rpc_urls import public_fallback_for, _normalize_network
+                _pub_http = public_fallback_for(_normalize_network(args.chain))
+                if _pub_http:
+                    logger.warning(
+                        "HTTP RPC 429 rate limit on %s after %d retries, falling back to public RPC: %s",
+                        rpc_host, _http_429_max_retries, _pub_http,
+                    )
+                    _original_provider = rpc_provider
+                    rpc_url = _pub_http
+                    rpc_provider = classify_provider(_pub_http)
+                    rpc_host = urlparse(rpc_url).netloc
+                    rpc_diag = {"source": "public_http_fallback", "original_source": rpc_diag.get("source", "unknown"), "original_provider": _original_provider, "fallback_reason": "http_429", "retries_attempted": _http_429_retries}
+                    _http_connected = True
+                else:
+                    logger.error("HTTP RPC 429 on %s and no public fallback available", rpc_host)
             else:
-                logger.error("HTTP RPC 429 on %s and no public fallback available", rpc_host)
-        else:
-            logger.debug("HTTP RPC test failed: %s (proceeding anyway)", _rpc_err[:80])
+                logger.debug("HTTP RPC test failed: %s (proceeding anyway)", _rpc_err[:80])
+                break
 
     # Resolve WebSocket for newHeads subscription
     # M7.E1: On Base, prefer Flashblocks WS for sub-block (~200ms) event delivery.
@@ -272,6 +298,19 @@ def run_ws_live(
     all_results = []
     blocks_processed = 0
     raw_logs_total = 0
+    # E1.12.1: Per-window cached L1 data fee (dynamic gas floor for OP-stack)
+    _l1_fee_bps_cached: Optional[float] = None
+    _l1_fee_source: str = "none"
+    if args.chain in ("base", "optimism"):
+        try:
+            from web3 import Web3 as _W3_l1
+            from chains.l1_cost import get_l1_fee_bps
+            _w3_l1 = _W3_l1(_W3_l1.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
+            _l1_fee_bps_cached = get_l1_fee_bps(w3=_w3_l1, chain=args.chain)
+            _l1_fee_source = "onchain"
+            logger.info("L1 data fee for %s: %.3f bps (source=%s)", args.chain, _l1_fee_bps_cached, _l1_fee_source)
+        except Exception as _l1_exc:
+            logger.debug("L1 fee query failed: %s (using static gas floor)", str(_l1_exc)[:100])
     # M7.E1.10: WS connection health tracking — distinguish ws_failed from market_empty
     _ws_connection_status = "not_attempted"  # not_attempted | connected | failed_429 | failed_other
     _ws_error_detail: str | None = None
@@ -523,6 +562,7 @@ def run_ws_live(
                         block_time_ms=block_time_ms,
                         addr_to_symbol=addr_to_symbol,
                         chain=args.chain,  # M7.E1.6: chain-aware gas floor
+                        l1_fee_bps=_l1_fee_bps_cached,  # E1.12.1: dynamic L1 data fee
                     )
                     # M7.A.5.34: Hot mode — no parallel fallback. If fast path
                     # returns None (pair not in registry / no state), create a

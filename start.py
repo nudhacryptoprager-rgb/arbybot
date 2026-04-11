@@ -360,7 +360,9 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
         print(f"  [{meta['chain']:16s}] {cfg}  run_kind={meta['run_kind']}  rolling={rolling}")
 
     # R24→R33: Check config-list coverage against chains.yaml
-    _warn_missing_chains(config_meta, allow_partial=args.allow_partial_chains)
+    # Auto-enable partial when single config (single-chain test/dev use case)
+    _allow_partial = args.allow_partial_chains or len(configs) == 1
+    _warn_missing_chains(config_meta, allow_partial=_allow_partial)
 
     # R28.5: Separate primary (NORMAL) and coverage configs
     primary_configs = [cfg for cfg in configs if is_primary_rolling_config(config_meta[cfg])]

@@ -1222,6 +1222,7 @@ def score_backrun_fast(
     block_time_ms: Optional[float] = None,
     addr_to_symbol: Optional[Dict[str, str]] = None,
     chain: str = "arbitrum_one",
+    l1_fee_bps: Optional[float] = None,
 ) -> Optional[BackrunResult]:
     """Score a backrun using pre-warmed registry only. Zero RPC in hot path.
 
@@ -1358,6 +1359,9 @@ def score_backrun_fast(
     if backrun_size_wei > 0:
         gross_bps = (gross_wei / backrun_size_wei) * 10000
         gas_bps = get_gas_floor_bps(chain)  # M7.E1.6: chain-aware gas floor
+        # E1.12.1: Use live L1 data fee when available (adds to static gas floor)
+        if l1_fee_bps is not None and l1_fee_bps > 0:
+            gas_bps = max(gas_bps, l1_fee_bps)
         net_bps = gross_bps - gas_bps
     else:
         return None

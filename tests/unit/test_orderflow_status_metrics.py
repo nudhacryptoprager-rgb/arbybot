@@ -326,7 +326,8 @@ class TestM7A513EventsScoredLowLagContract:
         r_viable = _make_result(
             event_id="v", best_backrun_net_bps=5.0, block_lag=0,
             same_state_class="same_block", reject_reason=None,
-            route_viable=True, event_block=100, event_detected_at_block=100,
+            route_viable=True, size_valid_for_token=True,
+            event_block=100, event_detected_at_block=100,
         )
         art = build_replay_summary([e, e], [r_stale_pos, r_viable], mode="test")
         assert art["best_net_bps_executable"] == 5.0

@@ -125,10 +125,22 @@ CHAINLINK_DECIMALS = 8  # USD feeds return 8-decimal answer
 
 # ---------------------------------------------------------------------------
 # M7.A.5.8: Subgraph-backed coverage seed endpoints
+# E1.12.1: Support GRAPH_API_KEY env var for gateway authentication.
+#   Gateway URL format: https://gateway.thegraph.com/api/{API_KEY}/subgraphs/id/{ID}
+#   Without key: uses keyless gateway (rate-limited, 403-prone).
 # ---------------------------------------------------------------------------
+def _subgraph_url(subgraph_id: str) -> str:
+    """Build subgraph URL, inserting GRAPH_API_KEY if available."""
+    import os
+    api_key = os.environ.get("GRAPH_API_KEY", "").strip()
+    if api_key:
+        return f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/{subgraph_id}"
+    return f"https://gateway.thegraph.com/api/subgraphs/id/{subgraph_id}"
+
+
 SUBGRAPH_ENDPOINTS_ARBITRUM: Dict[str, str] = {
-    "uniswap_v3": "https://gateway.thegraph.com/api/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
-    "sushiswap_v3": "https://gateway.thegraph.com/api/subgraphs/id/B2o157JTLbHpqy2MFga4HPrv46RTGiB3FWBQk6SwNkrR",
+    "uniswap_v3": _subgraph_url("5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV"),
+    "sushiswap_v3": _subgraph_url("B2o157JTLbHpqy2MFga4HPrv46RTGiB3FWBQk6SwNkrR"),
 }
 SUBGRAPH_SEED_TOKEN_CAP = 50
 SUBGRAPH_TIMEOUT_SECONDS = 10

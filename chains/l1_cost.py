@@ -1,23 +1,33 @@
 """
-Arbitrum L1 Cost Estimator Module.
+L1 Cost Estimator Module — Arbitrum + OP-Stack (Base).
 
+v2.2.0: Added OP-Stack GasPriceOracle for Base L1 data fee estimation.
 v2.1.0: Live L1 gas pricing for Arbitrum One.
 
 Arbitrum charges L1 data fees based on calldata/compression. The NodeInterface
 precompile provides gasEstimateL1Component() for accurate estimates.
 
+OP-Stack (Base/Optimism) charges L1 data fees via GasPriceOracle precompile
+at 0x420000000000000000000000000000000000000F. Post-Ecotone (EIP-4844),
+uses blob base fee + base fee scalar for L1 data pricing.
+
 NodeInterface address on Arbitrum: 0x00000000000000000000000000000000000000C8
+GasPriceOracle address on OP-Stack: 0x420000000000000000000000000000000000000F
 
 Sources:
 - Config: l1_data_gas_units * l1_gas_price_gwei (heuristic)
-- Onchain: NodeInterface.gasEstimateL1Component() (accurate)
+- Onchain: NodeInterface.gasEstimateL1Component() (Arbitrum, accurate)
+- Onchain: GasPriceOracle.getL1Fee(data) (OP-Stack, accurate)
 - Default: Hardcoded fallback
 
 Usage:
-    from chains.l1_cost import estimate_l1_cost_wei, get_l1_cost_with_source
+    from chains.l1_cost import get_l1_cost_with_source, get_l1_fee_bps
     
     cost, source = get_l1_cost_with_source(w3, calldata, config)
     # cost = wei, source = "onchain" | "config" | "default"
+    
+    l1_bps = get_l1_fee_bps(w3, chain="base", trade_size_wei=1e18)
+    # Returns L1 data fee as basis points of trade size
 """
 
 import logging
@@ -205,3 +215,135 @@ def create_sample_swap_calldata(
     )
     
     return selector + params
+
+
+# ============================================================
+# OP-Stack (Base / Optimism) L1 Data Fee
+# ============================================================
+
+# GasPriceOracle precompile on OP-Stack chains
+OP_GAS_PRICE_ORACLE_ADDRESS = "0x420000000000000000000000000000000000000F"
+
+# Minimal ABI for GasPriceOracle (post-Ecotone / Fjord)
+OP_GAS_PRICE_ORACLE_ABI = [
+    {
+        "inputs": [{"name": "_data", "type": "bytes"}],
+        "name": "getL1Fee",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "l1BaseFee",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "baseFeeScalar",
+        "outputs": [{"name": "", "type": "uint32"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "blobBaseFeeScalar",
+        "outputs": [{"name": "", "type": "uint32"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+# Default OP-Stack L1 fee (fallback when onchain query fails)
+# Post-EIP-4844 blob era: ~$0.001–0.01 per swap tx on Base
+DEFAULT_OP_L1_FEE_WEI = 5_000_000_000_000  # ~0.000005 ETH ≈ $0.01 @ ETH=$2k
+
+
+def estimate_op_l1_fee_onchain(
+    w3,  # Web3 instance connected to Base/OP-Stack
+    calldata: bytes = b"",
+) -> Optional[int]:
+    """
+    Query OP-Stack GasPriceOracle for live L1 data fee.
+
+    Args:
+        w3: Web3 instance connected to Base or another OP-Stack chain
+        calldata: Transaction calldata (affects L1 data cost)
+
+    Returns:
+        L1 data fee in wei, or None if query fails
+    """
+    try:
+        oracle = w3.eth.contract(
+            address=w3.to_checksum_address(OP_GAS_PRICE_ORACLE_ADDRESS),
+            abi=OP_GAS_PRICE_ORACLE_ABI,
+        )
+        if not calldata:
+            # Use representative swap calldata for estimation
+            calldata = b"\x00" * 196  # typical swap tx length
+        l1_fee_wei = oracle.functions.getL1Fee(calldata).call()
+        logger.debug("OP-Stack GasPriceOracle L1 fee: %d wei", l1_fee_wei)
+        return l1_fee_wei
+    except Exception as e:
+        logger.debug("OP-Stack GasPriceOracle query failed: %s", e)
+        return None
+
+
+def get_l1_cost_for_chain(
+    w3: Optional[Any] = None,
+    chain: str = "arbitrum",
+    calldata: bytes = b"",
+    config: Optional[dict] = None,
+) -> Tuple[int, str]:
+    """
+    Get L1 cost estimate for a specific chain, auto-dispatching to the
+    correct mechanism (NodeInterface for Arbitrum, GasPriceOracle for Base).
+
+    Args:
+        w3: Optional Web3 instance for live query
+        chain: Chain name ("arbitrum", "base", etc.)
+        calldata: Transaction calldata
+        config: Optional config dict
+
+    Returns:
+        Tuple of (cost_wei, source)
+    """
+    chain_lower = chain.lower().replace("_one", "").replace("_", "")
+    if chain_lower in ("base", "optimism"):
+        if w3 is not None:
+            cost = estimate_op_l1_fee_onchain(w3, calldata)
+            if cost is not None:
+                return (cost, "onchain_op")
+        return (DEFAULT_OP_L1_FEE_WEI, "default_op")
+    else:
+        # Arbitrum path
+        return get_l1_cost_with_source(w3, calldata, config)
+
+
+def get_l1_fee_bps(
+    w3: Optional[Any] = None,
+    chain: str = "base",
+    trade_size_wei: int = 10**18,
+    calldata: bytes = b"",
+) -> float:
+    """
+    Return L1 data fee as basis points of trade size.
+
+    This is the key integration point for the scoring pipeline:
+    use this to get a dynamic gas floor that accounts for L1 data costs.
+
+    Args:
+        w3: Optional Web3 instance for live query
+        chain: Chain name
+        trade_size_wei: Trade notional in wei (denominated in trade token)
+        calldata: Transaction calldata
+
+    Returns:
+        L1 data fee in basis points
+    """
+    if trade_size_wei <= 0:
+        return 0.0
+    l1_cost_wei, _source = get_l1_cost_for_chain(w3, chain, calldata)
+    return (l1_cost_wei / trade_size_wei) * 10_000

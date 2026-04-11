@@ -1,8 +1,20 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.12 OPEN -- premium-provider gate fix + fresh online evidence** (E1.12: REQUIRE_ALCHEMY gate generalized to REQUIRE_PREMIUM accepting alchemy/drpc/infura. Fresh online M5+M4 PASS on Arbitrum with `run_timestamp=2026-04-11T10:39:56Z`. Rolling refreshed.)  
+**Status**: **M7.E1.12.1 OPEN -- artifact-semantics fix + start.py auto-partial + CI ALL GATES** (E1.12.1: cold_executable_positive now requires route_viable AND size_valid_for_token. start.py auto-partial for single-chain configs. DEV_REPORT fresh. CI: 3862 passed, ALL GATES PASSED.)  
 **Updated**: 2026-04-11
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
+
+---
+
+## Strategic Focus (E1.12.1)
+
+**Base M7 production = main lane.** Arbitrum M4 = regression/paper benchmark only.
+
+Rationale (E1.12 audit):
+- Base delivers 183x more swap events per block than Arbitrum One (73.4 vs ~0.4)
+- M7 production lane on Base has produced best_net_bps=32.61 (best signal ever)
+- Arbitrum M4 stays at simulate_only/paper-live — profit_realism=ROUNDTRIP_NOT_PROFITABLE
+- No resources allocated to Arbitrum M7 (FROZEN at 5.47s)
 
 ---
 
@@ -193,6 +205,29 @@ A full Base config audit (validate_universe + warm_pool_cache --check-liquidity)
 - **Discovery 20m (dRPC)**: 89 events / 50 windows / 50 ws_connected / 0 ws_failed / 29 http_fallback / 0 ws_fallback / 12 provider_switches. **Discovery now scoring**: `bridge_pair_hit_total=23`, `fast_path_scored_total=31`, `windows_with_fast_scores=17`. Previous discovery zero-funnel (E1.10: bridge_pair_hit=0) resolved — likely by accumulated bridge state from prior production runs.
 
 **E1.12 premium-provider gate fix (2026-04-11)**: `REQUIRE_ALCHEMY` gate in `ci_m5_0_gate.py` and `strategy/infra.py` generalized to accept any premium provider (alchemy, drpc, infura), not just alchemy. New env var `ARBY_REQUIRE_PREMIUM` as canonical flag (old `ARBY_REQUIRE_ALCHEMY` / `REQUIRE_ALCHEMY` still honored as aliases). Fresh same-session online evidence: `ci_m5_0_gate --online` PASS (exit 0), `ci_m4_execution_gate --online --profile profit` PASS (exit 0), run dir `ci_m5_gate_arbitrum_one_20260411_123905_815779`. Rolling artifacts refreshed: `run_timestamp=2026-04-11T10:39:56Z`, `status=PASS`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `signals=42`. Note: `profit_status=PASS` coexists with `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` — operator semantics mismatch flagged for future fix (issue #7 in audit).
+
+**E1.12.1 artifact-semantics + start.py fix (2026-04-11)**: Two correctness bugs fixed:
+
+1. **cold_executable_positive semantic fix** (`m7/orderflow/artifacts.py`): `viable_count` and `viable_net_bps` now require `route_viable AND size_valid_for_token` (was `route_viable` only). Fixes false positives where a result passes route viability but has invalid token size. The execution funnel label "Route-viable, fresh, size-valid" now matches the code. `top_executable_candidates` (line 944) already had this correct filter — the fix aligns `viable_count` with the execution funnel truth.
+
+2. **start.py single-chain auto-partial**: `_allow_partial = args.allow_partial_chains or len(configs) == 1` added before `_warn_missing_chains()`. Single-config runs (e.g., `real_minimal.yaml` for arbitrum_one only) no longer FATAL exit when `chains.yaml` defines multiple chains.
+
+CI: 3862 passed, 6 skipped, ALL GATES PASSED (repo safety 0 warnings, M5 offline PASS, M4 smoke+profit PASS).
+
+**E1.12.1 full audit response (2026-04-11, second pass)**: All 10 audit steps implemented:
+- Step 3: Premium-only RPC exponential backoff (3 retries, 1/2/4s) in `mode_ws_live.py`. `ARBY_RPC_PREMIUM_ONLY=1` env var.
+- Step 4: Flashblocks URL fixed (`mainnet.flashblocks.base.org/ws`). `ARBY_FLASHBLOCKS_WS` env var for provider override.
+- Step 5: Tenderly simulation scaffolding (`m7/orderflow/simulation.py`). Requires `TENDERLY_USER/PROJECT/ACCESS_KEY`.
+- Step 6: Subgraph API key scaffolding (`_subgraph_url()` in constants.py). `GRAPH_API_KEY` env var.
+- Step 7: L1 data fee first-class (`chains/l1_cost.py` OP-Stack GasPriceOracle → `scoring_parallel.py` dynamic gas floor).
+- Step 9: Stricter release semantics (`production_readiness` block in `m4/fixtures.py` + `ci_m5_0_gate.py`).
+
+**30min burn-in (12:03-12:33Z, Base)**:
+- Production: 300 new windows, 37 events (12.3% rate), +1 positive, +1 viable, +1 guard_passed. dRPC WS 100% stable. 0 restarts.
+- Discovery: 284 windows (fresh rollup), 38 events (13.4% rate), 6 fast_path_scored, 0 positive. 0 restarts.
+- Both profiles: 30min clean, 3/3 workers throughout, clean shutdown.
+
+CI post-changes: 3862 passed, 6 skipped, ALL GATES PASSED.
 
 ---
 

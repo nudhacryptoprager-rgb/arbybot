@@ -1827,6 +1827,21 @@ ENV VARIABLES:
                             "run_mode": getattr(args, 'mode', 'online').upper(),  # v3.2.23: actual value
                             "config_path": getattr(args, 'config', None),
                         },
+                        # E1.12.1: Production readiness gate (offline: always False)
+                        "production_readiness": {
+                            "production_ready": False,
+                            "checks": {
+                                "profit_realism_profitable": False,
+                                "sim_passed_positive": False,
+                                "submit_ready_positive": False,
+                            },
+                            "values": {
+                                "profit_realism_status": "UNKNOWN",
+                                "truth_verdict": "NO_PROFIT",
+                                "sim_passed_count": 0,
+                                "submit_ready_count": 0,
+                            },
+                        },
                     }
                     
                     # v3.2.22: Use atomic write to prevent partial JSON on kill/crash

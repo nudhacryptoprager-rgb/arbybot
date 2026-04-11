@@ -1340,6 +1340,25 @@ def generate_m4_from_online_inputs(
         # R38: Blocker classification for operator-facing truth
         "blocker_classification": run_blocker_classification,
         "blocker_reason": run_blocker_reason,
+        # E1.12.1: Production readiness gate — machine-readable strict release criteria.
+        # profit_status=PASS is necessary but NOT sufficient for production.
+        # All 3 checks must be True for production_ready=True.
+        "production_readiness": {
+            "production_ready": (
+                truth_data.get("profit_realism_status") == "ROUNDTRIP_PROFITABLE"
+            ),
+            "checks": {
+                "profit_realism_profitable": truth_data.get("profit_realism_status") == "ROUNDTRIP_PROFITABLE",
+                "sim_passed_positive": roundtrip.get("sim_passed_count", 0) > 0 if isinstance(roundtrip, dict) else False,
+                "submit_ready_positive": roundtrip.get("submit_ready_count", 0) > 0 if isinstance(roundtrip, dict) else False,
+            },
+            "values": {
+                "profit_realism_status": truth_data.get("profit_realism_status", "UNKNOWN"),
+                "truth_verdict": truth_verdict,
+                "sim_passed_count": roundtrip.get("sim_passed_count", 0) if isinstance(roundtrip, dict) else 0,
+                "submit_ready_count": roundtrip.get("submit_ready_count", 0) if isinstance(roundtrip, dict) else 0,
+            },
+        },
     }
     
     with open(run_summary_path, "w") as f:
