@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.12.1 OPEN -- artifact-semantics fix + start.py auto-partial + CI ALL GATES** (E1.12.1: cold_executable_positive now requires route_viable AND size_valid_for_token. start.py auto-partial for single-chain configs. DEV_REPORT fresh. CI: 3862 passed, ALL GATES PASSED.)  
+**Status**: **M7.E1.12.1 CLOSED (engineering) -- 10-step audit complete, production NOT reached** (E1.12.1 engineering closure confirmed: all 10 audit steps implemented, 30min burn-in stable, CI 3862 PASS. Production readiness NOT reached: sim_passed=0, submit_ready=0, profit_realism=ROUNDTRIP_NOT_PROFITABLE.)  
 **Updated**: 2026-04-11
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -15,6 +15,8 @@ Rationale (E1.12 audit):
 - M7 production lane on Base has produced best_net_bps=32.61 (best signal ever)
 - Arbitrum M4 stays at simulate_only/paper-live — profit_realism=ROUNDTRIP_NOT_PROFITABLE
 - No resources allocated to Arbitrum M7 (FROZEN at 5.47s)
+
+**E1.12.1 closure note**: Engineering session CLOSED. Burn-in evidence is documented in DEV_REPORT_LATEST.md via rolling artifact session IDs (production=d4f84d5c, discovery=9c79152f), not discrete run_dirs. Production closure requires: sim_passed>0, submit_ready>0, profit_realism=ROUNDTRIP_PROFITABLE — none met yet.
 
 ---
 

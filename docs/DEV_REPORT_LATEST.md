@@ -3,20 +3,24 @@
 ## 0) Meta
 timestamp_utc: 2026-04-11T10:39:56Z
 run_id: ci_m5_gate_arbitrum_one_20260411_123905_815779
-mode: ONLINE (M7.E1.12.1 -- full 10-step audit response + 30min burn-in)
+mode: ONLINE (M7.E1.12.1 -- engineering closure: full 10-step audit response + 30min burn-in)
 artifact_mode: rolling
 config: Base M7 nonstop + config/real_minimal.yaml (M4/M5 rolling)
 code_identity:
   primary: ts:2026-04-11T10:39:56Z
   dirty: true
-  desc: E1.12.1 full audit -- RPC backoff, L1 fee integration, Flashblocks URL fix, Tenderly/Subgraph scaffolding, stricter release semantics, strategic focus codification, 30min burn-in
+  desc: E1.12.1 engineering closure -- RPC backoff, L1 fee integration, Flashblocks URL fix, Tenderly/Subgraph scaffolding, stricter release semantics, 30min burn-in. NOT production-ready.
+provenance_note:
+  m4_rolling: timestamp_utc and run_id above refer to M4/M5 Arbitrum rolling (ci_m5_gate run). These are the canonical rolling provenance.
+  m7_burnin: M7 burn-in evidence is from nonstop supervisor sessions on Base (12:03-12:33Z). Session IDs: production=d4f84d5c (12:26:17-12:33:23Z), discovery=9c79152f (12:26:46-12:33:23Z). These are rolling artifact sessions, not discrete run_dirs.
 
 ## Session Completion
 session_goal: E1.12 audit full response -- implement all 10 fix steps from audit. (1) Strategic focus codification. (2) start.py fix. (3) Premium RPC backoff. (4) Flashblocks URL fix. (5) Tenderly scaffolding. (6) Subgraph API key scaffolding. (7) L1 data fee first-class. (8) cold_executable_positive fix. (9) Stricter release semantics. (10) 30min burn-in with analysis.
-goal_status: REACHED (all 10 steps implemented, 30min burn-in completed, CI ALL GATES PASSED)
+goal_status: REACHED (engineering closure: all 10 steps implemented, 30min burn-in completed, CI ALL GATES PASSED. Production readiness NOT reached.)
 close_allowed: true
 remaining_blockers: (1) M7 submit_ready_total=0, sim_passed_total=0. (2) profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. (3) Tenderly/Subgraph API keys not configured (scaffolding only).
-evidence_session_run_dirs: [burnin_production_20260411_120325, burnin_discovery_20260411_120337]
+evidence_session_run_dirs: [ci_m5_gate_arbitrum_one_20260411_123905_815779]
+evidence_m7_sessions: [production=d4f84d5c (rolling, 12:26:17-12:33:23Z), discovery=9c79152f (rolling, 12:26:46-12:33:23Z)]
 primary_blocker_of_session: 10_step_audit_incomplete
 blocker_status_before: ACTIVE (only 2/10 audit steps done)
 blocker_status_after: RESOLVED (all 10/10 audit steps implemented + verified)
