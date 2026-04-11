@@ -588,3 +588,52 @@ class TestE110HotFallbackProfileAware:
         assert "profile" in sig.parameters, (
             "_write_hot_artifact must have profile parameter for profile-aware fallback"
         )
+
+
+class TestE1122HotArtifactsPathRebinding:
+    """E1.12.2 regression: hot_runtime_artifacts must see discovery paths after _init_artifact_paths."""
+
+    def test_hot_artifacts_see_discovery_paths_after_init(self):
+        """After _init_artifact_paths('discovery'), hot_runtime_artifacts must use _discovery suffix."""
+        import m7.orderflow.runtime_io as rio
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rio._init_artifact_paths("discovery")
+        try:
+            # hot_runtime_artifacts accesses paths through _rio module reference
+            assert "_discovery" in hra._rio._HOT_ARTIFACT_PATH, (
+                f"Expected _discovery in HOT_ARTIFACT_PATH, got: {hra._rio._HOT_ARTIFACT_PATH}"
+            )
+            assert "_discovery" in hra._rio._HOT_INTENTS_PATH, (
+                f"Expected _discovery in HOT_INTENTS_PATH, got: {hra._rio._HOT_INTENTS_PATH}"
+            )
+            assert "_discovery" in hra._rio._HOT_ROLLUP_PATH, (
+                f"Expected _discovery in HOT_ROLLUP_PATH, got: {hra._rio._HOT_ROLLUP_PATH}"
+            )
+        finally:
+            rio._init_artifact_paths("production")
+
+    def test_hot_artifacts_see_production_paths_default(self):
+        """Under production profile, hot_runtime_artifacts paths must NOT have _discovery."""
+        import m7.orderflow.runtime_io as rio
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rio._init_artifact_paths("production")
+        assert "_discovery" not in hra._rio._HOT_ARTIFACT_PATH
+        assert "_discovery" not in hra._rio._HOT_INTENTS_PATH
+        assert "_discovery" not in hra._rio._HOT_ROLLUP_PATH
+
+    def test_discovery_and_production_paths_dont_collide(self):
+        """Discovery and production hot paths must never be the same file."""
+        import m7.orderflow.runtime_io as rio
+
+        rio._init_artifact_paths("production")
+        prod = (rio._HOT_ARTIFACT_PATH, rio._HOT_INTENTS_PATH, rio._HOT_ROLLUP_PATH)
+
+        rio._init_artifact_paths("discovery")
+        disc = (rio._HOT_ARTIFACT_PATH, rio._HOT_INTENTS_PATH, rio._HOT_ROLLUP_PATH)
+
+        for p, d in zip(prod, disc):
+            assert p != d, f"Collision: {p}"
+
+        rio._init_artifact_paths("production")

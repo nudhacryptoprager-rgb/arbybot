@@ -2398,7 +2398,7 @@ class TestM7A537HotArtifactAlwaysEmit:
         with tempfile.TemporaryDirectory() as td:
             hot_path = Path(td) / "m7_hot_latest.json"
             with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)), \
-                 patch("m7.orderflow.hot_runtime_artifacts._HOT_ARTIFACT_PATH", str(hot_path)):
+                 patch("m7.orderflow.runtime_io._HOT_ARTIFACT_PATH", str(hot_path)):
                 _write_hot_artifact(artifact, iteration=1, guard_results=None, fast_results=None)
             hot = json.loads(hot_path.read_text(encoding="utf-8"))
 
@@ -2429,7 +2429,7 @@ class TestM7A537HotArtifactAlwaysEmit:
         with tempfile.TemporaryDirectory() as td:
             hot_path = Path(td) / "m7_hot_latest.json"
             with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)), \
-                 patch("m7.orderflow.hot_runtime_artifacts._HOT_ARTIFACT_PATH", str(hot_path)):
+                 patch("m7.orderflow.runtime_io._HOT_ARTIFACT_PATH", str(hot_path)):
                 _write_hot_artifact(artifact, iteration=1)
             hot = json.loads(hot_path.read_text(encoding="utf-8"))
 
@@ -2459,7 +2459,7 @@ class TestM7A537HotArtifactAlwaysEmit:
         with tempfile.TemporaryDirectory() as td:
             hot_path = Path(td) / "m7_hot_latest.json"
             with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)), \
-                 patch("m7.orderflow.hot_runtime_artifacts._HOT_ARTIFACT_PATH", str(hot_path)):
+                 patch("m7.orderflow.runtime_io._HOT_ARTIFACT_PATH", str(hot_path)):
                 _write_hot_artifact(artifact, iteration=1, fast_results=fast)
             hot = json.loads(hot_path.read_text(encoding="utf-8"))
 
@@ -2491,7 +2491,7 @@ class TestM7A537HotArtifactAlwaysEmit:
         with tempfile.TemporaryDirectory() as td:
             hot_path = Path(td) / "m7_hot_latest.json"
             with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)), \
-                 patch("m7.orderflow.hot_runtime_artifacts._HOT_ARTIFACT_PATH", str(hot_path)):
+                 patch("m7.orderflow.runtime_io._HOT_ARTIFACT_PATH", str(hot_path)):
                 _write_hot_artifact(artifact, iteration=1)
             hot = json.loads(hot_path.read_text(encoding="utf-8"))
 
@@ -4006,10 +4006,10 @@ class TestM7A545HotIntentsArtifact:
         """_write_hot_intents writes the intents artifact to rolling dir."""
         import json as _json
         from scripts import m7a_orderflow_loop as mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         out = tmp_path / "m7_hot_intents_latest.json"
         monkeypatch.setattr(mod, "_HOT_INTENTS_PATH", str(out))
-        monkeypatch.setattr(_hot_mod, "_HOT_INTENTS_PATH", str(out))
+        monkeypatch.setattr(_rio_mod, "_HOT_INTENTS_PATH", str(out))
 
         mod._write_hot_intents(
             fast_results=[], guard_results=None, iteration=1, bridge={},
@@ -4025,10 +4025,10 @@ class TestM7A545HotIntentsArtifact:
         """Intents rows are capped at 20."""
         import json as _json
         from scripts import m7a_orderflow_loop as mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         out = tmp_path / "m7_hot_intents_latest.json"
         monkeypatch.setattr(mod, "_HOT_INTENTS_PATH", str(out))
-        monkeypatch.setattr(_hot_mod, "_HOT_INTENTS_PATH", str(out))
+        monkeypatch.setattr(_rio_mod, "_HOT_INTENTS_PATH", str(out))
 
         # Make 30 fake BackrunResult-like objects
         class FakeResult:

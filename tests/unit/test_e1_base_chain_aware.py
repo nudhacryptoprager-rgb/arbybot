@@ -1234,10 +1234,10 @@ class TestE1_7_HotHeartbeatOnError:
     def test_heartbeat_writes_fresh_artifact_no_existing(self, tmp_path, monkeypatch):
         """With no existing hot artifact, heartbeat writes a minimal artifact."""
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         hot_path = str(tmp_path / "m7_hot_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_ARTIFACT_PATH", hot_path)
 
         loop_mod._write_hot_heartbeat_on_error(
             iteration=3,
@@ -1261,10 +1261,10 @@ class TestE1_7_HotHeartbeatOnError:
         """With existing hot artifact, heartbeat preserves snapshot and stamps fresh fields."""
         import json
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         hot_path = str(tmp_path / "m7_hot_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_ARTIFACT_PATH", hot_path)
 
         # Write an existing artifact with some data
         existing = {
@@ -1384,11 +1384,11 @@ class TestE1_8_ChainProvenance:
     def test_heartbeat_from_scratch_includes_chain(self, tmp_path, monkeypatch):
         """Heartbeat from scratch writes chain field."""
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         import json
         hot_path = str(tmp_path / "m7_hot_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_ARTIFACT_PATH", hot_path)
         loop_mod._write_hot_heartbeat_on_error(
             iteration=1,
             window_started_at="2026-01-01T00:00:00Z",
@@ -1404,11 +1404,11 @@ class TestE1_8_ChainProvenance:
     def test_heartbeat_from_scratch_zero_state(self, tmp_path, monkeypatch):
         """Heartbeat from scratch uses 0 for best_net_bps_clean, not None."""
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         import json
         hot_path = str(tmp_path / "m7_hot_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_ARTIFACT_PATH", hot_path)
         loop_mod._write_hot_heartbeat_on_error(
             iteration=1,
             window_started_at="2026-01-01T00:00:00Z",
@@ -1466,8 +1466,8 @@ class TestE1_8_ZeroStateSurfaces:
         with open(hot_path, "w") as f:
             json.dump(initial, f)
         monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
-        monkeypatch.setattr(_hot_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        import m7.orderflow.runtime_io as _rio_mod
+        monkeypatch.setattr(_rio_mod, "_HOT_ARTIFACT_PATH", hot_path)
         loop_mod._write_hot_heartbeat_on_error(
             iteration=5, window_started_at="T", window_ended_at="T",
             error_msg="err", chain="base",
@@ -1556,13 +1556,13 @@ class TestE1_8_1_ChainProvenanceInvariants:
     def test_rollup_run_context_written_to_disk(self, tmp_path, monkeypatch):
         """_update_hot_rollup writes run_context.chain to artifact on disk."""
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         import json
         rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_ROLLUP_PATH", rollup_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_ROLLUP_PATH", rollup_path)
         monkeypatch.setattr(loop_mod, "_SESSION_ID", "test-session-001")
-        monkeypatch.setattr(_hot_mod, "_SESSION_ID", "test-session-001")
+        monkeypatch.setattr(_rio_mod, "_SESSION_ID", "test-session-001")
         loop_mod._update_hot_rollup(
             events_count=0, fast_results=[], guard_results=[],
             bridge_diagnostics={}, chain="base",
@@ -1576,11 +1576,11 @@ class TestE1_8_1_ChainProvenanceInvariants:
     def test_intents_run_context_written_to_disk(self, tmp_path, monkeypatch):
         """_write_hot_intents writes run_context.chain to artifact on disk."""
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         import json
         intents_path = str(tmp_path / "m7_hot_intents_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_INTENTS_PATH", intents_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_INTENTS_PATH", intents_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_INTENTS_PATH", intents_path)
         loop_mod._write_hot_intents(
             fast_results=[], guard_results=[], iteration=1,
             bridge=None, chain="base",
@@ -1594,11 +1594,11 @@ class TestE1_8_1_ChainProvenanceInvariants:
     def test_heartbeat_9key_signal_counts(self, tmp_path, monkeypatch):
         """Heartbeat from scratch now emits 9-key signal_counts, not {}."""
         import scripts.m7a_orderflow_loop as loop_mod
-        import m7.orderflow.hot_runtime_artifacts as _hot_mod
+        import m7.orderflow.runtime_io as _rio_mod
         import json
         hot_path = str(tmp_path / "m7_hot_latest.json")
         monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
-        monkeypatch.setattr(_hot_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        monkeypatch.setattr(_rio_mod, "_HOT_ARTIFACT_PATH", hot_path)
         loop_mod._write_hot_heartbeat_on_error(
             iteration=1, window_started_at="T", window_ended_at="T",
             error_msg="test", chain="base",

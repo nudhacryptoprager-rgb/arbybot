@@ -1,4 +1,4 @@
-﻿"""
+"""
 E1.12.2 Phase 2 - Hot runtime artifacts: write/update hot-lane artifacts.
 
 Extracted from scripts/m7a_orderflow_loop.py. Contains:
@@ -16,12 +16,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from core.logging import get_logger
+import m7.orderflow.runtime_io as _rio
 from m7.orderflow.runtime_io import (
     _atomic_json_write,
-    _HOT_ARTIFACT_PATH,
-    _HOT_INTENTS_PATH,
-    _HOT_ROLLUP_PATH,
-    _SESSION_ID,
 )
 from m7.shared.constants import get_prewarm_pairs
 
@@ -48,9 +45,9 @@ def _write_hot_heartbeat_on_error(
 
     # Try to preserve existing artifact (anti-bad-overwrite, like cold lane)
     existing: dict | None = None
-    if os.path.exists(_HOT_ARTIFACT_PATH):
+    if os.path.exists(_rio._HOT_ARTIFACT_PATH):
         try:
-            with open(_HOT_ARTIFACT_PATH, "r", encoding="utf-8") as f:
+            with open(_rio._HOT_ARTIFACT_PATH, "r", encoding="utf-8") as f:
                 existing = json.load(f)
         except Exception:
             existing = None
@@ -123,10 +120,10 @@ def _write_hot_heartbeat_on_error(
         }
 
     try:
-        _atomic_json_write(_HOT_ARTIFACT_PATH, existing, indent=2, default=str)
+        _atomic_json_write(_rio._HOT_ARTIFACT_PATH, existing, indent=2, default=str)
         logger.info(
             "Hot heartbeat written on error (iter %d): %s",
-            iteration, _HOT_ARTIFACT_PATH,
+            iteration, _rio._HOT_ARTIFACT_PATH,
         )
     except Exception as exc:
         logger.warning("Failed to write hot heartbeat: %s", str(exc)[:120])
@@ -662,8 +659,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         }
 
     try:
-        _atomic_json_write(_HOT_ARTIFACT_PATH, hot, indent=2, default=str)
-        logger.info("Hot lane artifact written to %s", _HOT_ARTIFACT_PATH)
+        _atomic_json_write(_rio._HOT_ARTIFACT_PATH, hot, indent=2, default=str)
+        logger.info("Hot lane artifact written to %s", _rio._HOT_ARTIFACT_PATH)
     except Exception as exc:
         logger.warning("Failed to write hot artifact: %s", str(exc)[:120])
     # M7.A.5.47n: Return bridge hit trace so caller can merge into bridge file.
@@ -834,7 +831,7 @@ def _write_hot_intents(
     }
 
     try:
-        _atomic_json_write(_HOT_INTENTS_PATH, payload, indent=2, default=str)
+        _atomic_json_write(_rio._HOT_INTENTS_PATH, payload, indent=2, default=str)
         logger.info(
             "Hot intents written: scored=%d positive=%d guard_passed=%d headline=%s",
             _hot_scored, _hot_positive, _guard_passed, headline_level,
@@ -866,8 +863,8 @@ def _update_hot_rollup(
     # Read existing rollup (or start fresh)
     rollup: dict = {}
     try:
-        if os.path.exists(_HOT_ROLLUP_PATH):
-            with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as f:
+        if os.path.exists(_rio._HOT_ROLLUP_PATH):
+            with open(_rio._HOT_ROLLUP_PATH, "r", encoding="utf-8") as f:
                 rollup = json.load(f)
     except Exception:
         rollup = {}
@@ -898,10 +895,10 @@ def _update_hot_rollup(
     rollup["error_counts"] = _er
 
     # M7.A.5.47k: Session-scoped counters вЂ” reset each supervisor start.
-    # Uses _SESSION_ID (generated at import time) to detect new sessions.
+    # Uses _rio._SESSION_ID (generated at import time) to detect new sessions.
     _prev_sid = rollup.get("session", {}).get("session_id", "")
-    if _prev_sid != _SESSION_ID:
-        rollup["session"] = {"session_id": _SESSION_ID, "session_started_at": ts}
+    if _prev_sid != _rio._SESSION_ID:
+        rollup["session"] = {"session_id": _rio._SESSION_ID, "session_started_at": ts}
     _sess = rollup["session"]
     _sess["session_windows_seen"] = _sess.get("session_windows_seen", 0) + 1
     _sess["session_events_seen_total"] = (
@@ -1207,7 +1204,7 @@ def _update_hot_rollup(
         _ept = {"pool_address": None, "reason_if_not_hit": "no_bridge_data"}
     else:
         # M7.A.5.47o: Reset exact_pool_trace on session/target change.
-        if _ept.get("pool_address") != _TARGET_POOL or _prev_sid != _SESSION_ID:
+        if _ept.get("pool_address") != _TARGET_POOL or _prev_sid != _rio._SESSION_ID:
             _ept = {
                 "pool_address": _TARGET_POOL,
                 "session_windows_seen": 0,
@@ -1261,7 +1258,7 @@ def _update_hot_rollup(
         else "family_unresolved"
     )
     _eft = rollup.get("exact_family_trace", {})
-    if _eft.get("family") != _target_family or _prev_sid != _SESSION_ID:
+    if _eft.get("family") != _target_family or _prev_sid != _rio._SESSION_ID:
         _eft = {
             "family": _target_family,
             "selected_pools": [],
@@ -1311,7 +1308,7 @@ def _update_hot_rollup(
     # Fixed: families_with_any_hot_events now checks ALL bridge families
     # against the per-family event map, not just the single target family.
     _abt = rollup.get("architecture_blocker_trace", {})
-    if _prev_sid != _SESSION_ID:
+    if _prev_sid != _rio._SESSION_ID:
         _abt = {}
     _abt["session_windows_seen"] = _sess.get("session_windows_seen", 0)
     _abt["session_events_seen_total"] = _sess.get("session_events_seen_total", 0)
@@ -1350,7 +1347,7 @@ def _update_hot_rollup(
     rollup["architecture_blocker_trace"] = _abt
 
     try:
-        _atomic_json_write(_HOT_ROLLUP_PATH, rollup, indent=2, default=str)
+        _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:
         logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
 
