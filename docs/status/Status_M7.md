@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.12.2 IN PROGRESS — modularize loop + wire execution gate** (E1.12.1 engineering closure confirmed. E1.12.2: extracted 3 modules from 3274-line monolith, wired execution_gate.py pipeline, rollup counters now real. CI 3878 PASS.)  
+**Status**: **M7.E1.12.2 DONE — modularize loop + wire execution gate** (E1.12.1 engineering closure confirmed. E1.12.2: 5 modules extracted from 3274→204 line monolith (-93%), execution gate wired, rollup counters real, Phase 2 extract validated by 2×30m soak (0 restarts, clean shutdown). CI 3878 PASS.)  
 **Updated**: 2026-04-12
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -35,9 +35,19 @@ Rationale (E1.12 audit):
 - Step 10: 16 protective tests added (`tests/unit/test_execution_gate.py`)
 - CI: 3878 passed, 0 failed
 
-**Deferred (Phase 2)**:
-- Step 5: `m7/orderflow/hot_runtime_artifacts.py` — extract `_write_hot_artifact` (538 lines) and `_write_hot_intents`
-- Step 6: `m7/orderflow/loop_runner.py` — extract `LoopState` dataclass + `run_hot_iteration/run_cold_iteration` from `run_loop()` (1216 lines)
+**Deferred (Phase 2)** → **Done (Phase 2)**:
+- Step 5: `m7/orderflow/hot_runtime_artifacts.py` extracted (~1356 lines): `_compute_headline_level`, `_write_hot_heartbeat_on_error`, `_write_hot_artifact`, `_write_hot_intents`, `_update_hot_rollup`
+- Step 6: `m7/orderflow/loop_runner.py` extracted (~1339 lines): `LoopState` dataclass, `_apply_lane_defaults`, `_build_ws_args`, `run_loop`
+- Guard consolidation: `execution_gate._run_profit_guard_on_results()` delegates to `annotate_profit_guard_results()`
+- `scripts/m7a_orderflow_loop.py` thinned: 2750 → 204 lines (-93%), backward-compat re-exports preserved
+- 18 test patches updated for `hot_runtime_artifacts` module path
+- CI: 3878 passed, 6 skipped, 0 failed
+- **Soak evidence (Phase 2 validation)**:
+  - Production (base): 30m, 0 restarts, clean shutdown, exit 0 (session 18:25:02–18:55:02Z)
+  - Discovery (base): 30m, 0 restarts, clean shutdown, exit 0 (session 18:25:14–18:55:14Z)
+  - Rolling rollup post-soak: windows_seen=5174, events=1336, fast_scored=384, fast_positive=33, guard_passed=28, sim_attempted=7
+  - WS: connected (drpc), heartbeat_on_error_windows=0, normal_windows=3543
+  - Cold prod: events=2, best_net_bps=-60.11; Cold disc: events=4, viable=1, best_net_bps=+39.77
 
 ---
 

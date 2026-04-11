@@ -294,26 +294,26 @@ class TestSourceCodeContracts47j:
 
     def test_bridge_min_floor_constant(self):
         import inspect
-        import scripts.m7a_orderflow_loop as loop
-        src = inspect.getsource(loop)
+        from scripts.m7a_orderflow_loop import run_loop
+        src = inspect.getsource(run_loop)
         assert "_BRIDGE_MIN_FLOOR = 20" in src
 
     def test_c2_tolerance_tightened(self):
         import inspect
-        import scripts.m7a_orderflow_loop as loop
-        src = inspect.getsource(loop)
+        from scripts.m7a_orderflow_loop import run_loop
+        src = inspect.getsource(run_loop)
         assert "_C2_GAS_GAP_TOLERANCE_BPS = -5" in src
 
     def test_bridge_focused_pool_count_in_diagnostics(self):
         import inspect
-        import scripts.m7a_orderflow_loop as loop
-        src = inspect.getsource(loop)
+        from scripts.m7a_orderflow_loop import run_loop
+        src = inspect.getsource(run_loop)
         assert '"bridge_focused_pool_count"' in src
 
     def test_overlap_diag_always_list(self):
         """Verify that _overlap_diag is initialized as list and always set."""
         import inspect
-        import scripts.m7a_orderflow_loop as loop
-        src = inspect.getsource(loop)
+        from scripts.m7a_orderflow_loop import run_loop
+        src = inspect.getsource(run_loop)
         assert "_overlap_diag: list = []" in src
         assert '["hot_seen_vs_bridge_overlap_top"] = _overlap_diag[:5]' in src

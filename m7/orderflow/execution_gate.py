@@ -26,7 +26,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
-from m7.orderflow.profit_guard import ProfitGuardResult, check_profit_guard
+from m7.orderflow.profit_guard import (
+    ProfitGuardResult,
+    annotate_profit_guard_results,
+    check_profit_guard,
+)
 from m7.orderflow.simulation import SimulationResult, is_tenderly_configured, simulate_swap
 
 logger = logging.getLogger("m7.orderflow.execution_gate")
@@ -48,36 +52,14 @@ class ExecutionGateResult:
 def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
     """Run profit_guard on all scored results with positive net_bps.
 
+    E1.12.2 Phase 2: Delegates to annotate_profit_guard_results()
+    (canonical batch helper in profit_guard.py). This function is
+    maintained as the execution_gate entry point and for backward compat.
+
     Returns list of (result_dict_or_obj, ProfitGuardResult) for candidates
     that pass the guard.
     """
-    passed = []
-    for r in results:
-        net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
-        if net is None or net <= 0:
-            continue
-        size = r.get("amount_in_wei") if isinstance(r, dict) else getattr(r, "amount_in_wei", 0)
-        gross = r.get("gross_pnl_wei") if isinstance(r, dict) else getattr(r, "gross_pnl_wei", 0)
-        buy = size
-        sell = size + gross
-        sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
-        rr = r.get("reject_reason") if isinstance(r, dict) else getattr(r, "reject_reason", None)
-
-        if sv is False:
-            continue
-        if rr == "REJECT_PRICING_ANOMALY":
-            continue
-        if not buy or not sell or not size:
-            continue
-
-        pipeline_ms = r.get("quote_pipeline_latency_ms") if isinstance(r, dict) else getattr(r, "quote_pipeline_latency_ms", None)
-        guard = check_profit_guard(
-            buy_amount_wei=buy, sell_amount_wei=sell, backrun_size_wei=size,
-            pipeline_latency_ms=pipeline_ms, chain=chain,
-        )
-        if guard.passed:
-            passed.append((r, guard))
-    return passed
+    return annotate_profit_guard_results(results, chain=chain)
 
 
 def _attempt_simulation(
