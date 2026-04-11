@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.11 OPEN -- dRPC chain-scoped provider + provider_path_metrics** (E1.11: Chain-scoped env vars (BASE_RPC/WSS etc.) for dRPC as premium primary, classify_provider() for canonical provider types, validate_drpc_url() for wrong-chain rejection, provider_switch_count in rollup. dRPC WS stable (0 failures), dRPC HTTP intermittent 429 (50% fallback to public). Discovery now scoring: 31 fast_path_scored / 23 bridge_pair_hits.)  
+**Status**: **M7.E1.12 OPEN -- premium-provider gate fix + fresh online evidence** (E1.12: REQUIRE_ALCHEMY gate generalized to REQUIRE_PREMIUM accepting alchemy/drpc/infura. Fresh online M5+M4 PASS on Arbitrum with `run_timestamp=2026-04-11T10:39:56Z`. Rolling refreshed.)  
 **Updated**: 2026-04-11
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -191,6 +191,8 @@ A full Base config audit (validate_universe + warm_pool_cache --check-liquidity)
 
 - **Production 20m (dRPC)**: 87 events / 40 windows / 40 ws_connected / 0 ws_failed / 20 http_fallback / 0 ws_fallback / 6 provider_switches. dRPC WS: 100% stable. dRPC HTTP: 50% 429 fallback to public. Provenance: `rpc_source=chain_env_BASE_RPC`, `rpc_provider=drpc`. Scoring: 234 fast_path_scored, 73 windows_with_fast_scores.
 - **Discovery 20m (dRPC)**: 89 events / 50 windows / 50 ws_connected / 0 ws_failed / 29 http_fallback / 0 ws_fallback / 12 provider_switches. **Discovery now scoring**: `bridge_pair_hit_total=23`, `fast_path_scored_total=31`, `windows_with_fast_scores=17`. Previous discovery zero-funnel (E1.10: bridge_pair_hit=0) resolved — likely by accumulated bridge state from prior production runs.
+
+**E1.12 premium-provider gate fix (2026-04-11)**: `REQUIRE_ALCHEMY` gate in `ci_m5_0_gate.py` and `strategy/infra.py` generalized to accept any premium provider (alchemy, drpc, infura), not just alchemy. New env var `ARBY_REQUIRE_PREMIUM` as canonical flag (old `ARBY_REQUIRE_ALCHEMY` / `REQUIRE_ALCHEMY` still honored as aliases). Fresh same-session online evidence: `ci_m5_0_gate --online` PASS (exit 0), `ci_m4_execution_gate --online --profile profit` PASS (exit 0), run dir `ci_m5_gate_arbitrum_one_20260411_123905_815779`. Rolling artifacts refreshed: `run_timestamp=2026-04-11T10:39:56Z`, `status=PASS`, `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `signals=42`. Note: `profit_status=PASS` coexists with `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` — operator semantics mismatch flagged for future fix (issue #7 in audit).
 
 ---
 

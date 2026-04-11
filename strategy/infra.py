@@ -36,18 +36,23 @@ def get_current_block_via_rpc(config: Dict[str, Any]) -> Tuple[int, int]:
     
     rpc_urls = config.get("rpc_endpoints") or []
     
-    # If Require-Alchemy is set, prefer Alchemy endpoints for non-Base chains
-    # (do NOT embed keys in configs; use ALCHEMY_API_KEY env).
-    require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+    # If Require-Premium is set, prefer premium provider endpoints for non-Base chains.
+    # Accepts: alchemy, drpc, infura (do NOT embed keys in configs; use env vars).
+    _premium_providers = {"alchemy", "drpc", "infura"}
+    require_premium = (
+        os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1"
+        or os.environ.get("REQUIRE_ALCHEMY") == "1"
+        or os.environ.get("ARBY_REQUIRE_PREMIUM") == "1"
+    )
     try:
         chain_id = int(config.get("chain_id", 42161))
     except Exception:
         chain_id = 42161
-    if require_alchemy and chain_id != 8453:
+    if require_premium and chain_id != 8453:
         try:
             from core.rpc_urls import resolve_rpc_http
             url, provider, _diag = resolve_rpc_http(chain_id=chain_id, network=os.environ.get("NETWORK"), env=os.environ)
-            if url and provider == "alchemy":
+            if url and provider in _premium_providers:
                 rpc_urls = [url]
         except Exception:
             pass
@@ -102,19 +107,24 @@ def resolve_rpc_endpoints(config: Dict[str, Any]) -> Tuple[Optional[str], Option
     chain_id = config.get("chain_id")
     network = os.environ.get("NETWORK")
     
-    # If Require-Alchemy is set, prefer Alchemy endpoints for non-Base chains.
-    # This keeps configs key-free while honoring infra policy.
-    require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+    # If Require-Premium is set, prefer premium provider endpoints for non-Base chains.
+    # Accepts: alchemy, drpc, infura. Keeps configs key-free while honoring infra policy.
+    _premium_providers = {"alchemy", "drpc", "infura"}
+    require_premium = (
+        os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1"
+        or os.environ.get("REQUIRE_ALCHEMY") == "1"
+        or os.environ.get("ARBY_REQUIRE_PREMIUM") == "1"
+    )
     try:
         chain_id_int = int(chain_id) if chain_id is not None else None
     except Exception:
         chain_id_int = None
-    if require_alchemy and chain_id_int is not None and chain_id_int != 8453 and resolve_rpc_http:
+    if require_premium and chain_id_int is not None and chain_id_int != 8453 and resolve_rpc_http:
         try:
             url, prov, _diag = resolve_rpc_http(chain_id=chain_id_int, network=network, env=os.environ)
-            if url and prov == "alchemy":
+            if url and prov in _premium_providers:
                 resolved_http = url
-                provider_http = "alchemy"
+                provider_http = prov
                 from urllib.parse import urlparse
                 os.environ["ARBY_RPC_HTTP_PRIMARY"] = resolved_http
                 os.environ["ARBY_RPC_PROVIDER"] = provider_http

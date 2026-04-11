@@ -15,11 +15,12 @@ MODES (MUTUALLY EXCLUSIVE):
   --online    Runs real scan, IGNORES ARBY_RUN_DIR
 
 ENV VARIABLES (for --online and ADVANCED modes):
-  ARBY_CONFIG       Override --config
-  ARBY_CYCLES       Override --cycles
-  ARBY_OUTPUT_ROOT  Override --output-root
-  ARBY_RUN_DIR      [ADVANCED only] Explicit run directory
-  ARBY_REQUIRE_REAL Require real (non-fixture) artifacts
+  ARBY_CONFIG           Override --config
+  ARBY_CYCLES           Override --cycles
+  ARBY_OUTPUT_ROOT      Override --output-root
+  ARBY_RUN_DIR          [ADVANCED only] Explicit run directory
+  ARBY_REQUIRE_REAL     Require real (non-fixture) artifacts
+  ARBY_REQUIRE_PREMIUM  Require premium provider (alchemy/drpc/infura), reject public fallback
 
 EXIT CODES: 0=PASS, 1=FAIL validation, 2=FAIL missing, 3=FAIL scanner
 """
@@ -807,21 +808,25 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                 elif prov_t != "alchemy" and prov_t != "public":
                     messages.append(f"WARN: truth_report.infra missing rpc_http_host (provider={prov_t})")
 
-            # If env required Alchemy, ensure provider is alchemy
-            # Team policy: Base is allowed to use public RPC endpoints (non-Alchemy).
-            require_alchemy_env = (
-                os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
+            # If env required premium provider, ensure provider is not public fallback.
+            # Accepts: alchemy, drpc, infura. Rejects: publicnode, public_fallback, unknown.
+            # Team policy: Base is allowed to use public RPC endpoints.
+            _premium_providers = {"alchemy", "drpc", "infura"}
+            require_premium_env = (
+                os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1"
+                or os.environ.get("REQUIRE_ALCHEMY") == "1"
+                or os.environ.get("ARBY_REQUIRE_PREMIUM") == "1"
             )
-            if require_alchemy_env:
+            if require_premium_env:
                 chain_id_val = s.get("chain_id") or t.get("chain_id")
                 try:
                     chain_id_int = int(chain_id_val) if chain_id_val is not None else None
                 except Exception:
                     chain_id_int = None
                 if chain_id_int not in {8453}:
-                    if prov_s != "alchemy" or prov_t != "alchemy":
+                    if prov_s not in _premium_providers or prov_t not in _premium_providers:
                         messages.append(
-                            f"FAIL: REQUIRE_ALCHEMY set but provider != alchemy (scan={prov_s} truth={prov_t})"
+                            f"FAIL: REQUIRE_PREMIUM set but provider not premium (scan={prov_s} truth={prov_t})"
                         )
                         all_passed = False
 
@@ -1037,16 +1042,22 @@ def run_real_scan(output_dir: Path, config: str, cycles: int = 1) -> Tuple[bool,
         for key in ["ARBY_RPC_WS_PRIMARY", "ARBY_RPC_WS_PROVIDER", "ARBY_RPC_WS_HOST"]:
             env_for_run.pop(key, None)
 
-    # Enforce Require-Alchemy behavior if requested
-    require_alchemy = os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1" or os.environ.get("REQUIRE_ALCHEMY") == "1"
-    # Team policy: Base is allowed to use public RPC endpoints (non-Alchemy).
-    alchemy_optional_chain_ids = {8453}
+    # Enforce premium-provider requirement if requested.
+    # Accepts: alchemy, drpc, infura. Rejects: publicnode, public_fallback, unknown.
+    _premium_providers = {"alchemy", "drpc", "infura"}
+    require_premium = (
+        os.environ.get("ARBY_REQUIRE_ALCHEMY") == "1"
+        or os.environ.get("REQUIRE_ALCHEMY") == "1"
+        or os.environ.get("ARBY_REQUIRE_PREMIUM") == "1"
+    )
+    # Team policy: Base is allowed to use public RPC endpoints.
+    premium_optional_chain_ids = {8453}
     # v3.2.54: Use chain_id_int from config (already read above)
-    if require_alchemy and provider_http != "alchemy" and (chain_id_int or 0) not in alchemy_optional_chain_ids:
+    if require_premium and provider_http not in _premium_providers and (chain_id_int or 0) not in premium_optional_chain_ids:
         print(
-            f"FAIL: Alchemy expected but resolved provider={provider_http} (host={env_for_run.get('ARBY_RPC_HTTP_HOST')})"
+            f"FAIL: Premium provider expected but resolved provider={provider_http} (host={env_for_run.get('ARBY_RPC_HTTP_HOST')})"
         )
-        return False, "Alchemy expected but public fallback used"
+        return False, f"Premium provider expected but got {provider_http}"
 
     # NOTE: WS preference flags are read from the calling process env by the scanner.
 

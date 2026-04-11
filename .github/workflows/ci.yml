@@ -21,10 +21,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f pyproject.toml ]; then pip install -e . || true; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]" || pip install -e . || true; fi
           pip install pytest
 
-      - name: Run tests (sanity)
-        run: |
-          pytest -q tests/unit/test_error_contract.py tests/unit/test_exceptions.py
+      - name: Repo safety check
+        run: python scripts/check_repo_safety.py
+
+      - name: Run unit tests
+        run: pytest tests/unit -q
+
+      - name: CI full pipeline (offline)
+        run: python scripts/ci_full_pipeline.py --mode ci
 
