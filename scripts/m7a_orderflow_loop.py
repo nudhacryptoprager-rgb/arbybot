@@ -897,6 +897,11 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         # "no market events" from "couldn't connect to data source"
         "ws_connection_status": artifact.get("ws_connection_status", "unknown"),
         "blocks_processed": (artifact.get("ws_live_stats") or {}).get("blocks_processed", 0),
+        # M7.E1.10: Actual provider path after fallback resolution
+        "rpc_provider": artifact.get("rpc_provider", "unknown"),
+        "ws_provider": artifact.get("ws_provider", "unknown"),
+        "http_fallback_used": artifact.get("http_fallback_used", False),
+        "ws_fallback_used": artifact.get("ws_fallback_used", False),
         # M7.A.5.47m: Provenance — run_context with run_timestamp
         "run_context": {
             "run_timestamp": _ts_now,
@@ -1626,7 +1631,24 @@ def _update_hot_rollup(
         _sess.get("session_ws_failed_windows", 0)
         + (1 if _ws_status.startswith("failed") else 0)
     )
+    _sess["session_ws_failed_429_windows"] = (
+        _sess.get("session_ws_failed_429_windows", 0)
+        + (1 if _ws_status == "failed_429" else 0)
+    )
+    # M7.E1.10: Track actual provider path per window
+    _ws_prov = (ws_live_stats or {}).get("ws_provider", "unknown")
+    _rpc_prov = (ws_live_stats or {}).get("rpc_provider", "unknown")
+    _sess["session_http_fallback_windows"] = (
+        _sess.get("session_http_fallback_windows", 0)
+        + (1 if _rpc_prov == "public_fallback" else 0)
+    )
+    _sess["session_ws_fallback_windows"] = (
+        _sess.get("session_ws_fallback_windows", 0)
+        + (1 if _ws_prov == "public_fallback" else 0)
+    )
     _sess["last_ws_connection_status"] = _ws_status
+    _sess["last_rpc_provider"] = _rpc_prov
+    _sess["last_ws_provider"] = _ws_prov
     rollup["bridge_loaded_candidate_count_total"] = (
         rollup.get("bridge_loaded_candidate_count_total", 0)
         + _bd.get("bridge_loaded_candidate_count", 0)
@@ -1792,7 +1814,9 @@ def _update_hot_rollup(
                 "session_events_seen_total", "session_bridge_pool_hit_total",
                 "session_fast_path_scored_total",
                 "session_ws_connected_windows", "session_ws_failed_windows",
-                "last_ws_connection_status"):
+                "session_ws_failed_429_windows",
+                "session_http_fallback_windows", "session_ws_fallback_windows",
+                "last_ws_connection_status", "last_rpc_provider", "last_ws_provider"):
         rollup[_sk] = _sess.get(_sk)
 
     # M7.E1.3: Event-to-bridge classification counters (chain-agnostic).

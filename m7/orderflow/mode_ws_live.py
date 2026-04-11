@@ -107,6 +107,7 @@ def run_ws_live(
                 rpc_url = _pub_http
                 rpc_provider = "public_fallback"
                 rpc_host = urlparse(rpc_url).netloc
+                rpc_diag = {"source": "public_http_fallback", "original_source": rpc_diag.get("source", "unknown"), "fallback_reason": "http_429"}
             else:
                 logger.error("HTTP RPC 429 on %s and no public fallback available", rpc_host)
         else:
@@ -302,6 +303,7 @@ def run_ws_live(
                     ws_url = _try_ws_url
                     ws_provider = _try_ws_name
                     ws_host = urlparse(ws_url).netloc
+                    ws_diag = {"source": "public_ws_fallback", "original_source": ws_diag.get("source", "unknown"), "fallback_reason": "ws_429"}
                 break
             except Exception as _conn_exc:
                 _conn_err = str(_conn_exc)[:200]
@@ -645,6 +647,9 @@ def run_ws_live(
         # "no market events" from "couldn't connect to data source"
         "ws_connection_status": _ws_connection_status,
         "ws_error_detail": _ws_error_detail,
+        # M7.E1.10: Actual provider path after fallback resolution
+        "rpc_provider": rpc_provider,
+        "ws_provider": ws_provider,
         # M7.A.5.47: Hybrid intake diagnostics
         "broad_blocks": _broad_blocks,
         "focused_blocks": _focused_blocks,
@@ -675,7 +680,12 @@ def run_ws_live(
     artifact["ws_provider"] = ws_provider
     artifact["ws_source"] = ws_diag.get("source", "unknown")
     artifact["resolved_ws_host"] = ws_host
-    artifact["fallback_used"] = rpc_diag.get("source") == "public_fallback"
+    artifact["fallback_used"] = (
+        "fallback" in rpc_diag.get("source", "")
+        or "fallback" in ws_diag.get("source", "")
+    )
+    artifact["http_fallback_used"] = "fallback" in rpc_diag.get("source", "")
+    artifact["ws_fallback_used"] = "fallback" in ws_diag.get("source", "")
 
     # Live state metrics
     live_results = [r for r in all_results if r.event_block is not None]

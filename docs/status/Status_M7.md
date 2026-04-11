@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.10 OPEN -- VIRTUAL expansion + 20m A/B cadence** (E1.10: VIRTUAL/USDC + WETH/VIRTUAL added to discovery contour per config audit. Prior: AMONGUS removed, hot fallback profile-aware, config contract + cross_dex policy tests. 3838 tests pass.)  
-**Updated**: 2026-04-10
+**Status**: **M7.E1.10 OPEN -- 429-fallback fix + provenance cleanup + fresh A/B rerun** (E1.10: Alchemy 429 rate limit identified as root cause of zero-event windows. WS+HTTP auto-fallback to public RPC added. Provenance fields now record actual post-fallback provider. Fresh production 20m: 230 events / 46 windows / public_fallback. Discovery rerun in progress.)  
+**Updated**: 2026-04-11
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
 ---
@@ -182,6 +182,11 @@ A full Base config audit (validate_universe + warm_pool_cache --check-liquidity)
 
 **20m A/B after VIRTUAL expansion (19:56-20:37Z)**: Production (19:56-20:16Z, 327 windows, 0 events) + Discovery (20:16-20:37Z, 277 windows, 0 events, 12-pair seed with VIRTUAL confirmed). Market-window scarcity persists post-expansion. Per cadence rule: both empty, no further runs this session.
 
+**E1.10 429-fallback fix (2026-04-11)**: Alchemy free tier permanently 429 on both WS and HTTP. Root cause: all prior zero-event windows were ambiguous — `events_count=0` could mean market scarcity OR provider blindness. WS fallback (Alchemy→publicnode) and HTTP fallback (Alchemy→mainnet.base.org) added with automatic detection. Provenance fields (`rpc_source`, `ws_source`, `fallback_used`, `http_fallback_used`, `ws_fallback_used`) and 429-specific session counters added to artifacts.
+
+- **Production 20m**: 230 events / 46 windows / 800 cumulative events_seen_total / 0 ws_failed / public_fallback on both HTTP and WS. Cold artifact provenance correctly shows `public_http_fallback` / `public_ws_fallback`.
+- **Discovery 20m**: 245 events / 50 windows / 49 ws_connected / 1 ws_failed / 0 ws_failed_429 / 50 http_fallback / 49 ws_fallback. Cold artifact: `rpc_source=public_http_fallback`, `ws_source=public_ws_fallback`, `fallback_used=True`. Events confirmed: discovery sees comparable volume to production (245 vs 230). **Funnel divergence**: production has 84 bridge_pool_hits → 196 fast_path_scored → 42 scored_but_rejected_economics → 13 guard_passed; discovery has 84 bridge_pool_hits → 0 fast_path_scored. Discovery zero-funnel is now confirmed NOT 429-related — it is a profile-specific path issue (bridge_pair matching gap: `bridge_pool_hit_total=84` but `bridge_pair_hit_total=0`).
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -203,18 +208,18 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
 2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — E1.5: ~7% viable rate (14/196 scored). Near-exec frontier at -2.20 bps.
 3. ~~**HOT LANE NOT WRITING (Base)**~~ — **RESOLVED in E1.7**.
-4. **MARKET-WINDOW SCARCITY — CONFIRMED POST-CONTOUR-FIX (Base)** — E1.10: after contour cleanup (AMONGUS removed, meme diagnostic_only) AND VIRTUAL expansion (VIRTUAL/USDC + WETH/VIRTUAL added), 20m A/B still 0 events. Total evidence: E1.9.2 (9 short runs, 0), E1.10 (1h pair, 0), E1.10 contour cleanup A/B (0), E1.10 VIRTUAL A/B (19:56-20:37Z, 0). Scarcity confirmed market-driven, not contour-driven.
-5. **Flashblocks WS DNS unreachable** — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
+4. ~~**MARKET-WINDOW SCARCITY — CONFIRMED POST-CONTOUR-FIX (Base)**~~ — **RESOLVED by E1.10 429-fallback fix**: Prior zero-event evidence was 429-contaminated. Fresh production (230 events / 46 windows) and discovery (245 events / 50 windows) both confirm Base market is active. Remaining discovery funnel gap (bridge_pair_hit_total=0 despite bridge_pool_hit_total=84) is a profile-specific pair-matching issue, not market scarcity.
+5. ~~**Flashblocks WS DNS unreachable**~~ — `base.flashblocks.base.org` does not resolve. Sub-block delivery untested.
 6. **Submit-stage sim = 0** — sim_attempted/sim_passed/submit_ready all zero. Scaffolded, not wired.
 7. ~~**Dashboard dead appearance**~~ — **RESOLVED in E1.8**: M7 freshness banner separates M7 vs PRIMARY rolling.
 8. ~~**Chain provenance incomplete in run_context**~~ — **RESOLVED in E1.8.1**: rollup + intents now have `run_context.chain` + `run_context.run_timestamp`.
+9. ~~**ALCHEMY 429 RATE LIMIT — RESOLVED in E1.10**~~: Alchemy free tier permanently 429 on both WS and HTTP. Fixed with automatic fallback: WS → publicnode, HTTP → mainnet.base.org. Provenance fields (`rpc_source`, `ws_source`, `fallback_used`, `http_fallback_used`, `ws_fallback_used`) and session counters (`session_ws_failed_429_windows`, `session_http_fallback_windows`, `session_ws_fallback_windows`) added.
 
 ## Next steps
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
-2. **20m A/B proof cadence**: One 20-minute production + one 20-minute discovery, then immediate analysis. No further runs if both empty without contour/code changes.
+2. **Discovery pair-matching fix**: Discovery sees 84 bridge_pool_hits but 0 bridge_pair_hits — pool addresses match but pair resolution fails. Root-cause the bridge pair matching gap before running further discovery A/B.
 3. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
-4. **Discovery expansion decision**: If 2-3 dev sessions with 20m A/B runs + contour cleanup all zero, modest discovery expansion or OP Mainnet comparative pilot (not longer Base runs).
-5. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
-6. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
-7. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
+4. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
+5. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
+6. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
