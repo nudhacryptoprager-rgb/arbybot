@@ -122,6 +122,15 @@ class BackrunResult:
     scoring_path: Optional[str] = None
     # M7.A.5.33: Profit guard result in fast path
     profit_guard_passed: Optional[bool] = None
+    # E1.12.2: Terminal execution stages — wired through execution_gate.py
+    sim_attempted: Optional[bool] = None
+    sim_passed: Optional[bool] = None
+    simulation_id: Optional[str] = None
+    simulation_error: Optional[str] = None
+    submit_ready: Optional[bool] = None
+    submit_blocker: Optional[str] = None
+    calldata_ready: Optional[bool] = None
+    signing_ready: Optional[bool] = None
 
 
 @dataclass

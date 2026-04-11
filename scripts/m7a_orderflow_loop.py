@@ -52,478 +52,81 @@ from m7.shared.constants import (
     get_prewarm_pairs,
 )
 
+# ---------------------------------------------------------------------------
+# E1.12.2: Import from extracted modules (canonical locations)
+# ---------------------------------------------------------------------------
+from m7.orderflow.runtime_io import (
+    _rolling_path,
+    _init_artifact_paths as _init_artifact_paths_impl,
+    _atomic_json_write,
+    _write_promoted_pairs,
+    _read_promoted_pairs,
+    _read_discovery_scoreboard,
+    _update_discovery_scoreboard,
+    _write_discovery_scoreboard,
+    _SESSION_ID as _SESSION_ID_IMPORTED,
+)
+from m7.orderflow.runtime_io import (
+    _HOT_ARTIFACT_PATH as _HOT_ARTIFACT_PATH_DEFAULT,
+    _PROMOTED_PAIRS_PATH as _PROMOTED_PAIRS_PATH_DEFAULT,
+    _COLD_HOT_BRIDGE_PATH as _COLD_HOT_BRIDGE_PATH_DEFAULT,
+    _HOT_INTENTS_PATH as _HOT_INTENTS_PATH_DEFAULT,
+    _HOT_ROLLUP_PATH as _HOT_ROLLUP_PATH_DEFAULT,
+    _DISCOVERY_SCOREBOARD_PATH as _DISCOVERY_SCOREBOARD_PATH_DEFAULT,
+)
+from m7.orderflow.bridge_runtime import (
+    _write_cold_hot_bridge,
+    _read_cold_hot_bridge,
+    _populate_pool_token_cache_from_bridge,
+    _prewarm_registry_from_bridge,
+    _prewarm_registry_from_pairs,
+    _promote_pairs_from_cold,
+)
+from m7.orderflow.execution_gate import (
+    run_execution_gate,
+    ExecutionGateResult,
+    _run_profit_guard_on_results,
+)
+
 logger = get_logger("m7.orderflow.loop")
 
 # ---------------------------------------------------------------------------
-# M7.E1.9: Profile-aware artifact paths
+# E1.12.2: Module-level path constants — delegated to runtime_io.
+# These remain as module-level names for backward compatibility with tests
+# that import them from scripts.m7a_orderflow_loop.
 # ---------------------------------------------------------------------------
-# Production profile uses canonical names; discovery profile uses _discovery
-# suffix to prevent evidence contamination during parallel runs.
+import m7.orderflow.runtime_io as _rio
 
-def _rolling_path(name: str, profile: str = "production") -> str:
-    """Build rolling artifact path, inserting _discovery suffix when needed."""
-    if profile == "discovery":
-        base, ext = os.path.splitext(name)
-        name = f"{base}_discovery{ext}"
-    return os.path.join("data", "runs", "_rolling", name)
-
-
-_HOT_ARTIFACT_PATH = _rolling_path("m7_hot_latest.json")
-# M7.A.5.39: Cross-lane promoted pairs file — cold writes, hot reads.
-_PROMOTED_PAIRS_PATH = _rolling_path("m7_promoted_pairs.json")
-# M7.A.5.42: Cold→hot bridge queue — top executable candidates with TTL for hot lane consumption.
-_COLD_HOT_BRIDGE_PATH = _rolling_path("m7_cold_hot_bridge.json")
-# M7.A.5.45: Hot execution intents — compact rows for hot-scored + profit-guard-checked candidates.
-_HOT_INTENTS_PATH = _rolling_path("m7_hot_intents_latest.json")
-# M7.A.5.47: Cumulative hot rollup — survives across windows so progress is visible.
-_HOT_ROLLUP_PATH = _rolling_path("m7_hot_rollup_latest.json")
-# M7.E1.9: Discovery family repeatability scoreboard — tracks per-family stats
-# across cold iterations for promotion decisions.
-_DISCOVERY_SCOREBOARD_PATH = _rolling_path("m7_discovery_scoreboard.json")
+_HOT_ARTIFACT_PATH = _HOT_ARTIFACT_PATH_DEFAULT
+_PROMOTED_PAIRS_PATH = _PROMOTED_PAIRS_PATH_DEFAULT
+_COLD_HOT_BRIDGE_PATH = _COLD_HOT_BRIDGE_PATH_DEFAULT
+_HOT_INTENTS_PATH = _HOT_INTENTS_PATH_DEFAULT
+_HOT_ROLLUP_PATH = _HOT_ROLLUP_PATH_DEFAULT
+_DISCOVERY_SCOREBOARD_PATH = _DISCOVERY_SCOREBOARD_PATH_DEFAULT
 
 
 def _init_artifact_paths(profile: str) -> None:
     """Re-bind module-level artifact paths for the given profile.
 
-    M7.E1.9: Discovery profile writes to separate files (e.g.
-    m7_hot_latest_discovery.json) so parallel runs don't contaminate
-    production evidence.
+    E1.12.2: Delegates to runtime_io._init_artifact_paths and syncs
+    local module-level names for backward compat.
     """
     global _HOT_ARTIFACT_PATH, _PROMOTED_PAIRS_PATH, _COLD_HOT_BRIDGE_PATH
     global _HOT_INTENTS_PATH, _HOT_ROLLUP_PATH, _DISCOVERY_SCOREBOARD_PATH
 
-    _HOT_ARTIFACT_PATH = _rolling_path("m7_hot_latest.json", profile)
-    _PROMOTED_PAIRS_PATH = _rolling_path("m7_promoted_pairs.json", profile)
-    _COLD_HOT_BRIDGE_PATH = _rolling_path("m7_cold_hot_bridge.json", profile)
-    _HOT_INTENTS_PATH = _rolling_path("m7_hot_intents_latest.json", profile)
-    _HOT_ROLLUP_PATH = _rolling_path("m7_hot_rollup_latest.json", profile)
-    _DISCOVERY_SCOREBOARD_PATH = _rolling_path("m7_discovery_scoreboard.json", profile)
-    # M7.E1.9.1: Also redirect the cold lane rolling path in mode_ws_live
-    _set_rolling_m7_profile(profile)
+    _init_artifact_paths_impl(profile)
 
-# M7.A.5.47k: Session ID — unique per process lifetime, used to reset session
-# counters in the hot rollup when the supervisor restarts.
+    _HOT_ARTIFACT_PATH = _rio._HOT_ARTIFACT_PATH
+    _PROMOTED_PAIRS_PATH = _rio._PROMOTED_PAIRS_PATH
+    _COLD_HOT_BRIDGE_PATH = _rio._COLD_HOT_BRIDGE_PATH
+    _HOT_INTENTS_PATH = _rio._HOT_INTENTS_PATH
+    _HOT_ROLLUP_PATH = _rio._HOT_ROLLUP_PATH
+    _DISCOVERY_SCOREBOARD_PATH = _rio._DISCOVERY_SCOREBOARD_PATH
+
+
+# M7.A.5.47k: Session ID — unique per process lifetime
 import uuid as _uuid
-_SESSION_ID = str(_uuid.uuid4())[:8]
-
-
-def _atomic_json_write(path: str, data: dict, **kwargs) -> None:
-    """Write *data* as JSON to *path* atomically (tmp → os.replace).
-
-    M7.A.5.47e: Prevents cross-process readers from seeing truncated JSON.
-    """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path), suffix=".tmp", prefix=".arby_"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, **kwargs)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _write_promoted_pairs(promoted: dict) -> None:
-    """Write promoted pairs to rolling artifact for cross-lane communication."""
-    try:
-        payload = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "candidate": promoted.get("candidate", []),
-            "execution": promoted.get("execution", []),
-        }
-        _atomic_json_write(_PROMOTED_PAIRS_PATH, payload, indent=2)
-    except Exception as exc:
-        logger.debug("Failed to write promoted pairs: %s", str(exc)[:80])
-
-
-def _read_promoted_pairs() -> dict:
-    """Read promoted pairs written by cold lane. Returns empty dict on error."""
-    try:
-        if os.path.exists(_PROMOTED_PAIRS_PATH):
-            with open(_PROMOTED_PAIRS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return {
-                "candidate": data.get("candidate", []),
-                "execution": data.get("execution", []),
-            }
-    except Exception as exc:
-        logger.debug("Failed to read promoted pairs: %s", str(exc)[:80])
-    return {"candidate": [], "execution": []}
-
-
-# ---------------------------------------------------------------------------
-# M7.E1.9: Discovery family repeatability scoreboard
-# ---------------------------------------------------------------------------
-
-def _read_discovery_scoreboard() -> dict:
-    """Read the discovery scoreboard from rolling artifact."""
-    try:
-        if os.path.exists(_DISCOVERY_SCOREBOARD_PATH):
-            with open(_DISCOVERY_SCOREBOARD_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as exc:
-        logger.debug("Failed to read discovery scoreboard: %s", str(exc)[:80])
-    return {"families": {}, "updated_at": None, "profile": "discovery"}
-
-
-def _update_discovery_scoreboard(
-    scoreboard: dict, artifact: dict, iteration: int
-) -> dict:
-    """Update scoreboard from a cold lane artifact's scored results.
-
-    Tracks per-family:
-      - total_scored: times the family appeared in scored results
-      - scored_positive: times best_net_bps > 0
-      - route_viable: times at least one route was quotable
-      - guard_passed: times profit guard passed
-      - sessions_with_signal: distinct iteration numbers where scored_positive
-      - gas_gap_median_bps: latest median gas gap (informational)
-      - last_iteration: most recent iteration this family was seen
-    """
-    families = scoreboard.get("families", {})
-    results = artifact.get("results", [])
-    if not results:
-        return scoreboard
-
-    for r in results:
-        if not isinstance(r, dict):
-            continue
-        pair = r.get("pair_key") or r.get("pair", "")
-        if not pair:
-            continue
-        # Family = base token of the pair (e.g., DEGEN from DEGEN/WETH)
-        parts = pair.split("/")
-        if len(parts) != 2:
-            continue
-        family = parts[0]
-
-        rec = families.get(family, {
-            "total_scored": 0,
-            "scored_positive": 0,
-            "route_viable": 0,
-            "guard_passed": 0,
-            "sessions_with_signal": [],
-            "last_iteration": 0,
-        })
-
-        rec["total_scored"] = rec.get("total_scored", 0) + 1
-        rec["last_iteration"] = iteration
-
-        best_net = r.get("best_net_bps", r.get("net_bps"))
-        if best_net is not None and best_net > 0:
-            rec["scored_positive"] = rec.get("scored_positive", 0) + 1
-            sessions = rec.get("sessions_with_signal", [])
-            if iteration not in sessions:
-                sessions.append(iteration)
-            rec["sessions_with_signal"] = sessions[-20:]  # cap history
-
-        # Route viable if scored (not rejected before quoting)
-        reject = r.get("reject_reason", "")
-        if not reject or reject in ("GAS_EXCEEDS_GROSS", "SLIPPAGE_EXCEEDS_GROSS",
-                                     "INSUFFICIENT_IMPACT", "GAS_FLOOR_EXCEEDED"):
-            rec["route_viable"] = rec.get("route_viable", 0) + 1
-
-        if r.get("profit_guard_passed"):
-            rec["guard_passed"] = rec.get("guard_passed", 0) + 1
-
-        families[family] = rec
-
-    scoreboard["families"] = families
-    scoreboard["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    scoreboard["iteration"] = iteration
-    return scoreboard
-
-
-def _write_discovery_scoreboard(scoreboard: dict) -> None:
-    """Write the discovery scoreboard to rolling artifact."""
-    try:
-        _atomic_json_write(_DISCOVERY_SCOREBOARD_PATH, scoreboard, indent=2)
-    except Exception as exc:
-        logger.debug("Failed to write discovery scoreboard: %s", str(exc)[:80])
-
-
-def _write_cold_hot_bridge(
-    artifact: dict,
-    cold_active_pools: dict | None = None,
-    hot_active_pools: dict | None = None,
-) -> None:
-    """Write cold→hot bridge with per-candidate preload detail and pool→token transport.
-
-    M7.A.5.43: Bridge now carries:
-      - cold_executable / cold_stale_positive / near_executable with pool_address
-      - pool_token_transport: full _pool_token_cache dump for hot lane to populate
-        its own process-local cache (keys are pool addresses, values are
-        [token0_addr, token1_addr, fee] tuples).
-    M7.A.5.47d: Also carries hot_seen_unresolved_pools — pools discovered via
-      hot broad fallback that cold lane should priority-resolve next iteration.
-    """
-    try:
-        candidates = artifact.get("top_executable_candidates", [])
-        stale_pos = artifact.get("top_stale_positive_candidates", [])
-        recoverable_stale = artifact.get("top_recoverable_stale_candidates", [])
-        recoverable_stale_viable = artifact.get("top_recoverable_stale_route_viable", [])
-        recoverable_stale_not_viable = artifact.get("top_recoverable_stale_not_viable", [])
-        near_exec = artifact.get("near_executable_candidates", [])
-
-        # M7.A.5.43: Transport the full _pool_token_cache for hot lane.
-        # This is the canonical solution to the cross-process cache gap:
-        # cold lane populates _pool_token_cache via batch_pre_resolve_pools(),
-        # hot lane process starts with an empty cache and cannot score events.
-        _ptt = {}
-        try:
-            from m7.orderflow.resolve import _pool_token_cache
-            for pa, (t0, t1, fee) in _pool_token_cache.items():
-                _ptt[pa] = [t0, t1, fee]
-        except Exception:
-            pass
-
-        os.makedirs(os.path.dirname(_COLD_HOT_BRIDGE_PATH), exist_ok=True)
-        # M7.A.5.47c: Attach recent_active_pools_top from cold events
-        _rap_top = []
-        if cold_active_pools:
-            _rap_sorted = sorted(
-                cold_active_pools.items(),
-                key=lambda x: x[1].get("event_count", 0),
-                reverse=True,
-            )[:30]
-            _rap_top = [
-                {"pool_address": pa, "seen_count": info["event_count"],
-                 "last_iter": info.get("last_iter", 0), "source": "cold"}
-                for pa, info in _rap_sorted
-            ]
-        payload = {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "cold_executable": candidates,
-            "cold_stale_positive": stale_pos,
-            "cold_recoverable_stale": recoverable_stale,
-            "cold_recoverable_stale_route_viable": recoverable_stale_viable,
-            "cold_recoverable_stale_not_viable": recoverable_stale_not_viable,
-            "near_executable": near_exec,
-            "signal_classification": artifact.get("signal_classification", {}),
-            "pool_token_transport": _ptt,
-            # M7.A.5.47b: Transport micro_refinement for hot queue ordering
-            "micro_refinement": artifact.get("micro_refinement", []),
-            # M7.A.5.47c: Pools actually seen in cold events (activity ranking)
-            "recent_active_pools_top": _rap_top,
-            # M7.A.5.47f: Source breakdown — how many pools from each category
-            "candidate_source_breakdown": {
-                "cold_exec": len(candidates),
-                "near_exec": len(near_exec),
-                "stale_positive": len(stale_pos),
-                "recent_active": len(_rap_top),
-                "hot_seen_backfill": 0,  # updated below after unresolved computation
-                "ptt_total": len(_ptt),
-            },
-            # M7.A.5.47k: Initialize overlap/selected as empty lists so they
-            # are never null. Hot lane merges actual values after hot windows.
-            "hot_seen_vs_bridge_overlap_top": [],
-            "bridge_selected_pools_top": [],
-            # M7.E1.6: Always emit family_unresolved_pool_count as stable int (0 default).
-            # Hot lane updates it via _HOT_PRESERVE_ALWAYS.
-            "family_unresolved_pool_count": 0,
-            # M7.A.5.47m: Always emit these as non-null (empty defaults).
-            # Hot lane merges real values; cold lane guarantees contract.
-            "bridge_excluded_top": [],
-            "cut_stage_top": artifact.get("cut_stage_top", {}),
-            # M7.A.5.47m: Provenance — run_context with run_timestamp
-            "run_context": {
-                "run_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "code_sha": None,
-                "code_dirty": None,
-                "code_desc": None,
-                "evidence_sha": None,
-            },
-        }
-        # M7.A.5.47d: Attach hot_seen_unresolved_pools — pools discovered via
-        # hot broad fallback that are NOT in _pool_token_cache. Cold lane uses
-        # this as a priority backlog for batch_pre_resolve_pools next iteration.
-        # NOTE: hot_active_pools is process-local and empty in the cold lane
-        # (separate process). Read the hot rollup artifact instead, which the
-        # hot lane persists with hot_seen_pool_histogram_top.
-        _hot_unresolved = []
-        try:
-            from m7.orderflow.resolve import _pool_token_cache as _ptc_bridge
-            # Merge: in-memory hot_active_pools (if same process) + hot rollup file
-            _hap_merged: dict = {}
-            if hot_active_pools:
-                for _hpa, _hinfo in hot_active_pools.items():
-                    _hap_merged[_hpa.lower()] = _hinfo
-            # Also read hot rollup artifact for cross-process data
-            try:
-                if os.path.exists(_HOT_ROLLUP_PATH):
-                    with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as _rf:
-                        _rollup_data = json.load(_rf)
-                    for _rh in _rollup_data.get("hot_seen_pool_histogram_top", []):
-                        _rh_pa = (_rh.get("pool") or "").lower()
-                        if _rh_pa and _rh_pa not in _hap_merged:
-                            _hap_merged[_rh_pa] = {
-                                "event_count": _rh.get("count", 0),
-                                "last_iter": _rh.get("last_iter", 0),
-                            }
-            except Exception:
-                pass
-            if _hap_merged:
-                _hu_sorted = sorted(
-                    _hap_merged.items(),
-                    key=lambda x: x[1].get("event_count", 0),
-                    reverse=True,
-                )
-                for _hu_pa, _hu_info in _hu_sorted[:30]:
-                    _resolved = _hu_pa in _ptc_bridge or _hu_pa in _ptt
-                    _hot_unresolved.append({
-                        "pool_address": _hu_pa,
-                        "seen_count": _hu_info.get("event_count", 0),
-                        "last_iter": _hu_info.get("last_iter", 0),
-                        "resolved": _resolved,
-                    })
-        except Exception:
-            pass
-        payload["hot_seen_unresolved_pools"] = _hot_unresolved
-        # M7.A.5.47f: Update hot_seen_backfill count
-        payload["candidate_source_breakdown"]["hot_seen_backfill"] = len(_hot_unresolved)
-        # M7.A.5.47n: Preserve hot-derived fields from existing bridge file.
-        # Cold lane writes bridge_selected_pools_top=[] because it doesn't
-        # do bridge assembly (hot-only). Without this, cold overwrites wipe
-        # the hot-merged values every cold iteration.
-        # M7.A.5.47p: Only preserve bridge_hit_trace_top / cold_exec_pool_trace
-        # if current cold payload has cold_executable entries.  When cold
-        # reports cold_executable=[], the trace is stale and must be cleared.
-        _HOT_PRESERVE_ALWAYS = (
-            "bridge_selected_pools_top", "bridge_excluded_top",
-            # M7.A.5.47r: preserve these hot-merged fields across cold overwrites
-            "c3_gas_hopeless_skipped", "c3_gas_hopeless_families",
-            "bridge_selected_family_diff_top",
-            # M7.E1.6: preserve family_unresolved_pool_count across cold overwrites
-            "family_unresolved_pool_count",
-        )
-        _HOT_PRESERVE_IF_COLD_EXEC = (
-            "bridge_hit_trace_top", "cold_exec_pool_trace",
-        )
-        _has_cold_exec = bool(payload.get("cold_executable"))
-        try:
-            if os.path.exists(_COLD_HOT_BRIDGE_PATH):
-                with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _epf:
-                    _existing = json.load(_epf)
-                for _hpk in _HOT_PRESERVE_ALWAYS:
-                    _existing_val = _existing.get(_hpk)
-                    # M7.A.5.47r: use 'is not None' so falsy values (0, [])
-                    # from hot merge survive cold overwrites.
-                    if _existing_val is not None and _hpk not in payload:
-                        payload[_hpk] = _existing_val
-                if _has_cold_exec:
-                    for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
-                        _existing_val = _existing.get(_hpk)
-                        if _existing_val and not payload.get(_hpk):
-                            payload[_hpk] = _existing_val
-                else:
-                    # Explicitly clear stale trace when no cold executables
-                    for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
-                        payload[_hpk] = []
-        except Exception:
-            pass
-        # M7.E1.6: After hot-preserve, update breakdown with actual bridge_selected count
-        # so cold_exec=0 with bridge_selected_pools_count=20 is self-consistent.
-        _bsp = payload.get("bridge_selected_pools_top", [])
-        payload["candidate_source_breakdown"]["bridge_selected_pools_count"] = len(_bsp)
-        _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
-    except Exception as exc:
-        logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])
-
-
-def _read_cold_hot_bridge() -> dict:
-    """Read cold→hot bridge file written by cold lane.
-
-    M7.A.5.43: Returns bridge dict with pool_token_transport for
-    hot lane to populate its process-local _pool_token_cache.
-    """
-    try:
-        if not os.path.exists(_COLD_HOT_BRIDGE_PATH):
-            return {}
-        with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as exc:
-        logger.debug("Failed to read cold-hot bridge: %s", str(exc)[:80])
-    return {}
-
-
-def _populate_pool_token_cache_from_bridge(bridge: dict) -> int:
-    """Populate hot lane's _pool_token_cache from bridge pool_token_transport.
-
-    M7.A.5.43: This is the critical fix for the cross-process cache gap.
-    Cold lane populates _pool_token_cache via batch_pre_resolve_pools().
-    Hot lane process starts with empty cache. Bridge transports the cache.
-
-    Returns number of entries populated.
-    """
-    ptt = bridge.get("pool_token_transport", {})
-    if not ptt:
-        return 0
-    try:
-        from m7.orderflow.resolve import _pool_token_cache
-        count = 0
-        for pa, triple in ptt.items():
-            if len(triple) == 3:
-                key = pa.lower()
-                if key not in _pool_token_cache:
-                    _pool_token_cache[key] = tuple(triple)
-                    count += 1
-        return count
-    except Exception as exc:
-        logger.debug("Failed to populate pool_token_cache from bridge: %s", str(exc)[:80])
-    return 0
-
-
-def _prewarm_registry_from_bridge(
-    registry, bridge: dict,
-    dex_configs: dict, rpc_url: str, block_num: int,
-    priority_pools: set | None = None,
-) -> int:
-    """Prewarm hot registry from bridge entries using token addresses.
-
-    M7.A.5.43: Pool-address-first matching. Bridge entries carry
-    pool_address + token0_addr + token1_addr. We prewarm the registry
-    using actual token addresses, not symbol-pair strings.
-
-    M7.A.5.45: Priority prewarm. When priority_pools is provided (set of
-    lowercase pool addresses from cold_executable), those pools are
-    prewarmed first. Remaining ptt entries are prewarmed after.
-
-    Returns number of pairs prewarmed.
-    """
-    ptt = bridge.get("pool_token_transport", {})
-    if not ptt:
-        return 0
-    count = 0
-    _seen_pairs: set = set()
-
-    # M7.A.5.45: Sort ptt entries so priority_pools come first.
-    _priority = priority_pools or set()
-    _items = sorted(
-        ptt.items(),
-        key=lambda kv: (0 if kv[0].lower() in _priority else 1),
-    )
-
-    for pa, triple in _items:
-        if len(triple) != 3:
-            continue
-        t0, t1, _fee = triple
-        if not t0 or not t1:
-            continue
-        pair_key = f"{min(t0.lower(), t1.lower())}/{max(t0.lower(), t1.lower())}"
-        if pair_key in _seen_pairs:
-            continue
-        _seen_pairs.add(pair_key)
-        try:
-            registry.preload_pair(t0, t1, dex_configs, rpc_url, block_num)
-            count += 1
-        except Exception:
-            pass
-    return count
+_SESSION_ID = _SESSION_ID_IMPORTED
 
 
 def parse_args():
@@ -590,156 +193,6 @@ def _build_ws_args(cli_args) -> SimpleNamespace:
         max_events=cli_args.max_events,
         profile=getattr(cli_args, "profile", "production"),
     )
-
-
-def _prewarm_registry_from_pairs(
-    registry, session_pairs: dict, token_addresses: dict,
-    dex_configs: dict, rpc_url: str, block_num: int,
-) -> int:
-    """Prewarm registry using accumulated session_low_lag_pairs.
-
-    Returns number of pairs prewarmed.
-    """
-    count = 0
-    reverse_map = {v.lower(): k for k, v in token_addresses.items() if v}
-    for pair_key, info in session_pairs.items():
-        if "/" not in pair_key:
-            continue
-        sym_a, sym_b = pair_key.split("/", 1)
-        addr_a = token_addresses.get(sym_a, "")
-        addr_b = token_addresses.get(sym_b, "")
-        if not addr_a or not addr_b:
-            continue
-        try:
-            registry.preload_pair(addr_a, addr_b, dex_configs, rpc_url, block_num)
-            count += 1
-        except Exception:
-            pass
-    return count
-
-
-def _promote_pairs_from_cold(cold_artifact: dict, accumulated_cold_stats: dict) -> dict:
-    """Identify pairs to promote from cold lane results to hot watchlist.
-
-    M7.A.5.39: Two-level promotion:
-
-    **Candidate** (level 1) — relaxed; enters registry prewarm:
-      - Appeared in >= PROMOTED_MIN_COLD_APPEARANCES cold iterations
-      - reject_reason != PRICING_ANOMALY (no anomaly flag ever)
-      - registry_pools_active > 0
-      - best_net_bps > PROMOTED_MIN_NET_BPS (not total garbage)
-      (Does NOT require size_valid_for_token)
-
-    **Execution** (level 2) — strict; eligible for hot-path scoring:
-      - All candidate rules PLUS:
-      - size_valid_for_token=True in at least one scored result
-
-    Returns dict with keys:
-      "candidate": list of pair strings (capped at PROMOTED_CANDIDATE_MAX_PAIRS)
-      "execution": list of pair strings (capped at PROMOTED_MAX_PAIRS)
-    """
-    # M7.A.5.46: Use _raw_results (BackrunResult objects) instead of
-    # serialized results dicts — compact mode no longer serializes results.
-    results = cold_artifact.get("_raw_results", cold_artifact.get("results", []))
-    for r in results:
-        pair = r.get("actual_pair") if isinstance(r, dict) else getattr(r, "actual_pair", None)
-        if not pair or "/" not in pair:
-            continue
-
-        sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
-        rr = r.get("reject_reason") if isinstance(r, dict) else getattr(r, "reject_reason", None)
-        rpa = r.get("registry_pools_active") if isinstance(r, dict) else getattr(r, "registry_pools_active", None)
-        net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
-
-        if pair not in accumulated_cold_stats:
-            accumulated_cold_stats[pair] = {
-                "appearances": 0,
-                "size_valid_seen": False,
-                "has_active_pools": False,
-                "best_net_bps": None,
-                "has_anomaly": False,
-            }
-
-        stats = accumulated_cold_stats[pair]
-        stats["appearances"] += 1
-        if sv is True:
-            stats["size_valid_seen"] = True
-        if rpa and rpa > 0:
-            stats["has_active_pools"] = True
-        if rr == "REJECT_PRICING_ANOMALY":
-            stats["has_anomaly"] = True
-        if net is not None:
-            if stats["best_net_bps"] is None or net > stats["best_net_bps"]:
-                stats["best_net_bps"] = net
-
-    # M7.A.5.39: Apply two-level promotion rules
-    candidates = []
-    execution = []
-    for pair, stats in accumulated_cold_stats.items():
-        # Common rules (candidate level 1)
-        if stats["appearances"] < PROMOTED_MIN_COLD_APPEARANCES:
-            continue
-        if not stats["has_active_pools"]:
-            continue
-        if stats["has_anomaly"]:
-            continue
-        if stats["best_net_bps"] is None or stats["best_net_bps"] < PROMOTED_MIN_NET_BPS:
-            continue
-        candidates.append(pair)
-        # Execution level 2: additionally requires size_valid
-        if stats["size_valid_seen"]:
-            execution.append(pair)
-
-    # Sort by best_net descending, cap at respective limits
-    _sort_key = lambda p: accumulated_cold_stats[p].get("best_net_bps") or -999
-    candidates.sort(key=_sort_key, reverse=True)
-    execution.sort(key=_sort_key, reverse=True)
-    return {
-        "candidate": candidates[:PROMOTED_CANDIDATE_MAX_PAIRS],
-        "execution": execution[:PROMOTED_MAX_PAIRS],
-    }
-
-
-def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
-    """Run profit_guard on all scored results with positive net_bps.
-
-    Returns list of (result_dict, ProfitGuardResult) for candidates that
-    pass the guard.
-    """
-    passed = []
-    for r in results:
-        net = r.get("best_backrun_net_bps") if isinstance(r, dict) else getattr(r, "best_backrun_net_bps", None)
-        if net is None or net <= 0:
-            continue
-        # M7.A.5.33: Derive buy/sell from existing fields.
-        # best_buy_amount_wei / best_sell_amount_wei don't exist on BackrunResult.
-        # Use amount_in_wei (backrun input) and gross_pnl_wei to reconstruct:
-        #   sell_amount = amount_in_wei + gross_pnl_wei  (since gross = sell - input)
-        size = r.get("amount_in_wei") if isinstance(r, dict) else getattr(r, "amount_in_wei", 0)
-        gross = r.get("gross_pnl_wei") if isinstance(r, dict) else getattr(r, "gross_pnl_wei", 0)
-        buy = size  # backrun input IS the buy amount
-        sell = size + gross  # sell = input + gross PnL
-        sv = r.get("size_valid_for_token") if isinstance(r, dict) else getattr(r, "size_valid_for_token", None)
-        rr = r.get("reject_reason") if isinstance(r, dict) else getattr(r, "reject_reason", None)
-
-        # M7.A.5.31: Skip size_valid=false from profit guard (Step 5)
-        if sv is False:
-            continue
-
-        # M7.A.5.34: Hard-exclude PRICING_ANOMALY from profit guard
-        if rr == "REJECT_PRICING_ANOMALY":
-            continue
-
-        if not buy or not sell or not size:
-            continue
-        pipeline_ms = r.get("quote_pipeline_latency_ms") if isinstance(r, dict) else getattr(r, "quote_pipeline_latency_ms", None)
-        guard = check_profit_guard(
-            buy_amount_wei=buy, sell_amount_wei=sell, backrun_size_wei=size,
-            pipeline_latency_ms=pipeline_ms, chain=chain,
-        )
-        if guard.passed:
-            passed.append((r, guard))
-    return passed
 
 
 def _write_hot_heartbeat_on_error(
@@ -849,7 +302,8 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
                         candidate_pairs: list = None,
                         bridge_diagnostics: dict = None,
                         chain: str = "arbitrum_one",
-                        profile: str = "production") -> list:
+                        profile: str = "production",
+                        gate_result: "ExecutionGateResult | None" = None) -> list:
     """Write minimal hot-lane artifact: best candidate + profit guard status.
 
     fast_results: list of BackrunResult from score_backrun_fast() (M7.A.5.32)
@@ -932,15 +386,18 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     })
 
     # M7.E1.8: signal_counts — always honest 0/{} on empty windows, never null
+    _sim_attempted = gate_result.sim_attempted if gate_result else 0
+    _sim_passed = gate_result.sim_passed if gate_result else 0
+    _submit_ready = gate_result.submit_ready if gate_result else 0
     hot["signal_counts"] = {
         "events_count": _events_count,
         "fast_scored": _fast_scored,
         "fast_positive": _fast_positive,
         "guard_passed": _guard_count,
         "viable_count": artifact.get("viable_count", 0),
-        "sim_attempted": 0,
-        "sim_passed": 0,
-        "submit_ready": 0,
+        "sim_attempted": _sim_attempted,
+        "sim_passed": _sim_passed,
+        "submit_ready": _submit_ready,
         "realized": 0,
     }
 
@@ -1560,6 +1017,7 @@ def _update_hot_rollup(
     hot_active_pools: dict | None = None,
     bridge: dict | None = None,
     chain: str = "arbitrum_one",
+    gate_result: "ExecutionGateResult | None" = None,
 ) -> None:
     """Update cumulative hot rollup artifact — survives across windows.
 
@@ -1686,10 +1144,24 @@ def _update_hot_rollup(
         rollup.get("profit_guard_passed_total", 0)
         + sum(1 for r in _fast if getattr(r, "profit_guard_passed", False))
     )
-    # M7.E1.5: Submit-stage placeholder counters (populated when sim infra exists)
-    rollup.setdefault("sim_attempted_total", 0)
-    rollup.setdefault("sim_passed_total", 0)
-    rollup.setdefault("submit_ready_total", 0)
+    # M7.E1.5: Submit-stage counters — populated from execution gate result
+    if gate_result is not None:
+        rollup["sim_attempted_total"] = (
+            rollup.get("sim_attempted_total", 0) + gate_result.sim_attempted
+        )
+        rollup["sim_passed_total"] = (
+            rollup.get("sim_passed_total", 0) + gate_result.sim_passed
+        )
+        rollup["submit_ready_total"] = (
+            rollup.get("submit_ready_total", 0) + gate_result.submit_ready
+        )
+        rollup["sim_disabled"] = gate_result.sim_disabled
+        if gate_result.sim_blocker:
+            rollup["sim_blocker"] = gate_result.sim_blocker
+    else:
+        rollup.setdefault("sim_attempted_total", 0)
+        rollup.setdefault("sim_passed_total", 0)
+        rollup.setdefault("submit_ready_total", 0)
     # M7.A.5.47: 6 canonical hot miss counters (cumulative)
     rollup["bridge_candidate_loaded_total"] = (
         rollup.get("bridge_candidate_loaded_total", 0)
@@ -2709,12 +2181,14 @@ def run_loop(cli_args) -> None:
             # M7.A.5.31: Run profit guard on hot lane results
             guard_results = None
             fast_results = None
+            _gate_result = None  # E1.12.2: execution gate result
             if lane == "hot":
-                # M7.A.5.46: Use _raw_results for profit guard (compact mode).
-                guard_results = _run_profit_guard_on_results(
+                # E1.12.2: Run full execution gate (profit_guard → sim → submit)
+                _gate_result = run_execution_gate(
                     artifact.get("_raw_results", artifact.get("results", [])),
                     chain=cli_args.chain,
                 )
+                guard_results = _gate_result.guard_passed
 
                 # M7.A.5.34: Extract fast-path results directly from artifact.
                 # In hot mode, run_ws_live() scores events via score_backrun_fast()
@@ -3071,6 +2545,7 @@ def run_loop(cli_args) -> None:
                     bridge_diagnostics=_hot_bridge_diag,
                     chain=cli_args.chain,
                     profile=profile,
+                    gate_result=_gate_result,
                 )
 
                 # M7.A.5.47p: Auto-pin live-miss pools from other_live_pool_trace.
@@ -3205,6 +2680,7 @@ def run_loop(cli_args) -> None:
                     hot_active_pools=_hot_active_pools,
                     bridge=_bridge,
                     chain=cli_args.chain,
+                    gate_result=_gate_result,
                 )
 
             best = artifact.get("best_net_bps_clean")

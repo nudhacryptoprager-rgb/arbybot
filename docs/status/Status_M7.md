@@ -1,7 +1,7 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.12.1 CLOSED (engineering) -- 10-step audit complete, production NOT reached** (E1.12.1 engineering closure confirmed: all 10 audit steps implemented, 30min burn-in stable, CI 3862 PASS. Production readiness NOT reached: sim_passed=0, submit_ready=0, profit_realism=ROUNDTRIP_NOT_PROFITABLE.)  
-**Updated**: 2026-04-11
+**Status**: **M7.E1.12.2 IN PROGRESS — modularize loop + wire execution gate** (E1.12.1 engineering closure confirmed. E1.12.2: extracted 3 modules from 3274-line monolith, wired execution_gate.py pipeline, rollup counters now real. CI 3878 PASS.)  
+**Updated**: 2026-04-12
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
 ---
@@ -17,6 +17,27 @@ Rationale (E1.12 audit):
 - No resources allocated to Arbitrum M7 (FROZEN at 5.47s)
 
 **E1.12.1 closure note**: Engineering session CLOSED. Burn-in evidence is documented in DEV_REPORT_LATEST.md via rolling artifact session IDs (production=d4f84d5c, discovery=9c79152f), not discrete run_dirs. Production closure requires: sim_passed>0, submit_ready>0, profit_realism=ROUNDTRIP_PROFITABLE — none met yet.
+
+## E1.12.2 — Modularize loop + wire execution gate
+
+**Goal**: 1h soak confirmed Base M7 hot-path progress; terminal stages remain blocked by two classes of blockers: (a) code-path not wired for sim/submit, (b) cold-lane economics still net-negative under current L1 data costs. E1.12.2 addresses (a) by modularizing the 3274-line monolith and wiring the execution gate pipeline.
+
+**Done (Phase 1)**:
+- Step 9: BackrunResult extended with 8 terminal-stage fields (sim_attempted..signing_ready)
+- Step 3: `m7/orderflow/runtime_io.py` extracted (~200 lines): path management, atomic JSON, promoted pairs, discovery scoreboard
+- Step 4: `m7/orderflow/bridge_runtime.py` extracted (~300 lines): cold-hot bridge I/O, registry prewarm, promotion rules
+- Step 8: `m7/orderflow/execution_gate.py` created (~165 lines): profit_guard → sim → submit_ready pipeline, SIM_DISABLED honest blocker
+- Step 7: `m7/orderflow/profit_guard.py` — batch helper `annotate_profit_guard_results()` added
+- Step 2: `scripts/m7a_orderflow_loop.py` thinned: 635 lines removed, imports rewired to new modules, backward-compat re-exports preserved
+- Execution gate wired into run_loop() hot lane: `run_execution_gate()` replaces raw `_run_profit_guard_on_results()`
+- Rollup counters (sim_attempted_total, sim_passed_total, submit_ready_total) now increment from real gate_result
+- signal_counts in hot artifact now populated from gate_result (no more hardcoded 0)
+- Step 10: 16 protective tests added (`tests/unit/test_execution_gate.py`)
+- CI: 3878 passed, 0 failed
+
+**Deferred (Phase 2)**:
+- Step 5: `m7/orderflow/hot_runtime_artifacts.py` — extract `_write_hot_artifact` (538 lines) and `_write_hot_intents`
+- Step 6: `m7/orderflow/loop_runner.py` — extract `LoopState` dataclass + `run_hot_iteration/run_cold_iteration` from `run_loop()` (1216 lines)
 
 ---
 

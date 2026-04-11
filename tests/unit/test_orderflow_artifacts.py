@@ -1944,7 +1944,7 @@ class TestM7A533BackrunResultField:
         from dataclasses import fields
         from m7.orderflow.contracts import BackrunResult
 
-        assert len(fields(BackrunResult)) == 67
+        assert len(fields(BackrunResult)) == 75
 
     def test_profit_guard_passed_defaults_none(self):
         r = _make_result()
@@ -3261,14 +3261,14 @@ class TestM7A539CrossLanePromoted:
         """Promoted pairs can be written and read back."""
         import tempfile
         import os
-        from scripts.m7a_orderflow_loop import _write_promoted_pairs, _read_promoted_pairs, _PROMOTED_PAIRS_PATH
+        from scripts.m7a_orderflow_loop import _write_promoted_pairs, _read_promoted_pairs
 
-        # Save original path and use temp
-        original_path = _PROMOTED_PAIRS_PATH
-        import scripts.m7a_orderflow_loop as loop_mod
+        # Patch the canonical module-level path in runtime_io
+        import m7.orderflow.runtime_io as _rio_mod
+        original_path = _rio_mod._PROMOTED_PAIRS_PATH
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = os.path.join(tmpdir, "m7_promoted_pairs.json")
-            loop_mod._PROMOTED_PAIRS_PATH = tmp_path
+            _rio_mod._PROMOTED_PAIRS_PATH = tmp_path
             try:
                 promoted = {
                     "candidate": ["ARB/WETH", "SPA/USDC"],
@@ -3279,19 +3279,19 @@ class TestM7A539CrossLanePromoted:
                 assert result["candidate"] == ["ARB/WETH", "SPA/USDC"]
                 assert result["execution"] == ["ARB/WETH"]
             finally:
-                loop_mod._PROMOTED_PAIRS_PATH = original_path
+                _rio_mod._PROMOTED_PAIRS_PATH = original_path
 
     def test_read_returns_empty_when_missing(self):
         """Reading missing file returns empty dict."""
-        import scripts.m7a_orderflow_loop as loop_mod
+        import m7.orderflow.runtime_io as _rio_mod
         from scripts.m7a_orderflow_loop import _read_promoted_pairs
-        original_path = loop_mod._PROMOTED_PAIRS_PATH
-        loop_mod._PROMOTED_PAIRS_PATH = "/nonexistent/path/file.json"
+        original_path = _rio_mod._PROMOTED_PAIRS_PATH
+        _rio_mod._PROMOTED_PAIRS_PATH = "/nonexistent/path/file.json"
         try:
             result = _read_promoted_pairs()
             assert result == {"candidate": [], "execution": []}
         finally:
-            loop_mod._PROMOTED_PAIRS_PATH = original_path
+            _rio_mod._PROMOTED_PAIRS_PATH = original_path
 
 
 class TestM7A539HotPrewarmFromCross:

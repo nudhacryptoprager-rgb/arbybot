@@ -138,3 +138,53 @@ def check_profit_guard(
             "backrun_size_wei": backrun_size_wei,
         },
     )
+
+
+def annotate_profit_guard_results(
+    results: list,
+    chain: str = "arbitrum_one",
+) -> list:
+    """Run profit guard on a list of scored results and annotate in-place.
+
+    E1.12.2: Batch helper — replaces the per-script
+    _run_profit_guard_on_results() pattern. Sets
+    result.profit_guard_passed on each BackrunResult that has
+    the attribute.
+
+    Returns list of (result, ProfitGuardResult) for candidates
+    that pass the guard.
+    """
+    passed = []
+    for r in results:
+        net = (r.get("best_backrun_net_bps") if isinstance(r, dict)
+               else getattr(r, "best_backrun_net_bps", None))
+        if net is None or net <= 0:
+            continue
+        size = (r.get("amount_in_wei") if isinstance(r, dict)
+                else getattr(r, "amount_in_wei", 0))
+        gross = (r.get("gross_pnl_wei") if isinstance(r, dict)
+                 else getattr(r, "gross_pnl_wei", 0))
+        buy = size
+        sell = size + gross
+        sv = (r.get("size_valid_for_token") if isinstance(r, dict)
+              else getattr(r, "size_valid_for_token", None))
+        rr = (r.get("reject_reason") if isinstance(r, dict)
+              else getattr(r, "reject_reason", None))
+        if sv is False:
+            continue
+        if rr == "REJECT_PRICING_ANOMALY":
+            continue
+        if not buy or not sell or not size:
+            continue
+        pipeline_ms = (r.get("quote_pipeline_latency_ms") if isinstance(r, dict)
+                       else getattr(r, "quote_pipeline_latency_ms", None))
+        guard = check_profit_guard(
+            buy_amount_wei=buy, sell_amount_wei=sell,
+            backrun_size_wei=size, pipeline_latency_ms=pipeline_ms,
+            chain=chain,
+        )
+        if guard.passed:
+            if hasattr(r, "profit_guard_passed"):
+                r.profit_guard_passed = True
+            passed.append((r, guard))
+    return passed
