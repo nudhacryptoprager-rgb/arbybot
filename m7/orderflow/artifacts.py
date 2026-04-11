@@ -20,7 +20,7 @@ from m7.shared.constants import (
     BLOCKER_LOW_LAG_COMPLETION_LATENCY,
     BLOCKER_LOW_LAG_RPC_QUOTE_FAIL,
     BLOCKER_LOW_LAG_V2_UNSUPPORTED,
-    BLOCKER_SUBGRAPH_API_KEY_REQUIRED,
+    # BLOCKER_SUBGRAPH_API_KEY_REQUIRED removed in E1.12.3 (not used in hot path)
     DEFAULT_BACKRUN_GAS,
     DEFAULT_GAS_PRICE_GWEI,
     GAS_FLOOR_BPS_ARBITRUM,
@@ -838,15 +838,39 @@ def build_replay_summary(
         _active_tags.append(BLOCKER_LOW_LAG_COMPLETION_LATENCY)
     # Gas: check if GAS_EXCEEDS_GROSS is dominant reject
     _gas_dom = reject_counts.get(REJECT_GAS_EXCEEDS_GROSS, 0)
+    _gas_l1_breakdown = None
     if _gas_dom > 0 and (not scored_net_bps_clean or max(scored_net_bps_clean) < 0):
         _active_tags.append(BLOCKER_GAS_L1_DATA_DOMINANT)
-    # Subgraph: always tag if endpoints are configured but no API key mechanism
-    _active_tags.append(BLOCKER_SUBGRAPH_API_KEY_REQUIRED)
+        # E1.12.3: Compute L1/L2 gas breakdown for diagnosis
+        _l1_samples = [getattr(r, "l1_data_bps", None) for r in results if getattr(r, "l1_data_bps", None) is not None]
+        _l2_samples = [getattr(r, "l2_gas_bps", None) for r in results if getattr(r, "l2_gas_bps", None) is not None]
+        _total_samples = [getattr(r, "total_gas_bps", None) for r in results if getattr(r, "total_gas_bps", None) is not None]
+        _l1_dominant_count = sum(
+            1 for r in results
+            if (getattr(r, "l1_data_bps", None) or 0) > (getattr(r, "l2_gas_bps", None) or 0)
+        )
+        _avg_l1_ratio = None
+        if _l1_samples and _total_samples and len(_l1_samples) == len(_total_samples):
+            _ratios = [l1 / t for l1, t in zip(_l1_samples, _total_samples) if t > 0]
+            _avg_l1_ratio = round(sum(_ratios) / len(_ratios), 4) if _ratios else None
+        _gas_l1_breakdown = {
+            "l1_dominant_count": _l1_dominant_count,
+            "samples_with_l1": len(_l1_samples),
+            "samples_with_l2": len(_l2_samples),
+            "avg_l1_ratio": _avg_l1_ratio,
+            "median_l1_bps": round(sorted(_l1_samples)[len(_l1_samples) // 2], 4) if _l1_samples else None,
+            "median_l2_bps": round(sorted(_l2_samples)[len(_l2_samples) // 2], 4) if _l2_samples else None,
+            "median_total_bps": round(sorted(_total_samples)[len(_total_samples) // 2], 4) if _total_samples else None,
+        }
+    # E1.12.3: Removed unconditional BLOCKER_SUBGRAPH_API_KEY_REQUIRED
+    # Subgraph is not used in hot-path registry (factory-direct). Tag was misleading.
 
     blocker_tags = {
         "active_tags": _active_tags,
         "active_count": len(_active_tags),
         "all_canonical_tags": sorted(ALL_BLOCKER_TAGS),
+        # E1.12.3: L1/L2 gas breakdown when GAS_L1_DATA_DOMINANT fires
+        "gas_l1_breakdown": _gas_l1_breakdown,
     }
 
     # M7.A.5.41: Compact top-candidate persistence for rolling artifact.

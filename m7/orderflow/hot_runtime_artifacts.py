@@ -232,6 +232,13 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "submit_ready": _submit_ready,
         "realized": 0,
     }
+    # E1.12.3: Per-window sim error + submit blocker detail
+    if gate_result is not None:
+        hot["sim_errors"] = list(getattr(gate_result, "sim_errors", []))
+        hot["submit_blockers"] = list(getattr(gate_result, "submit_blockers_detail", []))
+    else:
+        hot["sim_errors"] = []
+        hot["submit_blockers"] = []
 
     # M7.E1.8: Error counters вЂ” always present (honest 0 on normal path)
     hot["error_counts"] = {"heartbeat_on_error": 0}
@@ -990,6 +997,18 @@ def _update_hot_rollup(
         rollup["sim_disabled"] = gate_result.sim_disabled
         if gate_result.sim_blocker:
             rollup["sim_blocker"] = gate_result.sim_blocker
+        # E1.12.3: Cumulative simulation error histogram — surfaces WHY sim fails
+        _sim_hist = rollup.get("simulation_error_histogram") or {}
+        for _se in getattr(gate_result, "sim_errors", []):
+            _se_key = (_se or "unknown")[:80]
+            _sim_hist[_se_key] = _sim_hist.get(_se_key, 0) + 1
+        rollup["simulation_error_histogram"] = _sim_hist
+        # E1.12.3: Cumulative submit blocker histogram — surfaces WHY submit blocked
+        _sub_hist = rollup.get("submit_blocker_histogram") or {}
+        for _sb in getattr(gate_result, "submit_blockers_detail", []):
+            _sb_key = (_sb or "unknown")[:80]
+            _sub_hist[_sb_key] = _sub_hist.get(_sb_key, 0) + 1
+        rollup["submit_blocker_histogram"] = _sub_hist
     else:
         rollup.setdefault("sim_attempted_total", 0)
         rollup.setdefault("sim_passed_total", 0)

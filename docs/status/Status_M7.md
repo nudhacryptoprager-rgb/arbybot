@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.12.2 DONE — modularize loop + wire execution gate** (E1.12.2: 5 modules extracted from 3274→204 line monolith (-93%), execution gate wired, rollup counters real. Phase 2 namespace regression found in review (discovery hot artifacts stale); fixed and revalidated by 2×30m soak with all 13 artifacts fresh. CI 3881 PASS.)  
+**Status**: **M7.E1.12.3 DONE — simulation telemetry + blocker refinement** (E1.12.3: simulation_error_histogram + submit_blocker_histogram in rollup; gas_l1_breakdown when GAS_L1_DATA_DOMINANT fires; SUBGRAPH_API_KEY_REQUIRED removed from active_tags. CI 3888 PASS.)  
 **Updated**: 2026-04-12
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -51,6 +51,44 @@ Rationale (E1.12 audit):
   - All 13 M7 rolling artifacts confirmed fresh (21:56–21:57 local), including previously-stale discovery hot files
   - WS: connected (drpc), heartbeat_on_error_windows=0 (both profiles)
   - Cold prod: events=8, best_net_bps=-2.27; Cold disc: events=7, best_net_bps=-10.20
+
+## E1.12.3 — Simulation Telemetry + Blocker Refinement (DONE)
+
+**Goal**: Diagnose WHY `sim_attempted=10` but `sim_passed=0`. E1.12.2 wired the execution gate, but sim failures were opaque. E1.12.3 surfaces per-error reasons via cumulative histograms + blocker refinements.
+
+**Code changes**:
+- `m7/orderflow/execution_gate.py`: Added `sim_errors: List[str]` and `submit_blockers_detail: List[str]` to `ExecutionGateResult` dataclass
+- `run_execution_gate()` collects: on sim failure → `gate.sim_errors.append(error)`, on submit blocked → `gate.submit_blockers_detail.extend(blockers)`
+- `m7/orderflow/hot_runtime_artifacts.py`:
+  - `_update_hot_rollup()`: Added `simulation_error_histogram` + `submit_blocker_histogram` cumulative counters
+  - `_write_hot_artifact()`: Added per-window `sim_errors` + `submit_blockers` lists
+- `m7/orderflow/artifacts.py`:
+  - Step 5 (GAS_L1_DATA_DOMINANT breakdown): Added `gas_l1_breakdown` to blocker_tags when GAS_L1_DATA_DOMINANT fires — surfaces L1/L2 split (l1_dominant_count, avg_l1_ratio, median_l1_bps, median_l2_bps)
+  - Step 6 (SUBGRAPH_API_KEY_REQUIRED removed): Removed unconditional blocker (subgraph not used in hot path)
+  - Step 7 (LOW_LAG_V2_UNSUPPORTED): Already conditional — no change needed
+
+**Tests**:
+- 6 new tests in `TestE1123SimErrorHistogram` class (`tests/unit/test_execution_gate.py`)
+- 2 new tests in `TestM7A518BlockerTagsArtifact` class (`tests/unit/test_orderflow_blocker_tags.py`):
+  - `test_blocker_tags_subgraph_removed_e1_12_3`
+  - `test_gas_l1_breakdown_present_when_dominant`
+- CI: 3888 passed, 6 skipped, 0 failed
+
+**Soak evidence (2026-04-11, post-completion)**:
+- Production (base): 30m, 0 restarts, clean shutdown, exit 0 (session 20:41:43–21:08:52Z, sid=88fd183f)
+- Discovery (base): 30m, 0 restarts, clean shutdown, exit 0 (session 20:39:24–21:09:03Z, sid=62d08408)
+- Prod rollup: windows_seen=5266, session_windows=41, events=102, fast_scored=447, fast_positive=36, guard_passed=31, sim_attempted=10, sim_passed=0
+- Disc rollup: windows_seen=472, session_windows=48, events=101, fast_scored=86, fast_positive=7, guard_passed=7, sim_attempted=3, sim_passed=0
+- All 13 M7 rolling artifacts confirmed fresh (23:08–23:09 local)
+- WS: connected, heartbeat_on_error_windows=0 (both profiles)
+- **E1.12.3 verified fields**:
+  - Prod `simulation_error_histogram`: `{}` (no sim events this session)
+  - Disc `simulation_error_histogram`: `{"HTTP 403: ...insufficient": 1, "HTTP 403: ...insufficient": 1}` — **Tenderly credits exhausted**
+  - Both `submit_blocker_histogram`: `{}`
+  - Prod cold `active_tags`: `["GAS_L1_DATA_DOMINANT"]` — SUBGRAPH removed
+  - Disc cold `active_tags`: `["LOW_LAG_INACTIVE_POOL", "GAS_L1_DATA_DOMINANT"]`
+  - Both cold `gas_l1_breakdown`: `{l1_dominant_count: ..., avg_l1_ratio: 0.8, median_l1_bps: 0.16, median_l2_bps: 0.04}`
+- **Key finding**: sim failures are **Tenderly HTTP 403 (insufficient credits)**, NOT code bugs or tx construction errors. Resolution: replenish Tenderly credits or switch to local fork sim.
 
 ---
 

@@ -47,6 +47,9 @@ class ExecutionGateResult:
     sim_disabled: bool = False
     sim_blocker: str = ""
     submit_blockers: List[str] = field(default_factory=list)
+    # E1.12.3: Per-candidate error reasons for reviewer-grade diagnosis
+    sim_errors: List[str] = field(default_factory=list)
+    submit_blockers_detail: List[str] = field(default_factory=list)
 
 
 def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
@@ -156,9 +159,12 @@ def run_execution_gate(
                     r.submit_ready = False
                     r.submit_blocker = ",".join(blockers)
                 gate.submit_blockers.extend(blockers)
+                gate.submit_blockers_detail.extend(blockers)
         else:
+            _sim_err = sim_result.error or "unknown"
+            gate.sim_errors.append(_sim_err)
             if hasattr(r, "submit_ready"):
                 r.submit_ready = False
-                r.submit_blocker = f"SIM_FAILED:{sim_result.error or 'unknown'}"
+                r.submit_blocker = f"SIM_FAILED:{_sim_err}"
 
     return gate

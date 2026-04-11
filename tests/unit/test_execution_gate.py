@@ -271,3 +271,182 @@ class TestProfitGuardBatchHelper:
     def test_annotate_exists(self):
         from m7.orderflow.profit_guard import annotate_profit_guard_results
         assert callable(annotate_profit_guard_results)
+
+
+class TestE1123SimErrorHistogram:
+    """E1.12.3: ExecutionGateResult collects per-candidate sim errors + submit blockers."""
+
+    def test_new_fields_default_empty(self):
+        from m7.orderflow.execution_gate import ExecutionGateResult
+
+        gate = ExecutionGateResult()
+        assert gate.sim_errors == []
+        assert gate.submit_blockers_detail == []
+
+    def test_sim_errors_collected_on_failure(self, monkeypatch):
+        """When sim fails, error string is appended to sim_errors."""
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+        import m7.orderflow.execution_gate as gate_mod
+
+        monkeypatch.setattr(gate_mod, "is_tenderly_configured", lambda: True)
+        monkeypatch.setattr(
+            gate_mod,
+            "_attempt_simulation",
+            lambda r, g, chain="base": SimulationResult(
+                success=False, error="HTTP 401: Unauthorized"
+            ),
+        )
+
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+        )
+
+        gate = run_execution_gate([br], chain="base")
+        if gate.guard_passed:
+            assert gate.sim_attempted > 0
+            assert gate.sim_passed == 0
+            assert len(gate.sim_errors) == gate.sim_attempted
+            assert "HTTP 401" in gate.sim_errors[0]
+
+    def test_submit_blockers_detail_on_sim_pass_no_calldata(self, monkeypatch):
+        """When sim passes but calldata not ready, submit blocker detail collected."""
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+        import m7.orderflow.execution_gate as gate_mod
+
+        monkeypatch.setattr(gate_mod, "is_tenderly_configured", lambda: True)
+        monkeypatch.setattr(
+            gate_mod,
+            "_attempt_simulation",
+            lambda r, g, chain="base": SimulationResult(
+                success=True, gas_used=21000, simulation_id="sim-123"
+            ),
+        )
+
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+        )
+
+        gate = run_execution_gate([br], chain="base")
+        if gate.guard_passed and gate.sim_passed > 0:
+            # calldata_ready/signing_ready are None by default
+            assert gate.submit_ready == 0
+            assert "CALLDATA_NOT_READY" in gate.submit_blockers_detail
+            assert "SIGNING_NOT_READY" in gate.submit_blockers_detail
+
+    def test_rollup_accumulates_sim_histogram(self, tmp_path, monkeypatch):
+        """_update_hot_rollup accumulates simulation_error_histogram from gate_result."""
+        import json
+        import m7.orderflow.runtime_io as _rio
+        import scripts.m7a_orderflow_loop as loop_mod
+        from m7.orderflow.execution_gate import ExecutionGateResult
+
+        rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio, "_SESSION_ID", "test-hist-001")
+        monkeypatch.setattr(loop_mod, "_SESSION_ID", "test-hist-001")
+
+        gate = ExecutionGateResult(
+            sim_attempted=3,
+            sim_passed=0,
+            sim_errors=["HTTP 401: Unauthorized", "HTTP 401: Unauthorized", "REVERT: out of gas"],
+            submit_blockers_detail=[],
+        )
+
+        loop_mod._update_hot_rollup(
+            events_count=5, fast_results=[], guard_results=[],
+            bridge_diagnostics={}, chain="base", gate_result=gate,
+        )
+
+        with open(rollup_path) as f:
+            data = json.load(f)
+
+        assert data["sim_attempted_total"] == 3
+        assert data["sim_passed_total"] == 0
+        hist = data.get("simulation_error_histogram", {})
+        assert hist.get("HTTP 401: Unauthorized") == 2
+        assert hist.get("REVERT: out of gas") == 1
+
+    def test_rollup_accumulates_submit_blocker_histogram(self, tmp_path, monkeypatch):
+        """_update_hot_rollup accumulates submit_blocker_histogram from gate_result."""
+        import json
+        import m7.orderflow.runtime_io as _rio
+        import scripts.m7a_orderflow_loop as loop_mod
+        from m7.orderflow.execution_gate import ExecutionGateResult
+
+        rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio, "_SESSION_ID", "test-hist-002")
+        monkeypatch.setattr(loop_mod, "_SESSION_ID", "test-hist-002")
+
+        gate = ExecutionGateResult(
+            sim_attempted=2,
+            sim_passed=2,
+            sim_errors=[],
+            submit_blockers_detail=["CALLDATA_NOT_READY", "SIGNING_NOT_READY",
+                                    "CALLDATA_NOT_READY", "SIGNING_NOT_READY"],
+        )
+
+        loop_mod._update_hot_rollup(
+            events_count=5, fast_results=[], guard_results=[],
+            bridge_diagnostics={}, chain="base", gate_result=gate,
+        )
+
+        with open(rollup_path) as f:
+            data = json.load(f)
+
+        hist = data.get("submit_blocker_histogram", {})
+        assert hist.get("CALLDATA_NOT_READY") == 2
+        assert hist.get("SIGNING_NOT_READY") == 2
+
+    def test_hot_artifact_includes_sim_errors(self, tmp_path, monkeypatch):
+        """_write_hot_artifact includes per-window sim_errors and submit_blockers."""
+        import json
+        import m7.orderflow.runtime_io as _rio
+        import scripts.m7a_orderflow_loop as loop_mod
+        from m7.orderflow.execution_gate import ExecutionGateResult
+
+        hot_path = str(tmp_path / "m7_hot_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ARTIFACT_PATH", hot_path)
+        monkeypatch.setattr(_rio, "_HOT_ARTIFACT_PATH", hot_path)
+
+        gate = ExecutionGateResult(
+            sim_attempted=1,
+            sim_passed=0,
+            sim_errors=["HTTP 500: Internal Server Error"],
+            submit_blockers_detail=[],
+        )
+
+        artifact = {"results": [], "events_count": 0, "_raw_results": []}
+        loop_mod._write_hot_artifact(artifact, iteration=1, gate_result=gate)
+
+        with open(hot_path) as f:
+            data = json.load(f)
+
+        assert data["sim_errors"] == ["HTTP 500: Internal Server Error"]
+        assert data["submit_blockers"] == []

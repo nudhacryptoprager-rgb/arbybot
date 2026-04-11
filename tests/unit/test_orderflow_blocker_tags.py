@@ -456,10 +456,12 @@ class TestM7A518BlockerTagsArtifact:
         bt = art["blocker_tags"]
         assert BLOCKER_LOW_LAG_NONE_THIS_WINDOW in bt["active_tags"]
 
-    def test_blocker_tags_subgraph_always_present(self):
+    def test_blocker_tags_subgraph_removed_e1_12_3(self):
+        """E1.12.3: SUBGRAPH_API_KEY_REQUIRED removed — not used in hot path."""
         art = build_replay_summary([], [], mode="test")
         bt = art["blocker_tags"]
-        assert BLOCKER_SUBGRAPH_API_KEY_REQUIRED in bt["active_tags"]
+        # E1.12.3: Subgraph tag is no longer unconditionally appended
+        assert BLOCKER_SUBGRAPH_API_KEY_REQUIRED not in bt["active_tags"]
 
     def test_blocker_tags_with_gas_dominant(self):
         ev = _make_event(eid="gas_dom")
@@ -471,6 +473,29 @@ class TestM7A518BlockerTagsArtifact:
         )
         art = build_replay_summary([ev], [r], mode="test")
         assert BLOCKER_GAS_L1_DATA_DOMINANT in art["blocker_tags"]["active_tags"]
+
+    def test_gas_l1_breakdown_present_when_dominant(self):
+        """E1.12.3: gas_l1_breakdown surfaces L1/L2 split when GAS_L1_DATA_DOMINANT fires."""
+        ev = _make_event(eid="gas_break")
+        r = _make_result(
+            event_id="gas_break", best_backrun_net_bps=-5.0,
+            reject_reason=REJECT_GAS_EXCEEDS_GROSS,
+            event_block=100, quote_block=100, block_lag=0,
+            same_state_class="same_block", event_detected_at_block=100,
+        )
+        # Add L1/L2 gas attributes
+        r.l1_data_bps = 3.5
+        r.l2_gas_bps = 1.0
+        r.total_gas_bps = 4.5
+        art = build_replay_summary([ev], [r], mode="test")
+        bt = art["blocker_tags"]
+        assert BLOCKER_GAS_L1_DATA_DOMINANT in bt["active_tags"]
+        breakdown = bt.get("gas_l1_breakdown")
+        assert breakdown is not None
+        assert breakdown["l1_dominant_count"] == 1
+        assert breakdown["samples_with_l1"] == 1
+        assert breakdown["median_l1_bps"] == 3.5
+        assert breakdown["median_l2_bps"] == 1.0
 
     def test_blocker_tags_no_counter_pool_on_low_lag(self):
         ev = _make_event(eid="ncp_ll")
