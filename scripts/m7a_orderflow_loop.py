@@ -1646,6 +1646,14 @@ def _update_hot_rollup(
         _sess.get("session_ws_fallback_windows", 0)
         + (1 if _ws_prov == "public_fallback" else 0)
     )
+    # M7.E1.11: Track provider switches (provider changed from previous window)
+    _prev_rpc = _sess.get("last_rpc_provider", _rpc_prov)
+    _prev_ws = _sess.get("last_ws_provider", _ws_prov)
+    _sess["provider_switch_count"] = (
+        _sess.get("provider_switch_count", 0)
+        + (1 if _rpc_prov != _prev_rpc else 0)
+        + (1 if _ws_prov != _prev_ws else 0)
+    )
     _sess["last_ws_connection_status"] = _ws_status
     _sess["last_rpc_provider"] = _rpc_prov
     _sess["last_ws_provider"] = _ws_prov
@@ -1816,6 +1824,7 @@ def _update_hot_rollup(
                 "session_ws_connected_windows", "session_ws_failed_windows",
                 "session_ws_failed_429_windows",
                 "session_http_fallback_windows", "session_ws_fallback_windows",
+                "provider_switch_count",
                 "last_ws_connection_status", "last_rpc_provider", "last_ws_provider"):
         rollup[_sk] = _sess.get(_sk)
 

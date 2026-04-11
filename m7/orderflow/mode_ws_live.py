@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 from config import load_dexes, get_all_token_addresses, load_chains
-from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws, _CHAIN_KEY_TO_ID
+from core.rpc_urls import resolve_rpc_http, resolve_rpc_ws, _CHAIN_KEY_TO_ID, classify_provider
 
 from m7.shared.constants import (
     ADMISSION_ONCHAIN_ENRICHED,
@@ -104,10 +104,11 @@ def run_ws_live(
                     "HTTP RPC 429 rate limit on %s, falling back to public RPC: %s",
                     rpc_host, _pub_http,
                 )
+                _original_provider = rpc_provider
                 rpc_url = _pub_http
-                rpc_provider = "public_fallback"
+                rpc_provider = classify_provider(_pub_http)
                 rpc_host = urlparse(rpc_url).netloc
-                rpc_diag = {"source": "public_http_fallback", "original_source": rpc_diag.get("source", "unknown"), "fallback_reason": "http_429"}
+                rpc_diag = {"source": "public_http_fallback", "original_source": rpc_diag.get("source", "unknown"), "original_provider": _original_provider, "fallback_reason": "http_429"}
             else:
                 logger.error("HTTP RPC 429 on %s and no public fallback available", rpc_host)
         else:
@@ -296,14 +297,15 @@ def run_ws_live(
                 ws_conn = ws_mod.create_connection(_try_ws_url, timeout=10)
                 _ws_connected = True
                 if _try_ws_url != ws_url:
+                    _original_ws_provider = ws_provider
                     logger.info(
                         "WS fallback to %s succeeded: %s",
                         _try_ws_name, urlparse(_try_ws_url).netloc,
                     )
                     ws_url = _try_ws_url
-                    ws_provider = _try_ws_name
+                    ws_provider = classify_provider(_try_ws_url)
                     ws_host = urlparse(ws_url).netloc
-                    ws_diag = {"source": "public_ws_fallback", "original_source": ws_diag.get("source", "unknown"), "fallback_reason": "ws_429"}
+                    ws_diag = {"source": "public_ws_fallback", "original_source": ws_diag.get("source", "unknown"), "original_provider": _original_ws_provider, "fallback_reason": "ws_429"}
                 break
             except Exception as _conn_exc:
                 _conn_err = str(_conn_exc)[:200]

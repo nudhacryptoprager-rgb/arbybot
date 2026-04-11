@@ -16,6 +16,15 @@ class TestRunScanInfra(unittest.TestCase):
             os.environ["NETWORK"] = "arbitrum"
             os.environ["ARBY_SKIP_RPC"] = "1"
             os.environ["ARBY_FAKE_BLOCK"] = "123"
+            # Remove chain-scoped env vars so Alchemy resolution is tested
+            # (dotenv may have loaded ARBITRUM_RPC from .env)
+            for _k in ("ARBITRUM_RPC", "ARBITRUM_WSS", "BASE_RPC", "BASE_WSS",
+                        "LINEA_RPC", "LINEA_WSS", "MANTLE_RPC", "MANTLE_WSS",
+                        "SCROLL_RPC", "SCROLL_WSS", "OPTIMISM_RPC", "OPTIMISM_WSS",
+                        "ARBY_RPC_HTTP_PRIMARY", "ARBY_RPC_WS_PRIMARY",
+                        "ARBY_RPC_PROVIDER", "ARBY_RPC_HTTP_HOST",
+                        "ARBY_RPC_WS_PROVIDER", "ARBY_RPC_WS_HOST"):
+                os.environ.pop(_k, None)
 
             with tempfile.TemporaryDirectory() as td:
                 out = Path(td)

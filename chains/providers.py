@@ -542,7 +542,7 @@ def extract_provider_name(url: str) -> str:
         return "ankr"
     elif "arbitrum.io" in url_lower:
         return "arbitrum_public"
-    elif "drpc.org" in url_lower:
+    elif "drpc.org" in url_lower or "drpc.live" in url_lower:
         return "drpc"
     elif "localhost" in url_lower or "127.0.0.1" in url_lower:
         return "localhost"

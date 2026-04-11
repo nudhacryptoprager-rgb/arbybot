@@ -63,6 +63,7 @@ class TestExtractProviderName:
         from chains.providers import extract_provider_name
         
         assert extract_provider_name("https://arbitrum.drpc.org") == "drpc"
+        assert extract_provider_name("https://lb.drpc.live/base/keyabc") == "drpc"
     
     def test_localhost_url(self):
         """Test localhost URL extraction."""

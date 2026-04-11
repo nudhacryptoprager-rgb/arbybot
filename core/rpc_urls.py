@@ -14,6 +14,28 @@ _NETWORK_ALIASES = {
     "mantle": "mantle",
     "scroll": "scroll",
     "zksync": "zksync",
+    "optimism": "optimism",
+}
+
+# Chain-scoped env var names: (HTTP_VAR, WSS_VAR) per canonical network.
+# These take priority over global ALCHEMY_API_KEY / ARBY_RPC_HTTP_PRIMARY.
+_CHAIN_ENV_VARS = {
+    "arbitrum": ("ARBITRUM_RPC", "ARBITRUM_WSS"),
+    "base":     ("BASE_RPC",     "BASE_WSS"),
+    "linea":    ("LINEA_RPC",    "LINEA_WSS"),
+    "mantle":   ("MANTLE_RPC",   "MANTLE_WSS"),
+    "scroll":   ("SCROLL_RPC",   "SCROLL_WSS"),
+    "optimism": ("OPTIMISM_RPC", "OPTIMISM_WSS"),
+}
+
+# dRPC path-segment → canonical network mapping for wrong-chain validation.
+_DRPC_PATH_SEGMENTS = {
+    "arbitrum": "arbitrum",
+    "base": "base",
+    "linea": "linea",
+    "mantle": "mantle",
+    "scroll": "scroll",
+    "optimism": "optimism",
 }
 
 # Alchemy subdomain mapping (best-effort); these are the subdomain prefixes
@@ -91,6 +113,82 @@ def public_fallback_for(network: Optional[str]) -> Optional[str]:
     return _PUBLIC_FALLBACKS.get(net)
 
 
+def classify_provider(url: str) -> str:
+    """Return a canonical provider type for an RPC URL.
+
+    Canonical types: alchemy, drpc, public_fallback, flashblocks, infura,
+    publicnode, localhost, unknown.
+    """
+    if not url:
+        return "unknown"
+    low = url.lower()
+    if "alchemy.com" in low:
+        return "alchemy"
+    if "drpc.org" in low or "drpc.live" in low:
+        return "drpc"
+    if "publicnode.com" in low:
+        return "publicnode"
+    if "flashblocks" in low:
+        return "flashblocks"
+    if "infura.io" in low:
+        return "infura"
+    if "localhost" in low or "127.0.0.1" in low:
+        return "localhost"
+    # Public chain-official endpoints
+    for _net, _fb in _PUBLIC_FALLBACKS.items():
+        if _fb and _fb.lower().rstrip("/") == low.rstrip("/"):
+            return "public_fallback"
+    return "unknown"
+
+
+def validate_drpc_url(url: str, expected_network: Optional[str]) -> tuple:
+    """Validate that a dRPC URL matches the expected chain.
+
+    dRPC URLs have the chain in the path: ``lb.drpc.live/<chain>/...``
+    or ``<chain>.drpc.org``.
+
+    Returns ``(is_valid, error_message_or_none)``.
+    If the URL is not a dRPC URL, returns ``(True, None)`` (nothing to check).
+    """
+    if not url or not expected_network:
+        return True, None
+    low = url.lower()
+    if "drpc.org" not in low and "drpc.live" not in low:
+        return True, None  # not dRPC, skip
+
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+
+    # lb.drpc.live/<chain>/... form
+    if "drpc.live" in (parsed.netloc or "").lower():
+        path_parts = [p for p in parsed.path.strip("/").split("/") if p]
+        if path_parts:
+            url_chain = path_parts[0].lower()
+            net = _normalize_network(expected_network)
+            if net and url_chain in _DRPC_PATH_SEGMENTS:
+                drpc_net = _DRPC_PATH_SEGMENTS[url_chain]
+                if drpc_net != net:
+                    return False, (
+                        f"dRPC URL chain mismatch: URL path has '{url_chain}' "
+                        f"(={drpc_net}) but expected network is '{net}'"
+                    )
+        return True, None
+
+    # <chain>.drpc.org form
+    host = (parsed.netloc or "").lower().split(":")[0]
+    if host.endswith(".drpc.org"):
+        url_chain = host.replace(".drpc.org", "")
+        net = _normalize_network(expected_network)
+        if net and url_chain in _DRPC_PATH_SEGMENTS:
+            drpc_net = _DRPC_PATH_SEGMENTS[url_chain]
+            if drpc_net != net:
+                return False, (
+                    f"dRPC URL chain mismatch: host '{host}' "
+                    f"(={drpc_net}) but expected network is '{net}'"
+                )
+    return True, None
+
+
 # Map common chain IDs to canonical network names (partial list; extend as needed)
 _CHAIN_ID_TO_NETWORK = {
     42161: "arbitrum",
@@ -162,6 +260,12 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
 
     Returns tuple (url_or_none, provider_name, diagnostics_dict).
     
+    Resolution order:
+    1. Chain-scoped env var (e.g. BASE_RPC) — preferred for dRPC/premium
+    2. Global explicit env var (ALCHEMY_RPC_HTTP / ARBY_RPC_HTTP_PRIMARY)
+    3. Alchemy API key
+    4. Public fallback
+    
     v3.2.32: Chain-safety validation - explicit env vars are only used if they
     match the requested chain_id. This prevents multi-chain scans from using
     wrong-chain endpoints (e.g., Arbitrum endpoint for Base scan).
@@ -169,7 +273,24 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
     env = env or {}
     diagnostics = {}
 
-    # Prefer explicit env var ONLY if it matches the requested chain_id
+    net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
+
+    # 1) Chain-scoped env var (e.g. BASE_RPC, ARBITRUM_RPC)
+    if net and net in _CHAIN_ENV_VARS:
+        http_var, _ws_var = _CHAIN_ENV_VARS[net]
+        chain_url = env.get(http_var)
+        if chain_url:
+            # Validate dRPC chain match
+            drpc_ok, drpc_err = validate_drpc_url(chain_url, net)
+            if not drpc_ok:
+                diagnostics["skipped_chain_env"] = drpc_err
+                # Fall through to other resolution
+            else:
+                prov = classify_provider(chain_url)
+                diagnostics["source"] = f"chain_env_{http_var}"
+                return chain_url, prov, diagnostics
+
+    # 2) Prefer explicit env var ONLY if it matches the requested chain_id
     http = env.get("ALCHEMY_RPC_HTTP") or env.get("ARBY_RPC_HTTP_PRIMARY")
     if http:
         # v3.2.32: Validate chain_id consistency before using explicit env var
@@ -182,15 +303,14 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
                 # Fall through to chain-aware resolution below
             else:
                 diagnostics["source"] = "explicit"
-                return http, ("alchemy" if "alchemy" in http else "public"), diagnostics
+                return http, classify_provider(http), diagnostics
         else:
             # No chain_id specified, use explicit env var as-is
             diagnostics["source"] = "explicit"
-            return http, ("alchemy" if "alchemy" in http else "public"), diagnostics
+            return http, classify_provider(http), diagnostics
 
-    # Build from api key if present
+    # 3) Build from api key if present
     api = env.get("ALCHEMY_API_KEY")
-    net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
     diagnostics["normalized_network"] = net
     if api and net:
         url = build_alchemy_http_url(net, api)
@@ -198,7 +318,7 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
             diagnostics["source"] = "alchemy_api_key"
             return url, "alchemy", diagnostics
 
-    # Fallback to public
+    # 4) Fallback to public
     fb = public_fallback_for(net)
     if fb:
         diagnostics["source"] = "public_fallback"
@@ -212,11 +332,32 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
     """Resolve a WS (wss) URL similarly to resolve_rpc_http.
 
     Returns tuple (url_or_none, provider_name, diagnostics_dict).
+
+    Resolution order:
+    1. Chain-scoped env var (e.g. BASE_WSS, ARBITRUM_WSS)
+    2. Global explicit env var (ALCHEMY_RPC_WS / ARBY_RPC_WS_PRIMARY)
+    3. Alchemy API key
+    4. Public WS fallback (publicnode)
     """
     env = env or {}
     diagnostics = {}
 
-    # v3.2.32: Validate chain_id consistency for WS too
+    net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
+
+    # 1) Chain-scoped env var
+    if net and net in _CHAIN_ENV_VARS:
+        _http_var, ws_var = _CHAIN_ENV_VARS[net]
+        chain_ws = env.get(ws_var)
+        if chain_ws:
+            drpc_ok, drpc_err = validate_drpc_url(chain_ws, net)
+            if not drpc_ok:
+                diagnostics["skipped_chain_env"] = drpc_err
+            else:
+                prov = classify_provider(chain_ws)
+                diagnostics["source"] = f"chain_env_{ws_var}"
+                return chain_ws, prov, diagnostics
+
+    # 2) v3.2.32: Validate chain_id consistency for WS too
     ws = env.get("ALCHEMY_RPC_WS") or env.get("ARBY_RPC_WS_PRIMARY")
     if ws:
         if chain_id is not None:
@@ -228,13 +369,13 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
                 # Fall through to chain-aware resolution below
             else:
                 diagnostics["source"] = "explicit"
-                return ws, ("alchemy" if "alchemy" in ws else "public"), diagnostics
+                return ws, classify_provider(ws), diagnostics
         else:
             diagnostics["source"] = "explicit"
-            return ws, ("alchemy" if "alchemy" in ws else "public"), diagnostics
+            return ws, classify_provider(ws), diagnostics
 
+    # 3) Alchemy API key
     api = env.get("ALCHEMY_API_KEY")
-    net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
     diagnostics["normalized_network"] = net
     if api and net:
         url = build_alchemy_ws_url(net, api)
@@ -242,10 +383,10 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
             diagnostics["source"] = "alchemy_api_key"
             return url, "alchemy", diagnostics
 
-    # Fallback to public WS endpoints
+    # 4) Fallback to public WS endpoints
     if net and net in _PUBLIC_WS_FALLBACKS:
         diagnostics["source"] = "public_ws_fallback"
-        return _PUBLIC_WS_FALLBACKS[net], "public", diagnostics
+        return _PUBLIC_WS_FALLBACKS[net], "publicnode", diagnostics
 
     diagnostics["source"] = "none"
     return None, "unknown", diagnostics

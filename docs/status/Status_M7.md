@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.10 OPEN -- 429-fallback fix + provenance cleanup + fresh A/B rerun** (E1.10: Alchemy 429 rate limit identified as root cause of zero-event windows. WS+HTTP auto-fallback to public RPC added. Provenance fields now record actual post-fallback provider. Fresh production 20m: 230 events / 46 windows / public_fallback. Discovery rerun in progress.)  
+**Status**: **M7.E1.11 OPEN -- dRPC chain-scoped provider + provider_path_metrics** (E1.11: Chain-scoped env vars (BASE_RPC/WSS etc.) for dRPC as premium primary, classify_provider() for canonical provider types, validate_drpc_url() for wrong-chain rejection, provider_switch_count in rollup. dRPC WS stable (0 failures), dRPC HTTP intermittent 429 (50% fallback to public). Discovery now scoring: 31 fast_path_scored / 23 bridge_pair_hits.)  
 **Updated**: 2026-04-11
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -187,6 +187,11 @@ A full Base config audit (validate_universe + warm_pool_cache --check-liquidity)
 - **Production 20m**: 230 events / 46 windows / 800 cumulative events_seen_total / 0 ws_failed / public_fallback on both HTTP and WS. Cold artifact provenance correctly shows `public_http_fallback` / `public_ws_fallback`.
 - **Discovery 20m**: 245 events / 50 windows / 49 ws_connected / 1 ws_failed / 0 ws_failed_429 / 50 http_fallback / 49 ws_fallback. Cold artifact: `rpc_source=public_http_fallback`, `ws_source=public_ws_fallback`, `fallback_used=True`. Events confirmed: discovery sees comparable volume to production (245 vs 230). **Funnel divergence**: production has 84 bridge_pool_hits → 196 fast_path_scored → 42 scored_but_rejected_economics → 13 guard_passed; discovery has 84 bridge_pool_hits → 0 fast_path_scored. Discovery zero-funnel is now confirmed NOT 429-related — it is a profile-specific path issue (bridge_pair matching gap: `bridge_pool_hit_total=84` but `bridge_pair_hit_total=0`).
 
+**E1.11 dRPC provider upgrade (2026-04-11)**: Chain-scoped env var support (`BASE_RPC`/`BASE_WSS` etc.) added to `core/rpc_urls.py`. dRPC (`lb.drpc.live/<chain>/...`) resolves as primary provider ahead of Alchemy/public. `classify_provider()` returns canonical types (alchemy, drpc, publicnode, public_fallback, flashblocks). `validate_drpc_url()` rejects wrong-chain dRPC URLs. `provider_switch_count` tracks provider changes per window.
+
+- **Production 20m (dRPC)**: 87 events / 40 windows / 40 ws_connected / 0 ws_failed / 20 http_fallback / 0 ws_fallback / 6 provider_switches. dRPC WS: 100% stable. dRPC HTTP: 50% 429 fallback to public. Provenance: `rpc_source=chain_env_BASE_RPC`, `rpc_provider=drpc`. Scoring: 234 fast_path_scored, 73 windows_with_fast_scores.
+- **Discovery 20m (dRPC)**: 89 events / 50 windows / 50 ws_connected / 0 ws_failed / 29 http_fallback / 0 ws_fallback / 12 provider_switches. **Discovery now scoring**: `bridge_pair_hit_total=23`, `fast_path_scored_total=31`, `windows_with_fast_scores=17`. Previous discovery zero-funnel (E1.10: bridge_pair_hit=0) resolved — likely by accumulated bridge state from prior production runs.
+
 ---
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
@@ -214,12 +219,14 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 7. ~~**Dashboard dead appearance**~~ — **RESOLVED in E1.8**: M7 freshness banner separates M7 vs PRIMARY rolling.
 8. ~~**Chain provenance incomplete in run_context**~~ — **RESOLVED in E1.8.1**: rollup + intents now have `run_context.chain` + `run_context.run_timestamp`.
 9. ~~**ALCHEMY 429 RATE LIMIT — RESOLVED in E1.10**~~: Alchemy free tier permanently 429 on both WS and HTTP. Fixed with automatic fallback: WS → publicnode, HTTP → mainnet.base.org. Provenance fields (`rpc_source`, `ws_source`, `fallback_used`, `http_fallback_used`, `ws_fallback_used`) and session counters (`session_ws_failed_429_windows`, `session_http_fallback_windows`, `session_ws_fallback_windows`) added.
+10. **dRPC HTTP 429 INTERMITTENT (Base)** — dRPC free tier HTTP rate-limits ~50% of windows (`session_http_fallback_windows=20/40` in production). dRPC WS is 100% stable (0 failures). Mitigation: automatic fallback to public HTTP. Not blocking — events flow through WS, HTTP used only for quoting.
 
 ## Next steps
 
 1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
-2. **Discovery pair-matching fix**: Discovery sees 84 bridge_pool_hits but 0 bridge_pair_hits — pool addresses match but pair resolution fails. Root-cause the bridge pair matching gap before running further discovery A/B.
-3. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
-4. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
-5. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
-6. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
+2. **Discovery pair-matching deepening**: Discovery now scoring (31 fast_path_scored), but bridge_pair_hit=23 vs production's cumulative 405 bridge_pool_hit — gap narrowing. Continue A/B runs to accumulate bridge state for discovery.
+3. **dRPC HTTP stabilization**: dRPC HTTP 429s ~50% of windows. Options: upgrade dRPC plan, or accept public fallback for HTTP (WS is stable).
+4. **Non-empty window capture**: Run during peak Base activity hours (14:00-22:00 UTC) to populate signal_counts with scored events.
+5. **Scoreboard graduation**: Once discovery families accumulate `scored_positive >= 3` across `>= 2` sessions, evaluate for production promotion.
+6. **Submit-stage simulation**: Wire Tenderly fork simulation. Only after fresh non-empty hot evidence.
+7. **Gas economics optimization**: L1 data cost reduction, gas_floor_bps tuning, Flashblocks WS for sub-block delivery.
