@@ -99,6 +99,9 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Foundry installer (runtime helper, not source)
+foundryup.sh
+
 !.vscode/
 !.vscode/tasks.json
 .vscode/settings.json

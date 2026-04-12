@@ -60,6 +60,8 @@ class ExecutionGateResult:
     # E1.12.3: Per-candidate error reasons for reviewer-grade diagnosis
     sim_errors: List[str] = field(default_factory=list)
     submit_blockers_detail: List[str] = field(default_factory=list)
+    # E1.12.4: Which simulation backend was used (anvil/tenderly/None)
+    simulation_backend: Optional[str] = None
 
 
 def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
@@ -280,6 +282,10 @@ def run_execution_gate(
     """
     gate = ExecutionGateResult()
 
+    # E1.12.4: Always record which simulation backend is available
+    _sim_configured = is_simulation_configured()
+    gate.simulation_backend = get_simulation_backend() if _sim_configured else None
+
     # Stage 1: Profit guard
     gate.guard_passed = _run_profit_guard_on_results(scored_results, chain=chain)
 
@@ -287,7 +293,6 @@ def run_execution_gate(
         return gate
 
     # Stage 2: Simulation
-    _sim_configured = is_simulation_configured()
     if not _sim_configured:
         gate.sim_disabled = True
         gate.sim_blocker = "SIM_DISABLED"

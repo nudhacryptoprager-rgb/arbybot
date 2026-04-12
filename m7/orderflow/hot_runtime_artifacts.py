@@ -995,6 +995,8 @@ def _update_hot_rollup(
             rollup.get("submit_ready_total", 0) + gate_result.submit_ready
         )
         rollup["sim_disabled"] = gate_result.sim_disabled
+        # E1.12.4: Record which simulation backend is active
+        rollup["simulation_backend"] = getattr(gate_result, "simulation_backend", None)
         if gate_result.sim_blocker:
             rollup["sim_blocker"] = gate_result.sim_blocker
         # E1.12.3: Cumulative simulation error histogram — surfaces WHY sim fails
