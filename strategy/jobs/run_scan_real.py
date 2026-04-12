@@ -45,6 +45,7 @@ from strategy.infra import (
     resolve_rpc_endpoints,
     check_ws_connection,
     check_tenderly_connection,
+    check_simulation_backend_connection,
     build_infra_payload,
     get_current_block_via_rpc,
 )
@@ -585,7 +586,7 @@ def run_scan(
     if primary_ws:
         ws_connected, ws_handshake_ms, ws_error = check_ws_connection(primary_ws)
     
-    tenderly_enabled, tenderly_ok, tenderly_error = check_tenderly_connection()
+    tenderly_enabled, tenderly_ok, tenderly_error = check_simulation_backend_connection()
     
     infra_payload = build_infra_payload(
         primary_http, primary_ws,

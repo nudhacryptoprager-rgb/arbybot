@@ -1,19 +1,24 @@
 """
-Tenderly Fork Simulation — Scaffolding for M7 execution pre-flight.
+Simulation Backend Router — M7 execution pre-flight.
 
-E1.12.1: Scaffolding only. Actual API calls require TENDERLY_ACCESS_KEY.
+E1.12.1: Tenderly fork scaffolding.
+E1.12.4A: Backend abstraction. Supports ARBY_SIM_BACKEND=tenderly|anvil.
 
 The simulation gate sits between profit_guard_passed and submit_ready
 in the execution funnel:
     scored → positive → route_viable → profit_guard_passed → sim_passed → submit_ready
 
 Usage:
-    from m7.orderflow.simulation import is_tenderly_configured, simulate_swap
+    from m7.orderflow.simulation import is_simulation_configured, simulate_swap
 
-    if is_tenderly_configured():
+    if is_simulation_configured():
         result = simulate_swap(chain="base", tx_params={...})
         if result.success:
             # proceed to submit
+
+Backend selection:
+    ARBY_SIM_BACKEND=tenderly  (default, requires TENDERLY_* env vars)
+    ARBY_SIM_BACKEND=anvil     (requires ARBY_ANVIL_RPC_URL or localhost:8545)
 """
 
 import logging
@@ -24,19 +29,45 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger("m7.orderflow.simulation")
 
 
+# ---------------------------------------------------------------------------
+# Backend constants
+# ---------------------------------------------------------------------------
+BACKEND_TENDERLY = "tenderly"
+BACKEND_ANVIL = "anvil"
+_VALID_BACKENDS = {BACKEND_TENDERLY, BACKEND_ANVIL}
+
+
 @dataclass
 class SimulationResult:
-    """Result of a Tenderly fork simulation."""
+    """Result of a fork simulation (backend-agnostic)."""
     success: bool
     gas_used: int = 0
     output_amount_wei: int = 0
     revert_reason: Optional[str] = None
     simulation_id: Optional[str] = None
     error: Optional[str] = None
+    backend: Optional[str] = None
 
     @property
     def passed(self) -> bool:
         return self.success and self.revert_reason is None
+
+
+# ---------------------------------------------------------------------------
+# Backend detection
+# ---------------------------------------------------------------------------
+
+def get_simulation_backend() -> str:
+    """Return the active simulation backend name.
+
+    Reads ARBY_SIM_BACKEND env var.  Defaults to "tenderly" for
+    backward compatibility.
+    """
+    raw = os.environ.get("ARBY_SIM_BACKEND", BACKEND_TENDERLY).strip().lower()
+    if raw in _VALID_BACKENDS:
+        return raw
+    logger.warning("Unknown ARBY_SIM_BACKEND=%r, falling back to tenderly", raw)
+    return BACKEND_TENDERLY
 
 
 def is_tenderly_configured() -> bool:
@@ -47,13 +78,31 @@ def is_tenderly_configured() -> bool:
     )
 
 
+def is_anvil_configured() -> bool:
+    """Check if Anvil backend is reachable (env var or default localhost)."""
+    from m7.orderflow.sim_backends.anvil_backend import is_anvil_configured as _anvil_ok
+    return _anvil_ok()
+
+
+def is_simulation_configured() -> bool:
+    """Generic readiness check for the currently selected backend."""
+    backend = get_simulation_backend()
+    if backend == BACKEND_ANVIL:
+        return is_anvil_configured()
+    return is_tenderly_configured()
+
+
+# ---------------------------------------------------------------------------
+# Tenderly implementation (legacy, kept in-module for migration cycle)
+# ---------------------------------------------------------------------------
+
 def _get_tenderly_base_url() -> str:
     user = os.environ.get("TENDERLY_USER", "")
     project = os.environ.get("TENDERLY_PROJECT", "")
     return f"https://api.tenderly.co/api/v1/account/{user}/project/{project}"
 
 
-def simulate_swap(
+def _simulate_swap_tenderly(
     chain: str = "base",
     from_address: str = "0x0000000000000000000000000000000000000000",
     to_address: str = "0x0000000000000000000000000000000000000000",
@@ -61,24 +110,12 @@ def simulate_swap(
     value_wei: int = 0,
     block_number: Optional[int] = None,
 ) -> SimulationResult:
-    """
-    Simulate a swap transaction via Tenderly fork API.
-
-    Args:
-        chain: Chain name (base, arbitrum_one, etc.)
-        from_address: Sender address
-        to_address: Target contract address
-        calldata: Transaction calldata
-        value_wei: ETH value to send
-        block_number: Block to simulate at (latest if None)
-
-    Returns:
-        SimulationResult with success/failure details
-    """
+    """Simulate via Tenderly fork API."""
     if not is_tenderly_configured():
         return SimulationResult(
             success=False,
             error="TENDERLY_NOT_CONFIGURED",
+            backend=BACKEND_TENDERLY,
         )
 
     chain_id_map = {"base": 8453, "arbitrum_one": 42161, "optimism": 10}
@@ -87,7 +124,7 @@ def simulate_swap(
     try:
         import httpx
     except ImportError:
-        return SimulationResult(success=False, error="httpx not installed")
+        return SimulationResult(success=False, error="httpx not installed", backend=BACKEND_TENDERLY)
 
     base_url = _get_tenderly_base_url()
     access_key = os.environ.get("TENDERLY_ACCESS_KEY", "")
@@ -118,6 +155,7 @@ def simulate_swap(
             return SimulationResult(
                 success=False,
                 error=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                backend=BACKEND_TENDERLY,
             )
 
         data = resp.json()
@@ -129,7 +167,48 @@ def simulate_swap(
             gas_used=tx.get("gas_used", 0),
             simulation_id=data.get("simulation", {}).get("id"),
             revert_reason=tx.get("error_message") if not status else None,
+            backend=BACKEND_TENDERLY,
         )
     except Exception as e:
         logger.warning("Tenderly simulation failed: %s", str(e)[:200])
-        return SimulationResult(success=False, error=str(e)[:200])
+        return SimulationResult(success=False, error=str(e)[:200], backend=BACKEND_TENDERLY)
+
+
+# ---------------------------------------------------------------------------
+# Public router
+# ---------------------------------------------------------------------------
+
+def simulate_swap(
+    chain: str = "base",
+    from_address: str = "0x0000000000000000000000000000000000000000",
+    to_address: str = "0x0000000000000000000000000000000000000000",
+    calldata: bytes = b"",
+    value_wei: int = 0,
+    block_number: Optional[int] = None,
+) -> SimulationResult:
+    """
+    Simulate a swap transaction via the configured backend.
+
+    Backend is determined by ARBY_SIM_BACKEND env var (default: tenderly).
+    """
+    backend = get_simulation_backend()
+
+    if backend == BACKEND_ANVIL:
+        from m7.orderflow.sim_backends.anvil_backend import simulate_swap_anvil
+        return simulate_swap_anvil(
+            chain=chain,
+            from_address=from_address,
+            to_address=to_address,
+            calldata=calldata,
+            value_wei=value_wei,
+            block_number=block_number,
+        )
+
+    return _simulate_swap_tenderly(
+        chain=chain,
+        from_address=from_address,
+        to_address=to_address,
+        calldata=calldata,
+        value_wei=value_wei,
+        block_number=block_number,
+    )

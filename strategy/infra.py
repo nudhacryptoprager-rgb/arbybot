@@ -250,6 +250,29 @@ def check_tenderly_connection() -> Tuple[bool, Optional[bool], Optional[str]]:
         return False, False, "disabled"
 
 
+def check_simulation_backend_connection() -> Tuple[bool, Optional[bool], Optional[str]]:
+    """Generic simulation backend connection check (E1.12.4A).
+
+    For Anvil: JSON-RPC health probe; for Tenderly: legacy API check.
+    Falls through to check_tenderly_connection() when backend is tenderly.
+
+    Returns:
+        (enabled, ok, error) — same contract as check_tenderly_connection()
+    """
+    try:
+        from m7.orderflow.simulation import get_simulation_backend
+        backend = get_simulation_backend()
+    except Exception:
+        return check_tenderly_connection()
+
+    if backend == "anvil":
+        from m7.orderflow.sim_backends.anvil_backend import check_anvil_connection
+        ok, client, err = check_anvil_connection()
+        return True, ok, err
+
+    return check_tenderly_connection()
+
+
 # Forward declaration for singleton (defined at end of file)
 _provider_router = None
 
@@ -315,10 +338,39 @@ def build_infra_payload(
         "ws_connected": ws_connected,
         "ws_fallback_to_http": False if ws_connected else bool(resolved_http),
         "ws_error": ws_error,
+        # Legacy Tenderly fields (kept for one migration cycle)
         "tenderly_enabled": tenderly_enabled,
         "tenderly_ok": tenderly_ok,
         "tenderly_error": tenderly_error,
     }
+
+    # E1.12.4A: Generic simulation backend fields (additive)
+    try:
+        from m7.orderflow.simulation import get_simulation_backend, is_simulation_configured
+        sim_backend = get_simulation_backend()
+        sim_configured = is_simulation_configured()
+        payload["simulation_backend"] = sim_backend
+        payload["simulation_enabled"] = sim_configured
+        if sim_backend == "anvil":
+            from m7.orderflow.sim_backends.anvil_backend import (
+                check_anvil_connection,
+                get_anvil_rpc_url,
+            )
+            _ok, _client, _err = check_anvil_connection()
+            payload["simulation_ok"] = _ok
+            payload["simulation_error"] = _err
+            from urllib.parse import urlparse as _up
+            payload["simulation_endpoint_host"] = _up(get_anvil_rpc_url()).netloc
+        else:
+            # tenderly — mirror legacy fields into generic
+            payload["simulation_ok"] = tenderly_ok
+            payload["simulation_error"] = tenderly_error
+    except Exception:
+        # Fallback if M7 modules not available (pure M5 scan context)
+        payload["simulation_backend"] = None
+        payload["simulation_enabled"] = tenderly_enabled
+        payload["simulation_ok"] = tenderly_ok
+        payload["simulation_error"] = tenderly_error
     
     # v2.2.0: Add ws_lag_ms (alias for ws_handshake_ms for Roadmap M5_0)
     if ws_handshake_ms is not None:

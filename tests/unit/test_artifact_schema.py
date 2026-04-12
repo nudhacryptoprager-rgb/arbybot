@@ -390,6 +390,26 @@ class TestInfraSchema:
             errors = validate_keys(infra, INFRA_REQUIRED_KEYS, "infra")
             assert not errors, f"Schema errors: {errors}"
 
+    def test_simulation_generic_fields_accepted(self):
+        """E1.12.4A: Generic simulation fields are additive; tenderly_enabled still required."""
+        infra = {
+            "rpc_provider": "alchemy",
+            "transport": "http",
+            "ws_enabled": False,
+            "tenderly_enabled": True,
+            "tenderly_ok": True,
+            # New generic fields (E1.12.4A)
+            "simulation_backend": "anvil",
+            "simulation_enabled": True,
+            "simulation_ok": True,
+            "simulation_error": None,
+            "simulation_endpoint_host": "127.0.0.1:8545",
+        }
+        errors = validate_keys(infra, INFRA_REQUIRED_KEYS, "infra")
+        assert not errors, f"Schema errors with simulation fields: {errors}"
+        # Generic fields present but not required
+        assert "simulation_backend" in infra
+
 
 class TestM4Schema:
     """Tests for M4 artifact schema."""

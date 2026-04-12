@@ -85,14 +85,14 @@ class TestExecutionGateEmptyInput:
 
 
 class TestSimDisabledHonest:
-    """E1.12.2: Without Tenderly config, execution gate marks SIM_DISABLED."""
+    """E1.12.2: Without simulation backend configured, execution gate marks SIM_DISABLED."""
 
     def test_sim_disabled_without_tenderly(self, monkeypatch):
         from m7.orderflow.execution_gate import run_execution_gate
         import m7.orderflow.execution_gate as gate_mod
 
-        # Ensure Tenderly is not configured — patch in the gate module namespace
-        monkeypatch.setattr(gate_mod, "is_tenderly_configured", lambda: False)
+        # Ensure simulation is not configured — patch generic check in gate module namespace
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: False)
 
         # Create a fake result that will pass profit guard
         from m7.orderflow.contracts import BackrunResult
@@ -289,7 +289,7 @@ class TestE1123SimErrorHistogram:
         from m7.orderflow.simulation import SimulationResult
         import m7.orderflow.execution_gate as gate_mod
 
-        monkeypatch.setattr(gate_mod, "is_tenderly_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
         monkeypatch.setattr(
             gate_mod,
             "_attempt_simulation",
@@ -326,7 +326,7 @@ class TestE1123SimErrorHistogram:
         from m7.orderflow.simulation import SimulationResult
         import m7.orderflow.execution_gate as gate_mod
 
-        monkeypatch.setattr(gate_mod, "is_tenderly_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
         monkeypatch.setattr(
             gate_mod,
             "_attempt_simulation",

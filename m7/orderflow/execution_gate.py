@@ -1,5 +1,6 @@
 """
 E1.12.2 — Execution gate: canonical terminal-stage pipeline.
+E1.12.4A — Backend-agnostic simulation readiness.
 
 Single entry point for the execution funnel stages beyond profit_guard:
 
@@ -7,9 +8,9 @@ Single entry point for the execution funnel stages beyond profit_guard:
 
 This module:
   - Runs profit guard in batch on scored results
-  - Wires Tenderly simulation for guard-passed candidates
+  - Wires simulation for guard-passed candidates (backend selected by ARBY_SIM_BACKEND)
   - Annotates BackrunResult with terminal stage fields
-  - Returns SIM_DISABLED when Tenderly is not configured (honest blocker)
+  - Returns SIM_DISABLED when no simulation backend is configured (honest blocker)
 
 Usage:
     from m7.orderflow.execution_gate import run_execution_gate, ExecutionGateResult
@@ -31,7 +32,13 @@ from m7.orderflow.profit_guard import (
     annotate_profit_guard_results,
     check_profit_guard,
 )
-from m7.orderflow.simulation import SimulationResult, is_tenderly_configured, simulate_swap
+from m7.orderflow.simulation import (
+    SimulationResult,
+    is_simulation_configured,
+    is_tenderly_configured,
+    simulate_swap,
+    get_simulation_backend,
+)
 
 logger = logging.getLogger("m7.orderflow.execution_gate")
 
@@ -68,12 +75,12 @@ def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> 
 def _attempt_simulation(
     result: Any, guard: ProfitGuardResult, chain: str = "base"
 ) -> SimulationResult:
-    """Attempt Tenderly fork simulation for a guard-passed candidate.
+    """Attempt simulation for a guard-passed candidate.
 
-    If Tenderly is not configured, returns a result with
-    error="SIM_DISABLED" (honest blocker, not masked as market).
+    Uses the configured backend (ARBY_SIM_BACKEND).
+    If no backend is configured, returns error="SIM_DISABLED" (honest blocker).
     """
-    if not is_tenderly_configured():
+    if not is_simulation_configured():
         return SimulationResult(success=False, error="SIM_DISABLED")
 
     # Build minimal tx params from the scored result.
@@ -113,8 +120,8 @@ def run_execution_gate(
         return gate
 
     # Stage 2: Simulation
-    _tenderly_configured = is_tenderly_configured()
-    if not _tenderly_configured:
+    _sim_configured = is_simulation_configured()
+    if not _sim_configured:
         gate.sim_disabled = True
         gate.sim_blocker = "SIM_DISABLED"
         # Annotate results with honest blocker

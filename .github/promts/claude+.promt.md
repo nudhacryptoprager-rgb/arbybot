@@ -1,7 +1,7 @@
 ---
 name: opus+
-description: Run a query in a subagent that uses the Opus-4.5 model.
-model: GPT-5 mini (copilot)
+description: Run a query in a subagent that uses the Opus-4.6 model.
+model: Claude Opus 4.6 (copilot)
 agent: agent
 ---
 <USER_REQUEST_INSTRUCTIONS>

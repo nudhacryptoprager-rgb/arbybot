@@ -884,6 +884,22 @@ def validate_artifacts(artifacts: Dict[str, Optional[Path]], require_real: bool 
                         else:
                             messages.append(f"WARN: {artifact_name}.infra tenderly_enabled true but no tenderly_ok or tenderly_error")
 
+            # E1.12.4A: Generic simulation backend diagnostics
+            for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
+                sim_backend = infra.get("simulation_backend")
+                sim_enabled = infra.get("simulation_enabled")
+                if sim_backend and sim_enabled:
+                    sim_ok = infra.get("simulation_ok")
+                    sim_err = infra.get("simulation_error")
+                    if sim_ok is not True and (not sim_err):
+                        if require_tenderly:
+                            messages.append(f"FAIL: {artifact_name}.infra simulation_backend={sim_backend} enabled but no simulation_ok or simulation_error")
+                            all_passed = False
+                        else:
+                            messages.append(f"WARN: {artifact_name}.infra simulation_backend={sim_backend} enabled but no simulation_ok or simulation_error")
+                    elif sim_backend:
+                        messages.append(f"INFO: {artifact_name}.infra simulation_backend={sim_backend} ok={sim_ok}")
+
             # WS diagnostics validation
             for artifact_name, infra in (("scan", infra_s), ("truth_report", infra_t)):
                 if infra.get("ws_enabled"):
@@ -1125,7 +1141,9 @@ ENV VARIABLES:
     parser.add_argument("--require-cross-artifact", action="store_true",
                         help="Treat cross-artifact summary mismatches as FAIL instead of WARN")
     parser.add_argument("--require-tenderly", action="store_true",
-                        help="Require tenderly diagnostics to be present and passing when enabled in artifacts")
+                        help="(deprecated alias for --require-simulation) Require simulation diagnostics when enabled")
+    parser.add_argument("--require-simulation", action="store_true",
+                        help="Require simulation diagnostics (generic: tenderly or anvil) to be present and passing when enabled")
     
     # M5 additions: strict mode and cost model
     parser.add_argument("--strict", action="store_true",
@@ -1160,6 +1178,10 @@ ENV VARIABLES:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     
     args = parser.parse_args()
+
+    # E1.12.4A: --require-simulation is the generic flag; --require-tenderly is alias
+    if args.require_simulation:
+        args.require_tenderly = True
 
     # Log presence of sensitive env keys (presence only; do not print values)
     print(f"ENV: ALCHEMY_API_KEY present={bool(os.environ.get('ALCHEMY_API_KEY'))}, TENDERLY_ACCESS_KEY present={bool(os.environ.get('TENDERLY_ACCESS_KEY'))}")

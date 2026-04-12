@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.12.3 DONE — simulation telemetry + blocker refinement** (E1.12.3: simulation_error_histogram + submit_blocker_histogram in rollup; gas_l1_breakdown when GAS_L1_DATA_DOMINANT fires; SUBGRAPH_API_KEY_REQUIRED removed from active_tags. CI 3888 PASS.)  
+**Status**: **M7.E1.12.4A IN PROGRESS — Anvil backend abstraction** (E1.12.4A: simulation backend router, anvil_backend.py, generic infra fields, --require-simulation. Pending: CI validation, 2×30m soaks, sim_passed>0.)  
 **Updated**: 2026-04-12
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -89,6 +89,33 @@ Rationale (E1.12 audit):
   - Disc cold `active_tags`: `["LOW_LAG_INACTIVE_POOL", "GAS_L1_DATA_DOMINANT"]`
   - Both cold `gas_l1_breakdown`: `{l1_dominant_count: ..., avg_l1_ratio: 0.8, median_l1_bps: 0.16, median_l2_bps: 0.04}`
 - **Key finding**: sim failures are **Tenderly HTTP 403 (insufficient credits)**, NOT code bugs or tx construction errors. Resolution: replenish Tenderly credits or switch to local fork sim.
+
+## E1.12.4 — Anvil Backend Diversification (IN PROGRESS)
+
+**Goal**: Replace Tenderly dependency with local Anvil fork sim to unblock `sim_passed > 0`.
+
+**Sub-steps**:
+- `E1.12.4A`: Backend abstraction + Anvil health — `ARBY_SIM_BACKEND=tenderly|anvil`, generic `is_simulation_configured()`, `check_simulation_backend_connection()`, additive infra fields, `--require-simulation` flag
+- `E1.12.4B`: Real calldata/gas path (future) — wire actual swap calldata into `_attempt_simulation()`
+- `E1.12.4C`: 2×30m Base prod/discovery with Anvil (future) — stable soaks with backend=anvil
+- `E1.12.4D`: First fresh non-Tenderly `sim_passed > 0` (future) — acceptance criterion
+
+**Exit criteria**: `simulation_backend=anvil` in fresh artifacts, 2×30m stable soaks, first non-Tenderly `sim_passed > 0`. Until then, M7.B NOT opened.
+
+**E1.12.4A code changes**:
+- `m7/orderflow/simulation.py`: Backend router with `ARBY_SIM_BACKEND`, `get_simulation_backend()`, `is_simulation_configured()`, `is_anvil_configured()`. Tenderly impl moved to `_simulate_swap_tenderly()`. `SimulationResult.backend` field added.
+- `m7/orderflow/sim_backends/anvil_backend.py`: New module — `is_anvil_configured()`, `get_anvil_rpc_url()`, `check_anvil_connection()`, `simulate_swap_anvil()`, `estimate_gas_anvil()`, `reset_anvil_fork()`. Uses `eth_call` + `eth_estimateGas` via JSON-RPC.
+- `m7/orderflow/execution_gate.py`: Decoupled from Tenderly — uses generic `is_simulation_configured()`. Blocker string `SIM_DISABLED` unchanged.
+- `scripts/start_anvil_fork.py`: Standalone Anvil bootstrap (not embedded in hot lane).
+- `strategy/infra.py`: Added `check_simulation_backend_connection()` and generic fields in `build_infra_payload()`: `simulation_backend`, `simulation_enabled`, `simulation_ok`, `simulation_error`, `simulation_endpoint_host`. Legacy `tenderly_*` fields kept.
+- `strategy/jobs/run_scan_real.py`: Imports `check_simulation_backend_connection`, uses it for connection check (falls through to Tenderly when backend=tenderly).
+- `scripts/ci_m5_0_gate.py`: Added `--require-simulation` flag (alias for `--require-tenderly`). Generic simulation field validation added.
+
+**E1.12.4A tests**:
+- `tests/unit/test_anvil_backend.py`: 17 tests covering backend selection, configuration, health probe, eth_call simulation, revert handling, gas estimation, fork reset, router dispatch, infra connection check
+- `tests/unit/test_execution_gate.py`: Updated 3 monkeypatches from `is_tenderly_configured` to `is_simulation_configured`
+- `tests/unit/test_artifact_schema.py`: Added `test_simulation_generic_fields_accepted`
+- `tests/unit/test_require_tenderly.py`: Added `test_require_simulation_alias`
 
 ---
 

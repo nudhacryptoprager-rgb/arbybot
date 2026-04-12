@@ -201,3 +201,23 @@ class TestRequireTenderly:
         
         # Should pass because tenderly_error is documented
         assert passed, f"Should pass but got: {messages}"
+
+    def test_require_simulation_alias(self, temp_run_dir):
+        """E1.12.4A: --require-simulation is an alias for --require-tenderly validation."""
+        from scripts.ci_m5_0_gate import validate_artifacts
+
+        scan_path, truth_path, reject_path = self._create_artifacts(
+            temp_run_dir,
+            tenderly_enabled=True,
+            tenderly_ok=True,
+        )
+
+        artifacts = {
+            "scan": scan_path,
+            "truth_report": truth_path,
+            "reject_histogram": reject_path,
+        }
+
+        # require_tenderly=True (which --require-simulation sets)
+        passed, messages = validate_artifacts(artifacts, require_tenderly=True)
+        assert passed, f"Should pass but got: {messages}"
