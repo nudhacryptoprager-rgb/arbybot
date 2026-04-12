@@ -44,7 +44,6 @@ from strategy.artifacts import write_artifacts, build_truth_data, build_reject_d
 from strategy.infra import (
     resolve_rpc_endpoints,
     check_ws_connection,
-    check_tenderly_connection,
     check_simulation_backend_connection,
     build_infra_payload,
     get_current_block_via_rpc,
@@ -586,12 +585,12 @@ def run_scan(
     if primary_ws:
         ws_connected, ws_handshake_ms, ws_error = check_ws_connection(primary_ws)
     
-    tenderly_enabled, tenderly_ok, tenderly_error = check_simulation_backend_connection()
+    sim_enabled, sim_ok, sim_error = check_simulation_backend_connection()
     
     infra_payload = build_infra_payload(
         primary_http, primary_ws,
         ws_connected, ws_handshake_ms, ws_error,
-        tenderly_enabled, tenderly_ok, tenderly_error,
+        sim_enabled, sim_ok, sim_error,
         provider_http=provider_http,  # v2.2.0 Fix Step 4: actually used provider
         provider_ws=provider_ws,
         config=config,

@@ -260,9 +260,11 @@ class TestCanonicalModuleImports:
             ExecutionGateResult,
             _run_profit_guard_on_results,
             _attempt_simulation,
+            _build_sim_tx_params,
         )
         assert callable(run_execution_gate)
         assert callable(_attempt_simulation)
+        assert callable(_build_sim_tx_params)
 
 
 class TestProfitGuardBatchHelper:
@@ -450,3 +452,186 @@ class TestE1123SimErrorHistogram:
 
         assert data["sim_errors"] == ["HTTP 500: Internal Server Error"]
         assert data["submit_blockers"] == []
+
+
+# ---------------------------------------------------------------------------
+# E1.12.4B: Real calldata wiring in _attempt_simulation / _build_sim_tx_params
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSimTxParams:
+    """E1.12.4B: _build_sim_tx_params builds real V3 calldata from BackrunResult."""
+
+    def _make_result(self, **overrides):
+        from m7.orderflow.contracts import BackrunResult
+
+        defaults = dict(
+            event_id="test-4b",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_buy_venue="uniswap_v3",
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**16,
+        )
+        defaults.update(overrides)
+        return BackrunResult(**defaults)
+
+    def test_v3_venue_returns_real_calldata(self):
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result()
+        tx, err = _build_sim_tx_params(br, chain="base")
+
+        assert err is None
+        assert tx is not None
+        # Router should be Uniswap V3 on Base
+        assert tx["to"] == "0x2626664c2603336E57B271c5C0b26F421741e481"
+        # Base uses SwapRouter02 selector 0x04e45aaf (no deadline)
+        assert tx["calldata"][:4] == bytes.fromhex("04e45aaf")
+        # Calldata should be selector + 7 x 32-byte words = 4 + 224 = 228 bytes
+        assert len(tx["calldata"]) == 228
+        assert tx["value"] == 0
+
+    def test_missing_venue_returns_error(self):
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(best_buy_venue=None)
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert err == "VENUE_MISSING"
+
+    def test_unresolved_pair_returns_error(self):
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(actual_pair=None)
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert err == "PAIR_UNRESOLVED"
+
+    def test_zero_amount_returns_error(self):
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(amount_in_wei=0)
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert err == "AMOUNT_ZERO"
+
+    def test_unsupported_adapter_returns_error(self):
+        """Aerodrome is ve33 — not V3-compatible for calldata."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(best_buy_venue="aerodrome")
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert "ADAPTER_UNSUPPORTED" in err
+        assert "ve33" in err
+
+    def test_unknown_token_returns_error(self):
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(actual_pair="WETH/FAKETOKEN")
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert "TOKEN_ADDRESS_UNKNOWN" in err
+        assert "FAKETOKEN" in err
+
+    def test_unknown_dex_returns_error(self):
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(best_buy_venue="nonexistent_dex")
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert "DEX_CONFIG_MISSING" in err
+
+    def test_sushiswap_v3_also_works(self):
+        """SushiSwap V3 on Base uses uniswap_v3 adapter type."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(best_buy_venue="sushiswap_v3")
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert tx["to"] == "0xFB7eF66a7e61224DD6FcD0D7d9C3be5C8B049b9f"
+        # Base = SwapRouter02 selector
+        assert tx["calldata"][:4] == bytes.fromhex("04e45aaf")
+
+    def test_arbitrum_uses_v1_router_with_deadline(self):
+        """Arbitrum uses legacy SwapRouter V1 (selector 0x414bf389, with deadline)."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result()
+        tx, err = _build_sim_tx_params(br, chain="arbitrum_one")
+        assert err is None
+        assert tx is not None
+        # V1 selector with deadline => 4 + 8*32 = 260 bytes
+        assert tx["calldata"][:4] == bytes.fromhex("414bf389")
+        assert len(tx["calldata"]) == 260
+
+
+class TestAttemptSimulationRealCalldata:
+    """E1.12.4B: _attempt_simulation sends real calldata to backend."""
+
+    def test_real_calldata_sent_to_simulate_swap(self, monkeypatch):
+        from m7.orderflow.execution_gate import _attempt_simulation
+        from m7.orderflow.simulation import SimulationResult
+        from m7.orderflow.contracts import BackrunResult
+        from m7.orderflow.profit_guard import ProfitGuardResult
+        import m7.orderflow.execution_gate as gate_mod
+
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+
+        captured = {}
+
+        def mock_simulate(chain, to_address, calldata, value_wei, **kw):
+            captured["to"] = to_address
+            captured["calldata"] = calldata
+            captured["value"] = value_wei
+            return SimulationResult(success=True, gas_used=150000)
+
+        monkeypatch.setattr(gate_mod, "simulate_swap", mock_simulate)
+
+        br = BackrunResult(
+            event_id="test-4b",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_buy_venue="uniswap_v3",
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**16,
+        )
+        guard = ProfitGuardResult(passed=True)
+
+        result = _attempt_simulation(br, guard, chain="base")
+        assert result.success is True
+        # Verify real calldata was sent (Base → SwapRouter02)
+        assert captured["to"] == "0x2626664c2603336E57B271c5C0b26F421741e481"
+        assert captured["calldata"][:4] == bytes.fromhex("04e45aaf")
+        assert captured["value"] == 0
+
+    def test_calldata_build_failure_gives_explicit_error(self, monkeypatch):
+        from m7.orderflow.execution_gate import _attempt_simulation
+        from m7.orderflow.contracts import BackrunResult
+        from m7.orderflow.profit_guard import ProfitGuardResult
+        import m7.orderflow.execution_gate as gate_mod
+
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+
+        br = BackrunResult(
+            event_id="test-4b",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_buy_venue="aerodrome",  # ve33 → unsupported
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**16,
+        )
+        guard = ProfitGuardResult(passed=True)
+
+        result = _attempt_simulation(br, guard, chain="base")
+        assert result.success is False
+        assert "CALLDATA_BUILD_FAILED" in result.error
+        assert "ADAPTER_UNSUPPORTED" in result.error

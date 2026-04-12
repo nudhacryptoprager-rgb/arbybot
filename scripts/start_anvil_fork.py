@@ -50,7 +50,8 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--rpc-url", default=None, help="Upstream RPC URL for fork")
     parser.add_argument("--block", type=int, default=None, help="Pin fork to block number")
-    parser.add_argument("--auto-impersonate", action="store_true", default=True)
+    parser.add_argument("--auto-impersonate", action=argparse.BooleanOptionalAction, default=True,
+                        help="Enable --auto-impersonate (default: on, use --no-auto-impersonate to disable)")
     parser.add_argument("--steps-tracing", action="store_true", default=False)
     args = parser.parse_args()
 
