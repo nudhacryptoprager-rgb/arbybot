@@ -104,7 +104,7 @@ Rationale (E1.12 audit):
   - Artifact: `data/tmp/_soak_4c_result.json`
 - `E1.12.4D` **(DONE)**: First non-Tenderly `sim_passed > 0` — Anvil Base fork (block 44618144), WETH→USDC via Uniswap V3 SwapRouter02, `sim_passed=1`, `gas_used=144810`, `backend=anvil`. Full execution gate pipeline: `guard_passed=1 → sim_attempted=1 → sim_passed=1`.
 
-**Exit criteria**: ALL MET — `simulation_backend=anvil` in fresh artifacts, 2×20-iter stable soaks (0 crashes), first non-Tenderly `sim_passed > 0` (4D). E1.12.4 CLOSED.
+**Exit criteria**: Engineering DONE. (1) `simulation_backend=anvil` confirmed in canonical rolling (both prod+disc, 2×30m soaks, 0 restarts, 2026-04-12T21:31–22:00Z). (2) 2×20-iter focused soaks PASS (4C: 40/200 sim_passed). (3) First non-Tenderly `sim_passed > 0` via acceptance test (4D: 1/1). Rolling `sim_passed_total` remains 0 — no events pass profit guard in current market; this is market-dependent, not a code bug. E1.12.4 engineering CLOSED.
 
 **E1.12.4A code changes**:
 - `m7/orderflow/simulation.py`: Backend router with `ARBY_SIM_BACKEND`, `get_simulation_backend()`, `is_simulation_configured()`, `is_anvil_configured()`. Tenderly impl moved to `_simulate_swap_tenderly()`. `SimulationResult.backend` field added.
@@ -180,7 +180,7 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 
 1. **EVENT-SOURCE CEILING — FROZEN (Arbitrum only)** — 47s proof confirms `event_source_absence`. Does NOT apply to Base.
 2. **GAS_EXCEEDS_GROSS — MAJORITY BLOCKER (Base)** — ~7% viable rate. Near-exec frontier at -2.20 bps.
-3. **Submit-stage sim = 0 in canonical rolling** — E1.12.4 engineering complete (Anvil sim works in soak). Fresh nonstop run needed to populate rolling artifacts with `sim_passed > 0`.
+3. **Submit-stage sim = 0 in canonical rolling** — `simulation_backend=anvil` confirmed in both prod+disc rolling (2×30m, 2026-04-12). Anvil sim works in focused soak (4C: 40/200) and acceptance test (4D: 1/1). Rolling `sim_passed=0` because no events currently pass profit guard — market-dependent, not code bug.
 4. **dRPC HTTP 429 INTERMITTENT (Base)** — ~50% HTTP fallback. dRPC WS 100% stable. Not blocking.
 
 Resolved: HOT LANE NOT WRITING (E1.7), MARKET-WINDOW SCARCITY (E1.10), ALCHEMY 429 (E1.10), Dashboard dead (E1.8), Chain provenance (E1.8.1).

@@ -1,168 +1,131 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-04-11T10:39:56Z
-run_id: ci_m5_gate_arbitrum_one_20260411_123905_815779
-mode: ONLINE (M7.E1.12.1 -- engineering closure: full 10-step audit response + 30min burn-in)
+timestamp_utc: 2026-04-12T21:59:20Z
+run_id: rolling (M7 nonstop sessions, not discrete runDir)
+mode: ONLINE (M7.E1.12.4 — Anvil backend diversification, canonical rolling evidence)
 artifact_mode: rolling
-config: Base M7 nonstop + config/real_minimal.yaml (M4/M5 rolling)
+config: Base M7 nonstop (production + discovery), ARBY_SIM_BACKEND=anvil, Anvil Base fork block 44619899
 code_identity:
-  primary: ts:2026-04-11T10:39:56Z
+  primary: ts:2026-04-12T21:59:20Z
   dirty: true
-  desc: E1.12.1 engineering closure -- RPC backoff, L1 fee integration, Flashblocks URL fix, Tenderly/Subgraph scaffolding, stricter release semantics, 30min burn-in. NOT production-ready.
+  desc: E1.12.4 engineering closure — simulation_backend field in rollup writer, Anvil fork sim backend, Status_M7.md honest exit criteria, DEV_REPORT refresh.
 provenance_note:
-  m4_rolling: timestamp_utc and run_id above refer to M4/M5 Arbitrum rolling (ci_m5_gate run). These are the canonical rolling provenance.
-  m7_burnin: M7 burn-in evidence is from nonstop supervisor sessions on Base (12:03-12:33Z). Session IDs: production=d4f84d5c (12:26:17-12:33:23Z), discovery=9c79152f (12:26:46-12:33:23Z). These are rolling artifact sessions, not discrete run_dirs.
+  m4_rolling: run_summary_latest references ci_m5_gate_arbitrum_one_20260411_123905_815779 (run_timestamp: 2026-04-11T10:39:56Z). M4/M5 not touched this session.
+  m7_evidence: M7 rolling evidence is from nonstop sessions on Base (21:29-22:00Z). Session IDs: production=589aeda7 (21:31:24-21:59:57Z), discovery=4551099e (21:35:10-22:00:08Z).
 
 ## Session Completion
-session_goal: E1.12 audit full response -- implement all 10 fix steps from audit. (1) Strategic focus codification. (2) start.py fix. (3) Premium RPC backoff. (4) Flashblocks URL fix. (5) Tenderly scaffolding. (6) Subgraph API key scaffolding. (7) L1 data fee first-class. (8) cold_executable_positive fix. (9) Stricter release semantics. (10) 30min burn-in with analysis.
-goal_status: REACHED (engineering closure: all 10 steps implemented, 30min burn-in completed, CI ALL GATES PASSED. Production readiness NOT reached.)
+session_goal: E1.12.4 canonical rolling evidence — run 2×30m soaks with ARBY_SIM_BACKEND=anvil, confirm simulation_backend=anvil in canonical rolling artifacts, update Status_M7 + DEV_REPORT honestly.
+goal_status: REACHED
 close_allowed: true
-remaining_blockers: (1) M7 submit_ready_total=0, sim_passed_total=0. (2) profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. (3) Tenderly/Subgraph API keys not configured (scaffolding only).
-evidence_session_run_dirs: [ci_m5_gate_arbitrum_one_20260411_123905_815779]
-evidence_m7_sessions: [production=d4f84d5c (rolling, 12:26:17-12:33:23Z), discovery=9c79152f (rolling, 12:26:46-12:33:23Z)]
-primary_blocker_of_session: 10_step_audit_incomplete
-blocker_status_before: ACTIVE (only 2/10 audit steps done)
-blocker_status_after: RESOLVED (all 10/10 audit steps implemented + verified)
+remaining_blockers: (1) Rolling sim_passed_total=0 — market-dependent (no events pass profit guard), not code bug. Proven working via focused soak (4C: 40/200) and acceptance test (4D: 1/1).
+evidence_session_run_dirs: [rolling sessions: production=589aeda7, discovery=4551099e]
+primary_blocker_of_session: simulation_backend_null_in_rolling
+blocker_status_before: ACTIVE (simulation_backend field missing from rollup writer; ordering bug set field after guard_passed early return)
+blocker_status_after: RESOLVED (simulation_backend=anvil confirmed in both prod+disc rolling after 2×30m soaks)
 docs_reread_confirmed: true
 
 ## 1) Scope
 
-goal (Roadmap): M7.E1.12.1 = full 10-step audit response -- all code fixes + scaffolding + 30min burn-in
+goal (Roadmap): M7.E1.12.4 = Anvil backend diversification + canonical rolling evidence with simulation_backend=anvil
 change_summary:
-  - m7/orderflow/mode_ws_live.py: Premium RPC exponential backoff (3 retries, 1/2/4s) + ARBY_RPC_PREMIUM_ONLY env + L1 fee caching + l1_fee_bps passthrough to scoring
-  - m7/orderflow/scoring_parallel.py: score_backrun_fast() accepts l1_fee_bps, gas floor = max(static, l1_fee_bps)
-  - m7/orderflow/simulation.py: NEW — Tenderly fork simulation scaffolding (SimulationResult, simulate_swap, is_tenderly_configured)
-  - chains/l1_cost.py: OP-Stack GasPriceOracle support + get_l1_cost_for_chain() dispatcher + get_l1_fee_bps()
-  - chains/flashblocks.py: Fixed default URL from base.flashblocks.base.org to mainnet.flashblocks.base.org
-  - m7/shared/constants.py: _subgraph_url() helper with GRAPH_API_KEY env var injection
-  - m4/fixtures.py: production_readiness block (profit_realism_profitable, sim_passed_positive, submit_ready_positive)
-  - scripts/ci_m5_0_gate.py: production_readiness block for offline run_summary
-  - docs/status/Status_M7.md: Strategic Focus (E1.12.1) section — Base M7 = main lane
-  - (prior turn) m7/orderflow/artifacts.py: cold_executable_positive requires route_viable AND size_valid_for_token
-  - (prior turn) start.py: auto-partial for single configs
+  - m7/orderflow/execution_gate.py: Added simulation_backend field to ExecutionGateResult; fixed ordering bug (field set BEFORE guard_passed early return)
+  - m7/orderflow/hot_runtime_artifacts.py: Added rollup["simulation_backend"] from gate_result
+  - docs/status/Status_M7.md: Header downgraded to honest formulation; exit criteria updated; compressed 374→198 lines; blocker #3 updated
+  - .gitignore: Added foundryup.sh
+  - docs/DEV_REPORT_LATEST.md: Full overwrite with fresh evidence
 touched_files:
-  - m7/orderflow/mode_ws_live.py
-  - m7/orderflow/scoring_parallel.py
-  - m7/orderflow/simulation.py (NEW)
-  - chains/l1_cost.py
-  - chains/flashblocks.py
-  - m7/shared/constants.py
-  - m4/fixtures.py
-  - scripts/ci_m5_0_gate.py
+  - m7/orderflow/execution_gate.py
+  - m7/orderflow/hot_runtime_artifacts.py
   - docs/status/Status_M7.md
   - docs/DEV_REPORT_LATEST.md
+  - .gitignore
 
 ## 2) Commands Executed
 
-py -3.11 -m pytest tests/unit -q: PASS (3862 passed, 6 skipped, 116s)
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: PASS (ALL REQUIRED GATES PASSED, 107s)
-py -3.11 scripts/start_nonstop_runtime.py --hours 0.5 --no-m4 --chain base --m7-profile production --dashboard-port 8101: COMPLETED (12:03:25Z → 12:33:26Z, 0 restarts)
-py -3.11 scripts/start_nonstop_runtime.py --hours 0.5 --no-m4 --chain base --m7-profile discovery --dashboard-port 8102: COMPLETED (12:03:37Z → 12:33:38Z, 0 restarts)
+py -3.11 -m pytest tests/unit -q: PASS (3924 passed, 6 skipped)
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.5 --no-m4 --chain base --m7-profile production --dashboard-port 8101 --m7-hot-pause 1 --m7-cold-pause 5: COMPLETED (21:29:57→21:59:57Z, 0 restarts, ARBY_SIM_BACKEND=anvil)
+py -3.11 scripts/start_nonstop_runtime.py --hours 0.5 --no-m4 --chain base --m7-profile discovery --dashboard-port 8102 --m7-hot-pause 1 --m7-cold-pause 5: COMPLETED (21:30:08→22:00:08Z, 0 restarts, ARBY_SIM_BACKEND=anvil)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: NOT RUN (M7 only, no M4/M5 changes)
 
 ## 3) Artifacts Attached
 
 rolling:
-  - data/runs/_rolling/m7_hot_rollup_latest.json (Base production, 4903 cumulative windows, 961 events, 18 viable, 0 sim/submit)
-  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json (Base discovery, 284 windows, 38 events, 0 viable)
-  - data/runs/_rolling/m7_orderflow_latest.json (Base production, blocker_tags: [SUBGRAPH_API_KEY_REQUIRED])
-  - data/runs/_rolling/m7_orderflow_latest_discovery.json (Base discovery)
-  - data/runs/_rolling/_latest.json (arbitrum_one, run_timestamp: 2026-04-11T10:39:56Z)
-  - data/runs/_rolling/run_summary_latest.json (status: PASS, profit_realism: ROUNDTRIP_NOT_PROFITABLE)
+  - data/runs/_rolling/m7_hot_rollup_latest.json (Base production, 5301 cumulative windows, 1698 events, simulation_backend=anvil)
+  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json (Base discovery, 500 windows, 532 events, simulation_backend=anvil)
+  - data/runs/_rolling/m7_orderflow_latest.json (Base production cold)
+  - data/runs/_rolling/m7_orderflow_latest_discovery.json (Base discovery cold)
 
 ## 4) Key Results
 
-### 4.1) 10-Step Audit Completion
+### 4.1) E1.12.4 Fresh Soak Evidence (2026-04-12, Anvil backend)
 
-| Step | Description | Status | Evidence |
-|------|-------------|--------|----------|
-| 1 | Strategic focus: Base M7 = main lane | DONE | Status_M7.md Strategic Focus section |
-| 2 | Fix start.py single-chain contract | DONE | start.py auto-partial, CI PASS |
-| 3 | Premium-only RPC with exponential backoff | DONE | mode_ws_live.py: 3 retries (1/2/4s), ARBY_RPC_PREMIUM_ONLY env |
-| 4 | Flashblocks URL fix | DONE | flashblocks.py: mainnet.flashblocks.base.org/ws |
-| 5 | Tenderly simulation scaffolding | DONE | simulation.py: SimulationResult, simulate_swap(), is_tenderly_configured() |
-| 6 | Subgraph API key scaffolding | DONE | constants.py: _subgraph_url() with GRAPH_API_KEY |
-| 7 | L1 data fee first-class | DONE | l1_cost.py: OP-Stack GasPriceOracle, get_l1_fee_bps(); scoring_parallel.py: dynamic gas floor |
-| 8 | Fix cold_executable_positive | DONE | artifacts.py: requires route_viable AND size_valid_for_token |
-| 9 | Stricter release semantics | DONE | fixtures.py + ci_m5_0_gate.py: production_readiness block |
-| 10 | 30min burn-in with analysis | DONE | 30min prod+disc, 0 restarts, analysis below |
-
-### 4.2) 30min Burn-In Results (12:03-12:33Z, Base)
-
-**Production** (profile=production, 4 focused pairs):
-| Metric | Delta this run | Cumulative |
-|--------|---------------|------------|
-| Duration | 30.0 min | multi-day |
-| Windows | +300 | 4903 |
-| Events | +37 | 961 |
-| Fast path scored | +10 | 265 |
-| Positive | +1 | 21 |
-| Route viable | +1 | 18 |
-| Guard passed | +1 | 18 |
+**Production** (session_id=589aeda7, 21:31:24→21:59:57Z, 30min):
+| Metric | Session delta | Cumulative |
+|--------|--------------|------------|
+| Windows | +32 | 5301 |
+| Events | +155 | 1698 |
+| Fast scored | +4 | 465 |
+| Fast positive | +0 | 37 |
+| Guard passed | +0 | 31 |
+| Sim attempted | +0 | 10 |
 | Sim passed | +0 | 0 |
-| Submit ready | +0 | 0 |
-| WS provider | drpc | connected |
-| WS 429 | 0 | stable |
-| HTTP fallback | 39/42 sessions | 93% fallback |
-| Restarts | 0 | clean shutdown |
+| WS connected | 31/32 | — |
+| Heartbeat errors | 0 | 0 |
+| Restarts | 0 | — |
+| **simulation_backend** | **anvil** | — |
+| sim_disabled | false | — |
 
-**Discovery** (profile=discovery, 10+ pairs, fresh rollup):
-| Metric | Total this run |
-|--------|---------------|
-| Duration | 30.0 min |
-| Windows | 284 |
-| Events | 38 |
-| Fast path scored | 6 |
-| Positive | 0 |
-| Route viable | 0 |
-| WS provider | drpc |
-| WS 429 | 0 |
-| HTTP fallback | 34/37 sessions |
-| Restarts | 0 |
+**Discovery** (session_id=4551099e, 21:35:10→22:00:08Z, 30min):
+| Metric | Session delta | Cumulative |
+|--------|--------------|------------|
+| Windows | +28 | 500 |
+| Events | +140 | 532 |
+| Fast scored | +6 | 94 |
+| Fast positive | +0 | 7 |
+| Guard passed | +0 | 7 |
+| Sim attempted | +0 | 3 |
+| Sim passed | +0 | 0 |
+| WS connected | 28/28 | — |
+| Heartbeat errors | 0 | 0 |
+| Restarts | 0 | — |
+| **simulation_backend** | **anvil** | — |
+| sim_disabled | false | — |
 
-### 4.3) Key Findings
+**Ключове спостереження**: `simulation_backend=anvil` підтверджено в обох канонічних rolling артефактах. Rolling `sim_passed_total=0` — жодна подія не пройшла profit guard у поточних ринкових умовах. Це market-dependent, не code bug. Anvil sim pipeline доведений через:
+- Focused soak (4C): 40 sim_passed / 200 sim_attempted / 0 crashes
+- Acceptance test (4D): 1 sim_passed / 1 sim_attempted, gas_used=144810, backend=anvil
 
-1. **Stability proven**: Both profiles ran 30 full minutes, 3/3 workers, 0 restarts, clean shutdown.
-2. **Event flow active**: 12-13% event rate (37 events / 300 windows production, 38/284 discovery).
-3. **Production scoring healthy**: +10 fast_path_scored, +1 positive, +1 viable, +1 guard_passed in 30min.
-4. **Discovery wider but sparser**: 6 fast_path_scored, 0 positive — wider pair set dilutes signal density.
-5. **dRPC WS 100% stable**: 0 WS failures, 0 429 windows across both profiles.
-6. **dRPC HTTP still 429-heavy**: 93% HTTP fallback to public — quoting goes through public RPC.
-7. **Sim/submit still zero**: Expected — no Tenderly API key configured, simulation scaffolding only.
-
-## 5) Strategic Reading
-
-1. **All 10 audit steps implemented and verified.** Code fixes, scaffolding, and 30min burn-in all complete.
-2. **Base M7 production is the main lane.** Codified in Status_M7.md. Arbitrum M4 = regression/paper only.
-3. **L1 data fee now first-class input to scoring.** OP-Stack GasPriceOracle queries feed into gas floor dynamically — no more hardcoded 0.5 bps when real L1 fees are available.
-4. **RPC resilience improved.** Exponential backoff on 429 (3 retries before public fallback). `ARBY_RPC_PREMIUM_ONLY=1` prevents public fallback entirely for production use.
-5. **Production_readiness gate prevents false go-signals.** `production_ready=True` requires ALL of: profit_realism=ROUNDTRIP_PROFITABLE, sim_passed>0, submit_ready>0. Currently all three are False → `production_ready=False`.
-6. **Tenderly + Subgraph ready for API keys.** Scaffolding in place — set `TENDERLY_USER/PROJECT/ACCESS_KEY` and `GRAPH_API_KEY` env vars to activate.
-7. **Flashblocks URL corrected** from `base.flashblocks.base.org` to `mainnet.flashblocks.base.org`. Note: infrastructure stream is for node operators; production should use ARBY_FLASHBLOCKS_WS env var with a Flashblocks-aware RPC provider.
-
-## 5.1) Contract Checks
-status/reasons consistency: OK (production_readiness block prevents PASS + NOT_PROFITABLE false go-signal)
-rolling discipline: OK
+## 5) Contract Checks
+status/reasons consistency: OK — Status_M7.md header honest, exit criteria honest about sim_passed=0 in rolling
+rolling discipline (canonical files only): OK
+provenance contract: OK — run_timestamp based
 runtime artifacts not committed: OK
-docs_reread_confirmed: true
 
 ## 6) Blocker Classification
 
-code_blocker: RESOLVED (all 10 audit steps implemented — RPC backoff, L1 fee, Flashblocks, Tenderly/Subgraph scaffolding, release semantics, cold_exec fix, start.py fix)
-infra_blocker: ACTIVE (dRPC HTTP 429 ~93% fallback; Tenderly/Subgraph API keys not configured)
-market_window_scarcity: PARTIALLY ACTIVE (12-13% event rate, market activity present but sparse)
+code_blocker: LOW (pytest 3924 PASS, simulation_backend wired and confirmed)
+data_collection_blocker: LOW (WS stable, events flowing)
+market_window_blocker: HIGH (0 events pass profit guard → sim_attempted=0 this session → sim_passed=0 in rolling)
 
-## 6.1) Blockers / Risks
-- **profit_realism_status=ROUNDTRIP_NOT_PROFITABLE**: No roundtrip has been profitable under current economics.
-- **submit_ready_total=0, sim_passed_total=0**: Sim scaffolded but Tenderly API key required to activate.
-- **production_readiness=False**: Correctly prevents false go-signal. Requires profit_realism + sim + submit all positive.
-- **dRPC HTTP 429**: ~93% HTTP fallback to public. WS 100% stable. Not blocking — events flow through WS.
-- **SUBGRAPH_API_KEY_REQUIRED**: Gateway URLs scaffolded with GRAPH_API_KEY env var. Without key: rate-limited keyless access.
-- **Discovery zero positive**: Wider pair set dilutes signal; needs more accumulation or pair refinement.
+## 6.1) Blockers / Risks (max 5)
+1. **sim_passed=0 in canonical rolling** — market-dependent. Anvil pipeline proven via focused soak (40/200) and acceptance test (1/1).
+2. **GAS_EXCEEDS_GROSS** — ~7% viable rate, near-exec frontier at -2.20 bps.
+3. **dRPC HTTP 429** — 100% HTTP fallback this session. WS 100% stable. Not blocking.
+4. **Tenderly HTTP 403 in discovery histogram** — Legacy pre-Anvil errors. Irrelevant with Anvil backend.
 
-## 6.2) New Environment Variables (this session)
-- `ARBY_RPC_PREMIUM_ONLY=1`: Refuse public RPC fallback entirely (premium-only mode)
-- `GRAPH_API_KEY`: The Graph Network API key for authenticated subgraph access
-- `TENDERLY_USER`, `TENDERLY_PROJECT`, `TENDERLY_ACCESS_KEY`: Tenderly fork simulation credentials
-- `ARBY_FLASHBLOCKS_WS`: Override Flashblocks WebSocket URL (for Flashblocks-aware RPC provider)
+## 7) Lead's Previous 10 Steps: Execution Map
+step_01: DONE — Fix Status_M7.md contradictions. evidence: Status_M7.md header + E1.12.4 heading
+step_02: DONE — Add simulation_backend to rollup writer. evidence: execution_gate.py + hot_runtime_artifacts.py
+step_03: DONE — Fix ordering bug (field before guard_passed). evidence: execution_gate.py
+step_04: DONE — Compress Status_M7.md 374→198 lines. evidence: Status_M7.md
+step_05: DONE — Add foundryup.sh to .gitignore. evidence: .gitignore
+step_06: DONE — Start Anvil fork (block 44619899). evidence: Anvil terminal
+step_07: DONE — Run 2×30m prod+disc ARBY_SIM_BACKEND=anvil. evidence: supervisor 0 restarts
+step_08: DONE — Verify simulation_backend=anvil in rolling. evidence: m7_hot_rollup_latest*.json
+step_09: DONE — Update Status_M7.md exit criteria. evidence: Status_M7.md line 107
+step_10: DONE — Overwrite DEV_REPORT_LATEST.md. evidence: this file
+
+## 8) What I need from Lead now
+request_1: Review E1.12.4 closure. Confirm honest exit criteria (sim_passed proven via soak/test, not in rolling due to market).
+request_2: If sim_passed>0 required in rolling for closure, run peak-hours soak or lower profit guard threshold temporarily.
