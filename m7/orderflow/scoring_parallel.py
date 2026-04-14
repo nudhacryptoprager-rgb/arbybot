@@ -798,8 +798,8 @@ def score_backrun_live_parallel(
                 event_type=event.event_type,
                 post_trade_state_used="live",
                 backrun_direction=backrun_dir,
-                best_buy_venue=_local_result["buy_venue"],
-                best_sell_venue=_local_result["sell_venue"],
+                best_buy_venue=_local_result.get("buy_dex", _local_result["buy_venue"]),
+                best_sell_venue=_local_result.get("sell_dex", _local_result["sell_venue"]),
                 amount_in_wei=backrun_size_wei,
                 gross_pnl_wei=_mid_gross,
                 gas_cost_wei=_mid_gas_cost,
@@ -878,8 +878,8 @@ def score_backrun_live_parallel(
         local_pricing_used = True
         best_buy_amount = _local_result["buy_amount"]
         best_sell_amount = _local_result["sell_amount"]
-        best_buy_venue = _local_result["buy_venue"]
-        best_sell_venue = _local_result["sell_venue"]
+        best_buy_venue = _local_result.get("buy_dex", _local_result["buy_venue"])
+        best_sell_venue = _local_result.get("sell_dex", _local_result["sell_venue"])
         venues_quoted = _local_result["pools_succeeded"]
     else:
         # Remote quoter path (slow, confirmatory)
@@ -1353,8 +1353,6 @@ def score_backrun_fast(
 
     # Economics
     gross_wei = sell_amount - backrun_size_wei
-    gas_cost_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
-    net_wei = gross_wei - gas_cost_wei
 
     if backrun_size_wei > 0:
         gross_bps = (gross_wei / backrun_size_wei) * 10000
@@ -1363,6 +1361,10 @@ def score_backrun_fast(
         if l1_fee_bps is not None and l1_fee_bps > 0:
             gas_bps = max(gas_bps, l1_fee_bps)
         net_bps = gross_bps - gas_bps
+        # E1.13: gas cost in token-native wei (derived from gas_bps so
+        # net_wei stays in the same denomination as gross_wei)
+        gas_cost_wei = int(backrun_size_wei * gas_bps / 10000)
+        net_wei = gross_wei - gas_cost_wei
     else:
         return None
 
@@ -1432,8 +1434,8 @@ def score_backrun_fast(
         event_type=event.event_type,
         post_trade_state_used="live",
         backrun_direction=backrun_dir,
-        best_buy_venue=pricing_result.get("buy_venue"),
-        best_sell_venue=pricing_result.get("sell_venue"),
+        best_buy_venue=pricing_result.get("buy_dex", pricing_result.get("buy_venue")),
+        best_sell_venue=pricing_result.get("sell_dex", pricing_result.get("sell_venue")),
         amount_in_wei=backrun_size_wei,
         gross_pnl_wei=gross_wei,
         gas_cost_wei=gas_cost_wei,

@@ -243,6 +243,8 @@ def attempt_local_pricing(
         sell_amount: int
         buy_venue: str  (pool address)
         sell_venue: str  (pool address)
+        buy_dex: str    (DEX name, e.g. "uniswap_v3")
+        sell_dex: str   (DEX name)
         buy_fee: int
         sell_fee: int
         pricing_path: "v3_local" | "v2_local" | "algebra_local"
@@ -252,17 +254,20 @@ def attempt_local_pricing(
     if not candidate_pools or not local_sim_states:
         return None
 
-    # Build adapter_type lookup from registry entries if available
+    # Build adapter_type + dex_name lookups from registry entries if available
     _adapter_map: dict = {}  # addr_lower -> adapter_type
+    _dex_map: dict = {}      # addr_lower -> dex_name
     if registry_entries:
         for re in registry_entries:
             _adapter_map[re.address.lower()] = re.adapter_type
+            _dex_map[re.address.lower()] = re.dex
 
     # Determine token ordering for zero_for_one
     zero_for_one = token_in_addr.lower() < token_out_addr.lower()
 
     best_buy_amount = 0
     best_buy_pool = None
+    best_buy_dex = None
     best_buy_fee = 0
     best_buy_path = None
     pools_attempted = 0
@@ -294,6 +299,7 @@ def attempt_local_pricing(
                 if out is not None and out > best_buy_amount:
                     best_buy_amount = out
                     best_buy_pool = addr
+                    best_buy_dex = _dex_map.get(addr.lower() if addr else "", "uniswap_v2")
                     best_buy_fee = fee
                     best_buy_path = "v2_local"
                     pools_succeeded += 1
@@ -313,6 +319,7 @@ def attempt_local_pricing(
                 if out is not None and out > best_buy_amount:
                     best_buy_amount = out
                     best_buy_pool = addr
+                    best_buy_dex = _dex_map.get(addr.lower() if addr else "", "algebra")
                     best_buy_fee = algebra_fee
                     best_buy_path = "algebra_local"
                     pools_succeeded += 1
@@ -330,6 +337,7 @@ def attempt_local_pricing(
                 if out is not None and out > best_buy_amount:
                     best_buy_amount = out
                     best_buy_pool = addr
+                    best_buy_dex = _dex_map.get(addr.lower() if addr else "", "uniswap_v3")
                     best_buy_fee = fee
                     best_buy_path = "v3_local"
                     pools_succeeded += 1
@@ -340,6 +348,7 @@ def attempt_local_pricing(
     # Sell pass: swap best_buy_amount back (reverse direction)
     best_sell_amount = 0
     best_sell_pool = None
+    best_sell_dex = None
     best_sell_fee = 0
 
     for cp in candidate_pools:
@@ -366,6 +375,7 @@ def attempt_local_pricing(
                 if out is not None and out > best_sell_amount:
                     best_sell_amount = out
                     best_sell_pool = addr
+                    best_sell_dex = _dex_map.get(addr.lower() if addr else "", "uniswap_v2")
                     best_sell_fee = fee
         elif adapter == "algebra":
             if sqrt_price > 0 and liq > 0:
@@ -380,6 +390,7 @@ def attempt_local_pricing(
                 if out is not None and out > best_sell_amount:
                     best_sell_amount = out
                     best_sell_pool = addr
+                    best_sell_dex = _dex_map.get(addr.lower() if addr else "", "algebra")
                     best_sell_fee = algebra_fee
         else:
             if sqrt_price > 0 and liq > 0:
@@ -393,6 +404,7 @@ def attempt_local_pricing(
                 if out is not None and out > best_sell_amount:
                     best_sell_amount = out
                     best_sell_pool = addr
+                    best_sell_dex = _dex_map.get(addr.lower() if addr else "", "uniswap_v3")
                     best_sell_fee = fee
 
     if best_sell_amount <= 0:
@@ -403,6 +415,8 @@ def attempt_local_pricing(
         "sell_amount": best_sell_amount,
         "buy_venue": best_buy_pool,
         "sell_venue": best_sell_pool,
+        "buy_dex": best_buy_dex or "uniswap_v3",
+        "sell_dex": best_sell_dex or "uniswap_v3",
         "buy_fee": best_buy_fee,
         "sell_fee": best_sell_fee,
         "pricing_path": best_buy_path,

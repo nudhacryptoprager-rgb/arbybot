@@ -354,9 +354,9 @@ class TestE1123SimErrorHistogram:
 
         gate = run_execution_gate([br], chain="base")
         if gate.guard_passed and gate.sim_passed > 0:
-            # calldata_ready/signing_ready are None by default
+            # E1.14: calldata_ready is now auto-set on sim pass
+            # signing_ready is still None by default
             assert gate.submit_ready == 0
-            assert "CALLDATA_NOT_READY" in gate.submit_blockers_detail
             assert "SIGNING_NOT_READY" in gate.submit_blockers_detail
 
     def test_rollup_accumulates_sim_histogram(self, tmp_path, monkeypatch):
@@ -519,14 +519,14 @@ class TestBuildSimTxParams:
         assert err == "AMOUNT_ZERO"
 
     def test_unsupported_adapter_returns_error(self):
-        """Aerodrome is ve33 — not V3-compatible for calldata."""
+        """SyncSwap is not V3-compatible for calldata."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
-        br = self._make_result(best_buy_venue="aerodrome")
-        tx, err = _build_sim_tx_params(br, chain="base")
+        br = self._make_result(best_buy_venue="syncswap_linea")
+        tx, err = _build_sim_tx_params(br, chain="linea")
         assert tx is None
         assert "ADAPTER_UNSUPPORTED" in err
-        assert "ve33" in err
+        assert "syncswap" in err
 
     def test_unknown_token_returns_error(self):
         from m7.orderflow.execution_gate import _build_sim_tx_params
@@ -568,6 +568,17 @@ class TestBuildSimTxParams:
         # V1 selector with deadline => 4 + 8*32 = 260 bytes
         assert tx["calldata"][:4] == bytes.fromhex("414bf389")
         assert len(tx["calldata"]) == 260
+
+    def test_ve33_aerodrome_now_supported(self):
+        """E1.14: Aerodrome (ve33) is V3-compatible and should build calldata."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(best_buy_venue="aerodrome")
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert tx["to"] == "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
+        assert tx["calldata"][:4] == bytes.fromhex("04e45aaf")
 
 
 class TestAttemptSimulationRealCalldata:
@@ -625,13 +636,138 @@ class TestAttemptSimulationRealCalldata:
             event_type="swap",
             post_trade_state_used="estimated",
             backrun_direction="buy",
-            best_buy_venue="aerodrome",  # ve33 → unsupported
+            best_buy_venue="syncswap_linea",  # syncswap → unsupported
             actual_pair="WETH/USDC",
             amount_in_wei=10**16,
         )
         guard = ProfitGuardResult(passed=True)
 
-        result = _attempt_simulation(br, guard, chain="base")
+        result = _attempt_simulation(br, guard, chain="linea")
         assert result.success is False
         assert "CALLDATA_BUILD_FAILED" in result.error
         assert "ADAPTER_UNSUPPORTED" in result.error
+
+
+class TestE115SimExceptionCapture:
+    """E1.15: Verify that unexpected exceptions in _attempt_simulation
+    are caught and recorded in sim_errors instead of crashing the gate."""
+
+    def test_exception_in_sim_recorded_in_errors(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+
+        # Make _attempt_simulation raise an unexpected error
+        def _boom(*a, **kw):
+            raise RuntimeError("anvil connection reset")
+
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate._attempt_simulation", _boom
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+        )
+
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test_exc",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+        )
+        gate = run_execution_gate([br], chain="base")
+        assert gate.sim_attempted == 1
+        assert gate.sim_passed == 0
+        assert len(gate.sim_errors) == 1
+        assert "SIM_EXCEPTION" in gate.sim_errors[0]
+        assert "RuntimeError" in gate.sim_errors[0]
+
+
+class TestE115PaperSigning:
+    """E1.15: ARBY_PAPER_SIGNING=1 enables submit_ready > 0."""
+
+    def test_paper_signing_enables_submit(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        # Mock simulation to pass
+        def _mock_sim(*a, **kw):
+            return SimulationResult(success=True, gas_used=150000, backend="anvil")
+
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+        )
+        monkeypatch.setenv("ARBY_PAPER_SIGNING", "1")
+
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test_paper",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+        )
+        gate = run_execution_gate([br], chain="base")
+        assert gate.sim_passed == 1
+        assert gate.submit_ready == 1
+        assert br.signing_ready is True
+        assert br.submit_ready is True
+
+    def test_no_paper_signing_by_default(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        def _mock_sim(*a, **kw):
+            return SimulationResult(success=True, gas_used=150000, backend="anvil")
+
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+        )
+        # No ARBY_PAPER_SIGNING set
+        monkeypatch.delenv("ARBY_PAPER_SIGNING", raising=False)
+
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test_no_paper",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+        )
+        gate = run_execution_gate([br], chain="base")
+        assert gate.sim_passed == 1
+        assert gate.submit_ready == 0
+        assert br.signing_ready is None
+        assert "SIGNING_NOT_READY" in (br.submit_blocker or "")

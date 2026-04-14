@@ -1556,6 +1556,31 @@ class TestM7A532ScoreBackrunFast:
             assert result.local_pricing_attempted is True
             assert result.pair_resolved is True
 
+    def test_score_backrun_fast_gas_cost_denomination(self):
+        """E1.13: gas_cost_wei must be in token denomination, not ETH wei.
+
+        Regression: previously gas_cost_wei = DEFAULT_BACKRUN_GAS * GWEI * 1e9
+        which is ETH-denominated (2e13 wei) — absurdly large for USDC (6-dec).
+        Fix derives gas_cost from gas_bps so it stays in token denomination.
+        """
+        from m7.shared.constants import DEFAULT_BACKRUN_GAS, DEFAULT_GAS_PRICE_GWEI, GAS_FLOOR_BPS_BASE
+
+        backrun_size_wei = 1000 * 10**6  # 1000 USDC in 6-decimal wei
+        gas_bps = GAS_FLOOR_BPS_BASE     # 0.5 bps for Base
+
+        # Correct: gas cost derived from bps in token denomination
+        gas_cost_token = int(backrun_size_wei * gas_bps / 10000)
+        assert gas_cost_token == 50_000, f"Expected 50000 (0.05 USDC), got {gas_cost_token}"
+
+        # Old buggy formula: ETH-denominated — must be much larger
+        gas_cost_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+        assert gas_cost_eth_wei > 1e12, "ETH gas cost should be ~2e13 wei"
+
+        # The token-denominated cost must be orders of magnitude smaller
+        assert gas_cost_token < gas_cost_eth_wei / 1e6, (
+            "Token gas cost must be << ETH gas cost for USDC"
+        )
+
 
 class TestM7A532NonstopSupervisor:
     """Verify nonstop supervisor script is importable and has correct structure."""

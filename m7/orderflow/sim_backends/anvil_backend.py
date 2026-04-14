@@ -16,6 +16,8 @@ Design constraints (per E1.12.4 directives):
   - Anvil is terminal-stage ONLY (profit_guard → sim → submit_ready)
   - NOT in quote collection or hot scoring path
   - Reuses execution/preflight.py + execution/simulator.py contracts where possible
+
+E1.14: ERC-20 balance seeding via anvil_setStorageAt + approval for sim.
 """
 
 import logging
@@ -123,6 +125,170 @@ def reset_anvil_fork(block_number: Optional[int] = None) -> bool:
     except Exception as e:
         logger.warning("Anvil reset error: %s", str(e)[:200])
         return False
+
+
+# ---------------------------------------------------------------------------
+# ERC-20 balance seeding for simulation (E1.14)
+# ---------------------------------------------------------------------------
+
+# Standard ERC-20 slot patterns for balanceOf(address) and allowance(owner,spender)
+# Most tokens (OpenZeppelin-based) use slot keccak256(abi.encode(address, slotIndex)).
+# Common balance slots: 0 (OZ ERC20), 1 (some), 2, 9 (USDC proxy).
+_COMMON_BALANCE_SLOTS = [0, 1, 2, 3, 9, 51]
+
+
+def _keccak256(data: bytes) -> bytes:
+    """Ethereum keccak256 hash (NOT SHA3-256)."""
+    try:
+        from Crypto.Hash import keccak
+        return keccak.new(data=data, digest_bits=256).digest()
+    except ImportError:
+        pass
+    try:
+        # pysha3 / pycryptodome fallback
+        import sha3
+        return sha3.keccak_256(data).digest()
+    except ImportError:
+        pass
+    try:
+        # web3 has keccak
+        from web3 import Web3
+        return Web3.keccak(data)
+    except ImportError:
+        pass
+    # Last resort: hashlib on Python 3.11+ with OpenSSL 3.x may have keccak
+    import hashlib
+    try:
+        h = hashlib.new("keccak-256", data)
+        return h.digest()
+    except ValueError:
+        # Fall back to sha3_256 — will likely produce wrong slots
+        logger.warning("No keccak-256 available, falling back to sha3_256 (may not work for storage slot computation)")
+        return hashlib.new("sha3_256", data).digest()
+
+
+def _compute_mapping_slot(key_addr: str, base_slot: int) -> str:
+    """Compute Solidity mapping slot: keccak256(abi.encode(address, uint256))."""
+    addr_bytes = bytes.fromhex(key_addr.lower().replace("0x", "").zfill(64))
+    slot_bytes = base_slot.to_bytes(32, "big")
+    return "0x" + _keccak256(addr_bytes + slot_bytes).hex()
+
+
+def _compute_allowance_slot(owner: str, spender: str, base_slot: int) -> str:
+    """Compute nested mapping slot for allowance[owner][spender].
+
+    Solidity storage for mapping(address => mapping(address => uint256)):
+      inner_slot = keccak256(abi.encode(owner, base_slot))
+      actual_slot = keccak256(abi.encode(spender, inner_slot))
+    """
+    owner_bytes = bytes.fromhex(owner.lower().replace("0x", "").zfill(64))
+    slot_bytes = base_slot.to_bytes(32, "big")
+    inner = _keccak256(owner_bytes + slot_bytes)
+
+    spender_bytes = bytes.fromhex(spender.lower().replace("0x", "").zfill(64))
+    return "0x" + _keccak256(spender_bytes + inner).hex()
+
+
+def _anvil_set_storage(token_addr: str, slot: str, value: str) -> bool:
+    """Set storage slot via anvil_setStorageAt."""
+    url = get_anvil_rpc_url()
+    try:
+        import httpx
+
+        resp = httpx.post(
+            url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "anvil_setStorageAt",
+                "params": [token_addr, slot, value],
+            },
+            timeout=5.0,
+        )
+        data = resp.json()
+        return "error" not in data
+    except Exception as e:
+        logger.debug("anvil_setStorageAt failed: %s", str(e)[:100])
+        return False
+
+
+def _anvil_get_balance_of(token_addr: str, owner: str) -> int:
+    """Read ERC-20 balanceOf via eth_call."""
+    url = get_anvil_rpc_url()
+    # balanceOf(address) selector = 0x70a08231
+    calldata = "0x70a08231" + owner.lower().replace("0x", "").zfill(64)
+    try:
+        import httpx
+
+        resp = httpx.post(
+            url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_call",
+                "params": [{"to": token_addr, "data": calldata}, "latest"],
+            },
+            timeout=5.0,
+        )
+        data = resp.json()
+        result_hex = data.get("result", "0x0")
+        if result_hex and len(result_hex) >= 3:
+            return int(result_hex, 16)
+        return 0
+    except Exception:
+        return 0
+
+
+def seed_erc20_balance(
+    token_addr: str, holder: str, amount: int, spender: Optional[str] = None
+) -> bool:
+    """Seed ERC-20 balance on Anvil fork by brute-forcing common storage slots.
+
+    Tries _COMMON_BALANCE_SLOTS to find which slot controls balanceOf(holder).
+    Sets balance to `amount` and optionally sets unlimited allowance for `spender`.
+
+    Returns True if balance was successfully set.
+    """
+    large_value = "0x" + amount.to_bytes(32, "big").hex()
+
+    for base_slot in _COMMON_BALANCE_SLOTS:
+        slot = _compute_mapping_slot(holder, base_slot)
+        _anvil_set_storage(token_addr, slot, large_value)
+
+        # Verify
+        actual = _anvil_get_balance_of(token_addr, holder)
+        if actual >= amount:
+            logger.debug(
+                "Seeded %s balance for %s at slot %d (balance=%d)",
+                token_addr[:10],
+                holder[:10],
+                base_slot,
+                actual,
+            )
+            # Set approval if spender given
+            if spender:
+                _seed_approval(token_addr, holder, spender, base_slot)
+            return True
+
+    logger.debug("Failed to seed balance for token %s (tried %d slots)", token_addr[:10], len(_COMMON_BALANCE_SLOTS))
+    return False
+
+
+def _seed_approval(
+    token_addr: str, owner: str, spender: str, balance_base_slot: int
+) -> bool:
+    """Set unlimited allowance for spender by trying common allowance slots.
+
+    Allowance mapping is typically at balance_slot + 1, but can vary.
+    """
+    max_uint = "0x" + "ff" * 32
+    # Common: allowance slot = balance slot + 1
+    for allowance_offset in [1, 0, 2, 3]:
+        allowance_base = balance_base_slot + allowance_offset
+        slot = _compute_allowance_slot(owner, spender, allowance_base)
+        _anvil_set_storage(token_addr, slot, max_uint)
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +409,20 @@ def simulate_swap_anvil(
             error=f"ANVIL_UNREACHABLE: {conn_err}",
             backend=BACKEND_ANVIL,
         )
+
+    # E1.14: Seed ERC-20 balance for from_address before simulation.
+    # Extract token_in from calldata (first 32 bytes after 4-byte selector)
+    # and seed a large balance + approval for the router (to_address).
+    if len(calldata) >= 36 and from_address != "0x0000000000000000000000000000000000000000":
+        try:
+            token_in_hex = "0x" + calldata[4:36].hex().lstrip("0").zfill(40)
+            # Seed 10^30 of the token (enough for any realistic sim)
+            seed_amount = 10**30
+            seeded = seed_erc20_balance(token_in_hex, from_address, seed_amount, spender=to_address)
+            if seeded:
+                logger.debug("Seeded token %s for sim from %s", token_in_hex[:10], from_address[:10])
+        except Exception as e:
+            logger.debug("Balance seeding failed (non-fatal): %s", str(e)[:100])
 
     # eth_call to simulate the transaction
     output_hex, call_err = _eth_call_anvil(

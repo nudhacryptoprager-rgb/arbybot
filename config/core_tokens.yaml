@@ -426,6 +426,56 @@ base:
     accounting_sensitive: true
     productive_default: false
 
+  VELVET:
+    address: "0xbf927b841994731c573bdf09ceb0c6b0aa887cdd"
+    decimals: 18
+    name: "Velvet"
+    note: "E1.15: Hot-seen in production, near-exec frontier"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
+  CHIMP:
+    address: "0x32f4adca627ac2b4ed1912b23fe8232abb096d5b"
+    decimals: 18
+    name: "Based Chimp"
+    note: "E1.15: Hot-seen in production pools"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
+  AMONGUS:
+    address: "0xe9114bbd3512cbb15a80ecc29ad6edf26f93ab32"
+    decimals: 18
+    name: "Based Amongus"
+    note: "E1.15: Hot-seen in production, promoted pairs"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
+  RAVE:
+    address: "0x1aa8fd5bcce2231c6100d55bf8b377cff33acfc3"
+    decimals: 18
+    name: "RaveDAO"
+    note: "E1.15: Top hot-seen pool (events=90)"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
+  SHIB:
+    address: "0xfca95aeb5bf44ae355806a5ad14659c940dc6bf7"
+    decimals: 9
+    name: "Shiba Inu"
+    note: "E1.15: Hot-seen in production pools"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
 # =============================================================================
 # LINEA (chain_id: 59144)
 # =============================================================================

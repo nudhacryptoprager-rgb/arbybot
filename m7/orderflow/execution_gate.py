@@ -176,8 +176,9 @@ def _build_sim_tx_params(
     if not router:
         return None, f"ROUTER_MISSING:{venue}"
 
-    # Only V3-compatible adapters emit exactInputSingle calldata
-    if adapter_type != "uniswap_v3":
+    # V3-compatible adapters that use exactInputSingle calldata
+    _V3_COMPATIBLE = {"uniswap_v3", "ve33", "algebra"}
+    if adapter_type not in _V3_COMPATIBLE:
         return None, f"ADAPTER_UNSUPPORTED:{adapter_type}"
 
     # Resolve token addresses
@@ -311,7 +312,15 @@ def run_execution_gate(
         if hasattr(r, "sim_attempted"):
             r.sim_attempted = True
 
-        sim_result = _attempt_simulation(r, g, chain=chain)
+        try:
+            sim_result = _attempt_simulation(r, g, chain=chain)
+        except Exception as exc:
+            # E1.15: Catch unexpected exceptions so sim_errors histogram
+            # is always populated (fixes "10 unknown" telemetry gap).
+            _exc_msg = f"SIM_EXCEPTION:{type(exc).__name__}:{str(exc)[:120]}"
+            logger.warning("Simulation exception for %s: %s",
+                           getattr(r, "event_id", "?"), _exc_msg)
+            sim_result = SimulationResult(success=False, error=_exc_msg)
 
         if hasattr(r, "sim_passed"):
             r.sim_passed = sim_result.passed
@@ -320,8 +329,16 @@ def run_execution_gate(
 
         if sim_result.passed:
             gate.sim_passed += 1
-            # Stage 3: Submit readiness (scaffolding)
-            # Requires: calldata_ready + signing_ready
+            # Stage 3: Submit readiness
+            # calldata_ready is True when calldata built successfully
+            if hasattr(r, "calldata_ready"):
+                r.calldata_ready = True
+            # E1.15: Paper-live signing — ARBY_PAPER_SIGNING=1 enables
+            # submit_ready counting without actual on-chain signing.
+            # This proves the full pipeline path to submit_ready > 0.
+            _paper_signing = os.environ.get("ARBY_PAPER_SIGNING", "").strip() == "1"
+            if _paper_signing and hasattr(r, "signing_ready"):
+                r.signing_ready = True
             _calldata_ready = getattr(r, "calldata_ready", None)
             _signing_ready = getattr(r, "signing_ready", None)
             if _calldata_ready and _signing_ready:
