@@ -240,7 +240,8 @@ class PoolRegistry:
             from web3 import Web3
             from core.rpc_rate_limiter import rpc_throttle
 
-            w3 = Web3(Web3.HTTPProvider(rpc_url))
+            # E1.19a: 10s timeout prevents hanging on slow/429'd RPC
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
 
             # getPair(address,address) = 0xe6a43905
             calldata = bytes.fromhex(_SELECTOR_GET_PAIR)
@@ -323,7 +324,8 @@ class PoolRegistry:
             try:
                 from web3 import Web3
                 from core.rpc_rate_limiter import rpc_throttle
-                w3 = Web3(Web3.HTTPProvider(rpc_url))
+                # E1.19a: 10s timeout
+                w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
                 for e in v2_entries:
                     rpc_throttle.acquire()
                     reserves_data = w3.eth.call(

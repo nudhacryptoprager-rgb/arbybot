@@ -171,6 +171,12 @@ def run_loop(cli_args) -> None:
     # so registry_preload_ms drops to near-zero for already-queried pairs.
     _cold_registry = None  # lazy-init on first cold iteration
 
+    # E1.19a: Track whether hot registry has been warmed successfully.
+    # After first successful bridge prewarm, skip RPC-heavy prewarm on
+    # subsequent iterations — registry cache + stale_threshold handles
+    # state refresh internally, avoiding dRPC 429 from repeated block_number calls.
+    _registry_warmed = False
+
     iteration = 0
     logger.info(
         "M7 %s loop starting: chain=%s profile=%s ws_blocks=%d timeout=%ds max_events=%d "
@@ -195,7 +201,12 @@ def run_loop(cli_args) -> None:
             if lane == "hot":
                 if _hot_registry is None:
                     from m7.orderflow.pool_registry import PoolRegistry
-                    _hot_registry = PoolRegistry()
+                    # E1.19: Hot registry uses 150-block stale threshold (~37s
+                    # on Base 2s blocks). Default 10 blocks was causing 600+ RPC
+                    # calls per iteration as every pool refreshed on each cycle.
+                    # ENV override: ARBY_HOT_STALE_BLOCKS (default 150).
+                    _hot_stale = int(os.environ.get("ARBY_HOT_STALE_BLOCKS", "150"))
+                    _hot_registry = PoolRegistry(stale_threshold_blocks=_hot_stale)
                 _ext_registry = _hot_registry
 
                 # M7.A.5.43: Bridge-first hot prewarm.
@@ -238,45 +249,62 @@ def run_loop(cli_args) -> None:
                 if _cross_promoted.get("candidate") or _cross_promoted.get("execution"):
                     _promoted_pairs = _cross_promoted
 
-                try:
-                    from config import load_dexes, get_all_token_addresses
-                    from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
-                    _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
-                    _rpc, _, _ = resolve_rpc_http(
-                        chain_id=_chain_id, network=cli_args.chain,
-                        env=dict(os.environ),
-                    )
-                    if _rpc:
-                        from web3 import Web3 as _W3
-                        _block = _W3(_W3.HTTPProvider(_rpc)).eth.block_number
-                        _all_dexes = load_dexes()
-                        _dex_cfg = _all_dexes.get(cli_args.chain, {})
-                        _token_addr = get_all_token_addresses(cli_args.chain)
-
-                        # M7.A.5.45: Bridge-first prewarm with cold_executable priority
-                        if _bridge.get("pool_token_transport"):
-                            _bridge_prewarm_count = _prewarm_registry_from_bridge(
-                                _hot_registry, _bridge, _dex_cfg, _rpc, _block,
-                                priority_pools=_cold_exec_pools,
-                            )
-
-                        # Legacy symbol-pair prewarm for seeds and accumulated pairs
-                        if _hot_pairs_to_prewarm:
-                            _pw = _prewarm_registry_from_pairs(
-                                _hot_registry, _hot_pairs_to_prewarm,
-                                _token_addr, _dex_cfg, _rpc, _block,
-                            )
-                        else:
-                            _pw = 0
-                        logger.info(
-                            "Hot prewarm: bridge_cache=%d bridge_registry=%d "
-                            "symbol_pairs=%d/%d (iter %d, cross=%d)",
-                            _bridge_cache_count, _bridge_prewarm_count,
-                            _pw, len(_hot_pairs_to_prewarm), iteration,
-                            len(_cross_promoted.get("candidate", [])),
+                # E1.19a: Only run RPC-heavy prewarm on first iteration (cold
+                # cache) or when registry hasn't been warmed yet.  After the
+                # first successful prewarm, the registry handles staleness
+                # internally via stale_threshold_blocks.  Skipping avoids a
+                # fresh eth.block_number HTTP call to dRPC every iteration,
+                # which was hanging on 429 after iter-1 exhausted the rate limit.
+                if not _registry_warmed:
+                    try:
+                        from config import load_dexes, get_all_token_addresses
+                        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+                        _chain_id = _CHAIN_KEY_TO_ID.get(cli_args.chain.lower())
+                        _rpc, _, _ = resolve_rpc_http(
+                            chain_id=_chain_id, network=cli_args.chain,
+                            env=dict(os.environ),
                         )
-                except Exception as _pw_exc:
-                    logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
+                        if _rpc:
+                            from web3 import Web3 as _W3
+                            # E1.19a: 10s timeout prevents hanging on dRPC 429
+                            _block = _W3(_W3.HTTPProvider(
+                                _rpc, request_kwargs={"timeout": 10},
+                            )).eth.block_number
+                            _all_dexes = load_dexes()
+                            _dex_cfg = _all_dexes.get(cli_args.chain, {})
+                            _token_addr = get_all_token_addresses(cli_args.chain)
+
+                            # M7.A.5.45: Bridge-first prewarm with cold_executable priority
+                            if _bridge.get("pool_token_transport"):
+                                _bridge_prewarm_count = _prewarm_registry_from_bridge(
+                                    _hot_registry, _bridge, _dex_cfg, _rpc, _block,
+                                    priority_pools=_cold_exec_pools,
+                                )
+
+                            # Legacy symbol-pair prewarm for seeds and accumulated pairs
+                            if _hot_pairs_to_prewarm:
+                                _pw = _prewarm_registry_from_pairs(
+                                    _hot_registry, _hot_pairs_to_prewarm,
+                                    _token_addr, _dex_cfg, _rpc, _block,
+                                )
+                            else:
+                                _pw = 0
+                            logger.info(
+                                "Hot prewarm: bridge_cache=%d bridge_registry=%d "
+                                "symbol_pairs=%d/%d (iter %d, cross=%d)",
+                                _bridge_cache_count, _bridge_prewarm_count,
+                                _pw, len(_hot_pairs_to_prewarm), iteration,
+                                len(_cross_promoted.get("candidate", [])),
+                            )
+                            _registry_warmed = True
+                    except Exception as _pw_exc:
+                        logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
+                else:
+                    logger.info(
+                        "Hot prewarm skipped (registry warm, iter %d, "
+                        "bridge_cache=%d)",
+                        iteration, _bridge_cache_count,
+                    )
             elif lane == "cold":
                 # M7.A.5.38: Lazy-init persistent cold registry with wide stale
                 # threshold (5000 blocks ≈ 20 min). Cold lane is diagnostic, not
@@ -318,7 +346,9 @@ def run_loop(cli_args) -> None:
                         )
                         if _rpc:
                             from web3 import Web3 as _W3
-                            _block = _W3(_W3.HTTPProvider(_rpc)).eth.block_number
+                            _block = _W3(_W3.HTTPProvider(
+                                _rpc, request_kwargs={"timeout": 10},
+                            )).eth.block_number
                             _all_dexes = load_dexes()
                             _dex_cfg = _all_dexes.get(cli_args.chain, {})
                             _token_addr = get_all_token_addresses(cli_args.chain)
@@ -376,7 +406,9 @@ def run_loop(cli_args) -> None:
                         )
                         if _rpc_hr:
                             from web3 import Web3 as _W3_hr
-                            _block_hr = _W3_hr(_W3_hr.HTTPProvider(_rpc_hr)).eth.block_number
+                            _block_hr = _W3_hr(_W3_hr.HTTPProvider(
+                                _rpc_hr, request_kwargs={"timeout": 10},
+                            )).eth.block_number
                             _ta_hr = get_all_token_addresses(cli_args.chain)
                             _ats_hr = _build_address_to_symbol(_ta_hr)
                             _pre = batch_pre_resolve_pools(

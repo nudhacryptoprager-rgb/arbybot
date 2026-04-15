@@ -226,3 +226,166 @@ class TestViaRouter:
         result = simulate_swap(chain="base")
         assert result.backend == "rpc_fork"
         assert result.success
+
+
+class TestE120FlashblocksPreconf:
+    """E1.20: Flashblocks pre-confirmed state via ``pending`` block tag."""
+
+    def test_flashblocks_disabled_by_default(self, monkeypatch):
+        """Without ARBY_FLASHBLOCKS_SIM=1, uses standard rpc_fork."""
+        monkeypatch.delenv("ARBY_FLASHBLOCKS_SIM", raising=False)
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://standard:8545",
+        )
+
+        captured = {}
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                captured["url"] = url
+                captured["block_tag"] = params[1]
+                return {"result": "0x" + "00" * 32}, None
+            return {"result": "0x0"}, None
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(chain="base")
+        assert result.backend == "rpc_fork"
+        assert captured["url"] == "http://standard:8545"
+        assert captured["block_tag"] == "latest"
+
+    def test_flashblocks_enabled_uses_pending(self, monkeypatch):
+        """ARBY_FLASHBLOCKS_SIM=1 → preconf URL + ``pending`` block tag."""
+        monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "1")
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://standard:8545",
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_flashblocks_http_url",
+            lambda chain: "https://mainnet-preconf.base.org",
+        )
+
+        captured = {}
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                captured["url"] = url
+                captured["block_tag"] = params[1]
+                return {"result": "0x" + "00" * 32}, None
+            return {"result": "0x0"}, None
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(chain="base")
+        assert result.backend == "rpc_fork_preconf"
+        assert captured["url"] == "https://mainnet-preconf.base.org"
+        assert captured["block_tag"] == "pending"
+
+    def test_flashblocks_fallback_on_failure(self, monkeypatch):
+        """When Flashblocks endpoint fails, falls back to standard RPC."""
+        monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "1")
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://standard:8545",
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_flashblocks_http_url",
+            lambda chain: "https://mainnet-preconf.base.org",
+        )
+
+        call_log = []
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            call_log.append((url, method, params[1] if len(params) > 1 else None))
+            if method == "eth_call" and "preconf" in url:
+                return None, "HTTP 429: rate limited"
+            if method == "eth_call":
+                return {"result": "0x" + (100).to_bytes(32, "big").hex()}, None
+            return {"result": "0x0"}, None
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(chain="base")
+        assert result.success
+        # First call = preconf (fails), second call = standard (succeeds)
+        assert len([c for c in call_log if c[1] == "eth_call"]) == 2
+        assert call_log[0][0] == "https://mainnet-preconf.base.org"
+        assert call_log[0][2] == "pending"
+        assert call_log[1][0] == "http://standard:8545"
+        assert call_log[1][2] == "latest"
+        # Backend label reflects fallback
+        assert result.backend == "rpc_fork"
+
+    def test_flashblocks_not_on_arbitrum(self, monkeypatch):
+        """ARBY_FLASHBLOCKS_SIM=1 has no effect on non-Base chains."""
+        monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "1")
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://arb:8545",
+        )
+
+        captured = {}
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                captured["url"] = url
+                captured["block_tag"] = params[1]
+                return {"result": "0x" + "00" * 32}, None
+            return {"result": "0x0"}, None
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(chain="arbitrum_one")
+        assert result.backend == "rpc_fork"
+        assert captured["url"] == "http://arb:8545"
+        assert captured["block_tag"] == "latest"
+
+    def test_flashblocks_skipped_when_explicit_block(self, monkeypatch):
+        """Explicit block_number disables Flashblocks pending."""
+        monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "1")
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://standard:8545",
+        )
+
+        captured = {}
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                captured["url"] = url
+                captured["block_tag"] = params[1]
+                return {"result": "0x" + "00" * 32}, None
+            return {"result": "0x0"}, None
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(chain="base", block_number=44739000)
+        assert result.backend == "rpc_fork"
+        assert captured["url"] == "http://standard:8545"
+        assert captured["block_tag"] == hex(44739000)
+
+    def test_is_flashblocks_sim_enabled_flag(self, monkeypatch):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _is_flashblocks_sim_enabled
+        monkeypatch.delenv("ARBY_FLASHBLOCKS_SIM", raising=False)
+        assert _is_flashblocks_sim_enabled() is False
+        monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "0")
+        assert _is_flashblocks_sim_enabled() is False
+        monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "1")
+        assert _is_flashblocks_sim_enabled() is True

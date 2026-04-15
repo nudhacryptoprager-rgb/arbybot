@@ -1,143 +1,149 @@
-# STEP 4: Production-Ready Action Plan (2026-04-14)
+# STEP 4: M7 Backrun — Path to Profit (2026-04-15)
 
-## Context
+## Strategic Context
 
-4-hour production + discovery scans (2026-04-13) produced **0 submit_ready** opportunities.
-Pipeline works end-to-end (1 sim_passed) but is blocked at 5 critical points.
+Стратегічний аналіз (E1.17) порівняв три шляхи до профіту:
+- **M7 Backrun (Base)**: gap ~2-10 bps, pipeline E2E proven, структурна перевага
+- **Triangular (Base)**: код є, НІКОЛИ не тестувався, 3× gas, unknown gap
+- **2-Leg DEX↔DEX**: gap 4.90 bps, FROZEN, жодного profitable roundtrip
 
-### Scan Results Summary
+**Рішення: M7 Backrun — однозначний переможець.**
 
-| Metric | Production | Discovery |
-|--------|-----------|-----------|
-| Events total | 2534 | 1042 |
-| Scored | 276 | 263 |
-| Positive | 36 | 11 |
-| Guard passed | 45 | 10 |
-| Sim attempted | 30 | 10 |
-| **Sim passed** | **1** | **0** |
-| Submit ready | **0** | **0** |
+### Production Funnel (5647 windows, Base)
 
----
+| Stage | Count | Conversion |
+|-------|-------|------------|
+| events | 2539 | — |
+| fast_scored | 876 | 34.5% |
+| fast_positive | 59 | 6.7% |
+| guard_passed | 51 | 86.4% |
+| sim_attempted | 30 | 58.8% |
+| sim_passed | 1 | 3.3% |
+| submit_ready | 0 | — |
 
-## 5 ROOT BLOCKERS
+### Sim Error Histogram (30 attempts → 19 failures)
 
-### B1: Bridge Selection ↔ Activity Mismatch (CRITICAL)
-- `families_with_exact_hits: 0` — 27 selected families, NONE received events
-- 84 families have events at completely different pools
-- Cold lane writes bridge every 5–30 min (stale); hot lane filters to old pools
-- 89.5% windows = `no_events_in_window`
-- **Without this fix, all other optimizations have ZERO effect**
+| Error | Count | Fix |
+|-------|-------|-----|
+| TOKEN_ADDRESS_UNKNOWN (token0_in/token1_in) | 12 | Phase 1.1: addr_to_symbol gap |
+| DEX_CONFIG_MISSING (pool address as venue) | 6 | Phase 1.2: factory→dex lookup |
+| STF revert (ve33 ABI mismatch) | 1 | Phase 2: ve33 calldata |
+| SIGNING_NOT_READY | 1 | Phase 1.3: ARBY_PAPER_SIGNING=1 |
 
-### B2: Sim Calldata Build Failures (HIGH)
-- TOKEN_ADDRESS_UNKNOWN: 12 (token not in core_tokens.yaml)
-- DEX_CONFIG_MISSING: 6 (hot lane outputs pool address instead of DEX key)
-- STF: 1 (Anvil balance seeding failed)
-- 19/30 sim attempts fail on calldata (63%)
-
-### B3: Gas Economics — L1 Data Cost Dominant (HIGH)
-- 665/748 matched candidates rejected by gas (89%)
-- L1 data = 80% of total gas cost (Base EIP-4844)
-- Gas floor = 0.5 bps; most cross-DEX spreads < 0.5 bps
-- Best candidates: VIRTUAL/WETH = -10 bps (deeply negative)
-
-### B4: Bridge Registry Miss Rate (MEDIUM)
-- 1294/1344 bridge pool hits don't resolve to registered pairs (96%)
-- Pools on-chain not in PTT (Pool Token Transport)
-
-### B5: No Token/Subgraph Discovery for Base (MEDIUM)
-- "subgraph seed not supported for chain: base"
-- addr_to_symbol grew only 19→20 in 4h
-- No dynamic token discovery
+**60% sim errors = config gaps, not code bugs.**
 
 ---
 
-## PHASE 1: "Make It Work" (today)
-*Goal: First submit_ready candidates with existing architecture*
+## PHASE 1: Config Coverage + rpc_fork Switch (E1.17)
+*Goal: Eliminate 18/30 config-caused sim failures + enable zero-infra simulation*
 
-### [ ] 1.1 Enable ARBY_PAPER_SIGNING (5 min)
-- Already implemented in execution_gate.py (E1.15)
-- Just set env var: `ARBY_PAPER_SIGNING=1`
-- Impact: 1 sim_passed → 1 submit_ready (instant unblock)
+### [x] 1.1 Fix TOKEN_ADDRESS_UNKNOWN — addr_to_symbol населення
+- **Проблема**: 12 sim failures — hot path бачить tokenі як `token0_in`/`token1_in` direction tags.
+  `backrun_token_in_address` заповнений (адреса є!), але execution_gate fallback на
+  `get_token_address(chain, "token0_in")` — і це природно фейлить.
+- **Root cause**: `actual_pair` містить direction тоді коли `addr_to_symbol` не має символу.
+  Але `backrun_token_in_address`/`backrun_token_out_address` вже populated!
+- **Fix**: execution_gate.py — перевірити чи token_in_addr/token_out_addr вже є BEFORE symbol lookup
+- **Impact**: TOKEN_ADDRESS_UNKNOWN 12 → 0
 
-### [ ] 1.2 Expand core_tokens.yaml for Base (30 min)
-- Add TOP-30 Base tokens by volume from Aerodrome/CoinGecko
-- BRETT, DEGEN, TOSHI, MOG, HIGHER, cbETH, USDbC, WELL, etc.
-- Impact: TOKEN_ADDRESS_UNKNOWN 12 → ~0 (40% of sim failures)
-- File: `config/core_tokens.yaml`
+### [x] 1.2 Fix DEX_CONFIG_MISSING — pool→dex reverse lookup
+- **Проблема**: 6 sim failures — `best_buy_venue` = pool address (0x765b..., 0xe4e9..., etc.)
+  замість DEX name. Fallback iterates 4 configured DEXes but fails for unknown pools.
+- **Root cause**: scoring path returns pool address when pool not in configured DEX set.
+  execution_gate fallback already checks uniswap_v3/aerodrome/sushiswap/pancake but pool
+  isn't in any of their factory registries.
+- **Fix**: Add factory address matching via on-chain `factory()` call on pool contract,
+  then map factory→dex_key using config/dexes.yaml factory addresses.
+- **Impact**: DEX_CONFIG_MISSING 6 → ~0
 
-### [ ] 1.3 Fix DEX_CONFIG_MISSING — venue name resolution (2h)
-- Problem: scoring engine outputs pool address as `best_buy_venue`
-- execution_gate.py expects DEX key (uniswap_v3, aerodrome, etc.)
-- Fix: add reverse-lookup from pool address → DEX key using factory
-- File: `m7/orderflow/execution_gate.py`
-- Impact: DEX_CONFIG_MISSING 6 → ~0 (20% of sim failures)
+### [x] 1.3 Switch sim backend: anvil → rpc_fork
+- **Проблема**: production rollup shows `simulation_backend: "anvil"` — потребує Anvil process
+  якого нема. rpc_fork backend (E1.16) працює на production RPC без зовнішньої інфри.
+- **Fix**: Set `ARBY_SIM_BACKEND=rpc_fork` + `ARBY_PAPER_SIGNING=1` в env
+- **Impact**: sim працює без Anvil; SIGNING_NOT_READY → submit_ready
 
-### [ ] 1.4 Fix Anvil STF seeding (1h)
-- Problem: keccak256 storage slot wrong for some tokens
-- Fix: try multiple slot variants (0,1,2,3) + verify balanceOf
-- File: `m7/orderflow/sim_backends/anvil_backend.py`
-- Impact: STF errors → ~0
-
-### [ ] 1.5 Run tests + 30-min validation scan
-- `python -m pytest tests/unit -q`
-- Scan with fixes: `ARBY_PAPER_SIGNING=1 python -m strategy.jobs.run_scan --mode real --config config/onboard_base_stage2.yaml`
-- Expected: 3+ submit_ready in 30 min
-
----
-
-## PHASE 2: "Make It Fast" (days 2-4)
-*Goal: 10x candidate throughput via bridge selection fix*
-
-### [ ] 2.1 100% Broad Mode — tactical quick fix (2h)
-- Set `_BROAD_FALLBACK_INTERVAL = 1` in mode_ws_live.py
-- All blocks use unfiltered eth_getLogs (no address restriction)
-- Trade-off: more RPC calls, but coverage >> bandwidth now
-- Impact: catch events at ALL active pools, not just 27 stale ones
-
-### [ ] 2.2 Dynamic Token Discovery on-chain (1 day)
-- Read token0/token1 from pool contract + symbol() on-chain
-- Cache in memory + flush to `core_tokens_dynamic.json`
-- Replace subgraph dependency for Base entirely
-- Impact: TOKEN_ADDRESS_UNKNOWN → 0 for any pool
-
-### [ ] 2.3 Pool → DEX Mapping Registry (4h)
-- Build reverse index: pool_address → dex_key at discovery time
-- Use factory address matching or factory logs
-- Impact: DEX_CONFIG_MISSING → 0
-
-### [ ] 2.4 Reactive Bridge Hot-Update (1 day)
-- Hot lane feeds newly-seen active pools back into bridge in real-time
-- Currently bridge is 5-30min stale (cold lane writes only)
-- Impact: families_with_exact_hits 0 → 20+, window coverage 10% → 50%+
+### [x] 1.4 Validate — tests + quick scan
+- `py -3.11 -m pytest tests/unit -q`
+- Live scan 15 min з rpc_fork + paper signing
+- **Target**: sim_attempted 30→51, sim_passed 1→~2+, submit_ready > 0
 
 ---
 
-## PHASE 3: "Make It Profitable" (days 5-14)
-*Goal: Strategic pivot for real profitability*
+## PHASE 2: ve33 Calldata Encoder (E1.18)
+*Goal: Unlock Aerodrome — dominant Base DEX (~40% volume)*
 
-### [ ] 3.1 Backrun Large Swaps (main strategic pivot)
-- Monitor flashblocks for large swap events (>$10K)
-- Calculate post-trade price dislocation
-- Build atomic backrun via different DEX
-- Base FCFS sequencer = <100ms advantage window
+### [x] 2.1 Implement Velodrome/Aerodrome calldata builder
+- **Проблема**: ve33 adapter uses `exactInputSingle` (Uniswap V3 ABI) → reverts on
+  Velodrome Router (`0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43`)
+- Velodrome Router API: `swapExactTokensForTokens(amountIn, amountOutMin, routes[], to, deadline)`
+  де `routes` = `[(from, to, stable, factory)]`
+- **File**: `m7/orderflow/execution_gate.py` — add `_encode_velodrome_swap()` alongside existing
+  `_encode_exact_input_single()`
+- **Impact**: Aerodrome pools перестануть STF-реvertити
 
-### [ ] 3.2 Flashblocks Integration (3 days)
-- `mainnet.flashblocks.base.org/ws` — 200ms pre-confirmations
-- Parse pre-confirmed blocks for large swap signatures
+### [x] 2.2 Add ve33 to rpc_fork_backend router dispatch
+- **File**: `m7/orderflow/sim_backends/rpc_fork_backend.py` — currently only handles V3 calldata
+- Add Velodrome router calldata path
+- **Impact**: sim_attempted ↑ (all Aerodrome pools simulatable)
 
-### [ ] 3.3 Gas Optimization — smaller calldata (2 days)
-- Multicall packed encoding: 228 → ~160 bytes
-- L1 data cost reduction ~30%
-- Custom minimal-calldata router
+### [x] 2.3 Tests + validation
+- Unit tests for velodrome calldata encoding
+- Live scan with aerodrome pools included
+- **Target**: STF errors → 0
 
-### [ ] 3.4 Multi-DEX Atomic Router (5 days)
-- Deploy custom contract: buy DEX-A + sell DEX-B atomically
-- One tx instead of two → 50% less gas
-- Includes flash loan if needed
+---
 
-### [ ] 3.5 Expand Aerodrome CL Pools (2 days)
-- Aerodrome = 60%+ Base DEX volume
-- Add Slipstream (CL) adapter: factory + router
+## PHASE 3: Peak-Hours Production Soak (E1.19)
+*Goal: First real submit_ready > 0 on production market*
+
+### [ ] 3.1 Prepare env for peak soak
+- `ARBY_SIM_BACKEND=rpc_fork`
+- `ARBY_PAPER_SIGNING=1`
+- `BASE_RPC=<drpc_url>` (premium, low latency)
+- `BASE_WSS=<drpc_wss>` (premium WS)
+
+### [ ] 3.2 Run 14:00-22:00 UTC soak (8 hours)
+- Peak Base activity = more large swaps = better backrun margins
+- Monitor rolling artifacts every 30 min
+- **Target**: submit_ready ≥ 5, positive net_bps in at least 1 event
+
+### [ ] 3.3 Analyze soak results
+- Conversion rate at each funnel stage
+- sim_passed/sim_attempted ratio with config fixes
+- Identify remaining blockers (if any)
+
+---
+
+## PHASE 4: Flashblocks Integration (E1.20)
+*Goal: Sub-block latency edge → cross gap-to-zero*
+
+### [ ] 4.1 Flashblocks WS connection
+- URL: `wss://mainnet-preconf.base.org` (app-level)
+- Parse pre-confirmed block payloads for large swap events
+- **Edge**: 200ms pre-confirmation → see swaps before other backrunners
+
+### [ ] 4.2 Flashblocks → hot scoring pipeline
+- Feed flashblock events into existing hot scoring path
+- Same guard → sim → submit pipeline, just earlier data
+- **Impact**: 1-2 bps latency advantage over non-flashblock competitors
+
+### [ ] 4.3 Validate latency improvement
+- Compare: standard WS vs flashblocks WS event-to-score latency
+- **Target**: gap-to-zero crosses below 0 → net positive P&L
+
+---
+
+## PHASE 5: Triangular Exploration (E1.21, stretch)
+*Goal: Diversification play — only AFTER Phases 1-4 proven*
+
+### [ ] 5.1 Run triangular CLI on Base (diagnostic only)
+- `m7/triangular/cli.py` already supports Base universe (8 tokens, 4 DEXes)
+- Single diagnostic run to measure cycle economics
+- **Gate**: proceed only if any cycle shows gap < 5 bps
+
+### [ ] 5.2 Integrate triangular into hot pipeline (if viable)
+- Wire `find_3hop_cycles()` + `score_cycle_measured()` into hot scoring
+- 3× gas penalty makes this viable only for large dislocations
 
 ---
 
@@ -145,17 +151,20 @@ Pipeline works end-to-end (1 sim_passed) but is blocked at 5 critical points.
 
 | Phase | Metric | Current | Target |
 |-------|--------|---------|--------|
-| 1 | submit_ready / 30min | 0 | 3+ |
-| 1 | sim_pass_rate | 3% (1/30) | >50% |
-| 2 | families_with_exact_hits | 0 | >20 |
-| 2 | window event coverage | 10.5% | >50% |
-| 3 | positive net_bps candidates | 0 | >5/hour |
-| 3 | paper P&L / day | $0 | >$10 |
+| 1 | sim errors from config gaps | 18/30 | 0/30 |
+| 1 | sim_attempted | 30 | 51+ |
+| 1 | submit_ready | 0 | ≥1 |
+| 2 | STF reverts (ve33) | 1 | 0 |
+| 2 | Aerodrome pools simulatable | 0 | all |
+| 3 | submit_ready / 8h soak | 0 | ≥5 |
+| 4 | event-to-score latency | ~2s | <200ms |
+| 4 | net_bps (best) | negative | >0 |
 
 ---
 
 ## KEY INSIGHT
 
-Pure cross-DEX arbitrage on Base has marginal profitability (confirmed by R39x+5 research).
-The real opportunity is **backrunning large swaps** via the FCFS centralized sequencer.
-Phase 1+2 prove the pipeline works; Phase 3 pivots to where the money is.
+M7 Backrun має **структурну перевагу**: ми торгуємо ПІСЛЯ відомого price impact,
+конкуруючи лише з іншими backrunners (не з усім MEV-пулом як у 2-leg/triangular).
+60% поточних sim failures — це config gaps, а не market blockers.
+Виправлення конфігу + rpc_fork + paper signing = перший submit_ready БЕЗ зміни коду pipeline.

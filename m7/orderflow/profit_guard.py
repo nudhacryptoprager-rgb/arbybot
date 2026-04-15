@@ -27,9 +27,9 @@ from typing import Any, Dict, Optional
 from m7.shared.constants import (
     DEFAULT_BACKRUN_GAS,
     DEFAULT_GAS_PRICE_GWEI,
-    GAS_FLOOR_BPS_ARBITRUM,
     TIMEBOOST_ELIGIBLE_BUDGET_MS,
-    get_gas_floor_bps,
+    estimate_gas_cost,
+    get_gas_price_gwei,
 )
 
 logger = logging.getLogger("m7.orderflow.profit_guard")
@@ -62,6 +62,7 @@ def check_profit_guard(
     min_net_bps: float = 0.0,
     pipeline_latency_ms: Optional[float] = None,
     chain: str = "arbitrum_one",
+    l1_fee_bps: float = 0.0,
 ) -> ProfitGuardResult:
     """Check whether the ending balance exceeds starting balance after gas.
 
@@ -87,12 +88,11 @@ def check_profit_guard(
     """
     _guard_start = time.monotonic()
     gross_pnl_wei = sell_amount_wei - backrun_size_wei
-    gas_cost_eth_wei = int(gas_estimate * gas_price_gwei * 1e9)
 
-    # Convert gas cost from ETH wei to token wei (simplified: assume 1:1 for ETH-denominated)
-    # For non-ETH tokens, this needs a price oracle — currently uses gas_floor_bps as proxy
-    # M7.E1.6: Chain-aware gas floor — Base has ~0.5 bps vs Arbitrum ~2.0 bps
-    gas_bps = get_gas_floor_bps(chain)
+    # Unified gas estimation — chain-aware, consistent with scoring
+    gas_bps, gas_cost_wei = estimate_gas_cost(
+        chain, backrun_size_wei, gas_units=gas_estimate, l1_fee_bps=l1_fee_bps,
+    )
 
     if backrun_size_wei > 0:
         gross_bps = (gross_pnl_wei / backrun_size_wei) * 10000
@@ -101,7 +101,7 @@ def check_profit_guard(
         gross_bps = 0.0
         net_bps = 0.0
 
-    net_pnl_wei = gross_pnl_wei - gas_cost_eth_wei
+    net_pnl_wei = gross_pnl_wei - gas_cost_wei
 
     # Core invariant: ending_balance > starting_balance
     passed = net_bps > min_net_bps and net_pnl_wei > 0
@@ -124,7 +124,7 @@ def check_profit_guard(
         passed=passed,
         net_pnl_wei=net_pnl_wei,
         net_bps=round(net_bps, 4),
-        gas_cost_wei=gas_cost_eth_wei,
+        gas_cost_wei=gas_cost_wei,
         gas_bps=round(gas_bps, 4),
         guard_mode="local_sim",
         reject_reason=reject_reason,
@@ -134,8 +134,9 @@ def check_profit_guard(
             "gross_pnl_wei": gross_pnl_wei,
             "gross_bps": round(gross_bps, 4),
             "gas_estimate": gas_estimate,
-            "gas_price_gwei": gas_price_gwei,
+            "gas_price_gwei": get_gas_price_gwei(chain),
             "backrun_size_wei": backrun_size_wei,
+            "l1_fee_bps": l1_fee_bps,
         },
     )
 
@@ -183,8 +184,12 @@ def annotate_profit_guard_results(
             backrun_size_wei=size, pipeline_latency_ms=pipeline_ms,
             chain=chain,
         )
+        if hasattr(r, "profit_guard_passed"):
+            r.profit_guard_passed = guard.passed
+        try:
+            setattr(r, "guard_reject_reason", guard.reject_reason)
+        except Exception:
+            pass
         if guard.passed:
-            if hasattr(r, "profit_guard_passed"):
-                r.profit_guard_passed = True
             passed.append((r, guard))
     return passed

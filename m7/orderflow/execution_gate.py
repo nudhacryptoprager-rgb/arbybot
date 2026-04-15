@@ -137,6 +137,90 @@ def _encode_exact_input_single(
     return selector + params
 
 
+def _resolve_address_prefix(chain: str, prefix: str) -> Optional[str]:
+    """E1.17: Resolve a truncated address prefix (e.g. '0x696f9436') to a full
+    checksummed address by scanning core_tokens.yaml entries for the chain.
+
+    Returns full address if found, None otherwise.
+    """
+    try:
+        from config import get_all_token_addresses
+        tokens = get_all_token_addresses(chain)
+        prefix_lower = prefix.lower()
+        for _sym, addr in tokens.items():
+            if addr.lower().startswith(prefix_lower):
+                return addr
+    except (ImportError, Exception):
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# ve33 (Velodrome/Aerodrome) calldata helpers (E1.18)
+# ---------------------------------------------------------------------------
+
+# Aerodrome V2 Router selector: swapExactTokensForTokens(uint256,uint256,(address,address,bool,address)[],address,uint256)
+_SELECTOR_VE33 = bytes.fromhex("cac88ea9")
+
+# Default Aerodrome factory on Base
+_AERODROME_FACTORY_DEFAULT = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
+
+
+def _encode_bool(val: bool) -> bytes:
+    return _encode_uint(1 if val else 0)
+
+
+def _encode_velodrome_swap(
+    token_in: str,
+    token_out: str,
+    recipient: str,
+    amount_in: int,
+    amount_out_min: int = 0,
+    stable: bool = False,
+    factory: str = _AERODROME_FACTORY_DEFAULT,
+) -> bytes:
+    """E1.18: Encode Velodrome/Aerodrome V2 swapExactTokensForTokens calldata.
+
+    Solidity signature:
+        swapExactTokensForTokens(
+            uint256 amountIn,
+            uint256 amountOutMin,
+            Route[] calldata routes,  // Route = (address from, address to, bool stable, address factory)
+            address to,
+            uint256 deadline
+        )
+
+    ABI encoding for dynamic array:
+        selector(4) + amountIn(32) + amountOutMin(32) + routes_offset(32) +
+        to(32) + deadline(32) + routes_length(32) +
+        [route0: from(32) + to(32) + stable(32) + factory(32)]
+    """
+    import time as _time
+
+    deadline = int(_time.time()) + 3600
+
+    # Fixed-size head: amountIn, amountOutMin, routes_offset, to, deadline
+    # routes_offset = 5 * 32 = 160 (offset from start of params to routes array)
+    head = (
+        _encode_uint(amount_in)
+        + _encode_uint(amount_out_min)
+        + _encode_uint(160)  # offset to routes array data
+        + _encode_address(recipient)
+        + _encode_uint(deadline)
+    )
+
+    # Dynamic tail: routes array (single route for now)
+    routes_data = (
+        _encode_uint(1)  # routes.length = 1
+        + _encode_address(token_in)     # route[0].from
+        + _encode_address(token_out)    # route[0].to
+        + _encode_bool(stable)          # route[0].stable
+        + _encode_address(factory)      # route[0].factory
+    )
+
+    return _SELECTOR_VE33 + head + routes_data
+
+
 def _build_sim_tx_params(
     result: Any, chain: str = "base"
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -166,6 +250,7 @@ def _build_sim_tx_params(
     # Resolve DEX config → router + adapter type
     # E1.16: When venue is a pool address (starts with 0x), fall back to
     # iterating configured DEXes for the chain to find a V3-compatible one.
+    # E1.17: Try factory-based matching first for more accurate DEX resolution.
     try:
         from config import get_dex_config
 
@@ -173,9 +258,10 @@ def _build_sim_tx_params(
     except (KeyError, ImportError):
         dex_cfg = None
         if venue.startswith("0x"):
-            # Venue is a pool address, not a DEX name — try known DEXes
+            # Venue is a pool address, not a DEX name — try known DEXes.
+            # Prefer uniswap_v3 as primary Base router (SwapRouter02).
             from config import get_dex_config as _gdc
-            for _fallback_dex in ("uniswap_v3", "aerodrome", "sushiswap_v3", "pancakeswap_v3"):
+            for _fallback_dex in ("uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"):
                 try:
                     _fb_cfg = _gdc(chain, _fallback_dex)
                     if _fb_cfg.get("adapter_type", "") in {"uniswap_v3", "ve33", "algebra"}:
@@ -192,8 +278,11 @@ def _build_sim_tx_params(
         return None, f"ROUTER_MISSING:{venue}"
 
     # V3-compatible adapters that use exactInputSingle calldata
-    _V3_COMPATIBLE = {"uniswap_v3", "ve33", "algebra"}
-    if adapter_type not in _V3_COMPATIBLE:
+    # E1.18: ve33 moved to separate set — uses Velodrome swapExactTokensForTokens
+    _V3_ADAPTERS = {"uniswap_v3", "algebra"}
+    _VE33_ADAPTERS = {"ve33"}
+    _SUPPORTED_ADAPTERS = _V3_ADAPTERS | _VE33_ADAPTERS
+    if adapter_type not in _SUPPORTED_ADAPTERS:
         return None, f"ADAPTER_UNSUPPORTED:{adapter_type}"
 
     # E1.16: Prefer resolved token addresses from BackrunResult (bypass
@@ -202,7 +291,11 @@ def _build_sim_tx_params(
     token_out_addr = getattr(result, "backrun_token_out_address", None)
 
     if not token_in_addr or not token_out_addr:
-        # Fallback: resolve from actual_pair symbols
+        # Fallback: resolve from actual_pair symbols or embedded hex addresses.
+        # actual_pair may contain:
+        #   - real symbols: "WETH/USDC"
+        #   - address prefixes: "0x696f9436/USDC" (addr_to_symbol miss)
+        #   - direction tags: "token0_in/USDC" (unresolved direction)
         tokens = pair.split("/")
         if len(tokens) != 2:
             return None, f"PAIR_FORMAT_INVALID:{pair}"
@@ -210,10 +303,30 @@ def _build_sim_tx_params(
         try:
             from config import get_token_address
 
-            if not token_in_addr:
-                token_in_addr = get_token_address(chain, tokens[0])
-            if not token_out_addr:
-                token_out_addr = get_token_address(chain, tokens[1])
+            for idx, missing_addr in [(0, token_in_addr), (1, token_out_addr)]:
+                if missing_addr:
+                    continue  # Already resolved
+                tok = tokens[idx]
+                # E1.17: If token looks like a hex address (0x...), use it directly
+                if tok.startswith("0x") and len(tok) >= 10:
+                    # Try full address from core_tokens.yaml by scanning all entries
+                    # for an address that starts with this prefix
+                    _resolved = _resolve_address_prefix(chain, tok)
+                    if _resolved:
+                        if idx == 0:
+                            token_in_addr = _resolved
+                        else:
+                            token_out_addr = _resolved
+                        continue
+                # Standard symbol lookup
+                try:
+                    addr = get_token_address(chain, tok)
+                    if idx == 0:
+                        token_in_addr = addr
+                    else:
+                        token_out_addr = addr
+                except (KeyError, ValueError):
+                    pass  # Will be caught by the check below
         except ImportError:
             return None, "CONFIG_IMPORT_FAILED"
 
@@ -226,22 +339,33 @@ def _build_sim_tx_params(
             missing.append(tokens[1] if len(tokens) > 1 else "?")
         return None, f"TOKEN_ADDRESS_UNKNOWN:{','.join(missing)}"
 
-    # Pick fee tier (first available from DEX config, or 3000 default)
-    fee_tiers = dex_cfg.get("fee_tiers", [3000])
-    fee = fee_tiers[0] if fee_tiers else 3000
-
-    # Build V3 exactInputSingle calldata.
-    # SwapRouter02 (Base, most L2s) uses 0x04e45aaf (no deadline field).
-    # Legacy SwapRouter (Arbitrum) uses 0x414bf389 (with deadline).
+    # Build calldata based on adapter type.
+    # E1.18: V3 adapters → exactInputSingle, ve33 → Velodrome swapExactTokensForTokens.
     try:
-        calldata = _encode_exact_input_single(
-            token_in=token_in_addr,
-            token_out=token_out_addr,
-            fee=fee,
-            recipient="0x0000000000000000000000000000000000000001",
-            amount_in=amount,
-            router_version=_router_version(chain),
-        )
+        if adapter_type in _VE33_ADAPTERS:
+            # Velodrome/Aerodrome V2: Route-based swap
+            factory = dex_cfg.get("factory", _AERODROME_FACTORY_DEFAULT)
+            calldata = _encode_velodrome_swap(
+                token_in=token_in_addr,
+                token_out=token_out_addr,
+                recipient="0x0000000000000000000000000000000000000001",
+                amount_in=amount,
+                stable=False,  # volatile pool default; stable detection deferred
+                factory=factory,
+            )
+        else:
+            # V3: exactInputSingle (uniswap_v3, algebra)
+            # Pick fee tier (first available from DEX config, or 3000 default)
+            fee_tiers = dex_cfg.get("fee_tiers", [3000])
+            fee = fee_tiers[0] if fee_tiers else 3000
+            calldata = _encode_exact_input_single(
+                token_in=token_in_addr,
+                token_out=token_out_addr,
+                fee=fee,
+                recipient="0x0000000000000000000000000000000000000001",
+                amount_in=amount,
+                router_version=_router_version(chain),
+            )
     except Exception as e:
         return None, f"CALLDATA_ENCODE_FAILED:{str(e)[:100]}"
 

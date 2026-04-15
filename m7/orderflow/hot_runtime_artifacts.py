@@ -626,6 +626,7 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
                 "route_viable": r.route_viable,
                 "scoring_path": r.scoring_path,
                 "profit_guard_passed": r.profit_guard_passed,
+                "guard_reject_reason": getattr(r, "guard_reject_reason", None),
                 "pipeline_latency_ms": r.quote_pipeline_latency_ms,
             }
             for r in _sorted_hot
@@ -772,6 +773,7 @@ def _write_hot_intents(
             "actual_pair": _pair,
             "net_bps": round(net, 4) if net else 0,
             "profit_guard_passed": getattr(r, "profit_guard_passed", False),
+            "guard_reject_reason": getattr(r, "guard_reject_reason", None),
             "guard_passed_in_hot": eid in _guard_event_ids,
             "scoring_path": getattr(r, "scoring_path", None),
             "pipeline_latency_ms": getattr(r, "quote_pipeline_latency_ms", None),
@@ -983,6 +985,12 @@ def _update_hot_rollup(
         rollup.get("profit_guard_passed_total", 0)
         + sum(1 for r in _fast if getattr(r, "profit_guard_passed", False))
     )
+    _guard_hist = rollup.get("guard_reject_reason_histogram") or {}
+    for r in _fast:
+        _guard_reason = getattr(r, "guard_reject_reason", None)
+        if _guard_reason:
+            _guard_hist[_guard_reason] = _guard_hist.get(_guard_reason, 0) + 1
+    rollup["guard_reject_reason_histogram"] = _guard_hist
     # M7.E1.5: Submit-stage counters вЂ” populated from execution gate result
     if gate_result is not None:
         rollup["sim_attempted_total"] = (

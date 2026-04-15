@@ -22,7 +22,6 @@ from m7.shared.constants import (
     BLOCKER_LOW_LAG_V2_UNSUPPORTED,
     # BLOCKER_SUBGRAPH_API_KEY_REQUIRED removed in E1.12.3 (not used in hot path)
     DEFAULT_BACKRUN_GAS,
-    DEFAULT_GAS_PRICE_GWEI,
     GAS_FLOOR_BPS_ARBITRUM,
     M7A4_CHAIN,
     REJECT_ALL_POOLS_TRULY_INACTIVE,
@@ -43,6 +42,7 @@ from m7.shared.constants import (
     SURFACE_MEV_SHARE_BACKRUN,
     SURFACE_UNISWAPX_FILLER,
     UNSCORED_REJECTS,
+    estimate_gas_cost,
 )
 from m7.orderflow.contracts import (
     BackrunResult,
@@ -99,7 +99,7 @@ def score_backrun_offline(event: OrderflowEvent) -> BackrunResult:
     # Estimate wei amounts from bps (proportional to event size)
     amount_in = event.amount_in_wei
     gross_wei = int(amount_in * gross_bps / 10000) if amount_in > 0 else 0
-    gas_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+    _, gas_wei = estimate_gas_cost(event.chain, amount_in)
     fee_wei = int(amount_in * fee_bps / 10000) if amount_in > 0 else 0
     net_wei = gross_wei - gas_wei - fee_wei
 

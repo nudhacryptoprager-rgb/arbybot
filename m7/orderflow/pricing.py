@@ -30,6 +30,9 @@ from m7.shared.constants import (
     _FALLBACK_ETH_PRICE_USD,
     _REF_MIN_WEI_18,
     _REF_MAX_WEI_18,
+    estimate_gas_cost,
+    get_gas_price_gwei,
+    get_min_profitable_size_wei,
 )
 from m7.orderflow.contracts import BackrunResult, OrderflowEvent
 
@@ -145,12 +148,12 @@ def estimate_backrun_gross_bps(event: OrderflowEvent) -> float:
 
 
 
-def estimate_gas_cost_bps(event: OrderflowEvent) -> float:
-    """Estimate gas cost in bps for a two-swap backrun on Arbitrum."""
-    gas_cost_eth = DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e-9
-    gas_cost_usd = gas_cost_eth * 3500  # ETH price estimate
+def estimate_gas_cost_bps(event: OrderflowEvent, chain: str = "arbitrum_one") -> float:
+    """Estimate gas cost in bps for a two-swap backrun."""
     if event.estimated_size_usd <= 0:
         return 10000.0  # Infinite gas overhead
+    gas_cost_eth = DEFAULT_BACKRUN_GAS * get_gas_price_gwei(chain) * 1e-9
+    gas_cost_usd = gas_cost_eth * 3500  # ETH price estimate
     return (gas_cost_usd / event.estimated_size_usd) * 10000
 
 
@@ -187,9 +190,6 @@ def score_backrun_live(
 
     backrun_dir = classify_event_backrun_type(event)
 
-    # Backrun size: ~10% of the original event
-    backrun_size_wei = max(event.amount_in_wei // 10, 1)
-
     # M7.A.5.9: Infer token_in decimals from symbol for size normalization
     _backrun_token_in_sym = event.token_out  # backrun buys what user sold
     _live_dec: Optional[int] = None
@@ -197,7 +197,10 @@ def score_backrun_live(
         _live_dec = 6
     elif _backrun_token_in_sym.upper() in ("WBTC",):
         _live_dec = 8
-    _live_min, _live_max = _normalized_bounds(_live_dec if _live_dec is not None else 18)
+    _effective_live_dec = _live_dec if _live_dec is not None else 18
+    _live_min, _live_max = _normalized_bounds(_effective_live_dec)
+    _live_min = max(_live_min, get_min_profitable_size_wei(event.chain, _effective_live_dec))
+    backrun_size_wei = max(event.amount_in_wei // 10, 1)
     backrun_size_wei = max(_live_min, min(_live_max, backrun_size_wei))
 
     # We need real token addresses for quoting
@@ -245,7 +248,7 @@ def score_backrun_live(
         # Use WETH→USDC as representative quote
         token_in_addr = weth_addr
         token_out_addr = usdc_addr
-        backrun_size_wei = 10**16  # 0.01 ETH — small test size
+        backrun_size_wei = max(10**16, get_min_profitable_size_wei(event.chain, 18))
 
     # Pass 1: Find best buy across all venues/fees
     for dex_name, cfg, quoter_addr in quotable_dexes:
@@ -321,7 +324,7 @@ def score_backrun_live(
         same_state_class = "stale"
 
     # M7.A.5.9: Convert gas to backrun token denomination
-    _gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+    _gas_eth_wei = int(DEFAULT_BACKRUN_GAS * get_gas_price_gwei(chain) * 1e9)
     gas_cost_wei = _gas_cost_in_token_wei(_gas_eth_wei, _live_dec)
 
     # Compute measured net from best quotes
@@ -424,6 +427,7 @@ def _run_size_sweep(
     token_out_addr: str,
     quotable_dexes: list,
     base_size_wei: int,
+    chain: str,
     fallback_rpc_urls: Optional[List[str]] = None,
     token_in_decimals: Optional[int] = None,
     gas_cost_token_wei: Optional[int] = None,
@@ -439,6 +443,10 @@ def _run_size_sweep(
     multipliers = [0.2, 0.5, 1.0, 2.0, 5.0]
     # M7.A.5.9: decimal-aware bounds
     MIN_WEI, MAX_WEI = _normalized_bounds(token_in_decimals if token_in_decimals is not None else 18)
+    MIN_WEI = max(
+        MIN_WEI,
+        get_min_profitable_size_wei(chain, token_in_decimals if token_in_decimals is not None else 18),
+    )
     sizes = []
     for m in multipliers:
         s = int(base_size_wei * m)
@@ -524,7 +532,10 @@ def _run_size_sweep(
             continue
 
         gross_wei = best_sell_amt - size_wei
-        _sweep_gas = gas_cost_token_wei if gas_cost_token_wei is not None else int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+        if gas_cost_token_wei is not None and size_wei == base_size_wei:
+            _sweep_gas = gas_cost_token_wei
+        else:
+            _, _sweep_gas = estimate_gas_cost(chain, size_wei)
         net_wei = gross_wei - _sweep_gas
         net_bps = (net_wei / size_wei) * 10000 if size_wei > 0 else 0.0
 

@@ -47,7 +47,10 @@ from m7.shared.constants import (
     _DEFAULT_FEE_TIERS,
     _FALLBACK_ETH_PRICE_USD,
     M7A4_CHAIN,
+    estimate_gas_cost,
     get_gas_floor_bps,
+    get_gas_price_gwei,
+    get_min_profitable_size_wei,
 )
 from m7.orderflow.contracts import BackrunResult, OrderflowEvent
 from m7.orderflow.pricing import (
@@ -613,11 +616,12 @@ def score_backrun_live_parallel(
     _norm_source = "decimal_only" if _token_in_dec is not None else "fallback_18"
     _effective_dec = _token_in_dec if _token_in_dec is not None else 18
     MIN_BACKRUN_WEI, MAX_BACKRUN_WEI = _normalized_bounds(_effective_dec)
+    MIN_BACKRUN_WEI = max(MIN_BACKRUN_WEI, get_min_profitable_size_wei(chain, _effective_dec))
 
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
     backrun_size_wei = max(MIN_BACKRUN_WEI, min(MAX_BACKRUN_WEI, backrun_size_wei))
     if backrun_size_wei != max(event.amount_in_wei // 10, 1):
-        size_source = "bounded"
+        size_source = "dynamic_bounded"
 
     # M7.A.5.9: Compute USD estimate if oracle price available
     _size_usd: Optional[float] = None
@@ -629,8 +633,8 @@ def score_backrun_live_parallel(
     _gas_floor_exceeded = False
     _gas_floor_bps: Optional[float] = None
     if _size_usd is not None and _size_usd > 0:
-        # Estimate gas cost in USD: gas_eth_wei * eth_price / 1e18
-        _gas_eth_wei_est = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+        # Chain-aware gas cost in USD: gas_eth_wei * eth_price / 1e18
+        _gas_eth_wei_est = int(DEFAULT_BACKRUN_GAS * get_gas_price_gwei(chain) * 1e9)
         _est_eth_price: Optional[float] = None
         if oracle_result:
             _in_sym = _ats.get(token_in_addr.lower(), "")
@@ -643,7 +647,7 @@ def score_backrun_live_parallel(
             _est_eth_price = _FALLBACK_ETH_PRICE_USD
         _gas_usd = _gas_eth_wei_est * _est_eth_price / 1e18
         _gas_floor_bps = round(_gas_usd / _size_usd * 10000, 2) if _size_usd > 0 else None
-        if _gas_floor_bps is not None and _gas_floor_bps > GAS_FLOOR_BPS_ARBITRUM:
+        if _gas_floor_bps is not None and _gas_floor_bps > get_gas_floor_bps(chain):
             _gas_floor_exceeded = True
 
     # ── M7.A.5.22: Gas-floor operational filter for stale events ────────
@@ -783,7 +787,7 @@ def score_backrun_live_parallel(
             _mid_buy = _local_result["buy_amount"]
             _mid_sell = _local_result["sell_amount"]
             _mid_gross = _mid_sell - backrun_size_wei
-            _mid_gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+            _mid_gas_eth_wei = int(DEFAULT_BACKRUN_GAS * get_gas_price_gwei(chain) * 1e9)
             _mid_gas_cost = _gas_cost_in_token_wei(
                 _mid_gas_eth_wei, _effective_dec,
                 token_price_usd=_tok_price_usd if '_tok_price_usd' in dir() else None,
@@ -1024,7 +1028,7 @@ def score_backrun_live_parallel(
 
     # ── M7.A.5.9: Gas denomination conversion ──────────────────────────
     # Gas is paid in ETH; convert to backrun token denomination for bps.
-    _gas_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
+    _gas_eth_wei = int(DEFAULT_BACKRUN_GAS * get_gas_price_gwei(chain) * 1e9)
     _eth_price_usd: Optional[float] = None
     _tok_price_usd: Optional[float] = None
     if oracle_result:
@@ -1086,7 +1090,7 @@ def score_backrun_live_parallel(
             try:
                 sweep_results = _run_size_sweep(
                     event, rpc_url, token_in_addr, token_out_addr,
-                    quotable_dexes, backrun_size_wei, fallback_rpc_urls,
+                    quotable_dexes, backrun_size_wei, chain, fallback_rpc_urls,
                     token_in_decimals=_token_in_dec,
                     gas_cost_token_wei=gas_cost_wei,
                 )
@@ -1174,7 +1178,7 @@ def score_backrun_live_parallel(
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
     fail_reason = REJECT_RPC_QUOTE_FAIL if venues_quoted == 0 else REJECT_PAIR_RESOLVED_UNTRADEABLE
-    return BackrunResult(
+    result = BackrunResult(
         event_id=event.event_id,
         event_source="live",
         event_type=event.event_type,
@@ -1329,6 +1333,9 @@ def score_backrun_fast(
     else:
         _effective_dec = 18
     low, high = _normalized_bounds(_effective_dec)
+    # Dynamic min: ensure trade can cover gas at >= 1 bps net
+    _dyn_min = get_min_profitable_size_wei(chain, _effective_dec)
+    low = max(low, _dyn_min)
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
     backrun_size_wei = max(low, min(high, backrun_size_wei))
 
@@ -1368,14 +1375,11 @@ def score_backrun_fast(
 
     if backrun_size_wei > 0:
         gross_bps = (gross_wei / backrun_size_wei) * 10000
-        gas_bps = get_gas_floor_bps(chain)  # M7.E1.6: chain-aware gas floor
-        # E1.12.1: Use live L1 data fee when available (adds to static gas floor)
-        if l1_fee_bps is not None and l1_fee_bps > 0:
-            gas_bps = max(gas_bps, l1_fee_bps)
+        # Unified gas estimation — chain-aware, consistent with profit_guard
+        gas_bps, gas_cost_wei = estimate_gas_cost(
+            chain, backrun_size_wei, l1_fee_bps=(l1_fee_bps or 0.0),
+        )
         net_bps = gross_bps - gas_bps
-        # E1.13: gas cost in token-native wei (derived from gas_bps so
-        # net_wei stays in the same denomination as gross_wei)
-        gas_cost_wei = int(backrun_size_wei * gas_bps / 10000)
         net_wei = gross_wei - gas_cost_wei
     else:
         return None
@@ -1391,6 +1395,7 @@ def score_backrun_fast(
     # ── Stage 4: Profit guard (local sim) ──────────────────────────────
     _guard_start = time.monotonic()
     _profit_guard_passed = None
+    _guard_reject_reason = None
     if _route_viable and net_bps > 0 and net_wei > 0:
         from m7.orderflow.profit_guard import check_profit_guard
         _guard = check_profit_guard(
@@ -1398,9 +1403,11 @@ def score_backrun_fast(
             sell_amount_wei=sell_amount,
             backrun_size_wei=backrun_size_wei,
             pipeline_latency_ms=pipeline_ms,
-            chain=chain,  # M7.E1.6: chain-aware gas floor
+            chain=chain,
+            l1_fee_bps=(l1_fee_bps or 0.0),
         )
         _profit_guard_passed = _guard.passed
+        _guard_reject_reason = _guard.reject_reason
     _profit_guard_ms = round((time.monotonic() - _guard_start) * 1000, 2)
 
     # M7.A.5.36: per-stage hard abort
@@ -1477,15 +1484,18 @@ def score_backrun_fast(
         actual_pair=actual_pair,
         backrun_token_in_address=token_in_addr,
         backrun_token_out_address=token_out_addr,
-        size_source="event_proportional",
+        size_source="dynamic_bounded",
         size_valid_for_token=True,
         local_pricing_attempted=True,
         local_pricing_used=True,
         registry_pools_found=len(entries),
         registry_pools_active=len(active_entries),
         gas_floor_exceeded=(net_bps <= 0),
-        gas_floor_bps=get_gas_floor_bps(chain),  # M7.E1.6: chain-aware gas floor
+        gas_floor_bps=gas_bps,
         scoring_path="registry_fast",
         profit_guard_passed=_profit_guard_passed,
     )
+    if _guard_reject_reason is not None:
+        setattr(result, "guard_reject_reason", _guard_reject_reason)
+    return result
 

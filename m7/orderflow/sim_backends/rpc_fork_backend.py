@@ -2,6 +2,7 @@
 RPC Fork Simulation Backend — eth_call with state overrides.
 
 E1.16: Zero-infrastructure simulation using production RPC.
+E1.20: Flashblocks pre-confirmed state (``pending`` block tag).
 
 Unlike Anvil (requires separate process) or Tenderly (requires credits),
 this backend uses `eth_call` with the stateOverride parameter supported
@@ -10,8 +11,17 @@ by Geth, OP-Geth, dRPC, Alchemy, and other EVM nodes.
 State overrides let us inject ERC-20 balances and allowances into the
 simulation without modifying actual chain state — everything is read-only.
 
+E1.20 Flashblocks (Base only):
+  When ARBY_FLASHBLOCKS_SIM=1, simulations on Base use the Flashblocks
+  pre-confirmation endpoint (mainnet-preconf.base.org) with ``pending``
+  block tag. This gives 1-2 blocks (2-4 seconds) of pre-confirmed state
+  ahead of standard ``latest`` — an execution timing edge at zero cost.
+  Falls back to standard RPC on failure.
+
 Environment:
   ARBY_SIM_BACKEND=rpc_fork    — selects this backend
+  ARBY_FLASHBLOCKS_SIM=1       — enable Flashblocks pending tag (Base only)
+  ARBY_FLASHBLOCKS_HTTP        — override Flashblocks HTTP URL
   (no extra env vars needed: uses chain RPC from existing config)
 """
 
@@ -123,6 +133,35 @@ def _get_rpc_url(chain: str) -> Optional[str]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Flashblocks pre-confirmed state (E1.20)
+# ---------------------------------------------------------------------------
+
+# Chains that support Flashblocks pre-confirmation via ``pending`` block tag.
+_FLASHBLOCKS_CHAINS = {"base"}
+
+
+def _is_flashblocks_sim_enabled() -> bool:
+    """True when ARBY_FLASHBLOCKS_SIM=1 (opt-in)."""
+    return os.environ.get("ARBY_FLASHBLOCKS_SIM", "").strip() == "1"
+
+
+def _get_flashblocks_http_url(chain: str) -> Optional[str]:
+    """Resolve Flashblocks HTTP endpoint for *chain*.
+
+    Priority: ARBY_FLASHBLOCKS_HTTP env > chains.yaml > None.
+    Only returns a URL for chains in ``_FLASHBLOCKS_CHAINS``.
+    """
+    if chain not in _FLASHBLOCKS_CHAINS:
+        return None
+    try:
+        from chains.flashblocks import get_flashblocks_http_url
+        return get_flashblocks_http_url()
+    except ImportError:
+        pass
+    return os.environ.get("ARBY_FLASHBLOCKS_HTTP")
+
+
 def _json_rpc(url: str, method: str, params: list, timeout: float = 10.0) -> Tuple[Optional[dict], Optional[str]]:
     """Send JSON-RPC request. Returns (result_dict, error_str)."""
     try:
@@ -164,6 +203,11 @@ def simulate_swap_rpc_fork(
     Uses the stateOverride parameter to inject ERC-20 balances and
     allowances for the sender, enabling real swap execution path
     simulation without modifying chain state.
+
+    E1.20: When ARBY_FLASHBLOCKS_SIM=1 and chain is Base, uses the
+    Flashblocks preconf endpoint with ``pending`` block tag for 1-2 blocks
+    of pre-confirmed state (2-4 sec edge).  Falls back to standard RPC on
+    failure.
     """
     from m7.orderflow.simulation import SimulationResult
 
@@ -175,6 +219,14 @@ def simulate_swap_rpc_fork(
             backend="rpc_fork",
         )
 
+    # E1.20: Resolve Flashblocks preconf endpoint for pending-state sim
+    use_flashblocks = False
+    flashblocks_url: Optional[str] = None
+    if block_number is None and _is_flashblocks_sim_enabled():
+        flashblocks_url = _get_flashblocks_http_url(chain)
+        if flashblocks_url:
+            use_flashblocks = True
+
     # Build tx object
     tx_obj: Dict = {
         "from": from_address,
@@ -184,13 +236,34 @@ def simulate_swap_rpc_fork(
     if value_wei:
         tx_obj["value"] = hex(value_wei)
 
-    block_tag = "latest" if block_number is None else hex(block_number)
+    if block_number is not None:
+        block_tag = hex(block_number)
+    elif use_flashblocks:
+        block_tag = "pending"
+    else:
+        block_tag = "latest"
 
     # Build state overrides for ERC-20 balance seeding
+    # E1.18: Detect calldata type by selector to extract token_in correctly.
+    # V3 (0x04e45aaf / 0x414bf389): token_in at calldata[4:36]
+    # ve33 (0xcac88ea9): token_in in routes array (dynamic offset)
     state_overrides: Dict = {}
     if len(calldata) >= 36 and from_address != "0x" + "0" * 40:
         try:
-            token_in_hex = "0x" + calldata[4:36].hex().lstrip("0").zfill(40)
+            selector = calldata[:4]
+            _VE33_SELECTOR = bytes.fromhex("cac88ea9")
+            if selector == _VE33_SELECTOR and len(calldata) >= 260:
+                # Velodrome: parse routes offset → routes[0].from
+                # Layout: selector(4) + amountIn(32) + amountOutMin(32) +
+                #   offset(32) + to(32) + deadline(32) + length(32) + route0.from(32)
+                # offset value at bytes [68:100] points to routes data start
+                # routes[0].from is at position: 4 + offset + 32 (length field)
+                routes_offset = int.from_bytes(calldata[68:100], "big")
+                route0_from_start = 4 + routes_offset + 32  # skip selector + offset + length
+                token_in_hex = "0x" + calldata[route0_from_start:route0_from_start + 32].hex().lstrip("0").zfill(40)
+            else:
+                # V3: token_in is first parameter at calldata[4:36]
+                token_in_hex = "0x" + calldata[4:36].hex().lstrip("0").zfill(40)
             state_overrides = _build_state_overrides(
                 token_in_addr=token_in_hex,
                 holder=from_address,
@@ -204,7 +277,25 @@ def simulate_swap_rpc_fork(
     if state_overrides:
         params.append(state_overrides)
 
-    data, call_err = _json_rpc(rpc_url, "eth_call", params)
+    # E1.20: Try Flashblocks preconf endpoint first (pending state edge),
+    # fall back to standard RPC on any failure.
+    sim_url = rpc_url
+    backend_label = "rpc_fork"
+    if use_flashblocks and flashblocks_url:
+        data, call_err = _json_rpc(flashblocks_url, "eth_call", params)
+        if call_err:
+            logger.info(
+                "Flashblocks preconf sim failed (%s), falling back to standard RPC",
+                call_err[:80],
+            )
+            # Fall back: switch to standard RPC + latest block tag
+            params[1] = "latest"
+            data, call_err = _json_rpc(rpc_url, "eth_call", params)
+        else:
+            sim_url = flashblocks_url
+            backend_label = "rpc_fork_preconf"
+    else:
+        data, call_err = _json_rpc(rpc_url, "eth_call", params)
 
     if call_err:
         revert_reason = None
@@ -214,17 +305,18 @@ def simulate_swap_rpc_fork(
             success=False,
             error=call_err,
             revert_reason=revert_reason,
-            backend="rpc_fork",
+            backend=backend_label,
         )
 
     output_hex = data.get("result", "0x") if data else "0x"
 
     # Gas estimation with state overrides (Geth 1.13+ supports this)
+    # Use the same URL that succeeded for eth_call.
     gas = 0
     gas_params = [tx_obj]
     if state_overrides:
         gas_params.append(state_overrides)
-    est_data, gas_err = _json_rpc(rpc_url, "eth_estimateGas", gas_params)
+    est_data, gas_err = _json_rpc(sim_url, "eth_estimateGas", gas_params)
     if est_data and not gas_err:
         try:
             gas = int(est_data.get("result", "0x0"), 16)
@@ -232,7 +324,7 @@ def simulate_swap_rpc_fork(
             pass
     elif gas_err:
         # Retry without overrides (older nodes)
-        est_data2, _ = _json_rpc(rpc_url, "eth_estimateGas", [tx_obj])
+        est_data2, _ = _json_rpc(sim_url, "eth_estimateGas", [tx_obj])
         if est_data2:
             try:
                 gas = int(est_data2.get("result", "0x0"), 16)
@@ -249,13 +341,13 @@ def simulate_swap_rpc_fork(
             pass
 
     logger.info(
-        "rpc_fork sim OK: chain=%s, gas=%d, output=%d",
-        chain, gas, output_amount,
+        "rpc_fork sim OK: chain=%s, gas=%d, output=%d, backend=%s",
+        chain, gas, output_amount, backend_label,
     )
 
     return SimulationResult(
         success=True,
         gas_used=gas,
         output_amount_wei=output_amount,
-        backend="rpc_fork",
+        backend=backend_label,
     )

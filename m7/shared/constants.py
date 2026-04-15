@@ -191,7 +191,19 @@ ALL_SURFACES = frozenset({
 MIN_EVENT_SIZE_USD = 100.0
 SIGNIFICANT_IMPACT_BPS = 5.0
 DEFAULT_BACKRUN_GAS = 200_000
-DEFAULT_GAS_PRICE_GWEI = 0.1
+DEFAULT_GAS_PRICE_GWEI = 0.1  # legacy fallback; prefer get_gas_price_gwei(chain)
+
+# Chain-specific L2 gas price estimates (gwei).
+# More accurate than universal DEFAULT_GAS_PRICE_GWEI for cross-chain scoring.
+_CHAIN_GAS_PRICE_GWEI: Dict[str, float] = {
+    "base": 0.001,           # Base L2 typical baseFee (~0.001 gwei)
+    "arbitrum_one": 0.01,    # Arbitrum One (~0.01 gwei)
+    "optimism": 0.001,       # OP Stack similar to Base
+    "linea": 0.05,           # Linea higher gas
+    "scroll": 0.05,          # Scroll similar to Linea
+    "mantle": 0.02,          # Mantle
+    "zksync": 0.25,          # zkSync Era higher gas
+}
 
 # M7.A.5.9: Decimal-aware size normalization reference bounds (18-decimal tokens)
 _REF_MIN_WEI_18 = 10**15   # 0.001 of an 18-decimal token
@@ -310,6 +322,74 @@ def get_gas_floor_bps(chain: str) -> float:
     if chain == "base":
         return GAS_FLOOR_BPS_BASE
     return GAS_FLOOR_BPS_ARBITRUM
+
+
+def get_gas_price_gwei(chain: str) -> float:
+    """Return L2 gas price estimate for the given chain (gwei).
+
+    Falls back to DEFAULT_GAS_PRICE_GWEI for unknown chains.
+    """
+    return _CHAIN_GAS_PRICE_GWEI.get(chain, DEFAULT_GAS_PRICE_GWEI)
+
+
+def estimate_gas_cost(
+    chain: str,
+    backrun_size_wei: int,
+    gas_units: int = DEFAULT_BACKRUN_GAS,
+    l1_fee_bps: float = 0.0,
+) -> tuple:
+    """Unified gas estimation — single source of truth for scoring + guard.
+
+    Returns ``(gas_bps, gas_cost_wei)`` where:
+
+    * **gas_bps** — relative cost in basis points, floor-capped
+      (conservative; used for bps-based filtering).
+    * **gas_cost_wei** — absolute cost in native-token wei,
+      chain-realistic (used for pnl checks).
+
+    Both values derive from the same chain-aware gas price so that
+    scoring and profit_guard are algebraically consistent.
+    """
+    gas_price = get_gas_price_gwei(chain)
+    l2_cost_wei = int(gas_units * gas_price * 1e9)
+
+    l1_cost_wei = 0
+    if l1_fee_bps > 0 and backrun_size_wei > 0:
+        l1_cost_wei = int(backrun_size_wei * l1_fee_bps / 10000)
+
+    gas_cost_wei = l2_cost_wei + l1_cost_wei
+
+    if backrun_size_wei > 0:
+        real_bps = (gas_cost_wei / backrun_size_wei) * 10000
+    else:
+        real_bps = get_gas_floor_bps(chain)
+
+    gas_bps = max(real_bps, get_gas_floor_bps(chain))
+    return (round(gas_bps, 6), gas_cost_wei)
+
+
+def get_min_profitable_size_wei(
+    chain: str,
+    token_decimals: int = 18,
+    target_net_bps: float = 1.0,
+    gas_units: int = DEFAULT_BACKRUN_GAS,
+) -> int:
+    """Minimum trade size (wei) to achieve *target_net_bps* net after gas.
+
+    Used for dynamic lower-bound sizing: trades smaller than this
+    cannot cover gas costs and should not be attempted.
+    """
+    gas_price = get_gas_price_gwei(chain)
+    gas_cost_wei_18 = int(gas_units * gas_price * 1e9)
+    if target_net_bps > 0:
+        min_size_18 = int(gas_cost_wei_18 * 10000 / target_net_bps)
+    else:
+        min_size_18 = _REF_MIN_WEI_18
+    min_size_18 = max(min_size_18, _REF_MIN_WEI_18)
+    if token_decimals != 18:
+        ratio = 10 ** max(0, 18 - token_decimals)
+        return max(1, min_size_18 // ratio)
+    return min_size_18
 
 
 def get_prewarm_pairs(chain: str, profile: str = "production") -> list:

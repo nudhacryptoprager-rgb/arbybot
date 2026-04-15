@@ -15,6 +15,7 @@ Usage:
     py -3.11 scripts/start_nonstop_runtime.py --hours 1
     py -3.11 scripts/start_nonstop_runtime.py --hours 4 --m7-hot-pause 1 --m7-cold-pause 5
     py -3.11 scripts/start_nonstop_runtime.py --hours 0.5 --dashboard-port 8099 --no-m4
+    py -3.11 scripts/start_nonstop_runtime.py --hours 1 --with-discovery
 """
 from __future__ import annotations
 
@@ -52,6 +53,8 @@ def parse_args():
                     choices=["production", "discovery"],
                     dest="m7_profile",
                     help="M7 pair profile: production (narrow) or discovery (wider contour)")
+    ap.add_argument("--with-discovery", action="store_true",
+                    help="Also launch parallel discovery hot+cold lanes alongside production")
     ap.add_argument("--restart-delay", type=int, default=5, help="Seconds before restarting a crashed process")
     ap.add_argument("--max-restarts", type=int, default=10, help="Max restarts per process before giving up")
     return ap.parse_args()
@@ -192,6 +195,36 @@ def main():
             restart_delay=args.restart_delay,
             max_restarts=args.max_restarts,
         ))
+
+    # 5. Discovery lanes (parallel to production)
+    if args.with_discovery and args.m7_profile == "production":
+        processes.append(ManagedProcess(
+            "m7_hot_discovery",
+            [
+                py, "scripts/m7a_orderflow_loop.py",
+                "--lane", "hot",
+                "--chain", args.chain,
+                "--profile", "discovery",
+                "--ws-blocks", str(args.m7_hot_blocks),
+                "--pause", str(args.m7_hot_pause),
+            ],
+            restart_delay=args.restart_delay,
+            max_restarts=args.max_restarts,
+        ))
+        if not args.no_m7_cold:
+            processes.append(ManagedProcess(
+                "m7_cold_discovery",
+                [
+                    py, "scripts/m7a_orderflow_loop.py",
+                    "--lane", "cold",
+                    "--chain", args.chain,
+                    "--profile", "discovery",
+                    "--ws-blocks", str(args.m7_cold_blocks),
+                    "--pause", str(args.m7_cold_pause),
+                ],
+                restart_delay=args.restart_delay,
+                max_restarts=args.max_restarts,
+            ))
 
     # Start all
     for p in processes:

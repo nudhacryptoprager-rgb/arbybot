@@ -570,7 +570,7 @@ class TestBuildSimTxParams:
         assert len(tx["calldata"]) == 260
 
     def test_ve33_aerodrome_now_supported(self):
-        """E1.14: Aerodrome (ve33) is V3-compatible and should build calldata."""
+        """E1.18: Aerodrome (ve33) builds Velodrome calldata (not V3)."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
         br = self._make_result(best_buy_venue="aerodrome")
@@ -578,7 +578,8 @@ class TestBuildSimTxParams:
         assert err is None
         assert tx is not None
         assert tx["to"] == "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
-        assert tx["calldata"][:4] == bytes.fromhex("04e45aaf")
+        # E1.18: ve33 uses Velodrome selector (not V3 exactInputSingle)
+        assert tx["calldata"][:4] == bytes.fromhex("cac88ea9")
 
 
 class TestAttemptSimulationRealCalldata:
@@ -907,3 +908,222 @@ class TestE116DexConfigMissingFix:
             "0x1b81D678ffb9C0263b24A97847620C99d213eB14",  # pancakeswap_v3
         }
         assert tx["to"] in known_routers
+
+
+class TestE117ResolveAddressPrefix:
+    """E1.17: _resolve_address_prefix scans core_tokens for matching addresses."""
+
+    def test_known_prefix_resolves(self):
+        """A prefix matching a core_tokens entry returns the full address."""
+        from m7.orderflow.execution_gate import _resolve_address_prefix
+
+        # WETH on Base starts with 0x4200000000000000000000000000000000000006
+        result = _resolve_address_prefix("base", "0x42000000000000000000000000000000000000")
+        assert result is not None
+        assert result.startswith("0x4200")
+
+    def test_unknown_prefix_returns_none(self):
+        """A prefix with no match returns None."""
+        from m7.orderflow.execution_gate import _resolve_address_prefix
+
+        result = _resolve_address_prefix("base", "0xdeadbeefdeadbeefdeadbeef")
+        assert result is None
+
+    def test_short_prefix_matches(self):
+        """Even a short 0x prefix resolves if it's unique enough."""
+        from m7.orderflow.execution_gate import _resolve_address_prefix
+
+        # USDC on Base: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+        result = _resolve_address_prefix("base", "0x833589fCD6eDb6E08f4c")
+        assert result is not None
+        assert "833589" in result
+
+    def test_invalid_chain_returns_none(self):
+        """Non-existent chain doesn't crash, returns None."""
+        from m7.orderflow.execution_gate import _resolve_address_prefix
+
+        result = _resolve_address_prefix("nonexistent_chain_xyz", "0x4200")
+        assert result is None
+
+    def test_address_prefix_in_actual_pair(self):
+        """actual_pair='0x4200.../USDC' resolves token_in via prefix matching."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test-e117-prefix",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            actual_pair="0x4200000000000000000000000000000000000006/USDC",
+            amount_in_wei=10**16,
+            best_buy_venue="uniswap_v3",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        # Should resolve 0x4200... to WETH via prefix matching, USDC via symbol
+        assert err is None
+        assert tx is not None
+
+    def test_dex_fallback_prefers_uniswap_v3(self):
+        """E1.17: Fallback ordering puts uniswap_v3 first (best V3 compat)."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test-e117-fallback-order",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**16,
+            best_buy_venue="0xSomePoolAddress123456789",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        # uniswap_v3 SwapRouter02 on Base
+        assert tx["to"] == "0x2626664c2603336E57B271c5C0b26F421741e481"
+
+
+class TestE118VelodromeEncoder:
+    """E1.18: Velodrome/Aerodrome ve33 calldata encoder tests."""
+
+    def test_encode_velodrome_swap_selector(self):
+        """E1.18: _encode_velodrome_swap produces correct selector."""
+        from m7.orderflow.execution_gate import _encode_velodrome_swap
+
+        calldata = _encode_velodrome_swap(
+            token_in="0x4200000000000000000000000000000000000006",
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            recipient="0x0000000000000000000000000000000000000001",
+            amount_in=10**18,
+        )
+        assert calldata[:4] == bytes.fromhex("cac88ea9")
+
+    def test_encode_velodrome_swap_length(self):
+        """E1.18: Velodrome calldata has correct ABI length."""
+        from m7.orderflow.execution_gate import _encode_velodrome_swap
+
+        calldata = _encode_velodrome_swap(
+            token_in="0x4200000000000000000000000000000000000006",
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            recipient="0x0000000000000000000000000000000000000001",
+            amount_in=10**18,
+        )
+        # selector(4) + amountIn(32) + amountOutMin(32) + offset(32) +
+        # to(32) + deadline(32) + length(32) + route[from(32)+to(32)+stable(32)+factory(32)]
+        # = 4 + 5*32 + 1*32 + 4*32 = 4 + 320 = 324
+        assert len(calldata) == 324
+
+    def test_encode_velodrome_swap_routes_position(self):
+        """E1.18: token_in is encoded at correct position in routes array."""
+        from m7.orderflow.execution_gate import _encode_velodrome_swap
+
+        token_in = "0x4200000000000000000000000000000000000006"
+        token_out = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        calldata = _encode_velodrome_swap(
+            token_in=token_in,
+            token_out=token_out,
+            recipient="0x0000000000000000000000000000000000000001",
+            amount_in=10**18,
+        )
+        # routes offset at bytes [68:100] = 160
+        routes_offset = int.from_bytes(calldata[68:100], "big")
+        assert routes_offset == 160
+        # routes[0].from starts at: 4 + offset + 32 (length) = 4 + 160 + 32 = 196
+        route_from = "0x" + calldata[196:228].hex().lstrip("0").zfill(40)
+        assert route_from.lower() == token_in.lower()
+        # routes[0].to at 228:260
+        route_to = "0x" + calldata[228:260].hex().lstrip("0").zfill(40)
+        assert route_to.lower() == token_out.lower()
+
+    def test_encode_velodrome_swap_stable_flag(self):
+        """E1.18: stable=True sets correct bool in route."""
+        from m7.orderflow.execution_gate import _encode_velodrome_swap
+
+        calldata_volatile = _encode_velodrome_swap(
+            token_in="0x4200000000000000000000000000000000000006",
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            recipient="0x0000000000000000000000000000000000000001",
+            amount_in=10**18,
+            stable=False,
+        )
+        calldata_stable = _encode_velodrome_swap(
+            token_in="0x4200000000000000000000000000000000000006",
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            recipient="0x0000000000000000000000000000000000000001",
+            amount_in=10**18,
+            stable=True,
+        )
+        # stable flag at route[0].stable = bytes [260:292]
+        assert int.from_bytes(calldata_volatile[260:292], "big") == 0
+        assert int.from_bytes(calldata_stable[260:292], "big") == 1
+
+    def test_build_sim_tx_params_ve33_calldata(self):
+        """E1.18: Full _build_sim_tx_params with ve33 adapter builds Velodrome calldata."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test-e118-ve33",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**18,
+            best_buy_venue="aerodrome",
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert tx["to"] == "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
+        assert tx["calldata"][:4] == bytes.fromhex("cac88ea9")
+        assert len(tx["calldata"]) == 324
+
+    def test_build_sim_tx_params_v3_unchanged(self):
+        """E1.18: V3 adapters still produce exactInputSingle calldata."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test-e118-v3-compat",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**18,
+            best_buy_venue="uniswap_v3",
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert tx["to"] == "0x2626664c2603336E57B271c5C0b26F421741e481"
+        # V3 SwapRouter02 selector unchanged
+        assert tx["calldata"][:4] == bytes.fromhex("04e45aaf")
+
+    def test_rpc_fork_token_extraction_ve33(self):
+        """E1.18: rpc_fork_backend extracts token_in from Velodrome calldata."""
+        from m7.orderflow.execution_gate import _encode_velodrome_swap
+
+        weth = "0x4200000000000000000000000000000000000006"
+        calldata = _encode_velodrome_swap(
+            token_in=weth,
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            recipient="0x0000000000000000000000000000000000000001",
+            amount_in=10**18,
+        )
+        # Verify rpc_fork would extract token_in correctly
+        selector = calldata[:4]
+        assert selector == bytes.fromhex("cac88ea9")
+        routes_offset = int.from_bytes(calldata[68:100], "big")
+        route0_from_start = 4 + routes_offset + 32
+        token_in_hex = "0x" + calldata[route0_from_start:route0_from_start + 32].hex().lstrip("0").zfill(40)
+        assert token_in_hex.lower() == weth.lower()
