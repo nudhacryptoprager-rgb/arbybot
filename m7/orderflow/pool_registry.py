@@ -238,6 +238,7 @@ class PoolRegistry:
         """Query a V2 factory.getPair() and read getReserves() for state."""
         try:
             from web3 import Web3
+            from core.rpc_rate_limiter import rpc_throttle
 
             w3 = Web3(Web3.HTTPProvider(rpc_url))
 
@@ -246,6 +247,7 @@ class PoolRegistry:
             calldata += Web3.to_bytes(hexstr=token_a).rjust(32, b"\x00")
             calldata += Web3.to_bytes(hexstr=token_b).rjust(32, b"\x00")
 
+            rpc_throttle.acquire()
             result = w3.eth.call(
                 {"to": Web3.to_checksum_address(factory), "data": "0x" + calldata.hex()},
                 block_num,
@@ -257,6 +259,7 @@ class PoolRegistry:
                 return
 
             # Read getReserves() = 0x0902f1ac
+            rpc_throttle.acquire()
             reserves_data = w3.eth.call(
                 {"to": Web3.to_checksum_address(pair_addr), "data": "0x0902f1ac"},
                 block_num,
@@ -319,8 +322,10 @@ class PoolRegistry:
         if v2_entries:
             try:
                 from web3 import Web3
+                from core.rpc_rate_limiter import rpc_throttle
                 w3 = Web3(Web3.HTTPProvider(rpc_url))
                 for e in v2_entries:
+                    rpc_throttle.acquire()
                     reserves_data = w3.eth.call(
                         {"to": Web3.to_checksum_address(e.address), "data": "0x0902f1ac"},
                         block_num,

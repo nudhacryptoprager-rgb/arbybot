@@ -61,6 +61,9 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m7_hot_rollup_latest_discovery.json",
             "m7_discovery_scoreboard.json",
             "m7_discovery_scoreboard_discovery.json",
+            # E1.16: Baseline snapshots (saved before long scans)
+            "_baseline_pre4h.json",
+            "_baseline_pre4h_discovery.json",
         }
         
         # Archive files are allowed (created on reset)

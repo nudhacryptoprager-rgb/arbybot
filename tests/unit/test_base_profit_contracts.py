@@ -265,33 +265,33 @@ class TestBaseProfitConfig:
         assert anchors["cbBTC_USDC"] > 10000, "cbBTC price too low"
         assert anchors["AERO_USDC"] < 10, "AERO price too high"
 
-    def test_narrow_sweep_sizes(self):
+    def test_sweep_sizes_wide_corridor(self):
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "config", "onboard_base_profit.yaml"
         )
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
         sizes = cfg["dynamic_probe"]["sizes_usd"]
-        assert sizes == [25, 50, 75], "R39r: Sweep sizes narrowed to $25/$50/$75 corridor"
-        assert max(sizes) <= 100, "Max size must not exceed 100 for profit lane"
+        assert sizes == [5, 10, 25, 50, 75, 100, 150, 250, 500, 750, 1000], "R40: Wide sweep corridor"
+        assert cfg["dynamic_probe"]["adaptive_refinement"] is True, "R40: Adaptive refinement enabled"
 
     def test_include_pairs_contour(self):
-        """R39r+: Active contour = 4 pairs (2 PRIMARY + 1 BENCHMARK + 1 DIAGNOSTIC).
-        cbBTC/* removed — never materialized in runtime truth path."""
+        """R40: Expanded contour = 7 pairs (2 PRIMARY + 1 BENCHMARK + 4 ALPHA).
+        cbBTC/* and VIRTUAL re-enabled for alpha pair discovery."""
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "config", "onboard_base_profit.yaml"
         )
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
         pairs = cfg.get("include_pairs", [])
-        assert len(pairs) == 4, f"Expected 4 active pairs, got {len(pairs)}: {pairs}"
+        assert len(pairs) == 7, f"Expected 7 active pairs, got {len(pairs)}: {pairs}"
         assert "USDC/DAI" in pairs
         assert "USDC/USDT" in pairs
         assert "WETH/USDC" in pairs
         assert "AERO/USDC" in pairs
-        # cbBTC/* must NOT be in active include_pairs (INACTIVE)
-        assert "cbBTC/USDC" not in pairs
-        assert "cbBTC/WETH" not in pairs
+        assert "cbBTC/USDC" in pairs
+        assert "cbBTC/WETH" in pairs
+        assert "VIRTUAL/USDC" in pairs
 
     def test_no_duplicate_yaml_keys(self):
         """Ensure tokens_anchor_price appears exactly once in the raw YAML."""

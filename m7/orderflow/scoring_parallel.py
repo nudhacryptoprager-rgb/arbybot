@@ -192,9 +192,11 @@ def score_backrun_live_parallel(
             _pair_unresolved_detail = "pool_read_failed"
             try:
                 from web3 import Web3
+                from core.rpc_rate_limiter import rpc_throttle
                 _w3 = Web3(Web3.HTTPProvider(rpc_url))
                 _pool_cs = _w3.to_checksum_address(event.pool_address)
                 # Check if pool has code
+                rpc_throttle.acquire()
                 _code = _w3.eth.get_code(_pool_cs, current_block)
                 _code_present = len(_code) > 0
                 if not _code_present:
@@ -213,21 +215,25 @@ def score_backrun_live_parallel(
                     _t0_ok, _t1_ok, _s0_ok, _liq_ok = False, False, False, False
                     _t0_raw, _t1_raw = b"", b""
                     try:
+                        rpc_throttle.acquire()
                         _t0_raw = _w3.eth.call({"to": _pool_cs, "data": "0x0dfe1681"}, current_block)
                         _t0_ok = len(_t0_raw) >= 32
                     except Exception:
                         pass
                     try:
+                        rpc_throttle.acquire()
                         _t1_raw = _w3.eth.call({"to": _pool_cs, "data": "0xd21220a7"}, current_block)
                         _t1_ok = len(_t1_raw) >= 32
                     except Exception:
                         pass
                     try:
+                        rpc_throttle.acquire()
                         _s0_raw = _w3.eth.call({"to": _pool_cs, "data": "0x3850c7bd"}, current_block)
                         _s0_ok = len(_s0_raw) >= 32
                     except Exception:
                         pass
                     try:
+                        rpc_throttle.acquire()
                         _liq_raw = _w3.eth.call({"to": _pool_cs, "data": "0x1a686502"}, current_block)
                         _liq_ok = len(_liq_raw) >= 32
                     except Exception:
@@ -295,6 +301,7 @@ def score_backrun_live_parallel(
                             _reserves_ok = False
                             _r0, _r1 = 0, 0
                             try:
+                                rpc_throttle.acquire()
                                 _res_raw = _w3.eth.call(
                                     {"to": _pool_cs, "data": "0x0902f1ac"}, current_block
                                 )
@@ -827,6 +834,8 @@ def score_backrun_live_parallel(
                 pipeline_stage_latency_ms=_mid_stage_latency,
                 pair_resolved=pair_resolved,
                 actual_pair=actual_pair,
+                backrun_token_in_address=token_in_addr,
+                backrun_token_out_address=token_out_addr,
                 size_source=size_source,
                 coverage_result=coverage,
                 token_admitted=True,
@@ -999,6 +1008,7 @@ def score_backrun_live_parallel(
     try:
         from web3 import Web3
         w3 = Web3(Web3.HTTPProvider(rpc_url))
+        rpc_throttle.acquire()
         quote_finished_block = w3.eth.block_number
     except Exception:
         quote_finished_block = current_block
@@ -1129,6 +1139,8 @@ def score_backrun_live_parallel(
             pipeline_stage_latency_ms=stage_latency,
             pair_resolved=pair_resolved,
             actual_pair=actual_pair,
+            backrun_token_in_address=token_in_addr,
+            backrun_token_out_address=token_out_addr,
             size_source=size_source,
             coverage_result=coverage,
             size_sweep_results=sweep_results,
@@ -1424,8 +1436,8 @@ def score_backrun_fast(
         same_state_class = "stale"
 
     actual_pair = None
-    tin_sym = _ats.get(token_in_addr.lower(), event.token_in)
-    tout_sym = _ats.get(token_out_addr.lower(), event.token_out)
+    tin_sym = _ats.get(token_in_addr.lower(), token_in_addr[:10] if token_in_addr else "??")
+    tout_sym = _ats.get(token_out_addr.lower(), token_out_addr[:10] if token_out_addr else "??")
     actual_pair = f"{tin_sym}/{tout_sym}"
 
     return BackrunResult(
@@ -1463,6 +1475,8 @@ def score_backrun_fast(
         },
         pair_resolved=True,
         actual_pair=actual_pair,
+        backrun_token_in_address=token_in_addr,
+        backrun_token_out_address=token_out_addr,
         size_source="event_proportional",
         size_valid_for_token=True,
         local_pricing_attempted=True,

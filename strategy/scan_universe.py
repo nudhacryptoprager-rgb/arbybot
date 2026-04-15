@@ -175,12 +175,20 @@ def resolve_universe(
                 max_pairs = _UNCAPPED
             require_cross_dex = config.get("require_cross_dex", False)
             excluded_hints = config.get("excluded_pair_hints") or []
+            # R40: Graph API discovery integration
+            graph_cfg = config.get("graph_discovery", {})
+            graph_enabled = graph_cfg.get("enabled", False) if isinstance(graph_cfg, dict) else bool(graph_cfg)
+            graph_min_tvl = graph_cfg.get("min_tvl_usd", 10_000) if isinstance(graph_cfg, dict) else 10_000
+            graph_max_pools = graph_cfg.get("max_pools", 50) if isinstance(graph_cfg, dict) else 50
             discovery_runtime_resolved, discovery_runtime_stats = resolve_runtime_pairs(
                 chain=chain_key,
                 dexes=dexes_list if dexes_list else None,
                 max_pairs=max_pairs,
                 require_cross_dex=require_cross_dex,
                 excluded_pair_hints=excluded_hints,
+                graph_discovery=graph_enabled,
+                graph_min_tvl_usd=graph_min_tvl,
+                graph_max_pools=graph_max_pools,
             )
             pairs_list = runtime_pairs_to_pair_configs(discovery_runtime_resolved)
 

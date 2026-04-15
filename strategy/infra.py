@@ -480,6 +480,15 @@ def build_infra_payload(
             payload["multicall"] = multicall_stats
     except Exception:
         pass  # multicall not used yet
+
+    # RPC rate-limiter stats
+    try:
+        from core.rpc_rate_limiter import rpc_throttle
+        _ts = rpc_throttle.stats()
+        if _ts["total_acquired"] > 0:
+            payload["rpc_throttle"] = _ts
+    except Exception:
+        pass
     
     return payload
 

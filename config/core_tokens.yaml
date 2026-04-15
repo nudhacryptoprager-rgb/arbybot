@@ -476,6 +476,26 @@ base:
     cross_dex_expected: 1
     productive_default: false
 
+  CHECK:
+    address: "0x9126236476eFBA9Ad8aB77855c60eB5BF37586Eb"
+    decimals: 18
+    name: "Checkmark"
+    note: "E1.16: Hot-seen pool 0x5a7b, active in sim window"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
+  TORIVA:
+    address: "0xb886Cf1444BFF05e9a99E00543BC4054d423ebFD"
+    decimals: 18
+    name: "Toriva"
+    note: "E1.16: Hot-seen pool 0x2393, active in sim window"
+    volatility_tier: high
+    liquidity_tier: low
+    cross_dex_expected: 1
+    productive_default: false
+
 # =============================================================================
 # LINEA (chain_id: 59144)
 # =============================================================================

@@ -1672,6 +1672,9 @@ class TestM7A532RollingCanonicalSet:
             "m7_hot_rollup_latest_discovery.json",
             "m7_discovery_scoreboard.json",
             "m7_discovery_scoreboard_discovery.json",
+            # E1.16: Baseline snapshots (saved before long scans)
+            "_baseline_pre4h.json",
+            "_baseline_pre4h_discovery.json",
         }
         for f in rolling.iterdir():
             if f.is_file() and not f.name.endswith(".tmp"):
@@ -1969,7 +1972,7 @@ class TestM7A533BackrunResultField:
         from dataclasses import fields
         from m7.orderflow.contracts import BackrunResult
 
-        assert len(fields(BackrunResult)) == 75
+        assert len(fields(BackrunResult)) == 77
 
     def test_profit_guard_passed_defaults_none(self):
         r = _make_result()

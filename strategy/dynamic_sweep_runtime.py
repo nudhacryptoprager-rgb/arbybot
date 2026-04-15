@@ -110,6 +110,8 @@ def run_sweep(
     dynamic_probe_cfg = config.get("dynamic_probe", {})
     sweep_sizes = dynamic_probe_cfg.get("sizes_usd", None) or list(CANONICAL_SWEEP_SIZES_USD)
     max_routes = dynamic_probe_cfg.get("top_routes", 15)
+    # R40: Adaptive refinement — golden-section search around the coarse best
+    use_adaptive = dynamic_probe_cfg.get("adaptive_refinement", False)
 
     # Derive fallback RPC URLs from config so sweep can survive 429 quarantine
     # R39s: Resolve ${ALCHEMY_API_KEY} placeholder in fallback URLs
@@ -186,6 +188,7 @@ def run_sweep(
             l1_cost_source=l1_cost_source,
             eth_usd_price=eth_usd,
             requote_block_tag=str(sweep_block),
+            adaptive_refinement=use_adaptive,
         )
         # Preserve opportunity route identity for downstream live-stream matching.
         # sweep_roundtrip_sizes receives leg quotes in simulation order, which can

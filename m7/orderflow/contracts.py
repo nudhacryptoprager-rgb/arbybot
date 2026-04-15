@@ -122,6 +122,9 @@ class BackrunResult:
     scoring_path: Optional[str] = None
     # M7.A.5.33: Profit guard result in fast path
     profit_guard_passed: Optional[bool] = None
+    # E1.16: Resolved token addresses for execution gate (bypass symbol lookup)
+    backrun_token_in_address: Optional[str] = None
+    backrun_token_out_address: Optional[str] = None
     # E1.12.2: Terminal execution stages — wired through execution_gate.py
     sim_attempted: Optional[bool] = None
     sim_passed: Optional[bool] = None

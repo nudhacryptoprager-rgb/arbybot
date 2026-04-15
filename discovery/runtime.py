@@ -175,6 +175,9 @@ def resolve_runtime_pairs(
     rpc_url: Optional[str] = None,
     require_cross_dex: bool = False,
     excluded_pair_hints: Optional[List[str]] = None,
+    graph_discovery: bool = False,
+    graph_min_tvl_usd: float = 10_000,
+    graph_max_pools: int = 50,
 ) -> tuple[List[RuntimePair], RuntimeStats]:
     """
     Resolve intent.txt pairs to pool addresses via factory.getPool().
@@ -187,6 +190,9 @@ def resolve_runtime_pairs(
         rpc_url: RPC URL (optional, will use default if not provided)
         require_cross_dex: If True, only include pairs with pools on 2+ dexes
         excluded_pair_hints: Glob patterns to exclude (e.g. ['cbBTC/*', '*/USDT'])
+        graph_discovery: If True, supplement intent pairs with Graph API discovery
+        graph_min_tvl_usd: Minimum TVL for Graph-discovered pools
+        graph_max_pools: Max pools per protocol from Graph API
         
     Returns:
         Tuple of (resolved_pairs, stats)
@@ -219,6 +225,46 @@ def resolve_runtime_pairs(
     
     # Get pairs for chain
     intent_pairs = universe.get_pairs_for_chain(chain)
+    if not intent_pairs:
+        intent_pairs = []
+
+    # R40: Supplement with Graph API discovery if enabled
+    graph_pairs_added = 0
+    if graph_discovery:
+        try:
+            from discovery.graph_client import discover_graph_pools, graph_pools_to_intent_pairs
+            graph_pools = discover_graph_pools(
+                chain=chain,
+                min_tvl_usd=graph_min_tvl_usd,
+                max_pools=graph_max_pools,
+            )
+            if graph_pools:
+                # Get known tokens for this chain to filter Graph results
+                all_tokens = registry.get_all_tokens(chain)
+                known_symbols = {sym.upper() for sym in all_tokens}
+                graph_intent_lines = graph_pools_to_intent_pairs(graph_pools, known_symbols)
+                # Add Graph-discovered pairs that aren't already in intent universe
+                existing_keys = {p.canonical_key for p in intent_pairs}
+                for line in graph_intent_lines:
+                    # Parse "base:TOKEN_A/TOKEN_B"
+                    parts = line.split(":", 1)
+                    if len(parts) != 2:
+                        continue
+                    chain_key, pair_str = parts
+                    if "/" not in pair_str:
+                        continue
+                    tok_a, tok_b = pair_str.split("/", 1)
+                    # Build IntentPair
+                    from discovery.intent_loader import IntentPair
+                    new_pair = IntentPair(chain=chain_key, token_a=tok_a, token_b=tok_b)
+                    if new_pair.canonical_key not in existing_keys:
+                        intent_pairs.append(new_pair)
+                        existing_keys.add(new_pair.canonical_key)
+                        graph_pairs_added += 1
+                logger.info("Graph discovery added %d new pairs for %s", graph_pairs_added, chain)
+        except Exception as e:
+            logger.warning("Graph discovery failed (non-fatal): %s", e)
+
     if not intent_pairs:
         logger.debug("No intent pairs for chain %s", chain)
         stats.error = f"no_intent_pairs_for_{chain}"

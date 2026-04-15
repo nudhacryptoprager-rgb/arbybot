@@ -771,3 +771,139 @@ class TestE115PaperSigning:
         assert gate.submit_ready == 0
         assert br.signing_ready is None
         assert "SIGNING_NOT_READY" in (br.submit_blocker or "")
+
+
+# ---------------------------------------------------------------------------
+# E1.16 regression — TOKEN_ADDRESS_UNKNOWN and DEX_CONFIG_MISSING fixes
+# ---------------------------------------------------------------------------
+
+
+class TestE116TokenAddressUnknownFix:
+    """E1.16: backrun_token_in_address/backrun_token_out_address bypass
+    symbol lookup when actual_pair contains direction tags."""
+
+    def _make_result(self, **overrides):
+        from m7.orderflow.contracts import BackrunResult
+
+        defaults = dict(
+            event_id="test-e116",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_buy_venue="uniswap_v3",
+            actual_pair="token0_in/token1_in",
+            amount_in_wei=10**16,
+        )
+        defaults.update(overrides)
+        return BackrunResult(**defaults)
+
+    def test_old_pattern_still_fails_without_addresses(self):
+        """Without backrun_token_*_address, direction-tag pairs still fail."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result()
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert "TOKEN_ADDRESS_UNKNOWN" in err
+
+    def test_direct_addresses_bypass_symbol_lookup(self):
+        """With backrun_token_*_address set, direction-tag pair succeeds."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert tx["calldata"][:4] == bytes.fromhex("04e45aaf")
+
+    def test_partial_address_falls_back_to_symbol(self):
+        """If only token_in address is set, token_out resolves from pair."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            actual_pair="WETH/USDC",
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+
+    def test_truncated_address_in_pair_with_direct_addresses(self):
+        """actual_pair with truncated addresses works via direct fields."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            actual_pair="0x42000000.../0x83358...",
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+
+
+class TestE116DexConfigMissingFix:
+    """E1.16: Pool-address venue falls back to iterating known DEXes."""
+
+    def _make_result(self, **overrides):
+        from m7.orderflow.contracts import BackrunResult
+
+        defaults = dict(
+            event_id="test-e116-dex",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            actual_pair="WETH/USDC",
+            amount_in_wei=10**16,
+        )
+        defaults.update(overrides)
+        return BackrunResult(**defaults)
+
+    def test_pool_address_venue_falls_back_to_known_dexes(self):
+        """Venue '0xe4e92eac...' (pool addr) resolves via DEX fallback."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            best_buy_venue="0xe4e92eac99db1db7c7723ec7948fc6d15ddc9",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        # Should NOT be DEX_CONFIG_MISSING anymore
+        assert err is None or "DEX_CONFIG_MISSING" not in (err or "")
+        if tx:
+            assert tx["calldata"][:4] in (
+                bytes.fromhex("04e45aaf"),
+                bytes.fromhex("414bf389"),
+            )
+
+    def test_truly_unknown_dex_still_fails(self):
+        """Non-address venue that isn't a known DEX still fails."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(best_buy_venue="nonexistent_magic_dex")
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert "DEX_CONFIG_MISSING" in err
+
+    def test_pool_address_venue_uses_v3_router(self):
+        """Verify the fallback picks a real V3-compatible DEX config."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            best_buy_venue="0x765bf105ed38d2ee7801210b4bb2b8b7d9b3a",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        # Should be one of the known Base V3 router addresses
+        known_routers = {
+            "0x2626664c2603336E57B271c5C0b26F421741e481",  # uniswap_v3
+            "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",  # aerodrome
+            "0xFB7eF66a7e61224DD6FcD0D7d9C3be5C8B049b9f",  # sushiswap_v3
+            "0x1b81D678ffb9C0263b24A97847620C99d213eB14",  # pancakeswap_v3
+        }
+        assert tx["to"] in known_routers

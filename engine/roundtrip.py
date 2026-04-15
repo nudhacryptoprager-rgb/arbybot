@@ -45,6 +45,19 @@ CANONICAL_SWEEP_SIZES_USD: List[float] = [
     500, 750, 1000, 1500, 2500, 5000, 7500, 10000,
 ]
 
+# ---------------------------------------------------------------------------
+# Adaptive refinement constants
+# ---------------------------------------------------------------------------
+# Golden ratio for golden-section search
+_PHI = (1 + 5 ** 0.5) / 2
+_RESPHI = 2 - _PHI  # ≈ 0.382
+
+# Max refinement iterations (each = 2 RPC calls for leg1+leg2)
+ADAPTIVE_MAX_ITERATIONS = 4
+
+# Minimum interval width (USD) to stop refinement — no point refining below $5
+ADAPTIVE_MIN_INTERVAL_USD = 5.0
+
 
 @dataclass
 class RoundTripResult:
@@ -916,6 +929,106 @@ class SizeSweepResult:
         }
 
 
+def _evaluate_single_size(
+    size_usd: float,
+    buy_quote_base: Dict[str, Any],
+    sell_quote_base: Dict[str, Any],
+    requote_leg1,
+    requote_leg2,
+    token_in_usd_price: float,
+    token_in_decimals: int,
+    gas_price_wei: int,
+    l1_cost_wei: int,
+    l1_cost_source: str,
+    eth_usd_price: float,
+) -> Optional[SizeSweepPoint]:
+    """Evaluate a single size point for adaptive refinement.
+
+    Returns SizeSweepPoint or None on failure.
+    """
+    amount_in_wei = int(
+        (Decimal(str(size_usd)) / Decimal(str(token_in_usd_price)))
+        * (Decimal(10) ** token_in_decimals)
+    )
+    if amount_in_wei <= 0:
+        return None
+
+    try:
+        leg1_q = requote_leg1(amount_in_wei)
+    except Exception:
+        return None
+    if not leg1_q or not leg1_q.get("amount_out_wei"):
+        return None
+
+    leg1_amount_out = leg1_q["amount_out_wei"]
+
+    try:
+        leg2_q = requote_leg2(leg1_amount_out)
+    except Exception:
+        return None
+    if not leg2_q or not leg2_q.get("amount_out_wei"):
+        return None
+
+    synth_buy = {
+        **buy_quote_base,
+        "amount_in_wei": amount_in_wei,
+        "amount_out_wei": leg1_q["amount_out_wei"],
+        "gas_estimate": leg1_q.get("gas_estimate", 150_000),
+        "ticks_crossed": leg1_q.get("ticks_crossed", 0),
+        "sqrt_price_x96": leg1_q.get("sqrt_price_x96") or buy_quote_base.get("sqrt_price_x96"),
+        "sqrt_price_after": leg1_q.get("sqrt_price_after"),
+    }
+    synth_sell = {
+        **sell_quote_base,
+        "amount_in_wei": leg1_amount_out,
+        "amount_out_wei": leg2_q["amount_out_wei"],
+        "gas_estimate": leg2_q.get("gas_estimate", 150_000),
+        "ticks_crossed": leg2_q.get("ticks_crossed", 0),
+        "sqrt_price_x96": leg2_q.get("sqrt_price_x96") or sell_quote_base.get("sqrt_price_x96"),
+        "sqrt_price_after": leg2_q.get("sqrt_price_after"),
+    }
+
+    _leg2_out = leg2_q["amount_out_wei"]
+    _leg2_gas = leg2_q.get("gas_estimate", 150_000)
+    _leg2_ticks = leg2_q.get("ticks_crossed", 0)
+
+    rt = simulate_roundtrip(
+        buy_quote=synth_buy,
+        sell_quote=synth_sell,
+        gas_price_wei=gas_price_wei,
+        l1_cost_wei=l1_cost_wei,
+        l1_cost_source=l1_cost_source,
+        eth_usd_price=eth_usd_price,
+        token_in_usd_price=token_in_usd_price,
+        token_in_decimals=token_in_decimals,
+        leg2_quote_callback=lambda _amt, _out=_leg2_out, _gas=_leg2_gas, _tc=_leg2_ticks: {
+            "amount_out_wei": _out,
+            "gas_estimate": _gas,
+            "ticks_crossed": _tc,
+        },
+    )
+
+    gas_bps_val = (rt.gas_cost_usd / size_usd) * 10000 if size_usd > 0 else 0
+    fee_bps_val = (rt.leg1_fee + rt.leg2_fee) / 100.0
+
+    # Skip degenerate results
+    if rt.gross_pnl_bps == 0.0 and rt.estimated_slippage_bps == 0.0:
+        return None
+
+    return SizeSweepPoint(
+        size_usd=size_usd,
+        net_pnl_bps=rt.net_pnl_bps,
+        gross_pnl_bps=rt.gross_pnl_bps,
+        measured_slippage_bps=rt.estimated_slippage_bps,
+        leg1_slippage_bps=rt.leg1_slippage_bps,
+        leg2_slippage_bps=rt.leg2_slippage_bps,
+        gas_bps=gas_bps_val,
+        fee_bps=fee_bps_val,
+        leg1_fee_bps=rt.leg1_fee / 100.0,
+        leg2_fee_bps=rt.leg2_fee / 100.0,
+    )
+
+
 def sweep_roundtrip_sizes(
     buy_quote_base: Dict[str, Any],
     sell_quote_base: Dict[str, Any],
@@ -929,6 +1042,7 @@ def sweep_roundtrip_sizes(
     l1_cost_source: str = "default",
     eth_usd_price: float = 2000.0,
     requote_block_tag: Optional[str] = None,
+    adaptive_refinement: bool = False,
 ) -> SizeSweepResult:
     """Sweep multiple notional sizes for a single opportunity route.
 
@@ -939,6 +1053,11 @@ def sweep_roundtrip_sizes(
 
     For each size, re-quotes both legs via *requote_leg1* / *requote_leg2*
     and runs ``simulate_roundtrip`` to find the best net_pnl_bps.
+
+    When ``adaptive_refinement=True``, after the coarse sweep completes,
+    a golden-section search refines the optimal size between the two
+    best adjacent coarse points.  This finds the true optimum where
+    gas_bps (decreasing with size) and slippage_bps (increasing) cross.
     """
     if sizes_usd is None:
         sizes_usd = list(CANONICAL_SWEEP_SIZES_USD)
@@ -1102,6 +1221,87 @@ def sweep_roundtrip_sizes(
                 break
 
     result.sizes_evaluated = len([p for p in result.points if p.error is None])
+
+    # -----------------------------------------------------------------------
+    # R40: Adaptive refinement — golden-section search around the coarse best
+    # -----------------------------------------------------------------------
+    if adaptive_refinement and result.best_size_usd is not None:
+        valid_points = [p for p in result.points if p.error is None and p.net_pnl_bps is not None]
+        valid_sizes = sorted(set(p.size_usd for p in valid_points))
+
+        if len(valid_sizes) >= 2:
+            best_idx = valid_sizes.index(result.best_size_usd) if result.best_size_usd in valid_sizes else -1
+            if best_idx >= 0:
+                # Determine search interval [lo, hi] around the best coarse point
+                lo = valid_sizes[max(0, best_idx - 1)]
+                hi = valid_sizes[min(len(valid_sizes) - 1, best_idx + 1)]
+
+                if hi - lo > ADAPTIVE_MIN_INTERVAL_USD:
+                    logger.debug(
+                        "Adaptive refinement %s: interval [$%.0f, $%.0f], best=$%.0f (%.2f bps)",
+                        pair, lo, hi, result.best_size_usd, result.best_net_pnl_bps or 0,
+                    )
+                    # Golden-section search: evaluate two interior points per iteration
+                    for _iter in range(ADAPTIVE_MAX_ITERATIONS):
+                        if hi - lo < ADAPTIVE_MIN_INTERVAL_USD:
+                            break
+
+                        # Two interior probe points
+                        probe_lo = lo + _RESPHI * (hi - lo)
+                        probe_hi = hi - _RESPHI * (hi - lo)
+
+                        pt_lo = _evaluate_single_size(
+                            round(probe_lo, 2), buy_quote_base, sell_quote_base,
+                            requote_leg1, requote_leg2,
+                            token_in_usd_price, token_in_decimals,
+                            gas_price_wei, l1_cost_wei, l1_cost_source, eth_usd_price,
+                        )
+                        pt_hi = _evaluate_single_size(
+                            round(probe_hi, 2), buy_quote_base, sell_quote_base,
+                            requote_leg1, requote_leg2,
+                            token_in_usd_price, token_in_decimals,
+                            gas_price_wei, l1_cost_wei, l1_cost_source, eth_usd_price,
+                        )
+
+                        # Record refinement points
+                        if pt_lo:
+                            result.points.append(pt_lo)
+                        if pt_hi:
+                            result.points.append(pt_hi)
+
+                        pnl_lo = pt_lo.net_pnl_bps if pt_lo and pt_lo.net_pnl_bps is not None else -9999
+                        pnl_hi = pt_hi.net_pnl_bps if pt_hi and pt_hi.net_pnl_bps is not None else -9999
+
+                        # Update best if refinement found better point
+                        for pt in [pt_lo, pt_hi]:
+                            if pt and pt.net_pnl_bps is not None:
+                                if best_net is None or pt.net_pnl_bps > best_net:
+                                    best_net = pt.net_pnl_bps
+                                    result.best_size_usd = pt.size_usd
+                                    result.best_net_pnl_bps = pt.net_pnl_bps
+                                    result.best_gross_pnl_bps = pt.gross_pnl_bps
+                                    result.best_gas_bps = pt.gas_bps
+                                    result.best_fee_bps = pt.fee_bps
+                                    result.best_slippage_bps = pt.measured_slippage_bps
+                                    result.best_total_cost_bps = (
+                                        (pt.gas_bps or 0) + (pt.fee_bps or 0) + (pt.measured_slippage_bps or 0)
+                                    )
+                                    result.best_leg1_slippage_bps = pt.leg1_slippage_bps
+                                    result.best_leg2_slippage_bps = pt.leg2_slippage_bps
+                                    result.best_leg1_fee_bps = pt.leg1_fee_bps
+                                    result.best_leg2_fee_bps = pt.leg2_fee_bps
+
+                        # Narrow the interval (maximize net_pnl_bps)
+                        if pnl_lo < pnl_hi:
+                            lo = probe_lo  # discard left region
+                        else:
+                            hi = probe_hi  # discard right region
+
+                    result.sizes_evaluated = len([p for p in result.points if p.error is None])
+                    logger.info(
+                        "Adaptive refinement %s: final best=$%.2f, pnl=%.2f bps (%d iterations)",
+                        pair, result.best_size_usd or 0, result.best_net_pnl_bps or 0, _iter + 1,
+                    )
 
     # R39i: Slippage quality gate — if the best point has unmeasured slippage
     # (ticks_heuristic fallback with ticks=0 → 0.0 bps), do not promote to

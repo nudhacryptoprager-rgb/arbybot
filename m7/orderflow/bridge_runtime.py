@@ -222,6 +222,8 @@ def _prewarm_registry_from_bridge(
 
     Returns number of pairs prewarmed.
     """
+    from core.rpc_rate_limiter import rpc_throttle
+
     ptt = bridge.get("pool_token_transport", {})
     if not ptt:
         return 0
@@ -249,6 +251,13 @@ def _prewarm_registry_from_bridge(
             count += 1
         except Exception:
             pass
+
+    _stats = rpc_throttle.stats()
+    if _stats["total_waits"] > 0:
+        logger.info(
+            "Bridge prewarm %d pairs — throttle: %d waits, %.0fms total delay",
+            count, _stats["total_waits"], _stats["total_waited_ms"],
+        )
     return count
 
 

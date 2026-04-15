@@ -324,6 +324,8 @@ def read_quoter_v2(
     last_error = None
     for url in urls_to_try:
         try:
+            from core.rpc_rate_limiter import rpc_throttle
+            rpc_throttle.acquire()
             w3 = _get_shared_w3(url)
             if w3 is None:
                 continue

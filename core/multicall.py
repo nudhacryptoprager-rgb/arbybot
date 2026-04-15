@@ -148,6 +148,7 @@ class MulticallBatcher:
             return []
 
         import time as _time
+        from core.rpc_rate_limiter import rpc_throttle
 
         all_results: List[Tuple[bool, bytes]] = []
         chunk_size = MULTICALL_MAX_BATCH
@@ -155,6 +156,7 @@ class MulticallBatcher:
         for start in range(0, len(calls), chunk_size):
             chunk = calls[start : start + chunk_size]
             try:
+                rpc_throttle.acquire()  # 1 RPC call per chunk
                 self.stats["rpc_calls"] += 1
                 _t0 = _time.monotonic()
                 results = self._multicall.functions.aggregate3(chunk).call(

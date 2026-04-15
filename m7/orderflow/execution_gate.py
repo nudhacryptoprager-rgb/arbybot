@@ -164,12 +164,27 @@ def _build_sim_tx_params(
         return None, "AMOUNT_ZERO"
 
     # Resolve DEX config → router + adapter type
+    # E1.16: When venue is a pool address (starts with 0x), fall back to
+    # iterating configured DEXes for the chain to find a V3-compatible one.
     try:
         from config import get_dex_config
 
         dex_cfg = get_dex_config(chain, venue)
     except (KeyError, ImportError):
-        return None, f"DEX_CONFIG_MISSING:{venue}"
+        dex_cfg = None
+        if venue.startswith("0x"):
+            # Venue is a pool address, not a DEX name — try known DEXes
+            from config import get_dex_config as _gdc
+            for _fallback_dex in ("uniswap_v3", "aerodrome", "sushiswap_v3", "pancakeswap_v3"):
+                try:
+                    _fb_cfg = _gdc(chain, _fallback_dex)
+                    if _fb_cfg.get("adapter_type", "") in {"uniswap_v3", "ve33", "algebra"}:
+                        dex_cfg = _fb_cfg
+                        break
+                except (KeyError, ImportError):
+                    continue
+        if dex_cfg is None:
+            return None, f"DEX_CONFIG_MISSING:{venue}"
 
     router = dex_cfg.get("router")
     adapter_type = dex_cfg.get("adapter_type", "")
@@ -181,25 +196,34 @@ def _build_sim_tx_params(
     if adapter_type not in _V3_COMPATIBLE:
         return None, f"ADAPTER_UNSUPPORTED:{adapter_type}"
 
-    # Resolve token addresses
-    tokens = pair.split("/")
-    if len(tokens) != 2:
-        return None, f"PAIR_FORMAT_INVALID:{pair}"
+    # E1.16: Prefer resolved token addresses from BackrunResult (bypass
+    # symbol lookup which fails when actual_pair contains direction tags).
+    token_in_addr = getattr(result, "backrun_token_in_address", None)
+    token_out_addr = getattr(result, "backrun_token_out_address", None)
 
-    try:
-        from config import get_token_address
+    if not token_in_addr or not token_out_addr:
+        # Fallback: resolve from actual_pair symbols
+        tokens = pair.split("/")
+        if len(tokens) != 2:
+            return None, f"PAIR_FORMAT_INVALID:{pair}"
 
-        token_in_addr = get_token_address(chain, tokens[0])
-        token_out_addr = get_token_address(chain, tokens[1])
-    except ImportError:
-        return None, "CONFIG_IMPORT_FAILED"
+        try:
+            from config import get_token_address
+
+            if not token_in_addr:
+                token_in_addr = get_token_address(chain, tokens[0])
+            if not token_out_addr:
+                token_out_addr = get_token_address(chain, tokens[1])
+        except ImportError:
+            return None, "CONFIG_IMPORT_FAILED"
 
     if not token_in_addr or not token_out_addr:
         missing = []
+        tokens = pair.split("/")
         if not token_in_addr:
-            missing.append(tokens[0])
+            missing.append(tokens[0] if len(tokens) > 0 else "?")
         if not token_out_addr:
-            missing.append(tokens[1])
+            missing.append(tokens[1] if len(tokens) > 1 else "?")
         return None, f"TOKEN_ADDRESS_UNKNOWN:{','.join(missing)}"
 
     # Pick fee tier (first available from DEX config, or 3000 default)
