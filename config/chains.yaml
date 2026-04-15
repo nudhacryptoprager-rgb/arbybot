@@ -30,9 +30,9 @@ base:
   ws_endpoints:
     - "wss://base.public.blastapi.io"
   # R39r: Flashblocks sub-block read-path (public, rate-limited — NOT for production submit)
-  # Reference: https://docs.base.org/base-chain/flashblocks/api-reference
-  flashblocks_ws_endpoint: "wss://base.flashblocks.base.org/ws"
-  flashblocks_http_endpoint: "https://base.flashblocks.base.org"
+  # R40.1: Corrected URL per https://docs.base.org/base-chain/api-reference/rpc-overview
+  flashblocks_ws_endpoint: "wss://mainnet-preconf.base.org"
+  flashblocks_http_endpoint: "https://mainnet-preconf.base.org"
   block_time_ms: 2000
   confirmations: 1
 

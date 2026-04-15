@@ -38,8 +38,8 @@ rpc_timeout_seconds: 10
 rpc_retries: 3
 rpc_backoff_base_ms: 500
 
-flashblocks_ws_endpoint: "wss://base.flashblocks.base.org/ws"
-flashblocks_http_endpoint: "https://base.flashblocks.base.org"
+flashblocks_ws_endpoint: "wss://mainnet-preconf.base.org"
+flashblocks_http_endpoint: "https://mainnet-preconf.base.org"
 
 universe_source: discovery_runtime
 

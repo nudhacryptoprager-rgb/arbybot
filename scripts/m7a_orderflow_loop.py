@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.env import load_root_dotenv
-from core.logging import get_logger
+from core.logging import get_logger, setup_logging
 from m7.orderflow.mode_ws_live import run_ws_live, _write_rolling_m7, _set_rolling_m7_profile
 from m7.orderflow.profit_guard import check_profit_guard
 from m7.orderflow.scoring_parallel import score_backrun_fast
@@ -196,6 +196,7 @@ from m7.orderflow.loop_runner import (  # noqa: F401
 
 def main():
     load_root_dotenv()
+    setup_logging()
     cli_args = parse_args()
     run_loop(cli_args)
 

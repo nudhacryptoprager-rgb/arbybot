@@ -41,6 +41,9 @@ class TestClassifyProvider(unittest.TestCase):
         self.assertEqual(classify_provider("wss://base-rpc.publicnode.com"), "publicnode")
 
     def test_flashblocks(self):
+        self.assertEqual(classify_provider("wss://mainnet-preconf.base.org"), "flashblocks")
+
+    def test_flashblocks_legacy(self):
         self.assertEqual(classify_provider("wss://base.flashblocks.base.org"), "flashblocks")
 
     def test_infura(self):

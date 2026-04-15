@@ -215,6 +215,34 @@ Fixes: `cold_executable_positive` semantic (route_viable AND size_valid), `start
 
 ---
 
+## E1.15 / R40 — 30-min Audit + Flashblocks Fix + Price Calibration (DONE)
+
+**Goal**: Validate R40 features (Graph API discovery, 7 expanded Base pairs, adaptive sweep refinement) via 30-min production runs on M7 (Arbitrum) and Base, perform deep system audit with web research, fix discovered issues.
+
+**Runs executed (2026-04-15)**:
+- M7 cold lane (arbitrum_one, discovery, 5 iterations): ALL_CANDIDATE_POOLS_TRULY_INACTIVE (4 events, 0 viable)
+- Base scan (onboard_base_profit.yaml, 16 runs, 999.6s): OE_ECONOMICS blocker, best -15.49 bps (USDC/DAI)
+
+**Bugs found and fixed**:
+1. **Flashblocks endpoint DNS failure**: `base.flashblocks.base.org` no longer resolves. Fixed → `mainnet-preconf.base.org` per Base docs. Updated: `config/onboard_base_profit.yaml`, `config/chains.yaml`, `config/onboard_base_discovery.yaml`, `chains/flashblocks.py` docstring.
+2. **AERO/WETH anchor price drift**: AERO $0.50→$0.36 (27.3% drift), WETH $2050→$2322 (13.3%). Fixed in `config/onboard_base_profit.yaml` (both `tokens_usd_price` and `tokens_anchor_price`).
+3. **M7 logging not configured**: `scripts/m7a_orderflow_loop.py` did not call `setup_logging()` — all INFO messages silently dropped. Fixed.
+4. **Provider classify gap**: New `mainnet-preconf.base.org` URLs not recognized as flashblocks. Fixed `core/rpc_urls.py` to classify "preconf" as flashblocks.
+5. **Test coverage**: Added `test_flashblocks_legacy` for backward compat of old URL classification.
+
+**Audit findings** (not fixed this session, documented for backlog):
+- 🔴 API key exposure in logs (core/rpc_urls.py, strategy/quotes.py)
+- 🔴 Unbounded event accumulation in M7 ws-live (memory leak potential)
+- 🟡 Stale hot_pairs cache blocks R40 alpha pairs (cbBTC, VIRTUAL)
+- 🟡 Graph API client lacks exponential backoff
+- 🟡 Rate limiting inconsistent across subsystems
+
+**Tests**: 3949 passed, 6 skipped. 15 pre-existing web3-in-venv failures (not caused by this session).
+
+**Exit criteria**: DONE. All R40 features validated (1 working, 2 blocked by stale cache — root cause identified). 6 bugs found and fixed. Audit documented. Documentation updated.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.

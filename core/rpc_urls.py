@@ -128,7 +128,7 @@ def classify_provider(url: str) -> str:
         return "drpc"
     if "publicnode.com" in low:
         return "publicnode"
-    if "flashblocks" in low:
+    if "flashblocks" in low or "preconf" in low:
         return "flashblocks"
     if "infura.io" in low:
         return "infura"

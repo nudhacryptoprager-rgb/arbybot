@@ -316,6 +316,22 @@ def get_l1_cost_for_chain(
             cost = estimate_op_l1_fee_onchain(w3, calldata)
             if cost is not None:
                 return (cost, "onchain_op")
+        # R40.1: Public fallback — GasPriceOracle is a cheap read, try public RPCs
+        # when primary w3 is unavailable or rate-limited (429).
+        _PUBLIC_RPCS = {
+            "base": ["https://base.publicnode.com", "https://mainnet.base.org"],
+            "optimism": ["https://optimism.publicnode.com", "https://mainnet.optimism.io"],
+        }
+        for fallback_url in _PUBLIC_RPCS.get(chain_lower, []):
+            try:
+                from web3 import Web3
+                fb_w3 = Web3(Web3.HTTPProvider(fallback_url, request_kwargs={"timeout": 3}))
+                cost = estimate_op_l1_fee_onchain(fb_w3, calldata)
+                if cost is not None:
+                    logger.debug("L1 cost from public fallback %s: %d wei", fallback_url, cost)
+                    return (cost, "onchain_op_fallback")
+            except Exception:
+                continue
         return (DEFAULT_OP_L1_FEE_WEI, "default_op")
     else:
         # Arbitrum path

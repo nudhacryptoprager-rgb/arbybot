@@ -608,7 +608,24 @@ def run_scan(
             stats["live_gas_price_gwei"] = live_gas_price_wei / 1e9
             logger.info("Live gas price: %.4f gwei", stats["live_gas_price_gwei"])
         except Exception as gas_err:
-            logger.debug("Failed to get live gas: %s", gas_err)
+            logger.debug("Failed to get live gas via primary RPC: %s", gas_err)
+            # R40.1: Public RPC fallback for gas price when primary is rate-limited
+            _GAS_FALLBACK_RPCS = {
+                "base": "https://base.publicnode.com",
+                "arbitrum_one": "https://arbitrum-one.publicnode.com",
+            }
+            _fb_url = _GAS_FALLBACK_RPCS.get(chain_key)
+            if _fb_url:
+                try:
+                    from web3 import Web3 as _W3
+                    _fb_w3 = _W3(_W3.HTTPProvider(_fb_url, request_kwargs={"timeout": 3}))
+                    live_gas_price_wei = _fb_w3.eth.gas_price
+                    stats["live_gas_price_wei"] = live_gas_price_wei
+                    stats["live_gas_price_gwei"] = live_gas_price_wei / 1e9
+                    stats["gas_price_source"] = "public_fallback"
+                    logger.info("Live gas price (public fallback): %.4f gwei", stats["live_gas_price_gwei"])
+                except Exception:
+                    pass
     else:
         stats["live_gas_price_wei"] = live_gas_price_wei
         stats["live_gas_price_gwei"] = live_gas_price_wei / 1e9
@@ -909,30 +926,31 @@ def run_scan(
                 logger.warning("Failed to load token_decimals from core_tokens: %s", e)
 
         if opps_list:
-            # v2.1.0: Get L1 cost with source tracking (prefer onchain if w3_instance available)
-            # v2.1.0-fix: Pass representative swap calldata for accurate L1 estimation
+            # R40.1: Chain-aware L1 cost estimation.
+            # Uses get_l1_cost_for_chain() which dispatches to:
+            #   - OP-Stack GasPriceOracle (0x420...00F) for Base/Optimism
+            #   - NodeInterface for Arbitrum
+            # Previously used Arbitrum-only get_l1_cost_with_source() which
+            # always fell back to config defaults on Base (overestimating 5-14x).
             try:
-                from chains.l1_cost import get_l1_cost_with_source, create_sample_swap_calldata
+                from chains.l1_cost import get_l1_cost_for_chain, create_sample_swap_calldata
                 
-                # Create representative swap calldata using WETH/USDC (canonical pair)
-                # L1 cost depends primarily on calldata SIZE, not actual tokens
-                weth_addr = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"  # Arbitrum WETH
-                usdc_addr = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"  # Arbitrum native USDC
+                # Create representative swap calldata (L1 cost depends on calldata SIZE)
                 sample_calldata = create_sample_swap_calldata(
-                    token_in=weth_addr,
-                    token_out=usdc_addr,
-                    amount_in=int(1e18),  # 1 WETH
+                    token_in="0x0000000000000000000000000000000000000001",
+                    token_out="0x0000000000000000000000000000000000000002",
+                    amount_in=int(1e18),
                     fee=3000,
                 )
                 
-                l1_cost_wei, l1_cost_source = get_l1_cost_with_source(
+                l1_cost_wei, l1_cost_source = get_l1_cost_for_chain(
                     w3=w3_instance,
+                    chain=chain_key or "arbitrum",
                     calldata=sample_calldata,
                     config={
                         "l1_data_gas_units": gas_config.l1_data_gas_units,
                         "l1_gas_price_gwei": gas_config.l1_gas_price_gwei,
                     },
-                    prefer_onchain=True,
                 )
             except Exception as l1_err:
                 # v3.2.4: Catch ALL exceptions, not just ImportError

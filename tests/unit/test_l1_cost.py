@@ -138,6 +138,56 @@ class TestGetL1CostWithSource(unittest.TestCase):
         self.assertEqual(source, "onchain")
 
 
+class TestGetL1CostForChain(unittest.TestCase):
+    """Tests for get_l1_cost_for_chain with chain-aware dispatch."""
+
+    def test_base_chain_dispatches_to_op(self):
+        """Base chain should use OP-Stack GasPriceOracle, not NodeInterface."""
+        from chains.l1_cost import get_l1_cost_for_chain, DEFAULT_OP_L1_FEE_WEI
+
+        # No w3 → should return OP default, not Arbitrum default
+        cost, source = get_l1_cost_for_chain(w3=None, chain="base")
+        self.assertEqual(source, "default_op")
+        self.assertEqual(cost, DEFAULT_OP_L1_FEE_WEI)
+
+    def test_base_onchain_op_success(self):
+        """Base chain with working w3 should call GasPriceOracle."""
+        from chains.l1_cost import get_l1_cost_for_chain
+
+        mock_w3 = MagicMock()
+        mock_contract = MagicMock()
+        mock_w3.eth.contract.return_value = mock_contract
+        mock_w3.to_checksum_address = lambda x: x
+        mock_contract.functions.getL1Fee.return_value.call.return_value = 2_500_000_000_000
+
+        cost, source = get_l1_cost_for_chain(w3=mock_w3, chain="base", calldata=b"\x00" * 100)
+        self.assertEqual(source, "onchain_op")
+        self.assertEqual(cost, 2_500_000_000_000)
+
+    def test_arbitrum_falls_through_to_nodeinterface(self):
+        """Arbitrum chain should go to get_l1_cost_with_source (NodeInterface path)."""
+        from chains.l1_cost import get_l1_cost_for_chain
+
+        cost, source = get_l1_cost_for_chain(w3=None, chain="arbitrum")
+        self.assertEqual(source, "default")
+        self.assertGreater(cost, 0)
+
+    def test_arbitrum_one_variant(self):
+        """'arbitrum_one' chain name should also dispatch to Arbitrum path."""
+        from chains.l1_cost import get_l1_cost_for_chain
+
+        cost, source = get_l1_cost_for_chain(w3=None, chain="arbitrum_one")
+        self.assertEqual(source, "default")
+
+    def test_base_op_default_cheaper_than_arb_default(self):
+        """OP-Stack default L1 cost should be <= Arbitrum default (post-EIP-4844)."""
+        from chains.l1_cost import get_l1_cost_for_chain
+
+        base_cost, _ = get_l1_cost_for_chain(w3=None, chain="base")
+        arb_cost, _ = get_l1_cost_for_chain(w3=None, chain="arbitrum")
+        self.assertLessEqual(base_cost, arb_cost)
+
+
 class TestCreateSampleSwapCalldata(unittest.TestCase):
     """Tests for sample swap calldata generation."""
     

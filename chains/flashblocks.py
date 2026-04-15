@@ -104,7 +104,7 @@ class FlashblocksWatcher:
 
     Usage::
 
-        watcher = FlashblocksWatcher(ws_url="wss://base.flashblocks.base.org/ws")
+        watcher = FlashblocksWatcher(ws_url="wss://mainnet-preconf.base.org")
         watcher.start()
         ...
         if watcher.state.is_healthy:
