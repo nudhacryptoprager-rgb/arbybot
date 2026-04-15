@@ -30,6 +30,8 @@ from m7.triangular.graph import (
     build_graph_from_runtime_pairs,
     filter_graph_to_m7a_universe,
     filter_graph_to_m7a2_universe,
+    get_chain_universe,
+    filter_graph_to_chain_universe,
 )
 from m7.triangular.scoring import (
     CycleScore,
@@ -169,7 +171,9 @@ def build_graph_from_live_runtime(chain: str) -> PoolGraph:
     """Build a PoolGraph from live RuntimePair via discovery.runtime."""
     from discovery.runtime import resolve_runtime_pairs
 
-    dexes = sorted(M7A_DEXES_ARBITRUM_ONE)
+    _tokens, _adapters, chain_dexes = get_chain_universe(chain)
+    # Fallback to Arbitrum dexes if chain has no universe defined
+    dexes = sorted(chain_dexes) if chain_dexes else sorted(M7A_DEXES_ARBITRUM_ONE)
     pairs, stats = resolve_runtime_pairs(
         chain=chain,
         dexes=dexes,
@@ -397,6 +401,7 @@ def _score_measured(
     from collections import Counter as _Counter
     from core.rpc_urls import get_rpc_url
     from dex.registry import load_dex_configs
+    from chains.l1_cost import get_l1_cost_for_chain
 
     rpc_url = get_rpc_url(chain)
     if not rpc_url:
@@ -409,6 +414,28 @@ def _score_measured(
         logger.error("Cannot get block number — falling back to fee-only scoring")
         scores = [score_cycle_fees_only(c) for c in viable]
         return [], scores, [], {"error": "no_block"}
+
+    # Resolve live L1 cost and gas price for accurate scoring
+    l1_cost_wei: Optional[int] = None
+    l1_cost_source = "default"
+    gas_price_wei = 100_000_000  # 0.1 gwei default
+    try:
+        from web3 import Web3
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 5}))
+        sample_calldata = b"\x00" * 200
+        cost, source = get_l1_cost_for_chain(w3, chain, sample_calldata)
+        l1_cost_wei = cost
+        l1_cost_source = source
+        try:
+            gas_price_wei = w3.eth.gas_price
+        except Exception:
+            pass
+        logger.info(
+            "Live gas params: l1_cost=%d (%s), gas_price=%.4f gwei",
+            l1_cost_wei, l1_cost_source, gas_price_wei / 1e9,
+        )
+    except Exception as exc:
+        logger.warning("Failed to get live gas params: %s", exc)
 
     dex_configs = load_dex_configs(chain)
     token_addresses = get_all_token_addresses(chain)
@@ -442,7 +469,11 @@ def _score_measured(
             continue
 
         quote_success += 1
-        s = score_cycle_measured(cycle, q1, q2, q3)
+        s = score_cycle_measured(
+            cycle, q1, q2, q3,
+            gas_price_wei=gas_price_wei,
+            l1_cost_wei=l1_cost_wei,
+        )
         measured_scores.append(s)
         same_state_counter[s.same_state_class] += 1
 
@@ -463,6 +494,9 @@ def _score_measured(
         "promoted_count": promoted_count,
         "best_measured_net_bps": best_measured,
         "same_state_distribution": dict(same_state_counter),
+        "l1_cost_wei": l1_cost_wei,
+        "l1_cost_source": l1_cost_source,
+        "gas_price_gwei": round(gas_price_wei / 1e9, 6),
     }
 
     logger.info(
@@ -584,12 +618,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # 2. Apply universe filter
     universe_profile = args.universe
-    if universe_profile == "expanded_10":
-        m7a_graph = filter_graph_to_m7a2_universe(full_graph)
-        universe_tokens = M7A2_TOKENS_ARBITRUM_ONE
-    else:
-        m7a_graph = filter_graph_to_m7a_universe(full_graph)
-        universe_tokens = M7A_TOKENS_ARBITRUM_ONE
+    expanded = (universe_profile == "expanded_10")
+    m7a_graph = filter_graph_to_chain_universe(full_graph, expanded=expanded)
+    universe_tokens, universe_adapters, universe_dexes = get_chain_universe(
+        chain, expanded=expanded,
+    )
 
     # 3. Enumerate cycles
     cycles = find_3hop_cycles(m7a_graph, max_cycles=args.max_cycles)
@@ -655,8 +688,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "universe_profile": universe_profile,
             "token_count": len(universe_tokens),
             "tokens": sorted(universe_tokens),
-            "dexes": sorted(M7A_DEXES_ARBITRUM_ONE),
-            "stable_adapters": sorted(M7A_STABLE_ADAPTERS),
+            "dexes": sorted(universe_dexes),
+            "stable_adapters": sorted(universe_adapters),
         },
         "cycles": {
             "total_found": len(cycles),

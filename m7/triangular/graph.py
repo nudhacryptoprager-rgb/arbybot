@@ -318,3 +318,84 @@ def filter_graph_to_m7a2_universe(graph: PoolGraph) -> PoolGraph:
         graph.node_count, filtered.node_count,
     )
     return filtered
+
+
+# ---------------------------------------------------------------------------
+# Chain-aware universe definitions (M7.B — multi-chain triangular)
+# ---------------------------------------------------------------------------
+
+M7_TOKENS_BASE: FrozenSet[str] = frozenset({
+    "WETH", "USDC", "USDT", "DAI", "cbBTC", "cbETH", "AERO", "VIRTUAL",
+})
+
+M7_ADAPTERS_BASE: FrozenSet[str] = frozenset({
+    "uniswap_v3",
+    "ve33",
+})
+
+M7_DEXES_BASE: FrozenSet[str] = frozenset({
+    "uniswap_v3",
+    "sushiswap_v3",
+    "pancakeswap_v3",
+    "aerodrome",
+})
+
+# Chain registry: maps chain key -> (tokens, adapters, dexes)
+_CHAIN_UNIVERSE: Dict[str, Tuple[FrozenSet[str], FrozenSet[str], FrozenSet[str]]] = {
+    "arbitrum_one": (M7A_TOKENS_ARBITRUM_ONE, M7A_STABLE_ADAPTERS, M7A_DEXES_ARBITRUM_ONE),
+    "base": (M7_TOKENS_BASE, M7_ADAPTERS_BASE, M7_DEXES_BASE),
+}
+
+# Expanded universe per chain
+_CHAIN_UNIVERSE_EXPANDED: Dict[str, Tuple[FrozenSet[str], FrozenSet[str], FrozenSet[str]]] = {
+    "arbitrum_one": (M7A2_TOKENS_ARBITRUM_ONE, M7A_STABLE_ADAPTERS, M7A_DEXES_ARBITRUM_ONE),
+    "base": (
+        M7_TOKENS_BASE | frozenset({"wstETH", "rETH", "WELL"}),
+        M7_ADAPTERS_BASE,
+        M7_DEXES_BASE,
+    ),
+}
+
+
+def get_chain_universe(
+    chain: str,
+    expanded: bool = False,
+) -> Tuple[FrozenSet[str], FrozenSet[str], FrozenSet[str]]:
+    """Return (tokens, adapters, dexes) for a chain's M7 universe."""
+    registry = _CHAIN_UNIVERSE_EXPANDED if expanded else _CHAIN_UNIVERSE
+    if chain in registry:
+        return registry[chain]
+    logger.warning("No M7 universe defined for chain=%s, using empty", chain)
+    return frozenset(), frozenset(), frozenset()
+
+
+def filter_graph_to_chain_universe(
+    graph: PoolGraph,
+    expanded: bool = False,
+) -> PoolGraph:
+    """Return a new PoolGraph filtered to the chain's M7 universe."""
+    tokens, adapters, dexes = get_chain_universe(graph.chain, expanded=expanded)
+    if not tokens:
+        logger.error("Empty universe for chain=%s — graph will be empty", graph.chain)
+        return PoolGraph(chain=graph.chain)
+
+    filtered = PoolGraph(chain=graph.chain)
+    for edges in graph.adjacency.values():
+        for e in edges:
+            if (
+                e.token_in in tokens
+                and e.token_out in tokens
+                and e.adapter_type in adapters
+                and e.dex in dexes
+            ):
+                filtered.add_edge(e)
+    label = "expanded" if expanded else "narrow"
+    logger.info(
+        "Filtered to M7 %s universe (chain=%s): %d -> %d edges, %d -> %d nodes, "
+        "tokens=%d, adapters=%d, dexes=%d",
+        label, graph.chain,
+        graph.edge_count, filtered.edge_count,
+        graph.node_count, filtered.node_count,
+        len(tokens), len(adapters), len(dexes),
+    )
+    return filtered

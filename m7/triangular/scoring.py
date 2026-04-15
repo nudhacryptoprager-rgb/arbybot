@@ -437,11 +437,21 @@ def score_cycle_measured(
     leg2_quote: LegQuote,
     leg3_quote: LegQuote,
     gas_price_wei: int = 100_000_000,
-    l1_cost_wei: int = 6_000_000_000_000,
+    l1_cost_wei: Optional[int] = None,
     eth_usd_price: float = 2000.0,
     max_block_drift: int = 1,
 ) -> CycleScore:
-    """Live measured scorer for a triangular cycle."""
+    """Live measured scorer for a triangular cycle.
+
+    l1_cost_wei defaults are chain-aware:
+      arbitrum_one = 6_000_000_000_000, base/OP-stack = 5_000_000_000_000.
+    """
+    if l1_cost_wei is None:
+        chain_lower = cycle.leg1.chain.lower() if cycle.leg1.chain else ""
+        if chain_lower in ("base", "optimism", "zora", "mode"):
+            l1_cost_wei = 5_000_000_000_000
+        else:
+            l1_cost_wei = 6_000_000_000_000
     amount_start = leg1_quote.amount_in_wei
     amount_end = leg3_quote.amount_out_wei
     if amount_start <= 0:

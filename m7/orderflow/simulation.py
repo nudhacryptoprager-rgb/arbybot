@@ -34,7 +34,8 @@ logger = logging.getLogger("m7.orderflow.simulation")
 # ---------------------------------------------------------------------------
 BACKEND_TENDERLY = "tenderly"
 BACKEND_ANVIL = "anvil"
-_VALID_BACKENDS = {BACKEND_TENDERLY, BACKEND_ANVIL}
+BACKEND_RPC_FORK = "rpc_fork"
+_VALID_BACKENDS = {BACKEND_TENDERLY, BACKEND_ANVIL, BACKEND_RPC_FORK}
 
 
 @dataclass
@@ -84,11 +85,19 @@ def is_anvil_configured() -> bool:
     return _anvil_ok()
 
 
+def is_rpc_fork_configured() -> bool:
+    """Check if rpc_fork backend is available (always True — uses production RPC)."""
+    from m7.orderflow.sim_backends.rpc_fork_backend import is_rpc_fork_configured as _rpc_ok
+    return _rpc_ok()
+
+
 def is_simulation_configured() -> bool:
     """Generic readiness check for the currently selected backend."""
     backend = get_simulation_backend()
     if backend == BACKEND_ANVIL:
         return is_anvil_configured()
+    if backend == BACKEND_RPC_FORK:
+        return is_rpc_fork_configured()
     return is_tenderly_configured()
 
 
@@ -196,6 +205,17 @@ def simulate_swap(
     if backend == BACKEND_ANVIL:
         from m7.orderflow.sim_backends.anvil_backend import simulate_swap_anvil
         return simulate_swap_anvil(
+            chain=chain,
+            from_address=from_address,
+            to_address=to_address,
+            calldata=calldata,
+            value_wei=value_wei,
+            block_number=block_number,
+        )
+
+    if backend == BACKEND_RPC_FORK:
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        return simulate_swap_rpc_fork(
             chain=chain,
             from_address=from_address,
             to_address=to_address,
