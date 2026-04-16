@@ -129,7 +129,7 @@ def _write_cold_hot_bridge(
                     key=lambda x: x[1].get("event_count", 0),
                     reverse=True,
                 )
-                for _hu_pa, _hu_info in _hu_sorted[:30]:
+                for _hu_pa, _hu_info in _hu_sorted[:50]:
                     _resolved = _hu_pa in _ptc_bridge or _hu_pa in _ptt
                     _hot_unresolved.append({
                         "pool_address": _hu_pa,
@@ -217,15 +217,15 @@ def _prewarm_registry_from_bridge(
     registry, bridge: dict,
     dex_configs: dict, rpc_url: str, block_num: int,
     priority_pools: set | None = None,
-    max_pairs: int = 30,
+    max_pairs: int = 60,
 ) -> int:
     """Prewarm hot registry from bridge entries using token addresses.
 
     E1.22: ``max_pairs`` raised from 10 to 30 to cover more bridge-discovered
-    pairs.  With 49 unique pairs in typical bridge PTT, 30 covers ~60%.
-    Priority pools always go first.  This prevents the prewarm from sending
-    600+ RPC calls when the full PTT has 200+ entries, which overloads
-    dRPC/public-RPC rate limits.
+    pairs.  E1.25: raised from 30 to 60 to cover ~100% of typical PTT
+    (49 unique pairs).  Priority pools always go first.  This prevents
+    the prewarm from sending 600+ RPC calls when the full PTT has 200+
+    entries, which overloads dRPC/public-RPC rate limits.
 
     Returns number of pairs prewarmed.
     """
@@ -267,7 +267,19 @@ def _prewarm_registry_from_bridge(
             "Bridge prewarm %d pairs — throttle: %d waits, %.0fms total delay",
             count, _stats["total_waits"], _stats["total_waited_ms"],
         )
-    return count
+
+    # E1.25: Direct PTT→registry injection for pools that factory discovery
+    # missed (Algebra dynamic-fee, BaseSwap, other unconfigured DEXes).
+    # This is the key fix for bridge_pool_hit_but_registry_miss.
+    _ptt_registered = 0
+    try:
+        _ptt_registered = registry.register_ptt_pools(ptt, rpc_url, block_num)
+    except Exception as exc:
+        logger.debug("PTT direct register failed: %s", str(exc)[:80])
+    if _ptt_registered > 0:
+        logger.info("Bridge prewarm: %d extra pools via PTT direct inject", _ptt_registered)
+
+    return count + _ptt_registered
 
 
 def _prewarm_registry_from_pairs(

@@ -46,6 +46,8 @@ class BackrunResult:
     backrun_direction: str  # Direction of backrun
     best_buy_venue: Optional[str] = None
     best_sell_venue: Optional[str] = None
+    # E1.25: Actual pool fee tier for execution calldata (V3: 500/3000/10000, ve33: 0/1)
+    best_buy_fee: Optional[int] = None
     candidate_path: Optional[List[str]] = None
     amount_in_wei: int = 0
     gross_pnl_wei: int = 0

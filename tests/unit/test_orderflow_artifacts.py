@@ -1972,7 +1972,7 @@ class TestM7A533BackrunResultField:
         from dataclasses import fields
         from m7.orderflow.contracts import BackrunResult
 
-        assert len(fields(BackrunResult)) == 77
+        assert len(fields(BackrunResult)) == 78
 
     def test_profit_guard_passed_defaults_none(self):
         r = _make_result()

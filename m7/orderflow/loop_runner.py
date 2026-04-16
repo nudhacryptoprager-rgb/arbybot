@@ -389,7 +389,7 @@ def run_loop(cli_args) -> None:
                     _unresolved_addrs = [
                         p["pool_address"] for p in _hu_pools
                         if isinstance(p, dict) and not p.get("resolved", False)
-                    ][:20]  # cap at 20 to limit RPC cost
+                    ][:40]  # E1.25: raised from 20→40 to cover more hot-seen pools
                     # Also source hot-seen pools directly from hot rollup
                     # (cross-process) to avoid 1-iteration delay via bridge
                     if not _unresolved_addrs:
@@ -402,7 +402,7 @@ def run_loop(cli_args) -> None:
                                     _rp_addr = (_rp.get("pool") or "").lower()
                                     if _rp_addr and _rp_addr not in _ptc_check:
                                         _unresolved_addrs.append(_rp_addr)
-                                _unresolved_addrs = _unresolved_addrs[:20]
+                                _unresolved_addrs = _unresolved_addrs[:40]
                         except Exception:
                             pass
                     if _unresolved_addrs:

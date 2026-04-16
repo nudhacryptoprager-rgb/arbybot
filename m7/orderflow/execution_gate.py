@@ -251,17 +251,37 @@ def _build_sim_tx_params(
     # E1.16: When venue is a pool address (starts with 0x), fall back to
     # iterating configured DEXes for the chain to find a V3-compatible one.
     # E1.17: Try factory-based matching first for more accurate DEX resolution.
+    # E1.26: PTT pools now carry real DEX names (uniswap_v3, aerodrome, etc.)
+    #        via fee-based mapping in register_ptt_pools().  Only truly unknown
+    #        pools still have venue="ptt_direct".
     try:
         from config import get_dex_config
 
         dex_cfg = get_dex_config(chain, venue)
     except (KeyError, ImportError):
         dex_cfg = None
-        if venue.startswith("0x"):
-            # Venue is a pool address, not a DEX name — try known DEXes.
-            # Prefer uniswap_v3 as primary Base router (SwapRouter02).
+        if venue.startswith("0x") or venue == "ptt_direct":
+            # E1.26: Use best_buy_fee to pick the correct DEX instead of
+            # always falling back to uniswap_v3.
+            _fee_hint = getattr(result, "best_buy_fee", None)
             from config import get_dex_config as _gdc
-            for _fallback_dex in ("uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"):
+
+            if _fee_hint is not None and _fee_hint <= 1:
+                # ve33 (Aerodrome): fee 0=volatile, 1=stable
+                _preferred = ["aerodrome", "uniswap_v3", "sushiswap_v3", "pancakeswap_v3"]
+            elif _fee_hint == 2500:
+                # PancakeSwap unique tier
+                _preferred = ["pancakeswap_v3", "uniswap_v3", "sushiswap_v3", "aerodrome"]
+            elif _fee_hint is None or _fee_hint in {100, 500, 3000, 10000}:
+                # Unknown fee or standard V3 tiers → default to uniswap_v3
+                _preferred = ["uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"]
+            elif _fee_hint > 10:
+                # Non-standard fee (Algebra dynamic) — no configured router
+                return None, f"UNSUPPORTED_FEE_TIER:{_fee_hint}"
+            else:
+                _preferred = ["uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"]
+
+            for _fallback_dex in _preferred:
                 try:
                     _fb_cfg = _gdc(chain, _fallback_dex)
                     if _fb_cfg.get("adapter_type", "") in {"uniswap_v3", "ve33", "algebra"}:
@@ -358,9 +378,15 @@ def _build_sim_tx_params(
             )
         else:
             # V3: exactInputSingle (uniswap_v3, algebra)
-            # Pick fee tier (first available from DEX config, or 3000 default)
-            fee_tiers = dex_cfg.get("fee_tiers", [3000])
-            fee = fee_tiers[0] if fee_tiers else 3000
+            # E1.25: Use actual pool fee from scoring (best_buy_fee) instead of
+            # config's first fee tier.  This fixes sim reverts caused by calldata
+            # targeting the wrong fee-tier pool (e.g., 500 instead of 3000).
+            _actual_fee = getattr(result, "best_buy_fee", None)
+            if _actual_fee and _actual_fee > 1:
+                fee = _actual_fee
+            else:
+                fee_tiers = dex_cfg.get("fee_tiers", [3000])
+                fee = fee_tiers[0] if fee_tiers else 3000
             calldata = _encode_exact_input_single(
                 token_in=token_in_addr,
                 token_out=token_out_addr,
@@ -410,13 +436,30 @@ def _attempt_simulation(
     if tx_params is None:
         return SimulationResult(success=False, error=f"CALLDATA_BUILD_FAILED:{build_err}")
 
-    return simulate_swap(
+    # E1.26: Log sim attempt details for debugging reverts
+    _venue = getattr(result, "best_buy_venue", "?")
+    _fee = getattr(result, "best_buy_fee", "?")
+    _pair = getattr(result, "actual_pair", "?")
+    logger.info(
+        "sim attempt: pair=%s venue=%s fee=%s router=%s",
+        _pair, _venue, _fee, tx_params["to"][:18],
+    )
+
+    sim_result = simulate_swap(
         chain=chain,
         from_address=_get_sim_from_address(),
         to_address=tx_params["to"],
         calldata=tx_params["calldata"],
         value_wei=tx_params["value"],
     )
+
+    if not sim_result.passed:
+        logger.info(
+            "sim FAILED: pair=%s venue=%s fee=%s error=%s",
+            _pair, _venue, _fee, (sim_result.error or "?")[:100],
+        )
+
+    return sim_result
 
 
 def run_execution_gate(

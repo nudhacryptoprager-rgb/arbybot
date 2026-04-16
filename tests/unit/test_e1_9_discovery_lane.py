@@ -101,6 +101,8 @@ class TestProductionBackwardCompat:
     def test_production_base_pairs_unchanged(self):
         assert PREWARM_PAIRS_BASE == [
             ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),
+            ("AERO", "USDC"), ("AERO", "WETH"),
+            ("cbBTC", "USDC"), ("cbBTC", "WETH"),
         ]
 
     def test_production_arbitrum_pairs_unchanged(self):

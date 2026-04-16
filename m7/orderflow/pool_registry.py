@@ -484,3 +484,208 @@ class PoolRegistry:
             "pools_discovered": self.pools_discovered,
             "pools_active": self.pools_active,
         }
+
+    def register_ptt_pools(
+        self,
+        ptt: Dict[str, Tuple],
+        rpc_url: str,
+        block_num: int,
+    ) -> int:
+        """E1.25: Directly register PTT pools that factory discovery missed.
+
+        For each PTT entry (pool_addr → [t0, t1, fee]), check if the pool
+        is already in the registry for its pair.  If not, inject it as a
+        PoolRegistryEntry and batch-read its on-chain state.
+
+        This covers pools from unconfigured factories (Algebra dynamic-fee,
+        BaseSwap, etc.) that ``preload_pair`` cannot discover via factory
+        queries.
+
+        Returns number of newly registered pools.
+        """
+        # Identify PTT pools missing from registry
+        missing: List[Tuple[str, str, str, int]] = []  # (pool_addr, t0, t1, fee)
+        for pa, triple in ptt.items():
+            if len(triple) != 3:
+                continue
+            t0, t1, fee = triple
+            if not t0 or not t1:
+                continue
+            key = _pair_key(t0, t1)
+            existing = self._pools.get(key, [])
+            pa_lower = pa.lower()
+            if any(e.address == pa_lower for e in existing):
+                continue  # Already registered
+            missing.append((pa_lower, t0, t1, fee if isinstance(fee, int) else 0))
+
+        if not missing:
+            return 0
+
+        # Batch-read state for all missing pools via multicall.
+        # Try slot0() for V3-style, getReserves() for V2-style.
+        # Use a heuristic: fee > 10 → V3-style (slot0), fee <= 10 → V2-style (getReserves).
+        try:
+            from core.multicall import get_multicall_batcher
+            batcher = get_multicall_batcher(rpc_url, block_num)
+        except Exception:
+            return 0
+
+        # Read full pool data in batch (handles both V3 slot0 and V2 reserves)
+        all_addrs = [m[0] for m in missing]
+        state_map: Dict[str, Optional[Dict[str, Any]]] = {}
+        try:
+            state_map = batcher.batch_full_pool_data(all_addrs)
+        except Exception:
+            pass
+
+        # For pools where slot0 returned nothing, try getReserves batch
+        _need_reserves: List[Tuple[int, str]] = []
+        for idx, (pa, t0, t1, fee) in enumerate(missing):
+            if pa not in state_map or state_map[pa] is None:
+                _need_reserves.append((idx, pa))
+
+        reserves_map: Dict[str, Tuple[int, int]] = {}
+        if _need_reserves:
+            try:
+                _RESERVES_SEL = bytes.fromhex("0902f1ac")
+                _calls = [(pa, True, _RESERVES_SEL) for _, pa in _need_reserves]
+                _results = batcher._execute_multicall(_calls)
+                if _results:
+                    for i, (_, pa) in enumerate(_need_reserves):
+                        if i < len(_results):
+                            success, data = _results[i]
+                            if success and len(data) >= 64:
+                                r0 = int.from_bytes(data[0:32], "big")
+                                r1 = int.from_bytes(data[32:64], "big")
+                                reserves_map[pa] = (r0, r1)
+            except Exception:
+                pass
+
+        # E1.26: Fee → DEX mapping for router resolution.
+        # Maps PTT pool fees to configured DEX names so execution_gate
+        # can look up the correct router via get_dex_config(chain, dex_name).
+        _STANDARD_V3_FEES = {100, 500, 3000, 10000}
+        _PCS_FEES = {2500}  # PancakeSwap unique tier
+
+        # E1.26: Batch-read factory() from V3-style pools to determine which
+        # configured DEX they belong to.  V3 pools expose factory() → address.
+        _FACTORY_SEL = bytes.fromhex("c45a0155")  # factory() selector
+        _factory_map: Dict[str, str] = {}  # pool_addr → factory_addr
+        _v3_pools = [(pa, fee) for pa, t0, t1, fee in missing if fee > 10]
+        if _v3_pools:
+            try:
+                _fact_calls = [(pa, True, _FACTORY_SEL) for pa, _ in _v3_pools]
+                _fact_results = batcher._execute_multicall(_fact_calls)
+                if _fact_results:
+                    for i, (pa, _) in enumerate(_v3_pools):
+                        if i < len(_fact_results):
+                            success, data = _fact_results[i]
+                            if success and len(data) >= 32:
+                                addr = "0x" + data[12:32].hex()
+                                _factory_map[pa] = addr.lower()
+            except Exception:
+                pass
+
+        # Map known factories to DEX names (from config/dexes.yaml)
+        _FACTORY_TO_DEX = {
+            "0x33128a8fc17869897dce68ed026d694621f6fdfd": "uniswap_v3",
+            "0xc35dadb65012ec5796536bd9864ed8773abc74c4": "sushiswap_v3",
+            "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865": "pancakeswap_v3",
+            "0x420dd381b31aef6683db6b902084cb0ffece40da": "aerodrome",
+        }
+
+        registered = 0
+        for pa, t0, t1, fee in missing:
+            key = _pair_key(t0, t1)
+            state = state_map.get(pa)
+            reserves = reserves_map.get(pa)
+
+            # Determine adapter type AND dex name from fee heuristic
+            if fee <= 1:
+                # ve33 (Aerodrome): fee 0=volatile, 1=stable
+                dex_name = "aerodrome"
+                adapter = "ve33"
+                r0 = reserves[0] if reserves else 0
+                r1 = reserves[1] if reserves else 0
+                liq = r0 + r1 if (r0 > 0 or r1 > 0) else 0
+                entry = PoolRegistryEntry(
+                    address=pa, dex=dex_name, adapter_type=adapter,
+                    fee=fee, token_a=t0, token_b=t1,
+                    liquidity=liq, sqrt_price_x96=r0, tick=r1,
+                    last_block=block_num,
+                )
+            elif 1 < fee <= 10:
+                # V2-style (fee 3 etc.)
+                dex_name = "ptt_direct"
+                adapter = "uniswap_v2"
+                r0 = reserves[0] if reserves else 0
+                r1 = reserves[1] if reserves else 0
+                liq = r0 + r1 if (r0 > 0 or r1 > 0) else 0
+                entry = PoolRegistryEntry(
+                    address=pa, dex=dex_name, adapter_type=adapter,
+                    fee=fee, token_a=t0, token_b=t1,
+                    liquidity=liq, sqrt_price_x96=r0, tick=r1,
+                    last_block=block_num,
+                )
+            else:
+                # V3-style: map to configured DEX by factory match or fee tier
+                _pool_factory = _factory_map.get(pa, "")
+                _matched_dex = _FACTORY_TO_DEX.get(_pool_factory, "")
+                if _matched_dex:
+                    # Factory matched — use the correct DEX
+                    dex_name = _matched_dex
+                    adapter = "ve33" if _matched_dex == "aerodrome" else "uniswap_v3"
+                elif fee in _PCS_FEES:
+                    dex_name = "pancakeswap_v3"
+                    adapter = "uniswap_v3"
+                elif fee in _STANDARD_V3_FEES:
+                    dex_name = "uniswap_v3"
+                    adapter = "uniswap_v3"
+                else:
+                    # Non-standard fees (2700, 10305, 586, etc.) → Algebra/dynamic
+                    dex_name = "ptt_direct"
+                    adapter = "algebra"
+                liq = state.get("liquidity", 0) if state else 0
+                sqp = state.get("sqrt_price_x96", 0) if state else 0
+                tick = state.get("tick", 0) if state else 0
+                # If V3 slot0 failed, try reserves as fallback
+                if liq == 0 and sqp == 0 and reserves:
+                    r0, r1 = reserves
+                    liq = r0 + r1 if (r0 > 0 or r1 > 0) else 0
+                    sqp = r0
+                    tick = r1
+                    if not _matched_dex:
+                        adapter = "algebra"  # V3 slot0 failed + no factory → likely non-V3
+                        dex_name = "ptt_direct"
+                entry = PoolRegistryEntry(
+                    address=pa, dex=dex_name, adapter_type=adapter,
+                    fee=fee, token_a=t0, token_b=t1,
+                    liquidity=liq, sqrt_price_x96=sqp, tick=tick,
+                    last_block=block_num,
+                )
+
+            self._pools.setdefault(key, []).append(entry)
+            self._queried.add(key)
+            self.pools_discovered += 1
+            if entry.is_active():
+                self.pools_active += 1
+            registered += 1
+
+        if registered > 0:
+            # E1.26: Log factory matching stats
+            _factory_matched = sum(1 for pa, _, _, f in missing if pa in _factory_map and _FACTORY_TO_DEX.get(_factory_map.get(pa, ""), ""))
+            _dex_dist: Dict[str, int] = {}
+            for pa, t0, t1, fee in missing:
+                for e in self._pools.get(_pair_key(t0, t1), []):
+                    if e.address == pa:
+                        _dex_dist[e.dex] = _dex_dist.get(e.dex, 0) + 1
+            logger.info(
+                "PTT direct register: %d/%d pools (active=%d, factory_matched=%d, dex_dist=%s)",
+                registered, len(missing),
+                sum(1 for pa, t0, t1, fee in missing
+                    if any(e.address == pa and e.is_active()
+                           for e in self._pools.get(_pair_key(t0, t1), []))),
+                _factory_matched,
+                _dex_dist,
+            )
+        return registered
