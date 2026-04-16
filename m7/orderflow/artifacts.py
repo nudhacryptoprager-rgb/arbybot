@@ -1124,9 +1124,9 @@ def build_replay_summary(
     # M7.A.5.44: Execution funnel — 5-stage machine-readable progression.
     # Each stage is a strict subset of the previous. The final stage
     # (realized_onchain_profit) is always 0 until M7.B execution is enabled.
-    # hot_scored and profit_guard_passed are populated by the hot lane and
-    # injected into this cold-lane artifact via the bridge. Cold lane cannot
-    # compute them directly (separate process), so they default to 0 here.
+    # E1.22: profit_guard_passed is now annotated in mode_ws_live before artifact
+    # build, so cold lane results have correct profit_guard_passed counts.
+    # sim_passed/submit_ready are post-patched by loop_runner execution gate.
     execution_funnel = {
         "diagnostic_positive": positive_net_count_clean,
         "cold_executable_positive": viable_count,

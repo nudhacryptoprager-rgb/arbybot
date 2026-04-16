@@ -176,6 +176,10 @@ def run_loop(cli_args) -> None:
     # subsequent iterations — registry cache + stale_threshold handles
     # state refresh internally, avoiding dRPC 429 from repeated block_number calls.
     _registry_warmed = False
+    # E1.22: Track bridge PTT size at last prewarm to detect new bridge data
+    # arriving after cold lane runs (chicken-and-egg: hot iter 1 has empty bridge,
+    # cold writes bridge after iter 1, hot iter 2+ needs re-prewarm).
+    _bridge_prewarmed_ptt_count = 0
 
     iteration = 0
     logger.info(
@@ -255,7 +259,14 @@ def run_loop(cli_args) -> None:
                 # internally via stale_threshold_blocks.  Skipping avoids a
                 # fresh eth.block_number HTTP call to dRPC every iteration,
                 # which was hanging on 429 after iter-1 exhausted the rate limit.
-                if not _registry_warmed:
+                # E1.22: Re-prewarm when bridge has NEW PTT entries (cold lane
+                # writes bridge after hot iter 1; hot iter 2+ needs those pools).
+                _current_ptt_count = len(_bridge.get("pool_token_transport", {}))
+                _need_prewarm = (
+                    not _registry_warmed
+                    or (_current_ptt_count > _bridge_prewarmed_ptt_count)
+                )
+                if _need_prewarm:
                     try:
                         from config import load_dexes, get_all_token_addresses
                         from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
@@ -291,12 +302,14 @@ def run_loop(cli_args) -> None:
                                 _pw = 0
                             logger.info(
                                 "Hot prewarm: bridge_cache=%d bridge_registry=%d "
-                                "symbol_pairs=%d/%d (iter %d, cross=%d)",
+                                "symbol_pairs=%d/%d (iter %d, cross=%d, ptt=%d)",
                                 _bridge_cache_count, _bridge_prewarm_count,
                                 _pw, len(_hot_pairs_to_prewarm), iteration,
                                 len(_cross_promoted.get("candidate", [])),
+                                _current_ptt_count,
                             )
                             _registry_warmed = True
+                            _bridge_prewarmed_ptt_count = _current_ptt_count
                     except Exception as _pw_exc:
                         logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
                 else:
@@ -839,6 +852,24 @@ def run_loop(cli_args) -> None:
                     )
 
             if lane == "cold":
+                # E1.22: Run full execution gate on cold lane results
+                # (profit guard already annotated in mode_ws_live; gate adds sim + submit)
+                _raw = artifact.get("_raw_results", [])
+                if _raw:
+                    _gate_result = run_execution_gate(_raw, chain=cli_args.chain)
+                    guard_results = _gate_result.guard_passed
+                    # Post-patch signal_counts with sim/submit from gate
+                    _sc = artifact.get("signal_counts", {})
+                    _sc["sim_passed"] = _gate_result.sim_passed
+                    _sc["submit_ready"] = _gate_result.submit_ready
+                    if _gate_result.guard_passed:
+                        logger.info(
+                            "Cold execution gate: %d guard_passed, %d sim_passed, %d submit_ready",
+                            len(_gate_result.guard_passed),
+                            _gate_result.sim_passed,
+                            _gate_result.submit_ready,
+                        )
+
                 # Cold lane: full diagnostic rolling artifact
                 _write_rolling_m7(artifact)
 

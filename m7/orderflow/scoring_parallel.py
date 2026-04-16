@@ -96,6 +96,7 @@ def score_backrun_live_parallel(
     addr_to_symbol: Optional[Dict[str, str]] = None,
     subgraph_seeded_addrs: Optional[set] = None,
     pool_registry: Any = None,
+    chain: str = "base",
 ) -> BackrunResult:
     """Score a backrun using 3-stage pipeline: pair resolve + coverage scan + quote.
 

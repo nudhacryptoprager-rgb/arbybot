@@ -158,6 +158,10 @@ class PoolRegistry:
         queries: List[Tuple] = []         # (factory, tokenA, tokenB, fee)
         query_meta: List[Tuple] = []      # (dex_name, adapter_type, fee)
 
+        # E1.22: ve33 raw multicall queries (batched alongside V3)
+        _ve33_raw_calls: List[Tuple] = []   # (target, allowFailure, calldata)
+        _ve33_meta: List[Tuple] = []        # (dex_name, stable_flag)
+
         for dex_name, cfg in dex_configs.items():
             adapter_type = cfg.get("adapter_type", "")
             factory = cfg.get("factory", "")
@@ -174,13 +178,23 @@ class PoolRegistry:
                 queries.append((factory, token_a, token_b, 0))
                 query_meta.append((dex_name, adapter_type, 0))
             elif adapter_type in ("uniswap_v2",):
-                # V2: getPair query — use batch_get_pool with fee=0
-                # (The multicall batcher encodes getPool, but for V2 we
-                #  need a different approach — direct eth_call)
                 self._preload_v2_pair(
                     dex_name, factory, token_a, token_b,
                     rpc_url, block_num, key,
                 )
+            elif adapter_type in ("ve33",):
+                # E1.22: Batch ve33 getPool(tokenA, tokenB, stable) queries
+                # into raw multicall instead of individual eth_call.
+                # Selector: 0x79bc57d5 = getPool(address,address,bool)
+                from web3 import Web3 as _W3
+                _cs_factory = _W3.to_checksum_address(factory)
+                for _stable in (False, True):
+                    _cd = bytes.fromhex("79bc57d5")
+                    _cd += _W3.to_bytes(hexstr=token_a).rjust(32, b"\x00")
+                    _cd += _W3.to_bytes(hexstr=token_b).rjust(32, b"\x00")
+                    _cd += (1 if _stable else 0).to_bytes(32, "big")
+                    _ve33_raw_calls.append((_cs_factory, True, _cd))
+                    _ve33_meta.append((dex_name, _stable))
 
         # Execute V3/Algebra queries via batch_get_pool
         entries: List[PoolRegistryEntry] = []
@@ -218,6 +232,55 @@ class PoolRegistry:
                         self.pools_active += 1
             except Exception as exc:
                 logger.debug("preload_pair factory query failed: %s", str(exc)[:100])
+
+        # E1.22: Execute ve33 factory queries via raw multicall batch
+        if _ve33_raw_calls:
+            try:
+                _ve33_results = batcher._execute_multicall(_ve33_raw_calls)
+                _ZERO_ADDR = "0x" + "0" * 40
+                _ve33_pool_addrs: List[Optional[str]] = []
+                _ve33_pool_meta: List[Tuple] = []
+                if _ve33_results:
+                    from web3 import Web3 as _W3
+                    for idx, (success, data) in enumerate(_ve33_results):
+                        if success and len(data) >= 32:
+                            addr = "0x" + data[-20:].hex()
+                            if addr != _ZERO_ADDR:
+                                _ve33_pool_addrs.append(_W3.to_checksum_address(addr))
+                                _ve33_pool_meta.append(_ve33_meta[idx])
+                # Batch getReserves() for discovered ve33 pools
+                if _ve33_pool_addrs:
+                    _RESERVES_SELECTOR = bytes.fromhex("0902f1ac")
+                    _reserves_calls = [
+                        (pa, True, _RESERVES_SELECTOR) for pa in _ve33_pool_addrs
+                    ]
+                    _reserves_results = batcher._execute_multicall(_reserves_calls)
+                    for idx, pa in enumerate(_ve33_pool_addrs):
+                        dex_name, _stable = _ve33_pool_meta[idx]
+                        reserve0 = reserve1 = 0
+                        if _reserves_results and idx < len(_reserves_results):
+                            _rsuc, _rdata = _reserves_results[idx]
+                            if _rsuc and len(_rdata) >= 64:
+                                reserve0 = int.from_bytes(_rdata[0:32], "big")
+                                reserve1 = int.from_bytes(_rdata[32:64], "big")
+                        entry = PoolRegistryEntry(
+                            address=pa.lower(),
+                            dex=dex_name,
+                            adapter_type="ve33",
+                            fee=0,
+                            token_a=token_a,
+                            token_b=token_b,
+                            liquidity=reserve0 + reserve1 if (reserve0 > 0 or reserve1 > 0) else 0,
+                            sqrt_price_x96=reserve0,
+                            tick=reserve1,
+                            last_block=block_num,
+                        )
+                        entries.append(entry)
+                        self.pools_discovered += 1
+                        if entry.is_active():
+                            self.pools_active += 1
+            except Exception as exc:
+                logger.debug("ve33 batch factory query failed: %s", str(exc)[:100])
 
         # Merge with any V2 entries already added
         existing_v2 = self._pools.get(key, [])
@@ -288,6 +351,74 @@ class PoolRegistry:
                 self.pools_active += 1
         except Exception as exc:
             logger.debug("V2 getPair failed for %s/%s: %s", dex_name, pair_key[:20], str(exc)[:80])
+
+    def _preload_ve33_pair(
+        self,
+        dex_name: str,
+        factory: str,
+        token_a: str,
+        token_b: str,
+        rpc_url: str,
+        block_num: int,
+        pair_key: str,
+    ) -> None:
+        """Query a ve33/Solidly-style factory.getPool(tokenA, tokenB, stable) and read getReserves() for state.
+
+        Queries both stable=false (volatile) and stable=true pools.
+        """
+        try:
+            from web3 import Web3
+            from core.rpc_rate_limiter import rpc_throttle
+
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+
+            for stable in (False, True):
+                # getPool(address,address,bool) = 0x79bc57d5
+                calldata = bytes.fromhex("79bc57d5")
+                calldata += Web3.to_bytes(hexstr=token_a).rjust(32, b"\x00")
+                calldata += Web3.to_bytes(hexstr=token_b).rjust(32, b"\x00")
+                calldata += (1 if stable else 0).to_bytes(32, "big")
+
+                rpc_throttle.acquire()
+                result = w3.eth.call(
+                    {"to": Web3.to_checksum_address(factory), "data": "0x" + calldata.hex()},
+                    block_num,
+                )
+                if len(result) < 32:
+                    continue
+                pair_addr = "0x" + result[-20:].hex()
+                if pair_addr == "0x" + "0" * 40:
+                    continue
+
+                # Read getReserves() = 0x0902f1ac
+                rpc_throttle.acquire()
+                reserves_data = w3.eth.call(
+                    {"to": Web3.to_checksum_address(pair_addr), "data": "0x0902f1ac"},
+                    block_num,
+                )
+                reserve0 = reserve1 = 0
+                if len(reserves_data) >= 64:
+                    reserve0 = int.from_bytes(reserves_data[0:32], "big")
+                    reserve1 = int.from_bytes(reserves_data[32:64], "big")
+
+                entry = PoolRegistryEntry(
+                    address=pair_addr,
+                    dex=dex_name,
+                    adapter_type="ve33",
+                    fee=0,  # ve33 pools use dynamic fees, not fixed tiers
+                    token_a=token_a,
+                    token_b=token_b,
+                    liquidity=reserve0 + reserve1 if (reserve0 > 0 or reserve1 > 0) else 0,
+                    sqrt_price_x96=reserve0,  # Store reserve0 in sqrt_price field
+                    tick=reserve1,            # Store reserve1 in tick field (V2 reuse)
+                    last_block=block_num,
+                )
+                self._pools.setdefault(pair_key, []).append(entry)
+                self.pools_discovered += 1
+                if entry.is_active():
+                    self.pools_active += 1
+        except Exception as exc:
+            logger.debug("ve33 getPool failed for %s/%s: %s", dex_name, pair_key[:20], str(exc)[:80])
 
     def _refresh_state(
         self,

@@ -29,6 +29,7 @@ from m7.orderflow.artifacts import build_replay_summary
 from m7.orderflow.coverage import seed_tokens_from_subgraph
 from m7.orderflow.events import normalize_swap_log
 from m7.orderflow.pool_registry import PoolRegistry
+from m7.orderflow.profit_guard import annotate_profit_guard_results
 from m7.orderflow.resolve import _build_address_to_symbol, batch_pre_resolve_pools
 from m7.orderflow.scoring_parallel import score_backrun_live_parallel, score_backrun_fast
 from m7.orderflow.contracts import BackrunResult
@@ -599,6 +600,24 @@ def run_ws_live(
                         addr_to_symbol=addr_to_symbol,
                         subgraph_seeded_addrs=subgraph_seeded_addrs,
                         pool_registry=session_registry,
+                        chain=args.chain,
+                    )
+                if r is None:
+                    # Defensive guard: keep ws-live running even if scoring returns None.
+                    _pair = f"{ev.token_in}/{ev.token_out}"
+                    r = BackrunResult(
+                        event_id=ev.event_id,
+                        event_source="live",
+                        event_type=ev.event_type,
+                        post_trade_state_used="live",
+                        backrun_direction="skip",
+                        reject_reason="REJECT_SCORING_RETURNED_NONE",
+                        event_block=ev.block_number,
+                        quote_block=current_block,
+                        block_lag=current_block - ev.block_number,
+                        event_detected_at_block=detected_block,
+                        actual_pair=_pair,
+                        scoring_path="cold_skip",
                     )
                 # Attach source event for downstream fast-path re-scoring
                 r._source_event = ev
@@ -668,6 +687,10 @@ def run_ws_live(
             pass
 
     ws_elapsed = time.monotonic() - ws_start_time
+
+    # E1.22: Annotate profit guard on all results BEFORE artifact build
+    # so that gate_trace and signal_counts reflect guard decisions.
+    annotate_profit_guard_results(all_results, chain=args.chain)
 
     # Build artifact
     # M7.A.5.46: compact=True skips full results serialization (operational path).

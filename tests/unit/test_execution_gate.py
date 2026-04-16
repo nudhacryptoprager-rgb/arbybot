@@ -328,6 +328,9 @@ class TestE1123SimErrorHistogram:
         from m7.orderflow.simulation import SimulationResult
         import m7.orderflow.execution_gate as gate_mod
 
+        # Ensure paper signing is off so signing_ready stays None
+        monkeypatch.delenv("ARBY_PAPER_SIGNING", raising=False)
+
         monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
         monkeypatch.setattr(
             gate_mod,

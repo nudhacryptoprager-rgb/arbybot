@@ -217,14 +217,15 @@ def _prewarm_registry_from_bridge(
     registry, bridge: dict,
     dex_configs: dict, rpc_url: str, block_num: int,
     priority_pools: set | None = None,
-    max_pairs: int = 10,
+    max_pairs: int = 30,
 ) -> int:
     """Prewarm hot registry from bridge entries using token addresses.
 
-    E1.19a: ``max_pairs`` caps the number of unique pairs to prewarm
-    (default 30).  Priority pools always go first.  This prevents the
-    prewarm from sending 600+ RPC calls when the full PTT has 200+
-    entries, which overloads dRPC/public-RPC rate limits.
+    E1.22: ``max_pairs`` raised from 10 to 30 to cover more bridge-discovered
+    pairs.  With 49 unique pairs in typical bridge PTT, 30 covers ~60%.
+    Priority pools always go first.  This prevents the prewarm from sending
+    600+ RPC calls when the full PTT has 200+ entries, which overloads
+    dRPC/public-RPC rate limits.
 
     Returns number of pairs prewarmed.
     """

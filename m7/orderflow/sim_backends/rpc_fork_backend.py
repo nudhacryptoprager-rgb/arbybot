@@ -163,7 +163,11 @@ def _get_flashblocks_http_url(chain: str) -> Optional[str]:
 
 
 def _json_rpc(url: str, method: str, params: list, timeout: float = 10.0) -> Tuple[Optional[dict], Optional[str]]:
-    """Send JSON-RPC request. Returns (result_dict, error_str)."""
+    """Send JSON-RPC request. Returns (result_dict, error_str).
+
+    Returns the HTTP status code embedded in the error string when non-200,
+    so callers can detect 429 and attempt fallback.
+    """
     try:
         import httpx
     except ImportError:
@@ -184,6 +188,13 @@ def _json_rpc(url: str, method: str, params: list, timeout: float = 10.0) -> Tup
         return data, None
     except Exception as e:
         return None, str(e)[:200]
+
+
+# Alternative public HTTP endpoints for sim fallback on 429.
+_SIM_FALLBACK_HTTP: Dict[str, str] = {
+    "base": "https://base-rpc.publicnode.com",
+    "arbitrum_one": "https://arbitrum-one-rpc.publicnode.com",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +307,19 @@ def simulate_swap_rpc_fork(
             backend_label = "rpc_fork_preconf"
     else:
         data, call_err = _json_rpc(rpc_url, "eth_call", params)
+
+    # E1.23: Fallback to alternative public RPC on 429 rate limit.
+    if call_err and "HTTP 429" in call_err:
+        fallback_url = _SIM_FALLBACK_HTTP.get(chain)
+        if fallback_url and fallback_url != rpc_url:
+            logger.info(
+                "rpc_fork 429 on primary, retrying sim via fallback (%s)",
+                fallback_url.split("//")[-1][:40],
+            )
+            params[1] = "latest"  # ensure standard block tag
+            data, call_err = _json_rpc(fallback_url, "eth_call", params)
+            if not call_err:
+                sim_url = fallback_url
 
     if call_err:
         revert_reason = None

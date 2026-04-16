@@ -119,10 +119,10 @@ def _resolve_pool_addresses_multicall(
     rpc_url: str,
     block_num: int,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Resolve V3 pool addresses via batched factory.getPool() multicall.
+    """Resolve V3 + ve33 pool addresses via batched factory multicall.
 
     Returns {dex_name: [{"address": addr, "fee": fee, "liquidity": int|None}, ...]}.
-    One multicall for getPool + one for liquidity.
+    One multicall for getPool + one for liquidity/state.
     """
     from core.multicall import get_multicall_batcher
 
@@ -131,42 +131,97 @@ def _resolve_pool_addresses_multicall(
     # Build getPool queries for all V3 factories × fee tiers
     queries: List[tuple] = []  # (factory, tokenA, tokenB, fee)
     query_meta: List[tuple] = []  # (dex_name, fee)
+
+    # E1.22: ve33 raw multicall queries (batched alongside V3)
+    _ve33_raw_calls: List[tuple] = []   # (target, allowFailure, calldata)
+    _ve33_meta: List[tuple] = []        # (dex_name, stable_flag)
+
     for dex_name, cfg in dex_configs.items():
         adapter_type = cfg.get("adapter_type", "")
         factory = cfg.get("factory", "")
         if not factory:
             continue
-        if adapter_type not in ("uniswap_v3", "algebra"):
-            continue
-        fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
-        for fee in fee_tiers[:2]:  # Top 2 fee tiers only
-            queries.append((factory, token_a, token_b, fee))
-            query_meta.append((dex_name, fee))
+        if adapter_type in ("uniswap_v3", "algebra"):
+            fee_tiers = cfg.get("fee_tiers", _DEFAULT_FEE_TIERS)
+            for fee in fee_tiers:  # Query all configured tiers (batched in one multicall)
+                queries.append((factory, token_a, token_b, fee))
+                query_meta.append((dex_name, fee))
+        elif adapter_type in ("ve33",):
+            # E1.22: Batch ve33 getPool(tokenA, tokenB, stable) queries
+            # Selector: 0x79bc57d5 = getPool(address,address,bool)
+            from web3 import Web3 as _W3
+            _cs_factory = _W3.to_checksum_address(factory)
+            for _stable in (False, True):
+                _cd = bytes.fromhex("79bc57d5")
+                _cd += _W3.to_bytes(hexstr=token_a).rjust(32, b"\x00")
+                _cd += _W3.to_bytes(hexstr=token_b).rjust(32, b"\x00")
+                _cd += (1 if _stable else 0).to_bytes(32, "big")
+                _ve33_raw_calls.append((_cs_factory, True, _cd))
+                _ve33_meta.append((dex_name, _stable))
 
-    if not queries:
-        return {}
-
-    pool_addrs = batcher.batch_get_pool(queries)
-
-    # M7.A.5.12: Use batch_full_pool_data as canonical pool state source
-    # (unifies coverage scan and local-sim truth — single RPC extraction)
-    valid_addrs = [a for a in pool_addrs if a is not None]
-    full_state_map: Dict[str, Optional[Dict[str, Any]]] = {}
-    if valid_addrs:
-        full_state_map = batcher.batch_full_pool_data(valid_addrs)
-
-    # Build result grouped by dex
     result: Dict[str, List[Dict[str, Any]]] = {}
-    for i, addr in enumerate(pool_addrs):
-        dex_name, fee = query_meta[i]
-        pool_state = full_state_map.get(addr) if addr else None
-        entry = {
-            "address": addr,
-            "fee": fee,
-            "liquidity": pool_state.get("liquidity") if pool_state else None,
-            "pool_state": pool_state,  # M7.A.5.12: full state for reuse
-        }
-        result.setdefault(dex_name, []).append(entry)
+
+    # Execute V3/Algebra queries
+    if queries:
+        pool_addrs = batcher.batch_get_pool(queries)
+
+        # M7.A.5.12: Use batch_full_pool_data as canonical pool state source
+        valid_addrs = [a for a in pool_addrs if a is not None]
+        full_state_map: Dict[str, Optional[Dict[str, Any]]] = {}
+        if valid_addrs:
+            full_state_map = batcher.batch_full_pool_data(valid_addrs)
+
+        for i, addr in enumerate(pool_addrs):
+            dex_name, fee = query_meta[i]
+            pool_state = full_state_map.get(addr) if addr else None
+            entry = {
+                "address": addr,
+                "fee": fee,
+                "liquidity": pool_state.get("liquidity") if pool_state else None,
+                "pool_state": pool_state,
+            }
+            result.setdefault(dex_name, []).append(entry)
+
+    # E1.22: Execute ve33 factory queries via raw multicall batch
+    if _ve33_raw_calls:
+        try:
+            _ve33_results = batcher._execute_multicall(_ve33_raw_calls)
+            _ZERO_ADDR = "0x" + "0" * 40
+            _ve33_pool_addrs: List[str] = []
+            _ve33_pool_dex: List[tuple] = []
+            if _ve33_results:
+                from web3 import Web3 as _W3b
+                for idx, (success, data) in enumerate(_ve33_results):
+                    if success and len(data) >= 32:
+                        addr = "0x" + data[-20:].hex()
+                        if addr != _ZERO_ADDR:
+                            _ve33_pool_addrs.append(_W3b.to_checksum_address(addr))
+                            _ve33_pool_dex.append(_ve33_meta[idx])
+            # Batch getReserves() for discovered ve33 pools
+            if _ve33_pool_addrs:
+                _RESERVES_SELECTOR = bytes.fromhex("0902f1ac")
+                _reserves_calls = [
+                    (pa, True, _RESERVES_SELECTOR) for pa in _ve33_pool_addrs
+                ]
+                _reserves_results = batcher._execute_multicall(_reserves_calls)
+                for idx, pa in enumerate(_ve33_pool_addrs):
+                    dex_name, _stable = _ve33_pool_dex[idx]
+                    reserve0 = reserve1 = 0
+                    if _reserves_results and idx < len(_reserves_results):
+                        _rsuc, _rdata = _reserves_results[idx]
+                        if _rsuc and len(_rdata) >= 64:
+                            reserve0 = int.from_bytes(_rdata[0:32], "big")
+                            reserve1 = int.from_bytes(_rdata[32:64], "big")
+                    liq = reserve0 + reserve1 if (reserve0 > 0 or reserve1 > 0) else 0
+                    entry = {
+                        "address": pa,
+                        "fee": 0,
+                        "liquidity": liq,
+                        "pool_state": {"liquidity": liq, "sqrt_price_x96": reserve0, "tick": reserve1},
+                    }
+                    result.setdefault(dex_name, []).append(entry)
+        except Exception as exc:
+            logger.debug("ve33 resolve batch failed: %s", str(exc)[:80])
 
     return result
 
