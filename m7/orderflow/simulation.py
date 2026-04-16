@@ -48,6 +48,10 @@ class SimulationResult:
     simulation_id: Optional[str] = None
     error: Optional[str] = None
     backend: Optional[str] = None
+    # E1.27/C1: Sim profit extraction — compare output vs input
+    input_amount_wei: int = 0
+    sim_profit_wei: int = 0
+    sim_profit_bps: float = 0.0
 
     @property
     def passed(self) -> bool:

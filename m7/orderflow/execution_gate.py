@@ -62,6 +62,8 @@ class ExecutionGateResult:
     submit_blockers_detail: List[str] = field(default_factory=list)
     # E1.12.4: Which simulation backend was used (anvil/tenderly/None)
     simulation_backend: Optional[str] = None
+    # E1.27/C1: Sim profit tracking per gate run
+    sim_profit_bps_values: List[float] = field(default_factory=list)
 
 
 def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
@@ -523,6 +525,12 @@ def run_execution_gate(
 
         if sim_result.passed:
             gate.sim_passed += 1
+            # E1.27/C1: Store sim profit metrics on the result for telemetry
+            if hasattr(r, "sim_profit_bps"):
+                r.sim_profit_bps = sim_result.sim_profit_bps
+            if hasattr(r, "sim_profit_wei"):
+                r.sim_profit_wei = sim_result.sim_profit_wei
+            gate.sim_profit_bps_values.append(sim_result.sim_profit_bps)
             # Stage 3: Submit readiness
             # calldata_ready is True when calldata built successfully
             if hasattr(r, "calldata_ready"):

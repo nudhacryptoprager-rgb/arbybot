@@ -389,3 +389,134 @@ class TestE120FlashblocksPreconf:
         assert _is_flashblocks_sim_enabled() is False
         monkeypatch.setenv("ARBY_FLASHBLOCKS_SIM", "1")
         assert _is_flashblocks_sim_enabled() is True
+
+
+# ---------------------------------------------------------------------------
+# E1.27/C1: Sim profit extraction
+# ---------------------------------------------------------------------------
+
+class TestSimProfitExtraction:
+    """C1: sim_profit_bps computed from calldata input vs eth_call output."""
+
+    def test_v2_profit_calculated(self, monkeypatch):
+        """V2 exactInputSingle: profit = output - input."""
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://fake:8545",
+        )
+        _sel_v2 = bytes.fromhex("04e45aaf")
+        _amount_in = 1_000_000  # 1 USDC (6 dec)
+        _calldata = (
+            _sel_v2
+            + b"\x00" * 32  # tokenIn
+            + b"\x00" * 32  # tokenOut
+            + b"\x00" * 32  # fee
+            + b"\x00" * 32  # recipient
+            + _amount_in.to_bytes(32, "big")  # amountIn
+            + b"\x00" * 32  # amountOutMin
+            + b"\x00" * 32  # sqrtPriceLimit
+        )
+        output_hex = "0x" + (1_005_000).to_bytes(32, "big").hex()
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                return {"result": output_hex}, None
+            if method == "eth_estimateGas":
+                return {"result": hex(150_000)}, None
+            return None, "unknown"
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(
+            chain="base",
+            from_address="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            to_address="0x2626664c2603336E57B271c5C0b26F421741e481",
+            calldata=_calldata,
+        )
+        assert result.success
+        assert result.input_amount_wei == 1_000_000
+        assert result.sim_profit_wei == 5_000
+        assert abs(result.sim_profit_bps - 50.0) < 0.1
+
+    def test_negative_profit(self, monkeypatch):
+        """Negative profit (output < input) reported honestly."""
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://fake:8545",
+        )
+        _sel_v2 = bytes.fromhex("04e45aaf")
+        _amount_in = 1_000_000
+        _calldata = (
+            _sel_v2
+            + b"\x00" * 128  # 4 params * 32 bytes
+            + _amount_in.to_bytes(32, "big")
+            + b"\x00" * 64  # 2 more params
+        )
+        output_hex = "0x" + (990_000).to_bytes(32, "big").hex()
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                return {"result": output_hex}, None
+            if method == "eth_estimateGas":
+                return {"result": hex(150_000)}, None
+            return None, "unknown"
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(
+            chain="base",
+            from_address="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            to_address="0x2626664c2603336E57B271c5C0b26F421741e481",
+            calldata=_calldata,
+        )
+        assert result.success
+        assert result.sim_profit_wei == -10_000
+        assert result.sim_profit_bps < 0
+
+
+# ---------------------------------------------------------------------------
+# E1.27/C2: Revert reason decoding
+# ---------------------------------------------------------------------------
+
+class TestRevertReasonDecoding:
+    """C2: _decode_revert_reason parses Solidity Error/Panic from RPC errors."""
+
+    def test_human_readable_revert(self):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        result = _decode_revert_reason("execution reverted: Too little received")
+        assert result == "REVERT:Too little received"
+
+    def test_stf_revert(self):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        result = _decode_revert_reason("execution reverted: STF")
+        assert result == "REVERT:STF"
+
+    def test_abi_encoded_error_string(self):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        hex_data = (
+            "08c379a0"
+            + "0000000000000000000000000000000000000000000000000000000000000020"
+            + "0000000000000000000000000000000000000000000000000000000000000003"
+            + "5354460000000000000000000000000000000000000000000000000000000000"
+        )
+        raw = f"execution reverted: 0x{hex_data}"
+        result = _decode_revert_reason(raw)
+        assert result == "REVERT:STF"
+
+    def test_panic_overflow(self):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        hex_data = "4e487b71" + "0000000000000000000000000000000000000000000000000000000000000011"
+        raw = f"execution reverted: 0x{hex_data}"
+        result = _decode_revert_reason(raw)
+        assert result == "PANIC:overflow"
+
+    def test_bare_revert(self):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        result = _decode_revert_reason("execution reverted")
+        assert result == "REVERT:unknown"

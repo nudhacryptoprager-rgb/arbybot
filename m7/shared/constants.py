@@ -291,12 +291,13 @@ PREWARM_PAIRS_ARBITRUM = [
     ("WETH", "USDC"), ("WETH", "USDT"), ("WETH", "ARB"),
     ("USDC", "USDT"), ("WETH", "WBTC"), ("ARB", "USDC"),
 ]
-# Base production: E1.26 expanded from 3→7 pairs to reduce registry miss.
-# Includes structurally strong pairs (cross_dex >= 2) from discovery set.
+# Base production: E1.27/C3 expanded from 7→9 pairs to close DISC→PROD gap.
+# Includes all Base intent.txt pairs (structurally proven in discovery).
 PREWARM_PAIRS_BASE = [
     ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),  # core stable/wrapped
     ("AERO", "USDC"), ("AERO", "WETH"),  # Aerodrome native (cross_dex >= 2)
     ("cbBTC", "USDC"), ("cbBTC", "WETH"),  # Coinbase BTC (cross_dex >= 2)
+    ("VIRTUAL", "USDC"), ("WETH", "VIRTUAL"),  # intent.txt promoted (cross_dex >= 2)
 ]
 # M7.E1.10: Base discovery — contour cleanup.
 # Structurally stronger pairs first, meme families (cross_dex_expected=1) after.

@@ -1,170 +1,177 @@
-# STEP 4: M7 Backrun — Path to Profit (2026-04-15)
+# STEP 4: Path to Proven Profitability + Execution (E1.27, 2026-04-16)
 
-## Strategic Context
+## Стратегічний контекст
 
-Стратегічний аналіз (E1.17) порівняв три шляхи до профіту:
-- **M7 Backrun (Base)**: gap ~2-10 bps, pipeline E2E proven, структурна перевага
-- **Triangular (Base)**: код є, НІКОЛИ не тестувався, 3× gas, unknown gap
-- **2-Leg DEX↔DEX**: gap 4.90 bps, FROZEN, жодного profitable roundtrip
+**E1.26 досягнення** (pipeline breakthrough):
+- DISC: sim_passed=2, submit_ready=2 (перший раз в історії проекту)
+- DISC positive: 7/559 events (1.3% hit rate)
+- PROD: positive=0 (всі знахідки лише в discovery)
+- Sim revert rate: 71% (5/7 "execution reverted")
+- Код зрілості: 85% infra, 90% safety, 90% sim — але 0% proven profit
 
-**Рішення: M7 Backrun — однозначний переможець.**
+**Ключове питання**: Чи 2 sim_passed дійсно прибуткові? Без відповіді wiring execution безглуздий.
 
-### Production Funnel (5647 windows, Base)
+### Поточний Production Funnel (E1.26 soak 30 min)
 
-| Stage | Count | Conversion |
-|-------|-------|------------|
-| events | 2539 | — |
-| fast_scored | 876 | 34.5% |
-| fast_positive | 59 | 6.7% |
-| guard_passed | 51 | 86.4% |
-| sim_attempted | 30 | 58.8% |
-| sim_passed | 1 | 3.3% |
-| submit_ready | 0 | — |
-
-### Sim Error Histogram (30 attempts → 19 failures)
-
-| Error | Count | Fix |
-|-------|-------|-----|
-| TOKEN_ADDRESS_UNKNOWN (token0_in/token1_in) | 12 | Phase 1.1: addr_to_symbol gap |
-| DEX_CONFIG_MISSING (pool address as venue) | 6 | Phase 1.2: factory→dex lookup |
-| STF revert (ve33 ABI mismatch) | 1 | Phase 2: ve33 calldata |
-| SIGNING_NOT_READY | 1 | Phase 1.3: ARBY_PAPER_SIGNING=1 |
-
-**60% sim errors = config gaps, not code bugs.**
+| Stage | PROD | DISC |
+|-------|------|------|
+| events | 557 | 559 |
+| bridge_hits | 205 | 183 |
+| registry_miss% | 41.0% | 25.1% |
+| scored | 55 | 42 |
+| positive | 0 | **7** |
+| sim_attempted | 0 | **7** |
+| sim_passed | 0 | **2** |
+| submit_ready | 0 | **2** |
+| sim_errors | — | 5 ("execution reverted") |
 
 ---
 
-## PHASE 1: Config Coverage + rpc_fork Switch (E1.17)
-*Goal: Eliminate 18/30 config-caused sim failures + enable zero-infra simulation*
+## PHASE C: Proven Profitability (E1.27)
 
-### [x] 1.1 Fix TOKEN_ADDRESS_UNKNOWN — addr_to_symbol населення
-- **Проблема**: 12 sim failures — hot path бачить tokenі як `token0_in`/`token1_in` direction tags.
-  `backrun_token_in_address` заповнений (адреса є!), але execution_gate fallback на
-  `get_token_address(chain, "token0_in")` — і це природно фейлить.
-- **Root cause**: `actual_pair` містить direction тоді коли `addr_to_symbol` не має символу.
-  Але `backrun_token_in_address`/`backrun_token_out_address` вже populated!
-- **Fix**: execution_gate.py — перевірити чи token_in_addr/token_out_addr вже є BEFORE symbol lookup
-- **Impact**: TOKEN_ADDRESS_UNKNOWN 12 → 0
+### C1. Sim Profit Extraction — дізнатися P&L кожного sim_passed
 
-### [x] 1.2 Fix DEX_CONFIG_MISSING — pool→dex reverse lookup
-- **Проблема**: 6 sim failures — `best_buy_venue` = pool address (0x765b..., 0xe4e9..., etc.)
-  замість DEX name. Fallback iterates 4 configured DEXes but fails for unknown pools.
-- **Root cause**: scoring path returns pool address when pool not in configured DEX set.
-  execution_gate fallback already checks uniswap_v3/aerodrome/sushiswap/pancake but pool
-  isn't in any of their factory registries.
-- **Fix**: Add factory address matching via on-chain `factory()` call on pool contract,
-  then map factory→dex_key using config/dexes.yaml factory addresses.
-- **Impact**: DEX_CONFIG_MISSING 6 → ~0
+**Проблема**: `sim_passed` = "swap не reverted" ≠ "прибуткова угода". `SimulationResult` повертає `output_amount_wei`, але ніхто не порівнює з `input_amount_wei`. Ми не знаємо, чи 2 sim_passed дали +3 bps або -5 bps.
 
-### [x] 1.3 Switch sim backend: anvil → rpc_fork
-- **Проблема**: production rollup shows `simulation_backend: "anvil"` — потребує Anvil process
-  якого нема. rpc_fork backend (E1.16) працює на production RPC без зовнішньої інфри.
-- **Fix**: Set `ARBY_SIM_BACKEND=rpc_fork` + `ARBY_PAPER_SIGNING=1` в env
-- **Impact**: sim працює без Anvil; SIGNING_NOT_READY → submit_ready
+**Файли**:
+- [ ] `m7/orderflow/sim_backends/rpc_fork_backend.py` — додати `sim_profit_wei`, `sim_profit_bps` в `SimulationResult`
+- [ ] `m7/orderflow/execution_gate.py` — після sim_passed: зберегти `sim_profit_bps` в `BackrunResult`
+- [ ] `m7/orderflow/hot_runtime_artifacts.py` — додати в rollup: `sim_profit_bps_median`, `sim_profit_bps_best`, `sim_profitable_count`
+- [ ] `tests/unit/test_rpc_fork_backend.py` — тест sim_profit_bps обчислення
 
-### [x] 1.4 Validate — tests + quick scan
-- `py -3.11 -m pytest tests/unit -q`
-- Live scan 15 min з rpc_fork + paper signing
-- **Target**: sim_attempted 30→51, sim_passed 1→~2+, submit_ready > 0
+**Формула**:
+```python
+sim_profit_wei = output_amount_wei - input_amount_wei
+sim_profit_bps = (sim_profit_wei / input_amount_wei) * 10000
+```
+
+**Перевірка**: Soak 30 хв → rolling показує `sim_profit_bps` для кожного sim_passed
+**Exit**: Знаємо точний P&L кожної симуляції
 
 ---
 
-## PHASE 2: ve33 Calldata Encoder (E1.18)
-*Goal: Unlock Aerodrome — dominant Base DEX (~40% volume)*
+### C2. Revert Reason Diagnosis — 71% revert → <30%
 
-### [x] 2.1 Implement Velodrome/Aerodrome calldata builder
-- **Проблема**: ve33 adapter uses `exactInputSingle` (Uniswap V3 ABI) → reverts on
-  Velodrome Router (`0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43`)
-- Velodrome Router API: `swapExactTokensForTokens(amountIn, amountOutMin, routes[], to, deadline)`
-  де `routes` = `[(from, to, stable, factory)]`
-- **File**: `m7/orderflow/execution_gate.py` — add `_encode_velodrome_swap()` alongside existing
-  `_encode_exact_input_single()`
-- **Impact**: Aerodrome pools перестануть STF-реvertити
+**Проблема**: 5/7 sim_attempted дають generic "execution reverted". Не зрозуміло: SLIPPAGE (stale price) vs LIQUIDITY (pool empty) vs ABI mismatch vs інше.
 
-### [x] 2.2 Add ve33 to rpc_fork_backend router dispatch
-- **File**: `m7/orderflow/sim_backends/rpc_fork_backend.py` — currently only handles V3 calldata
-- Add Velodrome router calldata path
-- **Impact**: sim_attempted ↑ (all Aerodrome pools simulatable)
+**Файли**:
+- [ ] `m7/orderflow/sim_backends/rpc_fork_backend.py` — decode revert data: `Error(string)` selector `0x08c379a0`, `Panic(uint256)` selector `0x4e487b71`
+- [ ] `m7/orderflow/execution_gate.py` — передавати decoded reason замість raw "execution reverted"
+- [ ] `m7/orderflow/hot_runtime_artifacts.py` — `simulation_error_histogram` з decoded reasons (не generic)
 
-### [x] 2.3 Tests + validation
-- Unit tests for velodrome calldata encoding
-- Live scan with aerodrome pools included
-- **Target**: STF errors → 0
+**Класифікація**:
+| Revert | Причина | Дія |
+|--------|---------|-----|
+| "Too little received" / "Insufficient output" | SLIPPAGE — stale price між scoring і sim | Зменшити затримку або збільшити tolerance |
+| "Too old" / "Transaction too old" | DEADLINE — calldata deadline expired | Збільшити deadline |
+| "SPL" / Panic(0x11) | LIQUIDITY — overflow/underflow | Фільтрувати пули по TVL |
+| Empty revert / unknown | ABI mismatch | Перевірити calldata encoding |
+
+**Перевірка**: Histogram показує конкретні reasons замість generic "execution reverted"
+**Exit**: Знаємо root cause 71% revert rate → конкретний action plan
 
 ---
 
-## PHASE 3: Peak-Hours Production Soak (E1.19)
-*Goal: First real submit_ready > 0 on production market*
+### C3. DISC→PROD Pool Promotion — PROD positive > 0
 
-### [ ] 3.1 Prepare env for peak soak
-- `ARBY_SIM_BACKEND=rpc_fork`
-- `ARBY_PAPER_SIGNING=1`
-- `BASE_RPC=<drpc_url>` (premium, low latency)
-- `BASE_WSS=<drpc_wss>` (premium WS)
+**Проблема**: Discovery знаходить 7 positive, PROD знаходить 0. DISC сканує 7 пар, PROD — ті самі 7, але різний universe пулів через discovery lane. config/intent.txt має 42 пари, але M7 hot loop використовує хардкожений `PREWARM_PAIRS_BASE`.
 
-### [ ] 3.2 Run 14:00-22:00 UTC soak (8 hours)
-- Peak Base activity = more large swaps = better backrun margins
-- Monitor rolling artifacts every 30 min
-- **Target**: submit_ready ≥ 5, positive net_bps in at least 1 event
+**Файли**:
+- [ ] `m7/shared/constants.py` — розширити `PREWARM_PAIRS_BASE` парами з intent.txt (7→20+)
+- [ ] `m7/orderflow/loop_runner.py` — (якщо потрібно) dynamic pair loading з config/intent.txt
+- [ ] `tests/unit/test_e1_9_discovery_lane.py` — оновити очікувану кількість пар
 
-### [ ] 3.3 Analyze soak results
-- Conversion rate at each funnel stage
-- sim_passed/sim_attempted ratio with config fixes
-- Identify remaining blockers (if any)
+**Стратегія**: Не автоматичний promotion, а розширення PROD universe до рівня DISC. Якщо DISC бачить сигнали на парах X — додати X в PROD.
+
+**Перевірка**: PROD pipeline з розширеними парами → PROD positive > 0
+**Exit**: PROD і DISC мають однакове покриття → PROD positive > 0
 
 ---
 
-## PHASE 4: Flashblocks Integration (E1.20)
-*Goal: Sub-block latency edge → cross gap-to-zero*
+## PHASE S: 3-годинний Production Soak (E1.27.S)
 
-### [ ] 4.1 Flashblocks WS connection
-- URL: `wss://mainnet-preconf.base.org` (app-level)
-- Parse pre-confirmed block payloads for large swap events
-- **Edge**: 200ms pre-confirmation → see swaps before other backrunners
+### S1. Підготовка
+- [ ] Всі зміни C1-C3 merged + тести зелені
+- [ ] ENV: `ARBY_SIM_BACKEND=rpc_fork`, `ARBY_PAPER_SIGNING=1`, `ARBY_HOT_STALE_BLOCKS=150`
+- [ ] ENV: `ARBY_FLASHBLOCKS_SIM=1`, `ARBY_FLASHBLOCKS_HTTP=https://mainnet-preconf.base.org`
+- [ ] ENV: `BASE_RPC=https://mainnet.base.org`, `BASE_WSS=wss://base-rpc.publicnode.com`
 
-### [ ] 4.2 Flashblocks → hot scoring pipeline
-- Feed flashblock events into existing hot scoring path
-- Same guard → sim → submit pipeline, just earlier data
-- **Impact**: 1-2 bps latency advantage over non-flashblock competitors
+### S2. Запуск 3-годинного soak
+- [ ] `py -3.11 scripts/start_nonstop_runtime.py --chain base --hours 3 --with-discovery --no-m4`
+- [ ] Моніторинг кожні 30 хв: rolling artifacts, dashboard
 
-### [ ] 4.3 Validate latency improvement
-- Compare: standard WS vs flashblocks WS event-to-score latency
-- **Target**: gap-to-zero crosses below 0 → net positive P&L
+### S3. Аналіз після soak
+- [ ] Перевірити `sim_profit_bps_best` — чи є ХОЧА Б ОДИН позитивний
+- [ ] Перевірити revert histogram — які decoded reasons домінують
+- [ ] Перевірити PROD positive — чи з'явились після promotion
+- [ ] Порівняти з E1.26 baseline: sim_passed, submit_ready, positive counts
+- [ ] **GO/NO-GO рішення**: якщо sim_profit_bps > 0 → переходити до A1 (execution wiring)
 
 ---
 
-## PHASE 5: Triangular Exploration (E1.21, stretch)
-*Goal: Diversification play — only AFTER Phases 1-4 proven*
+## PHASE A: Execution Wiring (E1.28, тільки якщо Phase S = GO)
 
-### [ ] 5.1 Run triangular CLI on Base (diagnostic only)
-- `m7/triangular/cli.py` already supports Base universe (8 tokens, 4 DEXes)
-- Single diagnostic run to measure cycle economics
-- **Gate**: proceed only if any cycle shows gap < 5 bps
+### A1. Wire `sign_and_send` — підключити реальний підпис
 
-### [ ] 5.2 Integrate triangular into hot pipeline (if viable)
-- Wire `find_3hop_cycles()` + `score_cycle_measured()` into hot scoring
-- 3× gas penalty makes this viable only for large dislocations
+**Передумова**: Phase S підтвердив sim_profit_bps > 0 хоча б для 1 транзакції.
+
+**Файли**:
+- [ ] Створити `execution/signer.py`:
+  ```python
+  async def make_signer(chain: str) -> Callable[[dict], str]:
+      key = os.environ["ARBY_PRIVATE_KEY"]  # або keystore JSON
+      account = Account.from_key(key)
+      async def sign_and_send(tx_dict: dict) -> str:
+          signed = account.sign_transaction(tx_dict)
+          tx_hash = await provider.send_raw_transaction(signed.raw_transaction)
+          return tx_hash.hex()
+      return sign_and_send
+  ```
+- [ ] `execution/private_tx.py` — Base Flashbots Protect RPC submission:
+  ```python
+  # POST eth_sendRawTransaction до https://rpc.flashbots.net/base
+  # Це 1 HTTP виклик — не потрібен bundle builder для Base
+  ```
+- [ ] Wire в `m7/orderflow/loop_runner.py`: submit_ready → execute_live()
+- [ ] Тест на Base Sepolia testnet
+
+**Перевірка**: Unit test з web3 Account.from_key → sign → verify
+**Exit**: Перша реальна транзакція на testnet
 
 ---
 
 ## SUCCESS METRICS
 
-| Phase | Metric | Current | Target |
-|-------|--------|---------|--------|
-| 1 | sim errors from config gaps | 18/30 | 0/30 |
-| 1 | sim_attempted | 30 | 51+ |
-| 1 | submit_ready | 0 | ≥1 |
-| 2 | STF reverts (ve33) | 1 | 0 |
-| 2 | Aerodrome pools simulatable | 0 | all |
-| 3 | submit_ready / 8h soak | 0 | ≥5 |
-| 4 | event-to-score latency | ~2s | <200ms |
-| 4 | net_bps (best) | negative | >0 |
+| Phase | Metric | Baseline (E1.26) | Target |
+|-------|--------|-------------------|--------|
+| C1 | sim_profit_bps known | ❌ unknown | ✅ known for every sim_passed |
+| C2 | revert reasons decoded | 0% | 100% (no generic "execution reverted") |
+| C2 | revert rate | 71% (5/7) | <40% |
+| C3 | PROD positive | 0 | ≥3 |
+| C3 | PROD pairs | 7 | 20+ |
+| S | sim_profitable_count | unknown | ≥1 (GO) or 0 (NO-GO) |
+| S | sim_profit_bps_best | unknown | >0 (GO condition) |
+| S | 3h stability | 30 min proven | 3h 0 restarts |
+| A1 | sign_and_send wired | ❌ paper only | ✅ testnet proven |
+
+---
+
+## GO/NO-GO GATE (після Phase S)
+
+| Condition | GO → Phase A | NO-GO → Pivot |
+|-----------|-------------|---------------|
+| sim_profit_bps_best > 0 | ✅ Wire execution | Diagnose: чому profitable scoring → unprofitable sim |
+| revert_rate < 40% | ✅ Continue | Focus: fix dominant revert reason |
+| PROD positive > 0 | ✅ Expand | Widen universe further |
+| 3h soak stable | ✅ Production-ready infra | Fix crash/restart issues first |
+
+**Якщо NO-GO**: Альтернативний шлях — Flashblocks timing edge (200ms preconf submission) або cross-chain arb (M8).
 
 ---
 
 ## KEY INSIGHT
 
-M7 Backrun має **структурну перевагу**: ми торгуємо ПІСЛЯ відомого price impact,
-конкуруючи лише з іншими backrunners (не з усім MEV-пулом як у 2-leg/triangular).
-60% поточних sim failures — це config gaps, а не market blockers.
-Виправлення конфігу + rpc_fork + paper signing = перший submit_ready БЕЗ зміни коду pipeline.
+Ми на порозі відповіді на головне питання проекту: **чи є реальний profit у M7 backrun?**
+Phase C дасть конкретні числа (sim_profit_bps), Phase S дасть статистичну значимість (3 години),
+Phase A дасть реальне виконання (перша tx на testnet).
+Без C1 (profit extraction) все інше — гадання.

@@ -198,6 +198,62 @@ _SIM_FALLBACK_HTTP: Dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# E1.27/C2: Revert reason decoder
+# ---------------------------------------------------------------------------
+
+def _decode_revert_reason(raw_error: str) -> str:
+    """Decode Solidity revert reason from RPC error message.
+
+    RPC nodes embed revert data in error messages in various formats:
+      - "execution reverted: Too little received"  (human-readable)
+      - "execution reverted: 0x08c379a0..."        (ABI-encoded Error(string))
+      - "execution reverted"                        (no data)
+    """
+    # Case 1: Already human-readable after "execution reverted: "
+    _prefix = "execution reverted: "
+    idx = raw_error.lower().find(_prefix.lower())
+    if idx >= 0:
+        after = raw_error[idx + len(_prefix):].strip()
+        if after and not after.startswith("0x"):
+            return f"REVERT:{after[:120]}"
+        # Case 2: ABI-encoded Error(string) — selector 0x08c379a0
+        if after.startswith("0x08c379a0") and len(after) >= 138:
+            try:
+                hex_data = after[2:]  # strip 0x
+                # Error(string): selector(8) + offset(64) + length(64) + data
+                str_len = int(hex_data[72:136], 16)
+                str_bytes = bytes.fromhex(hex_data[136:136 + str_len * 2])
+                decoded = str_bytes.decode("utf-8", errors="replace").strip()
+                if decoded:
+                    return f"REVERT:{decoded[:120]}"
+            except Exception:
+                pass
+        # Case 3: ABI-encoded Panic(uint256) — selector 0x4e487b71
+        if after.startswith("0x4e487b71") and len(after) >= 74:
+            try:
+                panic_code = int(after[10:74], 16)
+                _PANIC_CODES = {
+                    0x00: "generic",
+                    0x01: "assert_failed",
+                    0x11: "overflow",
+                    0x12: "div_by_zero",
+                    0x21: "enum_conversion",
+                    0x22: "storage_encoding",
+                    0x31: "pop_empty",
+                    0x32: "index_out_of_bounds",
+                    0x41: "too_much_memory",
+                    0x51: "zero_init_fn_ptr",
+                }
+                desc = _PANIC_CODES.get(panic_code, f"code_{panic_code}")
+                return f"PANIC:{desc}"
+            except Exception:
+                pass
+        if after:
+            return f"REVERT:hex:{after[:64]}"
+    return f"REVERT:unknown"
+
+
+# ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
 
@@ -324,7 +380,7 @@ def simulate_swap_rpc_fork(
     if call_err:
         revert_reason = None
         if "revert" in call_err.lower() or "execution reverted" in call_err.lower():
-            revert_reason = call_err
+            revert_reason = _decode_revert_reason(call_err)
         return SimulationResult(
             success=False,
             error=call_err,
@@ -364,14 +420,40 @@ def simulate_swap_rpc_fork(
         except ValueError:
             pass
 
+    # E1.27/C1: Extract input_amount from calldata for profit calculation.
+    input_amount = 0
+    if len(calldata) >= 36:
+        try:
+            selector = calldata[:4]
+            _VE33_SEL = bytes.fromhex("cac88ea9")
+            _V2_SEL = bytes.fromhex("04e45aaf")   # SwapRouter02 exactInputSingle
+            _V1_SEL = bytes.fromhex("414bf389")   # SwapRouter  exactInputSingle (legacy)
+            if selector == _VE33_SEL:
+                # Velodrome: amountIn at bytes [4:36]
+                input_amount = int.from_bytes(calldata[4:36], "big")
+            elif selector == _V1_SEL and len(calldata) >= 196:
+                # V1: (tokenIn, tokenOut, fee, recipient, deadline, amountIn, ...)
+                input_amount = int.from_bytes(calldata[4 + 160:4 + 192], "big")
+            elif len(calldata) >= 164:
+                # V2: (tokenIn, tokenOut, fee, recipient, amountIn, ...)
+                input_amount = int.from_bytes(calldata[4 + 128:4 + 160], "big")
+        except Exception:
+            pass
+
+    sim_profit_wei = output_amount - input_amount if input_amount > 0 else 0
+    sim_profit_bps = (sim_profit_wei / input_amount * 10000) if input_amount > 0 else 0.0
+
     logger.info(
-        "rpc_fork sim OK: chain=%s, gas=%d, output=%d, backend=%s",
-        chain, gas, output_amount, backend_label,
+        "rpc_fork sim OK: chain=%s, gas=%d, output=%d, input=%d, profit_bps=%.2f, backend=%s",
+        chain, gas, output_amount, input_amount, sim_profit_bps, backend_label,
     )
 
     return SimulationResult(
         success=True,
         gas_used=gas,
         output_amount_wei=output_amount,
+        input_amount_wei=input_amount,
+        sim_profit_wei=sim_profit_wei,
+        sim_profit_bps=sim_profit_bps,
         backend=backend_label,
     )

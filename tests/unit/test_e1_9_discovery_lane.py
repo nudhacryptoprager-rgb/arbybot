@@ -103,6 +103,7 @@ class TestProductionBackwardCompat:
             ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),
             ("AERO", "USDC"), ("AERO", "WETH"),
             ("cbBTC", "USDC"), ("cbBTC", "WETH"),
+            ("VIRTUAL", "USDC"), ("WETH", "VIRTUAL"),
         ]
 
     def test_production_arbitrum_pairs_unchanged(self):

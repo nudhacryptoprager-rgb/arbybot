@@ -1003,6 +1003,15 @@ def _update_hot_rollup(
             rollup.get("submit_ready_total", 0) + gate_result.submit_ready
         )
         rollup["sim_disabled"] = gate_result.sim_disabled
+        # E1.27/C1: Cumulative sim profit metrics
+        _sim_bps_vals = getattr(gate_result, "sim_profit_bps_values", [])
+        if _sim_bps_vals:
+            _all_bps = rollup.get("_sim_profit_bps_all", []) + _sim_bps_vals
+            rollup["_sim_profit_bps_all"] = _all_bps
+            rollup["sim_profit_bps_best"] = max(_all_bps)
+            rollup["sim_profit_bps_worst"] = min(_all_bps)
+            rollup["sim_profitable_count"] = sum(1 for v in _all_bps if v > 0)
+            rollup["sim_profit_bps_median"] = sorted(_all_bps)[len(_all_bps) // 2]
         # E1.12.4: Record which simulation backend is active
         rollup["simulation_backend"] = getattr(gate_result, "simulation_backend", None)
         if gate_result.sim_blocker:
