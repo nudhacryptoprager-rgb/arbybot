@@ -267,7 +267,7 @@ class PoolRegistry:
                             address=pa.lower(),
                             dex=dex_name,
                             adapter_type="ve33",
-                            fee=0,
+                            fee=1 if _stable else 0,  # E1.24: 0=volatile, 1=stable (for pricing fee model)
                             token_a=token_a,
                             token_b=token_b,
                             liquidity=reserve0 + reserve1 if (reserve0 > 0 or reserve1 > 0) else 0,

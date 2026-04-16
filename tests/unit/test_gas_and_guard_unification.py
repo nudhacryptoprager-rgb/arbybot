@@ -9,7 +9,7 @@ from m7.shared.constants import estimate_gas_cost, get_min_profitable_size_wei
 class TestUnifiedGasEstimation:
     def test_estimate_gas_cost_base_small_size_is_dynamic(self):
         gas_bps, gas_cost_wei = estimate_gas_cost("base", 10**16)
-        assert gas_bps >= 0.5
+        assert gas_bps >= 0.15
         assert gas_cost_wei > 0
 
     def test_min_profitable_size_scales_by_decimals(self):

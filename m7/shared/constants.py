@@ -188,7 +188,10 @@ ALL_SURFACES = frozenset({
 # ---------------------------------------------------------------------------
 # Thresholds and sizing
 # ---------------------------------------------------------------------------
-MIN_EVENT_SIZE_USD = 100.0
+# E1.24: Raised from 100 to 500 — micro-events (<$500) have negligible
+# spread and dominate reject histogram as noise. $500+ events show
+# meaningful price impact and wider cross-venue spreads.
+MIN_EVENT_SIZE_USD = 500.0
 SIGNIFICANT_IMPACT_BPS = 5.0
 DEFAULT_BACKRUN_GAS = 200_000
 DEFAULT_GAS_PRICE_GWEI = 0.1  # legacy fallback; prefer get_gas_price_gwei(chain)
@@ -232,8 +235,11 @@ _DEFAULT_FEE_TIERS = [500, 3000, 100, 10000]
 GAS_FLOOR_BPS_ARBITRUM = 2.0  # ~2 bps baseline gas cost on Arbitrum
 
 # M7.E1: Base gas floor — significantly cheaper than Arbitrum (no L1 data poster
-# component at current base fee levels; typical swap cost ~0.1-0.3 bps).
-GAS_FLOOR_BPS_BASE = 0.5
+# component at current base fee levels; typical swap cost ~0.002 bps).
+# E1.24: Lowered from 0.5 to 0.15 based on 30-min production evidence showing
+# real gas_bps = 0.002 (L2=0.0004, L1=0.0016). Old 0.5 floor caused
+# false GAS_EXCEEDS_GROSS rejects on events with 0.3-0.5 bps gross spread.
+GAS_FLOOR_BPS_BASE = 0.15
 
 # ---------------------------------------------------------------------------
 # M7.A.5.27: Timeboost ordering — Arbitrum express lane constants

@@ -70,7 +70,7 @@ class TestEventClassification:
         assert classify_event_viability(e) == REJECT_EVENT_TOO_SMALL
 
     def test_viability_rejects_zero_impact(self):
-        e = _make_event(estimated_impact_bps=0.0)
+        e = _make_event(estimated_impact_bps=0.0, estimated_size_usd=1000.0)
         assert classify_event_viability(e) == REJECT_INSUFFICIENT_IMPACT
 
     def test_viability_accepts_normal_event(self):
@@ -117,7 +117,7 @@ class TestBackrunScoring:
         assert r.route_viable is False
 
     def test_score_offline_zero_impact_rejected(self):
-        e = _make_event(estimated_impact_bps=0.0)
+        e = _make_event(estimated_impact_bps=0.0, estimated_size_usd=1000.0)
         r = score_backrun_offline(e)
         assert r.reject_reason == REJECT_INSUFFICIENT_IMPACT
 

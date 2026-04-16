@@ -215,7 +215,7 @@ def _resolve_pool_addresses_multicall(
                     liq = reserve0 + reserve1 if (reserve0 > 0 or reserve1 > 0) else 0
                     entry = {
                         "address": pa,
-                        "fee": 0,
+                        "fee": 1 if _stable else 0,  # E1.24: 0=volatile, 1=stable
                         "liquidity": liq,
                         "pool_state": {"liquidity": liq, "sqrt_price_x96": reserve0, "tick": reserve1},
                     }

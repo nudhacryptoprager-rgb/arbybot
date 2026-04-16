@@ -1566,11 +1566,11 @@ class TestM7A532ScoreBackrunFast:
         from m7.shared.constants import DEFAULT_BACKRUN_GAS, DEFAULT_GAS_PRICE_GWEI, GAS_FLOOR_BPS_BASE
 
         backrun_size_wei = 1000 * 10**6  # 1000 USDC in 6-decimal wei
-        gas_bps = GAS_FLOOR_BPS_BASE     # 0.5 bps for Base
+        gas_bps = GAS_FLOOR_BPS_BASE     # 0.15 bps for Base
 
         # Correct: gas cost derived from bps in token denomination
         gas_cost_token = int(backrun_size_wei * gas_bps / 10000)
-        assert gas_cost_token == 50_000, f"Expected 50000 (0.05 USDC), got {gas_cost_token}"
+        assert gas_cost_token == 15_000, f"Expected 15000 (0.015 USDC), got {gas_cost_token}"
 
         # Old buggy formula: ETH-denominated — must be much larger
         gas_cost_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)

@@ -19,7 +19,7 @@ def _make_event(eid="e1", block=100, **overrides) -> OrderflowEvent:
         dex="uniswap_v3",
         pool_address="0xpool",
         fee_tier=3000,
-        estimated_size_usd=100.0,
+        estimated_size_usd=1000.0,
         estimated_impact_bps=5.0,
         timestamp="2025-01-01T00:00:00Z",
     )

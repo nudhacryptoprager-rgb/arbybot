@@ -219,7 +219,11 @@ def counter_venue_coverage_scan(
     for dex_name in known_dexes:
         cfg = dex_configs.get(dex_name, {})
         quoter = cfg.get("quoter_v2") or cfg.get("quoter")
-        if quoter:
+        # E1.24: ve33 (Aerodrome) pools use local reserve-based pricing,
+        # not a quoter contract — count them as having quote capability.
+        _adapter = cfg.get("adapter_type", "")
+        has_quote_capability = bool(quoter) or _adapter in ("ve33", "uniswap_v2")
+        if has_quote_capability:
             buy_venues += 1
             sell_venues += 1  # same quoter can do both directions
             if dex_name in active_dexes:

@@ -286,8 +286,8 @@ def attempt_local_pricing(
         sqrt_price = state.get("sqrt_price_x96", 0)
         liq = state.get("liquidity", 0)
 
-        if adapter == "uniswap_v2":
-            # V2: sqrt_price_x96 = reserve0, tick = reserve1
+        if adapter in ("uniswap_v2", "ve33"):
+            # V2/ve33: sqrt_price_x96 = reserve0, tick = reserve1
             reserve0 = sqrt_price
             reserve1 = state.get("tick", 0)
             if reserve0 > 0 and reserve1 > 0:
@@ -295,13 +295,24 @@ def attempt_local_pricing(
                 # Determine which reserve is "in" vs "out"
                 r_in = reserve0 if zero_for_one else reserve1
                 r_out = reserve1 if zero_for_one else reserve0
-                out = compute_v2_swap_amount_out(r_in, r_out, backrun_size_wei)
+                # E1.24: ve33 fee model — Aerodrome volatile=0.3% (997/1000),
+                # stable=0.01% (9999/10000). Default to volatile.
+                _fee_num = 997
+                _fee_den = 1000
+                if adapter == "ve33" and fee == 1:
+                    # fee==1 signals stable pool (from _stable flag)
+                    _fee_num = 9999
+                    _fee_den = 10000
+                out = compute_v2_swap_amount_out(
+                    r_in, r_out, backrun_size_wei,
+                    fee_numerator=_fee_num, fee_denominator=_fee_den,
+                )
                 if out is not None and out > best_buy_amount:
                     best_buy_amount = out
                     best_buy_pool = addr
-                    best_buy_dex = _dex_map.get(addr.lower() if addr else "", "uniswap_v2")
+                    best_buy_dex = _dex_map.get(addr.lower() if addr else "", adapter)
                     best_buy_fee = fee
-                    best_buy_path = "v2_local"
+                    best_buy_path = "ve33_local" if adapter == "ve33" else "v2_local"
                     pools_succeeded += 1
         elif adapter == "algebra":
             # Algebra: same math as V3 but fee may be dynamic
@@ -364,18 +375,26 @@ def attempt_local_pricing(
         sqrt_price = state.get("sqrt_price_x96", 0)
         liq = state.get("liquidity", 0)
 
-        if adapter == "uniswap_v2":
+        if adapter in ("uniswap_v2", "ve33"):
             reserve0 = sqrt_price
             reserve1 = state.get("tick", 0)
             if reserve0 > 0 and reserve1 > 0:
                 # Reverse direction for sell
                 r_in = reserve1 if zero_for_one else reserve0
                 r_out = reserve0 if zero_for_one else reserve1
-                out = compute_v2_swap_amount_out(r_in, r_out, best_buy_amount)
+                _fee_num = 997
+                _fee_den = 1000
+                if adapter == "ve33" and fee == 1:
+                    _fee_num = 9999
+                    _fee_den = 10000
+                out = compute_v2_swap_amount_out(
+                    r_in, r_out, best_buy_amount,
+                    fee_numerator=_fee_num, fee_denominator=_fee_den,
+                )
                 if out is not None and out > best_sell_amount:
                     best_sell_amount = out
                     best_sell_pool = addr
-                    best_sell_dex = _dex_map.get(addr.lower() if addr else "", "uniswap_v2")
+                    best_sell_dex = _dex_map.get(addr.lower() if addr else "", adapter)
                     best_sell_fee = fee
         elif adapter == "algebra":
             if sqrt_price > 0 and liq > 0:

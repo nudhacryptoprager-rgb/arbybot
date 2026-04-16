@@ -345,12 +345,15 @@ def _build_sim_tx_params(
         if adapter_type in _VE33_ADAPTERS:
             # Velodrome/Aerodrome V2: Route-based swap
             factory = dex_cfg.get("factory", _AERODROME_FACTORY_DEFAULT)
+            # E1.24: Detect stable from pool fee field (0=volatile, 1=stable)
+            _pool_fee = getattr(result, "best_buy_fee", 0) or 0
+            _is_stable = (_pool_fee == 1)
             calldata = _encode_velodrome_swap(
                 token_in=token_in_addr,
                 token_out=token_out_addr,
                 recipient="0x0000000000000000000000000000000000000001",
                 amount_in=amount,
-                stable=False,  # volatile pool default; stable detection deferred
+                stable=_is_stable,
                 factory=factory,
             )
         else:

@@ -101,7 +101,7 @@ class TestGasFloor:
         base_floor = get_gas_floor_bps("base")
         arb_floor = get_gas_floor_bps("arbitrum_one")
         assert base_floor < arb_floor
-        assert base_floor == 0.5
+        assert base_floor == 0.15
 
     def test_unknown_chain_falls_back_to_arbitrum(self):
         assert get_gas_floor_bps("unknown") == GAS_FLOOR_BPS_ARBITRUM
@@ -122,7 +122,7 @@ class TestBackwardCompatibility:
         assert len(PREWARM_PAIRS_ARBITRUM) == 6
 
     def test_gas_floor_bps_base_exists(self):
-        assert GAS_FLOOR_BPS_BASE == 0.5
+        assert GAS_FLOOR_BPS_BASE == 0.15
 
 
 # ---------------------------------------------------------------------------
@@ -923,12 +923,12 @@ class TestE1_6_StrictExecutableSemantics:
 
 class TestE1_6_ChainAwareGasFloor:
     """M7.E1.6: check_profit_guard must use chain-aware gas floor.
-    Base = 0.5 bps, Arbitrum = 2.0 bps."""
+    Base = 0.15 bps, Arbitrum = 2.0 bps."""
 
     def test_profit_guard_base_uses_base_gas(self):
         from m7.orderflow.profit_guard import check_profit_guard
-        # Construct amounts that pass Base gas floor (0.5 bps) but fail Arbitrum (2.0 bps)
-        # net_bps ~= 1.5 bps (pass Base 0.5, fail Arbitrum 2.0)
+        # Construct amounts that pass Base gas floor (0.15 bps) but fail Arbitrum (2.0 bps)
+        # net_bps ~= 1.5 bps (pass Base 0.15, fail Arbitrum 2.0)
         size = 10**18  # 1 token
         gross_bps = 1.5
         gross_wei = int(size * gross_bps / 10000)
