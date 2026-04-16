@@ -71,9 +71,28 @@ class TestStateOverrideBuilder:
         )
         token_key = list(overrides.keys())[0]
         diff = overrides[token_key]["stateDiff"]
-        # Should have balance slots (6 slots) + allowance slots (6 * 3 offsets = 18)
-        # Total: 6 + 18 = 24 slots
+        # E1 widened coverage — should have at least len(_COMMON_BALANCE_SLOTS) balance
+        # slots plus multiple allowance offsets.
         assert len(diff) >= len(_COMMON_BALANCE_SLOTS)
+
+    def test_extra_balance_slots_from_env(self, monkeypatch):
+        """E1: ARBY_SIM_EXTRA_BALANCE_SLOTS augments _COMMON_BALANCE_SLOTS."""
+        from m7.orderflow.sim_backends.rpc_fork_backend import (
+            _effective_balance_slots, _COMMON_BALANCE_SLOTS,
+        )
+        monkeypatch.setenv("ARBY_SIM_EXTRA_BALANCE_SLOTS", "200,201,202")
+        slots = _effective_balance_slots()
+        assert 200 in slots and 201 in slots and 202 in slots
+        for base in _COMMON_BALANCE_SLOTS:
+            assert base in slots
+
+    def test_extra_balance_slots_invalid_env_ignored(self, monkeypatch):
+        from m7.orderflow.sim_backends.rpc_fork_backend import (
+            _effective_balance_slots, _COMMON_BALANCE_SLOTS,
+        )
+        monkeypatch.setenv("ARBY_SIM_EXTRA_BALANCE_SLOTS", "not-an-int")
+        slots = _effective_balance_slots()
+        assert slots == list(_COMMON_BALANCE_SLOTS)
 
 
 class TestHashingCompat:
@@ -392,14 +411,14 @@ class TestE120FlashblocksPreconf:
 
 
 # ---------------------------------------------------------------------------
-# E1.27/C1: Sim profit extraction
+# E1.27/D1: Raw sim input/output amounts (profit_bps removed due to decimals bug)
 # ---------------------------------------------------------------------------
 
 class TestSimProfitExtraction:
-    """C1: sim_profit_bps computed from calldata input vs eth_call output."""
+    """D1: raw input_amount_wei and output_amount_wei are captured correctly."""
 
     def test_v2_profit_calculated(self, monkeypatch):
-        """V2 exactInputSingle: profit = output - input."""
+        """V2 exactInputSingle: input_amount_wei decoded from calldata."""
         monkeypatch.setattr(
             "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
             lambda chain: "http://fake:8545",
@@ -438,8 +457,9 @@ class TestSimProfitExtraction:
         )
         assert result.success
         assert result.input_amount_wei == 1_000_000
-        assert result.sim_profit_wei == 5_000
-        assert abs(result.sim_profit_bps - 50.0) < 0.1
+        assert result.output_amount_wei == 1_005_000
+        # D1: sim_profit_bps fields removed due to cross-decimals bug.
+        assert not hasattr(result, "sim_profit_bps")
 
     def test_negative_profit(self, monkeypatch):
         """Negative profit (output < input) reported honestly."""
@@ -476,8 +496,8 @@ class TestSimProfitExtraction:
             calldata=_calldata,
         )
         assert result.success
-        assert result.sim_profit_wei == -10_000
-        assert result.sim_profit_bps < 0
+        assert result.input_amount_wei == 1_000_000
+        assert result.output_amount_wei == 990_000
 
 
 # ---------------------------------------------------------------------------
@@ -520,3 +540,104 @@ class TestRevertReasonDecoding:
         from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
         result = _decode_revert_reason("execution reverted")
         assert result == "REVERT:unknown"
+
+
+# ---------------------------------------------------------------------------
+# E2: Round-trip simulation fields on SimulationResult
+# ---------------------------------------------------------------------------
+
+class TestRoundTripFields:
+    """E2: SimulationResult carries round-trip (buy+sell) fields."""
+
+    def test_default_roundtrip_fields(self):
+        from m7.orderflow.simulation import SimulationResult
+        r = SimulationResult(success=True)
+        assert r.roundtrip_attempted is False
+        assert r.roundtrip_success is False
+        assert r.roundtrip_final_wei == 0
+        assert r.roundtrip_profit_wei == 0
+        assert r.roundtrip_profit_bps == 0.0
+        assert r.roundtrip_sell_revert_reason is None
+
+    def test_profitable_roundtrip_bps_positive(self):
+        from m7.orderflow.simulation import SimulationResult
+        r = SimulationResult(
+            success=True,
+            input_amount_wei=1_000_000,
+            output_amount_wei=500_000,
+            roundtrip_attempted=True,
+            roundtrip_success=True,
+            roundtrip_final_wei=1_005_000,
+            roundtrip_profit_wei=5_000,
+            roundtrip_profit_bps=50.0,
+        )
+        assert r.roundtrip_profit_bps > 0
+        assert r.roundtrip_final_wei > r.input_amount_wei
+
+    def test_sell_leg_builder_fee_check(self):
+        """E2: _build_sell_leg_tx_params rejects unsupported fees."""
+        from dataclasses import dataclass
+        from m7.orderflow.execution_gate import _build_sell_leg_tx_params
+
+        @dataclass
+        class _FakeResult:
+            best_sell_venue: str = "uniswap_v3"
+            best_sell_fee: int = 2655  # non-standard Algebra dynamic
+            best_buy_fee: int = 2655
+            backrun_token_in_address: str = "0x4200000000000000000000000000000000000006"
+            backrun_token_out_address: str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+        tx, err = _build_sell_leg_tx_params(_FakeResult(), 1_000_000, chain="base")
+        assert tx is None
+        assert err is not None and "UNSUPPORTED" in err
+
+    def test_sell_leg_builder_zero_input(self):
+        from dataclasses import dataclass
+        from m7.orderflow.execution_gate import _build_sell_leg_tx_params
+
+        @dataclass
+        class _FakeResult:
+            best_sell_venue: str = "uniswap_v3"
+            best_sell_fee: int = 500
+
+        tx, err = _build_sell_leg_tx_params(_FakeResult(), 0, chain="base")
+        assert tx is None and err == "SELL_INPUT_ZERO"
+
+
+# ---------------------------------------------------------------------------
+# E3: Rollup migration drops deprecated sim_profit_bps keys
+# ---------------------------------------------------------------------------
+
+class TestRollupMigration:
+    def test_deprecated_keys_stripped(self, tmp_path, monkeypatch):
+        import json as _json
+        import m7.orderflow.runtime_io as _rio
+        import m7.orderflow.hot_runtime_artifacts as _hra
+
+        _rollup = tmp_path / "hot_rollup.json"
+        _rollup.write_text(_json.dumps({
+            "last_updated": "2026-04-16T00:00:00Z",
+            "windows_seen": 5,
+            "_sim_profit_bps_all": [-9999.9, -10000.0],
+            "sim_profit_bps_best": -9999.9,
+            "sim_profit_bps_worst": -10000.0,
+            "sim_profit_bps_median": -9999.95,
+            "sim_profitable_count": 0,
+        }))
+
+        monkeypatch.setattr(_rio, "_HOT_ROLLUP_PATH", str(_rollup))
+        monkeypatch.setattr(_rio, "_SESSION_ID", "test-session")
+        _hra._update_hot_rollup(
+            chain="base", events_count=0,
+            fast_results=None, guard_results=None,
+            bridge_diagnostics=None, ws_live_stats=None,
+        )
+        data = _json.loads(_rollup.read_text())
+        for k in [
+            "_sim_profit_bps_all",
+            "sim_profit_bps_best",
+            "sim_profit_bps_worst",
+            "sim_profit_bps_median",
+            "sim_profitable_count",
+        ]:
+            assert k not in data

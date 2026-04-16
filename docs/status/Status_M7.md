@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.26 — B1 router mismatch fix (fee→DEX + factory multicall), B2 PREWARM 3→7, DISC sim_passed=1 submit_ready=1 (FIRST EVER). 30min soak: 0 restarts. 4003 passed.**  
+**Status**: **M7.E1.28 — E1 (widened ERC-20 seeding: 15 slots, 5 allowance offsets, env override, STF diagnostic), E2 (round-trip buy+sell same-token bps), E3 (legacy `sim_profit_bps_*` migration purge), E4 (diagnostic `ARBY_SIM_BYPASS_GUARD=1` to measure real profit). 2×30min soak: 0 restarts. 5 round-trips executed; scorer +20334 bps AERO/WETH ≠ real -10000 bps → first reproducible false-positive evidence. 4014 pytest pass.**  
 **Updated**: 2026-04-16
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -65,19 +65,7 @@ Fixes: `cold_executable_positive` semantic (route_viable AND size_valid), `start
 
 ## E1.13–E1.19: Denomination Fix → Pipeline Unblock → Velodrome → Rate Limit (DONE, compressed)
 
-**E1.13**: Fixed `gas_cost_wei` denomination mismatch in `score_backrun_fast()` — was mixing ETH wei with token-native wei. Eliminated positive→viable gap. CI: 3926.
-
-**E1.14**: Fixed 6 pipeline blockers: venue naming (pool addresses → DEX names), adapter check (ve33/algebra accepted), ERC-20 seeding (keccak256 fix: pycryptodome, NOT hashlib.sha3_256), calldata_ready auto-set. **BREAKTHROUGH: sim_passed=1** in canonical rolling (first ever). CI: 3926.
-
-**E1.15/R40**: Flashblocks endpoint DNS fix (`base.flashblocks.base.org` → `mainnet-preconf.base.org`). AERO/WETH anchor price calibration. M7 logging fix. Provider classify update. Audit: API key exposure, memory leak potential, stale cache. CI: 3949.
-
-**E1.16**: `rpc_fork` backend — `eth_call` with `stateOverrides` for balance/allowance seeding. Zero infra dependency. Full E2E: `sim_passed=1 → submit_ready=1`. CI: 3979.
-
-**E1.17**: Config coverage fix — address prefix resolution, DEX fallback reorder (uniswap_v3 first, aerodrome last). Eliminated 18/30 config-caused sim failures. CI: 3979.
-
-**E1.18**: Velodrome calldata encoder for Aerodrome (selector `0xcac88ea9`). Split `_V3_COMPATIBLE` → `_V3_ADAPTERS` + `_VE33_ADAPTERS`. Token extraction by selector in rpc_fork. CI: 3992.
-
-**E1.19**: Rate limit fix — 4 root causes: stale threshold 10→150 blocks, prewarm skip after iter 1, max_pairs 10 cap, V2 timeout 10s. 10/10 iters on public RPC, 0 rate limit errors. CI: 3992.
+**E1.13**: Fixed `gas_cost_wei` denomination (ETH wei vs token wei). **E1.14**: 6 pipeline blockers fixed; first `sim_passed=1` in rolling. **E1.15/R40**: Flashblocks DNS (`mainnet-preconf.base.org`), AERO/WETH calibration, audits. **E1.16**: `rpc_fork` backend — stateOverrides seeding; E2E `sim_passed→submit_ready`. **E1.17**: Config/DEX fallback fix. **E1.18**: Velodrome `0xcac88ea9` calldata encoder + ve33 adapter split. **E1.19**: Rate-limit root causes (stale 10→150, prewarm skip, max_pairs=10, V2 timeout). CI ladder: 3926→3992.
 
 ---
 
@@ -248,6 +236,58 @@ Fixes: `cold_executable_positive` semantic (route_viable AND size_valid), `start
 
 ---
 
+## E1.27 — Raw sim amounts + Pre-sim fee gate + Telemetry honesty (D1/D2/D3, DONE)
+
+**D1**: `SimulationResult.sim_profit_bps/wei` removed. Root cause: buy leg compared WETH(18d)→USDC(6d) → bogus bps. Now only raw `input_amount_wei`/`output_amount_wei` captured (single-leg profit_bps is **semantically invalid**).
+**D2**: `_attempt_simulation` extracts honest revert_reason via `sim_result.revert_reason or sim_result.error` (was silently swallowing).
+**D3**: Pre-sim fee tier check. Algebra dynamic fees (150/600/3024) tracked in `pre_sim_skip_histogram` without consuming RPC calls or incrementing `sim_attempted`.
+
+---
+
+## E1.28 — Round-trip measurement + E4 diagnostic bypass (E1/E2/E3/E4, DONE)
+
+**E1 — Expanded ERC-20 state-override seeding** ([m7/orderflow/sim_backends/rpc_fork_backend.py](m7/orderflow/sim_backends/rpc_fork_backend.py)):
+- `_COMMON_BALANCE_SLOTS` 6→15 (covers OZ mapping + most custom layouts).
+- Allowance offsets 3→5 (`[1,0,2,3,4]`).
+- New `ARBY_SIM_EXTRA_BALANCE_SLOTS` env (CSV ints).
+- `_effective_balance_slots()` resolves runtime union.
+- STF reverts now emit `logger.warning("rpc_fork STF revert: token_in=%s router=%s ...")` so problem tokens are identifiable.
+
+**E2 — Round-trip simulation (buy + sell → same token)** across 6 files:
+- [m7/orderflow/simulation.py](m7/orderflow/simulation.py): `SimulationResult` gets `roundtrip_attempted/success/final_wei/profit_wei/profit_bps/sell_gas_used/sell_revert_reason`.
+- [m7/orderflow/contracts.py](m7/orderflow/contracts.py): `BackrunResult.best_sell_fee: Optional[int]` (field count 78→79).
+- [m7/orderflow/scoring_parallel.py](m7/orderflow/scoring_parallel.py) (3 sites), [m7/orderflow/v3_math.py](m7/orderflow/v3_math.py): wire `sell_fee` through.
+- [m7/orderflow/execution_gate.py](m7/orderflow/execution_gate.py): new `_build_sell_leg_tx_params()` mirrors buy builder with reversed tokens; after a successful buy leg, sell leg is simulated — `roundtrip_profit_bps = (final - initial) / initial * 10000`. **Valid bps because same token.**
+- [m7/orderflow/execution_gate.py](m7/orderflow/execution_gate.py): `ExecutionGateResult.roundtrip_{attempted,success,profitable_count,profit_bps_values,errors}`.
+- [m7/orderflow/hot_runtime_artifacts.py](m7/orderflow/hot_runtime_artifacts.py): rollup aggregator `roundtrip_{attempted,success,profitable}_total`, `roundtrip_profit_bps_{best,worst,median}`, `roundtrip_error_histogram`, `sim_output_samples_recent` (cap 500 values).
+- New env: `ARBY_ROUNDTRIP_SIM=1` (default on; set 0 to disable).
+- Caveat: both legs use unmodified pool state → result is an **optimistic upper-bound** (ignores buy-leg price impact on sell leg).
+
+**E3 — Legacy rollup key migration** ([m7/orderflow/hot_runtime_artifacts.py](m7/orderflow/hot_runtime_artifacts.py)): on load, pop deprecated `_sim_profit_bps_all`, `sim_profit_bps_{best,worst,median}`, `sim_profitable_count` (pre-D1 garbage like `-9999.99` auto-healed).
+
+**E4 — Diagnostic guard bypass** ([m7/orderflow/execution_gate.py](m7/orderflow/execution_gate.py)): when `ARBY_SIM_BYPASS_GUARD=1`, all `scored_results` run round-trip regardless of profit_guard. `ExecutionGateResult.guard_bypassed` flag. Default off preserves backward-compat. Purpose: decouple round-trip measurement from upstream scorer heuristic.
+
+**Tests**: 7 new targeted tests in [tests/unit/test_rpc_fork_backend.py](tests/unit/test_rpc_fork_backend.py) (`TestExtraBalanceSlots`×2, `TestRoundTripFields`×4, `TestRollupMigration`×1). Field-count assertions migrated 78→79 in [tests/unit/test_orderflow_contracts_core.py](tests/unit/test_orderflow_contracts_core.py), [tests/unit/test_orderflow_status_metrics.py](tests/unit/test_orderflow_status_metrics.py), [tests/unit/test_orderflow_artifacts.py](tests/unit/test_orderflow_artifacts.py). **Regression: 4014 pass / 4 pre-existing failures (unrelated: test_l1_cost OP L1 dispatch, and test_nonstop/test_orderflow_artifacts rolling-canonical failures caused by stray `_preD*.json` leftovers already moved out of rolling).**
+
+**Analyzer**: [scripts/analyze_roundtrip_profitability.py](scripts/analyze_roundtrip_profitability.py) — prints pipeline counts, round-trip distribution, E3 purge check, exit-code verdict (0=PROFITABLE_CASE_FOUND, 2=NO_ROUNDTRIP_ATTEMPTED, 3=ALL_FAILED, 4=NO_PROFITABLE_CASE).
+
+### Soak results (2×30min Base, PID 14076 + 19720)
+
+**Soak #1 (no bypass)**: windows_seen 598→647, sim_attempted 65 unchanged, `roundtrip_attempted=0`. Diagnosis: `signal_counts.fast_positive=0, guard_passed=0` — upstream profit_guard rejects every scored spread, so round-trip never fires. → Led to E4.
+
+**Soak #2 (ARBY_SIM_BYPASS_GUARD=1)**: windows 647→687, sim_attempted 65→70, **`roundtrip_attempted=5, roundtrip_success=5, roundtrip_profitable=0`**. All 5 samples AERO/WETH: scored_net_bps=**+20334.68**, `amount_in=1e18 WETH`, `sim_output_wei=32`, `roundtrip_final_wei=32`, `roundtrip_profit_bps=-10000`. Sell leg succeeded (no revert_reason). **First reproducible proof that scorer’s +20334 bps estimate is a false positive**: likely a thin-liquidity / wrong-fee-tier AERO/WETH pool at the sampled router; 1 WETH input collapses to 32 wei output after the buy hop.
+
+### Verdict
+
+- **Infrastructure**: E1/E2/E3/E4 operate end-to-end on live Base — round-trip bps is now the canonical, decimals-correct profitability oracle.
+- **Profitable case in 30-min window**: **NONE** at 1 WETH sizing. Scorer-vs-sim gap is the next gate.
+- **Next steps** (out of scope for this ticket):
+  1. Capture `best_buy_venue/fee` + reserves/liquidity in `sim_output_samples_recent` to classify the AERO/WETH regression.
+  2. Smaller `amount_in` sweep (0.01 / 0.1 / 1 WETH) to detect size-dependent profitability.
+  3. Reconcile scorer denomination: +20334 bps → 0 after round-trip suggests the spread calc is using stale/asymmetric pool state.
+
+---
+
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 
 Per `docs/step_M7.md`: Opens only if M7.A proves a repeatable measured edge better than two-leg thesis.
@@ -279,6 +319,7 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 13. **~~PROD coverage gap (3 pairs, 80.6% miss)~~ → PARTIALLY RESOLVED (E1.26)** — PREWARM 3→7 pairs, miss 80.6%→47.6%. PROD positive still 0 — production pairs don't find spread.
 14. **DISC sim revert rate 83% (5/6)** — 5 out of 6 sim attempts revert. Factory multicall may improve. Needs re-soak.
 15. **Triangular arb NOT viable** — Baseline -14.16 bps. CLOSED.
+16. **Scorer-vs-sim gap (E1.28 finding)** — AERO/WETH scored +20334 bps, real round-trip -10000 bps (1 WETH → 32 wei output). 5/5 samples. Root cause unknown; need venue/fee + reserves in sample log and per-size sweep.
 
 Resolved: HOT LANE NOT WRITING (E1.7), MARKET-WINDOW SCARCITY (E1.10), ALCHEMY 429 (E1.10), Dashboard dead (E1.8), Chain provenance (E1.8.1), Submit-stage sim=0 (E1.14), SIGNING_NOT_READY (E1.16), TOKEN_ADDRESS_UNKNOWN (E1.17), DEX_CONFIG_MISSING (E1.17), ve33 ABI mismatch (E1.18), dRPC 429 INTERMITTENT (E1.19), ve33 pricing broken (E1.24), ve33 coverage broken (E1.24), Aerodrome stable sim (E1.24), PTT router mismatch (E1.26), PROD coverage gap partial (E1.26).
 

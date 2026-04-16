@@ -1,0 +1,207 @@
+{
+  "last_updated": "2026-04-16T18:57:47Z",
+  "chain": "base",
+  "current_window_timestamp": "2026-04-16T18:57:47Z",
+  "snapshot_run_timestamp": "2026-04-16T18:57:47Z",
+  "first_window_at": "2026-04-16T10:19:29Z",
+  "windows_seen": 647,
+  "events_seen_total": 3148,
+  "error_counts": {
+    "heartbeat_on_error_windows": 0,
+    "normal_windows": 647
+  },
+  "session": {
+    "session_id": "8d94b69e",
+    "session_started_at": "2026-04-16T18:34:11Z",
+    "session_windows_seen": 49,
+    "session_events_seen_total": 245,
+    "session_bridge_pool_hit_total": 112,
+    "session_fast_path_scored_total": 76,
+    "session_ws_connected_windows": 49,
+    "session_ws_failed_windows": 0,
+    "session_ws_failed_429_windows": 0,
+    "session_http_fallback_windows": 49,
+    "session_ws_fallback_windows": 0,
+    "provider_switch_count": 0,
+    "last_ws_connection_status": "connected",
+    "last_rpc_provider": "public_fallback",
+    "last_ws_provider": "publicnode"
+  },
+  "bridge_loaded_candidate_count_total": 241,
+  "pool_address_match_count_total": 1024,
+  "bridge_pool_address_hit_count_total": 1923,
+  "fast_path_scored_total": 1273,
+  "fast_path_positive_total": 65,
+  "route_viable_total": 44,
+  "profit_guard_passed_total": 65,
+  "guard_reject_reason_histogram": {},
+  "sim_attempted_total": 65,
+  "sim_passed_total": 23,
+  "submit_ready_total": 23,
+  "sim_disabled": false,
+  "simulation_backend": "rpc_fork",
+  "simulation_error_histogram": {
+    "CALLDATA_BUILD_FAILED:UNSUPPORTED_FEE_TIER:150": 9,
+    "CALLDATA_BUILD_FAILED:UNSUPPORTED_FEE_TIER:600": 2,
+    "execution reverted": 7,
+    "CALLDATA_BUILD_FAILED:UNSUPPORTED_FEE_TIER:3024": 7,
+    "CALLDATA_BUILD_FAILED:UNSUPPORTED_FEE_TIER:2105": 3,
+    "execution reverted: STF": 2,
+    "REVERT:unknown": 11,
+    "REVERT:STF": 1
+  },
+  "submit_blocker_histogram": {},
+  "bridge_candidate_loaded_total": 241,
+  "bridge_pool_hit_total": 1923,
+  "bridge_pair_hit_total": 1827,
+  "registry_hit_for_event_pool_total": 1024,
+  "fast_score_attempted_total": 3148,
+  "fast_score_rejected_economics_total": 1208,
+  "windows_with_events": 637,
+  "windows_with_bridge_hits": 589,
+  "windows_with_fast_scores": 498,
+  "broad_fallback_events_total": 76071,
+  "bridge_pool_hit_but_registry_miss_total": 1107,
+  "bridge_focused_pool_count_last": 44,
+  "hot_seen_pool_histogram_top": [
+    {
+      "pool": "0xdbc6998296caa1652a810dc8d3baf4a8294330f1",
+      "count": 217,
+      "last_iter": 49
+    },
+    {
+      "pool": "0xb4cb800910b228ed3d0834cf79d697127bbb00e5",
+      "count": 213,
+      "last_iter": 49
+    },
+    {
+      "pool": "0x3f0296bf652e19bca772ec3df08b32732f93014a",
+      "count": 196,
+      "last_iter": 49
+    },
+    {
+      "pool": "0xd0b53d9277642d899df5c87a3966a349a798f224",
+      "count": 159,
+      "last_iter": 49
+    },
+    {
+      "pool": "0x2393cf60fd67e58e302f6d0b8c552cd5c37caf97",
+      "count": 131,
+      "last_iter": 48
+    },
+    {
+      "pool": "0xb30540172f1b37d1ee1d109e49f883e935e69219",
+      "count": 124,
+      "last_iter": 47
+    },
+    {
+      "pool": "0xb2cc224c1c9fee385f8ad6a55b4d94e92359dc59",
+      "count": 123,
+      "last_iter": 49
+    },
+    {
+      "pool": "0x4e392fbfe4d0557c82d2f97f02ec39daa31516dd",
+      "count": 118,
+      "last_iter": 49
+    },
+    {
+      "pool": "0x4e962bb3889bf030368f56810a9c96b83cb3e778",
+      "count": 113,
+      "last_iter": 49
+    },
+    {
+      "pool": "0x29183f918920a2aef0115a9c7374945589968aea",
+      "count": 89,
+      "last_iter": 48
+    }
+  ],
+  "hot_seen_unresolved_pool_count": 0,
+  "resolved_from_hot_seen_count": 10,
+  "hot_seen_unresolved_pool_count_max": 10,
+  "window_miss_classes": {
+    "events_but_no_bridge_hit": 48,
+    "scored_but_rejected_economics": 429,
+    "bridge_hit_but_not_scored": 102,
+    "no_events_in_window": 10,
+    "guard_passed": 58
+  },
+  "dominant_hot_miss_reason": "scored_but_rejected_economics",
+  "run_context": {
+    "run_timestamp": "2026-04-16T18:57:47Z",
+    "chain": "base",
+    "code_sha": null,
+    "code_dirty": null,
+    "code_desc": null,
+    "evidence_sha": null
+  },
+  "session_id": "8d94b69e",
+  "session_started_at": "2026-04-16T18:34:11Z",
+  "session_windows_seen": 49,
+  "session_events_seen_total": 245,
+  "session_bridge_pool_hit_total": 112,
+  "session_fast_path_scored_total": 76,
+  "session_ws_connected_windows": 49,
+  "session_ws_failed_windows": 0,
+  "session_ws_failed_429_windows": 0,
+  "session_http_fallback_windows": 49,
+  "session_ws_fallback_windows": 0,
+  "provider_switch_count": 0,
+  "last_ws_connection_status": "connected",
+  "last_rpc_provider": "public_fallback",
+  "last_ws_provider": "publicnode",
+  "events_in_bridge_total": 1051,
+  "events_not_in_bridge_total": 222,
+  "matched_then_registry_rejected_total": 0,
+  "matched_then_gas_rejected_total": 991,
+  "matched_then_scored_positive_total": 60,
+  "exact_pool_trace": {
+    "pool_address": "0x00bf864f6bb2466fa875b97715f3b7e0cb76198c",
+    "session_windows_seen": 35,
+    "session_windows_in_bridge": 0,
+    "session_hot_events_seen": 0,
+    "session_fast_attempted": 0,
+    "session_fast_scored": 0,
+    "in_bridge_every_window": false,
+    "last_seen_window": null,
+    "reason_if_not_hit": "not_in_bridge"
+  },
+  "exact_family_trace": {
+    "family": "family_unresolved",
+    "selected_pools": [
+      "0x00bf864f6bb2466fa875b97715f3b7e0cb76198c",
+      "0x098a4de96305bafaea0c0ce07cf6456e2c64982a",
+      "0x4e829f8a5213c42535ab84aa40bd4adcce9cba02",
+      "0x51663b8a28e7ea197c5ccf983afc084da0a8023d",
+      "0x5a7b4970b2610aee4776a6944d9f2171ee6060b0",
+      "0x5ec8fd9b09454e7e2662a2c4c0432f95e896ea79",
+      "0x78443623394f1657c3fc0a319f858f44e7fd0625",
+      "0x82321f3beb69f503380d6b233857d5c43562e2d0",
+      "0x85fb468a5e65a537c5ac767776599708a3d41046",
+      "0x8cd8c7015b6a8f8310c15ccc8aa3d200d9c74882",
+      "0x911a2c812da0b9b79cf6e3a00ce6fd39cbd13ccb",
+      "0x9331f571f79d1e186a095c93756b5680a43932ac",
+      "0x9b64bf51386b623ed0ac59ff1978b386564e90c0",
+      "0x9e48d016ee76cf53e2de8dc8058c7549c8c202df",
+      "0x32bb4ad5fed77f7abf97d1435f8d6aaae59aa64e",
+      "0x74e4c08bb50619b70550733d32b7e60424e9628e",
+      "0x77310fc8950dd83a035769018f2a05b1e989a52a",
+      "0x78595d8e45e1df1cba5775e8368827cdac50af9c",
+      "0x296303a60f6cb2587f768036a3ef457adad9c431",
+      "0x4a79b0168296c0ef7b8f314973b82ad406a29f1b"
+    ],
+    "session_family_events_seen": 10,
+    "session_exact_pool_events_seen": 0,
+    "reason_if_no_exact_hit": "no_events_at_any_family_pool"
+  },
+  "architecture_blocker_trace": {
+    "session_windows_seen": 49,
+    "session_events_seen_total": 245,
+    "families_selected_count": 17,
+    "families_with_any_hot_events": 15,
+    "families_with_exact_hits": 0,
+    "blocker_class": "selection_or_scoring"
+  },
+  "roundtrip_attempted_total": 0,
+  "roundtrip_success_total": 0,
+  "roundtrip_profitable_total": 0
+}

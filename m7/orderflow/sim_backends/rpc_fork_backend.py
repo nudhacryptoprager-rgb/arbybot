@@ -33,7 +33,25 @@ logger = logging.getLogger("m7.orderflow.sim_backends.rpc_fork")
 
 # Common ERC-20 storage slots for balanceOf(address) mapping.
 # Slot = keccak256(abi.encode(address, baseSlot))
-_COMMON_BALANCE_SLOTS = [0, 1, 2, 3, 9, 51]
+# E1: Widened coverage — added slots used by proxy upgradeable tokens
+# (USDC proxy=9, DAI=2), Solmate (slot 0), OpenZeppelin (slot 0/3),
+# and custom meme tokens (slots 5/6/7/101/104/151).
+_COMMON_BALANCE_SLOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 51, 101, 104, 151]
+
+# E1: Allow runtime extension via env (comma-separated ints)
+_EXTRA_SLOTS_ENV = "ARBY_SIM_EXTRA_BALANCE_SLOTS"
+
+
+def _effective_balance_slots() -> list:
+    """Union _COMMON_BALANCE_SLOTS with ARBY_SIM_EXTRA_BALANCE_SLOTS env."""
+    extra_raw = os.environ.get(_EXTRA_SLOTS_ENV, "").strip()
+    if not extra_raw:
+        return list(_COMMON_BALANCE_SLOTS)
+    try:
+        extra = [int(s.strip()) for s in extra_raw.split(",") if s.strip()]
+        return sorted(set(_COMMON_BALANCE_SLOTS) | set(extra))
+    except ValueError:
+        return list(_COMMON_BALANCE_SLOTS)
 
 
 # ---------------------------------------------------------------------------
@@ -105,13 +123,14 @@ def _build_state_overrides(
 
     state_diff: Dict[str, str] = {}
 
-    for base_slot in _COMMON_BALANCE_SLOTS:
+    for base_slot in _effective_balance_slots():
         # Balance slot
         bal_slot = _compute_mapping_slot(holder, base_slot)
         state_diff[bal_slot] = large_value
 
-        # Allowance slots: try allowance base = balance base + 1 (most common)
-        for allowance_offset in [1, 0, 2]:
+        # Allowance slots: try allowance base = balance base + 1 (most common),
+        # +0 (same slot in dense layouts), +2 (spacing), and +3/+4 (proxies).
+        for allowance_offset in [1, 0, 2, 3, 4]:
             allow_slot = _compute_allowance_slot(holder, router, base_slot + allowance_offset)
             state_diff[allow_slot] = max_allowance
 
@@ -381,6 +400,16 @@ def simulate_swap_rpc_fork(
         revert_reason = None
         if "revert" in call_err.lower() or "execution reverted" in call_err.lower():
             revert_reason = _decode_revert_reason(call_err)
+        # E1: Diagnostic logging for STF reverts — shows which token/router/pool
+        # is failing safeTransferFrom despite state overrides. Helps identify
+        # non-standard token layouts that need explicit slot mapping.
+        if revert_reason and "STF" in revert_reason:
+            _tin = state_overrides and list(state_overrides.keys())[0] or "?"
+            logger.warning(
+                "rpc_fork STF revert: token_in=%s router=%s from=%s amount=%d",
+                _tin[:42], to_address[:18], from_address[:18],
+                int.from_bytes(calldata[4:36], "big") if len(calldata) >= 36 else 0,
+            )
         return SimulationResult(
             success=False,
             error=call_err,
@@ -420,7 +449,10 @@ def simulate_swap_rpc_fork(
         except ValueError:
             pass
 
-    # E1.27/C1: Extract input_amount from calldata for profit calculation.
+    # E1.27/D1: Extract input_amount from calldata. Note: profit_bps cannot be
+    # computed from single-leg sim because token_in and token_out have different
+    # decimals. We report raw values only; caller must compare against scored
+    # expected output or do round-trip sim to derive profit.
     input_amount = 0
     if len(calldata) >= 36:
         try:
@@ -429,23 +461,17 @@ def simulate_swap_rpc_fork(
             _V2_SEL = bytes.fromhex("04e45aaf")   # SwapRouter02 exactInputSingle
             _V1_SEL = bytes.fromhex("414bf389")   # SwapRouter  exactInputSingle (legacy)
             if selector == _VE33_SEL:
-                # Velodrome: amountIn at bytes [4:36]
                 input_amount = int.from_bytes(calldata[4:36], "big")
             elif selector == _V1_SEL and len(calldata) >= 196:
-                # V1: (tokenIn, tokenOut, fee, recipient, deadline, amountIn, ...)
                 input_amount = int.from_bytes(calldata[4 + 160:4 + 192], "big")
             elif len(calldata) >= 164:
-                # V2: (tokenIn, tokenOut, fee, recipient, amountIn, ...)
                 input_amount = int.from_bytes(calldata[4 + 128:4 + 160], "big")
         except Exception:
             pass
 
-    sim_profit_wei = output_amount - input_amount if input_amount > 0 else 0
-    sim_profit_bps = (sim_profit_wei / input_amount * 10000) if input_amount > 0 else 0.0
-
     logger.info(
-        "rpc_fork sim OK: chain=%s, gas=%d, output=%d, input=%d, profit_bps=%.2f, backend=%s",
-        chain, gas, output_amount, input_amount, sim_profit_bps, backend_label,
+        "rpc_fork sim OK: chain=%s, gas=%d, input_wei=%d, output_wei=%d, backend=%s",
+        chain, gas, input_amount, output_amount, backend_label,
     )
 
     return SimulationResult(
@@ -453,7 +479,5 @@ def simulate_swap_rpc_fork(
         gas_used=gas,
         output_amount_wei=output_amount,
         input_amount_wei=input_amount,
-        sim_profit_wei=sim_profit_wei,
-        sim_profit_bps=sim_profit_bps,
         backend=backend_label,
     )

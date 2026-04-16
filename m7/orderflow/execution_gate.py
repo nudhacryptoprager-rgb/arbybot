@@ -62,8 +62,18 @@ class ExecutionGateResult:
     submit_blockers_detail: List[str] = field(default_factory=list)
     # E1.12.4: Which simulation backend was used (anvil/tenderly/None)
     simulation_backend: Optional[str] = None
-    # E1.27/C1: Sim profit tracking per gate run
-    sim_profit_bps_values: List[float] = field(default_factory=list)
+    # E1.27/D1: Raw sim output amounts (wei) for offline profit analysis.
+    # Profit in bps cannot be derived here because token decimals differ.
+    sim_output_samples: List[Dict[str, Any]] = field(default_factory=list)
+    # E2: Round-trip (buy+sell) same-token bps metrics. These are VALID bps
+    # because initial and final amounts are the same token.
+    roundtrip_attempted: int = 0
+    roundtrip_success: int = 0
+    roundtrip_profitable_count: int = 0
+    roundtrip_profit_bps_values: List[float] = field(default_factory=list)
+    roundtrip_errors: List[str] = field(default_factory=list)
+    # E4: Diagnostic — true when guard was bypassed via ARBY_SIM_BYPASS_GUARD.
+    guard_bypassed: bool = False
 
 
 def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
@@ -421,6 +431,101 @@ def _get_sim_from_address() -> str:
     )
 
 
+def _build_sell_leg_tx_params(
+    result: Any,
+    sell_input_wei: int,
+    chain: str = "base",
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """E2: Build sell-leg tx params for round-trip sim.
+
+    Reverses token direction (token_out → token_in) using best_sell_venue
+    and best_sell_fee. Returns (tx_params, None) or (None, reason).
+    """
+    if sell_input_wei <= 0:
+        return None, "SELL_INPUT_ZERO"
+
+    _STANDARD_V3_FEES = {100, 500, 2500, 3000, 10000}
+    _VE33_FEES = {0, 1}
+    _ACCEPTED = _STANDARD_V3_FEES | _VE33_FEES
+
+    sell_venue = getattr(result, "best_sell_venue", None)
+    if not sell_venue:
+        return None, "SELL_VENUE_MISSING"
+
+    sell_fee = getattr(result, "best_sell_fee", None)
+    if sell_fee is None:
+        sell_fee = getattr(result, "best_buy_fee", None)  # fallback
+    if sell_fee is None or sell_fee not in _ACCEPTED:
+        return None, f"SELL_FEE_UNSUPPORTED:{sell_fee}"
+
+    # Reverse token direction: buy.tokenOut becomes sell.tokenIn
+    buy_token_in = getattr(result, "backrun_token_in_address", None)
+    buy_token_out = getattr(result, "backrun_token_out_address", None)
+    if not buy_token_in or not buy_token_out:
+        return None, "TOKEN_ADDRESS_UNKNOWN"
+
+    # Resolve DEX config for sell venue
+    try:
+        from config import get_dex_config
+        dex_cfg = get_dex_config(chain, sell_venue)
+    except (KeyError, ImportError):
+        dex_cfg = None
+        if sell_venue.startswith("0x") or sell_venue == "ptt_direct":
+            from config import get_dex_config as _gdc
+            if sell_fee is not None and sell_fee <= 1:
+                _preferred = ["aerodrome", "uniswap_v3", "sushiswap_v3", "pancakeswap_v3"]
+            elif sell_fee == 2500:
+                _preferred = ["pancakeswap_v3", "uniswap_v3", "sushiswap_v3", "aerodrome"]
+            else:
+                _preferred = ["uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"]
+            for _fb in _preferred:
+                try:
+                    _fb_cfg = _gdc(chain, _fb)
+                    if _fb_cfg.get("adapter_type", "") in {"uniswap_v3", "ve33", "algebra"}:
+                        dex_cfg = _fb_cfg
+                        break
+                except (KeyError, ImportError):
+                    continue
+        if dex_cfg is None:
+            return None, f"SELL_DEX_CONFIG_MISSING:{sell_venue}"
+
+    router = dex_cfg.get("router")
+    adapter_type = dex_cfg.get("adapter_type", "")
+    if not router:
+        return None, f"SELL_ROUTER_MISSING:{sell_venue}"
+
+    _V3_ADAPTERS = {"uniswap_v3", "algebra"}
+    _VE33_ADAPTERS = {"ve33"}
+    if adapter_type not in (_V3_ADAPTERS | _VE33_ADAPTERS):
+        return None, f"SELL_ADAPTER_UNSUPPORTED:{adapter_type}"
+
+    # Sell leg: tokenIn = buy_token_out, tokenOut = buy_token_in
+    try:
+        if adapter_type in _VE33_ADAPTERS:
+            factory = dex_cfg.get("factory", _AERODROME_FACTORY_DEFAULT)
+            calldata = _encode_velodrome_swap(
+                token_in=buy_token_out,
+                token_out=buy_token_in,
+                recipient="0x0000000000000000000000000000000000000001",
+                amount_in=sell_input_wei,
+                stable=(sell_fee == 1),
+                factory=factory,
+            )
+        else:
+            calldata = _encode_exact_input_single(
+                token_in=buy_token_out,
+                token_out=buy_token_in,
+                fee=sell_fee,
+                recipient="0x0000000000000000000000000000000000000001",
+                amount_in=sell_input_wei,
+                router_version=_router_version(chain),
+            )
+    except Exception as e:
+        return None, f"SELL_CALLDATA_ENCODE_FAILED:{str(e)[:100]}"
+
+    return {"to": router, "calldata": calldata, "value": 0}, None
+
+
 def _attempt_simulation(
     result: Any, guard: ProfitGuardResult, chain: str = "base"
 ) -> SimulationResult:
@@ -460,6 +565,57 @@ def _attempt_simulation(
             "sim FAILED: pair=%s venue=%s fee=%s error=%s",
             _pair, _venue, _fee, (sim_result.error or "?")[:100],
         )
+        return sim_result
+
+    # E2: Round-trip simulation — use sim buy-leg output as sell-leg input.
+    # Enable via ARBY_ROUNDTRIP_SIM=1 (default ON for rpc_fork backend).
+    _rt_enabled = os.environ.get("ARBY_ROUNDTRIP_SIM", "1").strip() == "1"
+    if _rt_enabled and sim_result.output_amount_wei > 0:
+        sim_result.roundtrip_attempted = True
+        _sell_tx, _sell_err = _build_sell_leg_tx_params(
+            result, sim_result.output_amount_wei, chain=chain
+        )
+        if _sell_tx is None:
+            sim_result.roundtrip_sell_revert_reason = f"SELL_BUILD:{_sell_err}"
+            logger.info(
+                "roundtrip skip: pair=%s reason=%s", _pair, _sell_err,
+            )
+        else:
+            try:
+                _sell_sim = simulate_swap(
+                    chain=chain,
+                    from_address=_get_sim_from_address(),
+                    to_address=_sell_tx["to"],
+                    calldata=_sell_tx["calldata"],
+                    value_wei=_sell_tx["value"],
+                )
+                sim_result.roundtrip_sell_gas_used = _sell_sim.gas_used
+                if _sell_sim.passed and _sell_sim.output_amount_wei > 0:
+                    sim_result.roundtrip_success = True
+                    sim_result.roundtrip_final_wei = _sell_sim.output_amount_wei
+                    # Same-token comparison (valid bps)
+                    _init = sim_result.input_amount_wei
+                    sim_result.roundtrip_profit_wei = _sell_sim.output_amount_wei - _init
+                    if _init > 0:
+                        sim_result.roundtrip_profit_bps = round(
+                            (sim_result.roundtrip_profit_wei / _init) * 10000, 4
+                        )
+                    logger.info(
+                        "roundtrip OK: pair=%s profit_wei=%d profit_bps=%.2f (init=%d final=%d)",
+                        _pair, sim_result.roundtrip_profit_wei,
+                        sim_result.roundtrip_profit_bps, _init, _sell_sim.output_amount_wei,
+                    )
+                else:
+                    sim_result.roundtrip_sell_revert_reason = (
+                        _sell_sim.revert_reason or _sell_sim.error or "unknown"
+                    )
+                    logger.info(
+                        "roundtrip sell FAILED: pair=%s reason=%s",
+                        _pair, (sim_result.roundtrip_sell_revert_reason or "?")[:80],
+                    )
+            except Exception as _rt_exc:
+                sim_result.roundtrip_sell_revert_reason = f"RT_EXC:{type(_rt_exc).__name__}"
+                logger.debug("Roundtrip sim exception: %s", _rt_exc)
 
     return sim_result
 
@@ -486,6 +642,14 @@ def run_execution_gate(
     # Stage 1: Profit guard
     gate.guard_passed = _run_profit_guard_on_results(scored_results, chain=chain)
 
+    # E4: Diagnostic bypass — when ARBY_SIM_BYPASS_GUARD=1, run round-trip
+    # sim on ALL scored_results even if profit_guard rejected them. This lets
+    # us measure the TRUE profit distribution (post-price-impact) independently
+    # of the upstream scoring heuristic. Default off preserves backward-compat.
+    if not gate.guard_passed and os.getenv("ARBY_SIM_BYPASS_GUARD", "0") == "1":
+        gate.guard_passed = [(r, None) for r in scored_results]
+        gate.guard_bypassed = True
+
     if not gate.guard_passed:
         return gate
 
@@ -503,7 +667,27 @@ def run_execution_gate(
                 r.submit_blocker = "SIM_DISABLED"
         return gate
 
+    # E1.27/D3: Pre-sim fee tier check. Skip non-standard fees (e.g. Algebra
+    # dynamic 150/600/3024) before counting them as sim_attempted. These consume
+    # no RPC calls and are tracked separately via pre_sim_skip_histogram.
+    _STANDARD_V3_FEES = {100, 500, 2500, 3000, 10000}
+    _VE33_FEES = {0, 1}
+    _ACCEPTED_FEES = _STANDARD_V3_FEES | _VE33_FEES
+
     for r, g in gate.guard_passed:
+        _fee_hint = getattr(r, "best_buy_fee", None)
+        if _fee_hint is not None and _fee_hint not in _ACCEPTED_FEES:
+            # Record in sim_errors (for histogram) but do NOT count as sim_attempted.
+            _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint}"
+            gate.sim_errors.append(_skip_key)
+            if hasattr(r, "sim_attempted"):
+                r.sim_attempted = False
+                r.simulation_error = _skip_key
+            if hasattr(r, "submit_ready"):
+                r.submit_ready = False
+                r.submit_blocker = _skip_key
+            continue
+
         gate.sim_attempted += 1
         if hasattr(r, "sim_attempted"):
             r.sim_attempted = True
@@ -525,12 +709,40 @@ def run_execution_gate(
 
         if sim_result.passed:
             gate.sim_passed += 1
-            # E1.27/C1: Store sim profit metrics on the result for telemetry
-            if hasattr(r, "sim_profit_bps"):
-                r.sim_profit_bps = sim_result.sim_profit_bps
-            if hasattr(r, "sim_profit_wei"):
-                r.sim_profit_wei = sim_result.sim_profit_wei
-            gate.sim_profit_bps_values.append(sim_result.sim_profit_bps)
+            # E1.27/D1: Record raw sim output vs scored amount_in for offline analysis.
+            # Bps profit cannot be computed here because token_in/token_out decimals
+            # differ. Consumers (hot_runtime_artifacts) may compare against scored
+            # expected_output or run round-trip sim.
+            _pair = getattr(r, "actual_pair", None)
+            _amt_in = getattr(r, "amount_in_wei", 0) or 0
+            _net_bps_scored = getattr(r, "best_backrun_net_bps", None)
+            gate.sim_output_samples.append({
+                "pair": _pair,
+                "amount_in_wei": _amt_in,
+                "sim_output_wei": sim_result.output_amount_wei,
+                "sim_input_wei": sim_result.input_amount_wei,
+                "scored_net_bps": _net_bps_scored,
+                # E2: round-trip same-token bps (valid)
+                "roundtrip_attempted": sim_result.roundtrip_attempted,
+                "roundtrip_success": sim_result.roundtrip_success,
+                "roundtrip_profit_wei": sim_result.roundtrip_profit_wei,
+                "roundtrip_profit_bps": sim_result.roundtrip_profit_bps,
+                "roundtrip_final_wei": sim_result.roundtrip_final_wei,
+                "roundtrip_sell_revert_reason": sim_result.roundtrip_sell_revert_reason,
+            })
+            # E2: Record gate-level round-trip counters
+            if sim_result.roundtrip_attempted:
+                gate.roundtrip_attempted += 1
+                if sim_result.roundtrip_success:
+                    gate.roundtrip_success += 1
+                    gate.roundtrip_profit_bps_values.append(sim_result.roundtrip_profit_bps)
+                    if sim_result.roundtrip_profit_bps > 0:
+                        gate.roundtrip_profitable_count += 1
+                else:
+                    _rt_err = sim_result.roundtrip_sell_revert_reason or "unknown"
+                    gate.roundtrip_errors.append(_rt_err)
+            if hasattr(r, "sim_output_amount_wei"):
+                r.sim_output_amount_wei = sim_result.output_amount_wei
             # Stage 3: Submit readiness
             # calldata_ready is True when calldata built successfully
             if hasattr(r, "calldata_ready"):
@@ -559,7 +771,8 @@ def run_execution_gate(
                 gate.submit_blockers.extend(blockers)
                 gate.submit_blockers_detail.extend(blockers)
         else:
-            _sim_err = sim_result.error or "unknown"
+            # E1.27/D2: Prefer decoded revert_reason over raw error for histogram
+            _sim_err = sim_result.revert_reason or sim_result.error or "unknown"
             gate.sim_errors.append(_sim_err)
             if hasattr(r, "submit_ready"):
                 r.submit_ready = False

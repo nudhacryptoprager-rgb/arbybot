@@ -878,6 +878,20 @@ def _update_hot_rollup(
     except Exception:
         rollup = {}
 
+    # E3: Migration — drop deprecated cross-decimals sim_profit_bps keys.
+    # These were written by pre-D1 code and produce garbage values because
+    # single-leg swap between different-decimal tokens (WETH 18 vs USDC 6)
+    # can never yield a meaningful bps metric. Removed at load time so the
+    # rolling artifact heals itself on next update.
+    for _deprecated in (
+        "_sim_profit_bps_all",
+        "sim_profit_bps_best",
+        "sim_profit_bps_worst",
+        "sim_profit_bps_median",
+        "sim_profitable_count",
+    ):
+        rollup.pop(_deprecated, None)
+
     # Increment counters
     _bd = bridge_diagnostics or {}
     _fast = fast_results or []
@@ -1003,15 +1017,40 @@ def _update_hot_rollup(
             rollup.get("submit_ready_total", 0) + gate_result.submit_ready
         )
         rollup["sim_disabled"] = gate_result.sim_disabled
-        # E1.27/C1: Cumulative sim profit metrics
-        _sim_bps_vals = getattr(gate_result, "sim_profit_bps_values", [])
-        if _sim_bps_vals:
-            _all_bps = rollup.get("_sim_profit_bps_all", []) + _sim_bps_vals
-            rollup["_sim_profit_bps_all"] = _all_bps
-            rollup["sim_profit_bps_best"] = max(_all_bps)
-            rollup["sim_profit_bps_worst"] = min(_all_bps)
-            rollup["sim_profitable_count"] = sum(1 for v in _all_bps if v > 0)
-            rollup["sim_profit_bps_median"] = sorted(_all_bps)[len(_all_bps) // 2]
+        # E1.27/D1: Store last N sim output samples (bounded) for offline
+        # profit analysis. Raw bps cannot be derived because token decimals
+        # differ between token_in/token_out for single-leg swaps.
+        _samples = getattr(gate_result, "sim_output_samples", [])
+        if _samples:
+            _existing = rollup.get("sim_output_samples_recent", [])
+            _combined = (_existing + _samples)[-50:]  # keep last 50
+            rollup["sim_output_samples_recent"] = _combined
+            rollup["sim_output_samples_total"] = (
+                rollup.get("sim_output_samples_total", 0) + len(_samples)
+            )
+        # E2: Round-trip cumulative counters (VALID same-token bps)
+        _rt_att = getattr(gate_result, "roundtrip_attempted", 0)
+        _rt_suc = getattr(gate_result, "roundtrip_success", 0)
+        _rt_prof = getattr(gate_result, "roundtrip_profitable_count", 0)
+        _rt_bps = getattr(gate_result, "roundtrip_profit_bps_values", [])
+        _rt_err = getattr(gate_result, "roundtrip_errors", [])
+        rollup["roundtrip_attempted_total"] = rollup.get("roundtrip_attempted_total", 0) + _rt_att
+        rollup["roundtrip_success_total"] = rollup.get("roundtrip_success_total", 0) + _rt_suc
+        rollup["roundtrip_profitable_total"] = rollup.get("roundtrip_profitable_total", 0) + _rt_prof
+        if _rt_bps:
+            _all_rt = rollup.get("_roundtrip_profit_bps_all", []) + _rt_bps
+            # Cap cumulative list to bound disk usage
+            if len(_all_rt) > 500:
+                _all_rt = _all_rt[-500:]
+            rollup["_roundtrip_profit_bps_all"] = _all_rt
+            rollup["roundtrip_profit_bps_best"] = round(max(_all_rt), 4)
+            rollup["roundtrip_profit_bps_worst"] = round(min(_all_rt), 4)
+            rollup["roundtrip_profit_bps_median"] = round(sorted(_all_rt)[len(_all_rt) // 2], 4)
+        if _rt_err:
+            _rt_hist = rollup.get("roundtrip_error_histogram", {})
+            for _e in _rt_err:
+                _rt_hist[_e[:100]] = _rt_hist.get(_e[:100], 0) + 1
+            rollup["roundtrip_error_histogram"] = _rt_hist
         # E1.12.4: Record which simulation backend is active
         rollup["simulation_backend"] = getattr(gate_result, "simulation_backend", None)
         if gate_result.sim_blocker:

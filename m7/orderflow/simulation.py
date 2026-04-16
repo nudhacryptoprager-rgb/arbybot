@@ -48,10 +48,24 @@ class SimulationResult:
     simulation_id: Optional[str] = None
     error: Optional[str] = None
     backend: Optional[str] = None
-    # E1.27/C1: Sim profit extraction — compare output vs input
+    # E1.27/D1: Raw wei values for offline profit analysis.
+    # NOTE: Do NOT compute profit_bps from (output - input) unless token_in
+    # and token_out have identical decimals. Single-leg swap between different
+    # tokens (e.g. WETH→USDC) has no meaningful bps. Use round-trip sim or
+    # compare with scored expected_output_wei instead.
     input_amount_wei: int = 0
-    sim_profit_wei: int = 0
-    sim_profit_bps: float = 0.0
+    # E2: Round-trip sim fields (buy + sell leg). Because both legs compare
+    # the SAME token (token_in → token_out → token_in), bps is semantically
+    # valid. Note: sell leg uses UNMODIFIED pool state (eth_call is stateless
+    # between sequential calls), so this is an upper-bound estimate that
+    # ignores price impact from the buy leg.
+    roundtrip_attempted: bool = False
+    roundtrip_success: bool = False
+    roundtrip_final_wei: int = 0           # token_in amount after both legs
+    roundtrip_profit_wei: int = 0          # final - initial input
+    roundtrip_profit_bps: float = 0.0      # 10000 * profit / input
+    roundtrip_sell_gas_used: int = 0
+    roundtrip_sell_revert_reason: Optional[str] = None
 
     @property
     def passed(self) -> bool:

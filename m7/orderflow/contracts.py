@@ -48,6 +48,8 @@ class BackrunResult:
     best_sell_venue: Optional[str] = None
     # E1.25: Actual pool fee tier for execution calldata (V3: 500/3000/10000, ve33: 0/1)
     best_buy_fee: Optional[int] = None
+    # E2: Sell-leg pool fee tier for round-trip simulation (valid same-token bps)
+    best_sell_fee: Optional[int] = None
     candidate_path: Optional[List[str]] = None
     amount_in_wei: int = 0
     gross_pnl_wei: int = 0
