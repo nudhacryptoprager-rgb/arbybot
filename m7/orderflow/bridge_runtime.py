@@ -227,8 +227,19 @@ def _prewarm_registry_from_bridge(
     the prewarm from sending 600+ RPC calls when the full PTT has 200+
     entries, which overloads dRPC/public-RPC rate limits.
 
+    N6: Adds wall-clock budget (`ARBY_HOT_PREWARM_BUDGET_SEC`, default 30s).
+    Sequential preload_pair costs ~2-3s per pair on public RPC; without a
+    budget, 60 pairs = 180s prewarm which starves run_ws_live of its time
+    budget inside a 5-minute soak window.  Priority pools always run first
+    so cold_executable candidates still get covered.
+
     Returns number of pairs prewarmed.
     """
+    import time as _time_mod
+
+    _budget_sec = float(os.environ.get("ARBY_HOT_PREWARM_BUDGET_SEC", "30"))
+    _start = _time_mod.monotonic()
+
     from core.rpc_rate_limiter import rpc_throttle
 
     ptt = bridge.get("pool_token_transport", {})
@@ -236,6 +247,7 @@ def _prewarm_registry_from_bridge(
         return 0
     count = 0
     _seen_pairs: set = set()
+    _budget_exceeded = False
 
     _priority = priority_pools or set()
     _items = sorted(
@@ -245,6 +257,10 @@ def _prewarm_registry_from_bridge(
 
     for pa, triple in _items:
         if count >= max_pairs:
+            break
+        # N6: wall-clock budget guard — stop preloading if we've run over
+        if _budget_sec > 0 and (_time_mod.monotonic() - _start) >= _budget_sec:
+            _budget_exceeded = True
             break
         if len(triple) != 3:
             continue
@@ -260,6 +276,12 @@ def _prewarm_registry_from_bridge(
             count += 1
         except Exception:
             pass
+
+    if _budget_exceeded:
+        logger.info(
+            "Bridge prewarm: budget %.0fs exceeded after %d pairs (ptt=%d)",
+            _budget_sec, count, len(ptt),
+        )
 
     _stats = rpc_throttle.stats()
     if _stats["total_waits"] > 0:

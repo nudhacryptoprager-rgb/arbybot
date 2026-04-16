@@ -645,6 +645,21 @@ def score_backrun_live_parallel(
             elif _out_sym.upper() in ("WETH", "ETH"):
                 _est_eth_price = oracle_result.get("token_out_oracle_usd")
         if _est_eth_price is None:
+            # N1 (E5 follow-up): prefer LIVE resolver (no stale table) over
+            # the 3500.0 constant. allow_default_fallback=False ensures we
+            # only override _FALLBACK_ETH_PRICE_USD when a dynamic_anchors or
+            # config source actually has WETH; otherwise the old behavior is
+            # preserved byte-for-byte.
+            try:
+                from strategy.quotes import resolve_token_usd_price
+                _resolved = resolve_token_usd_price(
+                    "WETH", chain=chain, allow_default_fallback=False,
+                )
+                if _resolved is not None and _resolved > 0:
+                    _est_eth_price = float(_resolved)
+            except Exception:
+                pass
+        if _est_eth_price is None:
             _est_eth_price = _FALLBACK_ETH_PRICE_USD
         _gas_usd = _gas_eth_wei_est * _est_eth_price / 1e18
         _gas_floor_bps = round(_gas_usd / _size_usd * 10000, 2) if _size_usd > 0 else None
@@ -897,6 +912,25 @@ def score_backrun_live_parallel(
         best_buy_venue = _local_result.get("buy_dex", _local_result["buy_venue"])
         best_sell_venue = _local_result.get("sell_dex", _local_result["sell_venue"])
         venues_quoted = _local_result["pools_succeeded"]
+        # ── N5: Accumulate dynamic_anchors sample from live pool state ──
+        # Fire-and-forget; never fail the hot path if recording has issues.
+        try:
+            from strategy.dynamic_anchors import record_m7_anchor_sample
+            _out_dec = get_cached_decimals(token_out_addr)
+            record_m7_anchor_sample(
+                chain_key=chain,
+                symbol_in=in_sym,
+                symbol_out=out_sym,
+                amount_in_wei=int(backrun_size_wei),
+                amount_out_wei=int(best_buy_amount) if best_buy_amount else 0,
+                decimals_in=_token_in_dec,
+                decimals_out=_out_dec,
+                dex_id=str(_local_result.get("buy_dex") or "unknown"),
+                fee_tier=int(_local_result.get("buy_fee") or 0),
+                block=int(event.block_number or 0),
+            )
+        except Exception:
+            pass
     else:
         # Remote quoter path (slow, confirmatory)
         def _try_buy(dex_name: str, quoter_addr: str, fee: int):
@@ -984,6 +1018,33 @@ def score_backrun_live_parallel(
                             if best_sell_amount is None or amt > best_sell_amount:
                                 best_sell_amount = amt
                                 best_sell_venue = dex_name
+
+    # N5: Accumulate dynamic_anchors sample from remote quoter path too.
+    # Same rationale as the local_pricing branch above — fire-and-forget.
+    if (
+        _local_result is None
+        and best_buy_amount is not None
+        and best_buy_amount > 0
+        and in_sym
+        and out_sym
+    ):
+        try:
+            from strategy.dynamic_anchors import record_m7_anchor_sample
+            _out_dec = get_cached_decimals(token_out_addr)
+            record_m7_anchor_sample(
+                chain_key=chain,
+                symbol_in=in_sym,
+                symbol_out=out_sym,
+                amount_in_wei=int(backrun_size_wei),
+                amount_out_wei=int(best_buy_amount),
+                decimals_in=_token_in_dec,
+                decimals_out=_out_dec,
+                dex_id=str(best_buy_venue or "quoter_v2"),
+                fee_tier=0,
+                block=int(event.block_number or 0),
+            )
+        except Exception:
+            pass
 
     stage_b_ms = round((time.monotonic() - stage_b_start) * 1000, 2)
     pipeline_end = time.monotonic()
@@ -1374,6 +1435,39 @@ def score_backrun_fast(
 
     buy_amount = pricing_result["buy_amount"]
     sell_amount = pricing_result["sell_amount"]
+
+    # ── N5: Accumulate dynamic_anchors sample (fast path) ──────────────
+    # Fire-and-forget; mirrors the hook in score_backrun_live_parallel.
+    try:
+        from strategy.dynamic_anchors import record_m7_anchor_sample
+        _out_sym_fast = _ats.get(token_out_addr.lower(), "").upper()
+        # Fallback: reverse-lookup in token_addresses (symbol -> address map).
+        if not _in_sym or not _out_sym_fast:
+            _rev = {v.lower(): k.upper() for k, v in (token_addresses or {}).items() if v}
+            if not _in_sym:
+                _in_sym = _rev.get(token_in_addr.lower(), "")
+            if not _out_sym_fast:
+                _out_sym_fast = _rev.get(token_out_addr.lower(), "")
+        _out_dec_fast = get_cached_decimals(token_out_addr)
+        logger.info(
+            "N5 hook(fast): chain=%s %s/%s in_wei=%d out_wei=%s dec_in=%s dec_out=%s",
+            chain, _in_sym, _out_sym_fast, int(backrun_size_wei),
+            buy_amount, _effective_dec, _out_dec_fast,
+        )
+        record_m7_anchor_sample(
+            chain_key=chain,
+            symbol_in=_in_sym,
+            symbol_out=_out_sym_fast,
+            amount_in_wei=int(backrun_size_wei),
+            amount_out_wei=int(buy_amount) if buy_amount else 0,
+            decimals_in=_effective_dec,
+            decimals_out=_out_dec_fast,
+            dex_id=str(pricing_result.get("buy_dex") or "unknown"),
+            fee_tier=int(pricing_result.get("buy_fee") or 0),
+            block=int(event.block_number or 0),
+        )
+    except Exception as _n5_exc:
+        logger.warning("N5 hook(fast) exception: %s", _n5_exc)
 
     # Economics
     gross_wei = sell_amount - backrun_size_wei

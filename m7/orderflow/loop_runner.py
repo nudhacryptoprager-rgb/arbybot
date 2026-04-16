@@ -203,6 +203,7 @@ def run_loop(cli_args) -> None:
             # M7.A.5.39: Lane-specific registry init + prewarm
             _ext_registry = None
             if lane == "hot":
+                logger.info("hot-phase: enter lane=hot iter=%d", iteration)
                 if _hot_registry is None:
                     from m7.orderflow.pool_registry import PoolRegistry
                     # E1.19: Hot registry uses 150-block stale threshold (~37s
@@ -218,9 +219,13 @@ def run_loop(cli_args) -> None:
                 # 2. Populate _pool_token_cache from bridge (cross-process cache fix)
                 # 3. Prewarm registry from bridge token addresses (pool-address-first)
                 # 4. Fall back to symbol-pair prewarm for seeds / accumulated pairs
+                logger.info("hot-phase: reading cold->hot bridge")
                 _bridge = _read_cold_hot_bridge()
+                logger.info("hot-phase: populating pool_token_cache (ptt=%d)",
+                             len(_bridge.get("pool_token_transport", {})))
                 _bridge_cache_count = _populate_pool_token_cache_from_bridge(_bridge)
                 _bridge_prewarm_count = 0
+                logger.info("hot-phase: bridge_cache_count=%d", _bridge_cache_count)
 
                 # M7.A.5.45: Build execution queue — cold_executable pool addresses
                 # get priority prewarm so hot lane scores them first.
@@ -267,6 +272,7 @@ def run_loop(cli_args) -> None:
                     or (_current_ptt_count > _bridge_prewarmed_ptt_count)
                 )
                 if _need_prewarm:
+                    logger.info("hot-phase: entering prewarm block")
                     try:
                         from config import load_dexes, get_all_token_addresses
                         from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
@@ -275,29 +281,37 @@ def run_loop(cli_args) -> None:
                             chain_id=_chain_id, network=cli_args.chain,
                             env=dict(os.environ),
                         )
+                        logger.info("hot-phase: rpc resolved=%s", bool(_rpc))
                         if _rpc:
                             from web3 import Web3 as _W3
                             # E1.19a: 10s timeout prevents hanging on dRPC 429
                             _block = _W3(_W3.HTTPProvider(
                                 _rpc, request_kwargs={"timeout": 10},
                             )).eth.block_number
+                            logger.info("hot-phase: block=%d", _block)
                             _all_dexes = load_dexes()
                             _dex_cfg = _all_dexes.get(cli_args.chain, {})
                             _token_addr = get_all_token_addresses(cli_args.chain)
 
                             # M7.A.5.45: Bridge-first prewarm with cold_executable priority
                             if _bridge.get("pool_token_transport"):
+                                logger.info("hot-phase: starting bridge prewarm (ptt=%d)",
+                                            len(_bridge.get("pool_token_transport", {})))
                                 _bridge_prewarm_count = _prewarm_registry_from_bridge(
                                     _hot_registry, _bridge, _dex_cfg, _rpc, _block,
                                     priority_pools=_cold_exec_pools,
                                 )
+                                logger.info("hot-phase: bridge prewarm done=%d", _bridge_prewarm_count)
 
                             # Legacy symbol-pair prewarm for seeds and accumulated pairs
                             if _hot_pairs_to_prewarm:
+                                logger.info("hot-phase: starting pair prewarm (n=%d)",
+                                            len(_hot_pairs_to_prewarm))
                                 _pw = _prewarm_registry_from_pairs(
                                     _hot_registry, _hot_pairs_to_prewarm,
                                     _token_addr, _dex_cfg, _rpc, _block,
                                 )
+                                logger.info("hot-phase: pair prewarm done=%d", _pw)
                             else:
                                 _pw = 0
                             logger.info(
@@ -790,6 +804,7 @@ def run_loop(cli_args) -> None:
             # with events but zero hits) goes fully broad (interval=1).
             _bhd = lane == "hot" and _rollup_wwe > 0 and _rollup_wwbh == 0
             _bhd_severe = _bhd and _rollup_wwe >= 3
+            logger.info("hot-phase: invoking run_ws_live (lane=%s iter=%d)", lane, iteration)
             artifact = run_ws_live(ws_args, external_registry=_ext_registry,
                                    warm_registry=_cold_registry if lane == "cold" else None,
                                    bridge_pool_addresses=_bridge_pool_addrs,

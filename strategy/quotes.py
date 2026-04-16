@@ -173,10 +173,32 @@ from strategy.quote_metrics import (
 
 
 # =============================================================================
-# USD-NOTIONAL SIZING (M4.2)
+# USD-NOTIONAL SIZING (M4.2 + E5 dynamic resolver)
 # =============================================================================
 
-# Default USD prices for common tokens (for sizing, not profit calc)
+# Stable tokens pegged to 1 USD — these are TRULY static by definition.
+# All other tokens must be resolved dynamically from live sources.
+STABLE_USD_PRICES: Dict[str, float] = {
+    "USDC": 1.0,
+    "USDC_E": 1.0,
+    "USDBC": 1.0,
+    "USDbC": 1.0,
+    "USDT": 1.0,
+    "DAI": 1.0,
+    "FRAX": 1.0,
+    "LUSD": 1.0,
+    "USDE": 1.0,
+    "USDS": 1.0,
+    "CRVUSD": 1.0,
+    "GHO": 1.0,
+    "PYUSD": 1.0,
+}
+
+# Legacy fallback table — KEPT for backward compat. Values are stale by
+# design (snapshot 2024-2025). resolve_token_usd_price() prefers
+# dynamic_anchors cache → config YAML → STABLE_USD_PRICES → this table.
+# Callers that import DEFAULT_TOKEN_USD_PRICES directly will still work,
+# but should migrate to resolve_token_usd_price() for drift-free pricing.
 DEFAULT_TOKEN_USD_PRICES = {
     "WETH": 2000.0,
     "ETH": 2000.0,
@@ -222,6 +244,78 @@ DEFAULT_TOKEN_USD_PRICES = {
     "AERO": 0.50,
     "cbETH": 2200.0,
 }
+
+
+def resolve_token_usd_price(
+    symbol: str,
+    *,
+    config: Optional[Dict[str, Any]] = None,
+    chain: Optional[str] = None,
+    allow_default_fallback: bool = True,
+) -> Optional[float]:
+    """Drift-free USD price resolver (E5).
+
+    Resolution chain (highest→lowest priority):
+      1. dynamic_anchors cache (per-chain, live median of recent quotes)
+      2. config["tokens_usd_price"][symbol] (case-insensitive)
+      3. STABLE_USD_PRICES[symbol] (if pegged stable)
+      4. DEFAULT_TOKEN_USD_PRICES[symbol] (stale table) — emits WARN
+         and is skipped when ``allow_default_fallback=False``.
+
+    Callers that want strict drift discipline (execution path) should
+    pass ``allow_default_fallback=False`` and treat ``None`` as
+    "no live price available — reject candidate".
+
+    Args:
+        symbol: Token ticker (case-insensitive).
+        config: Optional loaded YAML config (reads ``tokens_usd_price``).
+        chain: Optional chain key to scope the dynamic_anchors cache.
+        allow_default_fallback: If False, suppress stale DEFAULT fallback.
+
+    Returns:
+        USD price or ``None`` when no live source has the symbol and the
+        stale fallback is disabled.
+    """
+    if not symbol:
+        return None
+    sym_upper = symbol.upper()
+
+    # 1) dynamic anchors cache (live)
+    try:
+        from strategy.dynamic_anchors import get_token_usd_from_anchors
+        live = get_token_usd_from_anchors(sym_upper, chain_key=chain)
+        if live is not None and live > 0:
+            return float(live)
+    except Exception:
+        # dynamic_anchors helper may not exist in all trees; fall through.
+        pass
+
+    # 2) config YAML
+    if config is not None:
+        usd_dict = config.get("tokens_usd_price") or {}
+        cfg_price = lookup_token_usd_price_ci(usd_dict, symbol)
+        if cfg_price is not None and cfg_price > 0:
+            return float(cfg_price)
+
+    # 3) stable tokens (truly static)
+    if sym_upper in STABLE_USD_PRICES:
+        return STABLE_USD_PRICES[sym_upper]
+    stable_ci = lookup_token_usd_price_ci(STABLE_USD_PRICES, symbol)
+    if stable_ci is not None:
+        return float(stable_ci)
+
+    # 4) stale DEFAULT fallback (last resort, opt-out via flag)
+    if allow_default_fallback:
+        default_price = lookup_token_usd_price_ci(DEFAULT_TOKEN_USD_PRICES, symbol)
+        if default_price is not None:
+            logger.warning(
+                "STALE_PRICE_FALLBACK: %s → $%s (DEFAULT_TOKEN_USD_PRICES; "
+                "no dynamic_anchors, no config)",
+                sym_upper, default_price,
+            )
+            return float(default_price)
+
+    return None
 
 
 # =============================================================================

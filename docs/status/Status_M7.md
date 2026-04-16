@@ -1,6 +1,6 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.28 — E1 (widened ERC-20 seeding: 15 slots, 5 allowance offsets, env override, STF diagnostic), E2 (round-trip buy+sell same-token bps), E3 (legacy `sim_profit_bps_*` migration purge), E4 (diagnostic `ARBY_SIM_BYPASS_GUARD=1` to measure real profit). 2×30min soak: 0 restarts. 5 round-trips executed; scorer +20334 bps AERO/WETH ≠ real -10000 bps → first reproducible false-positive evidence. 4014 pytest pass.**  
+**Status**: **M7.E1.28 + E5 — E1-E4 complete (widened ERC-20 seeding, round-trip buy+sell same-token bps, legacy `sim_profit_bps_*` purge, diagnostic `ARBY_SIM_BYPASS_GUARD=1`). 2×30min soak: 0 restarts. Scorer +20334 bps AERO/WETH ≠ real -10000 bps → first reproducible false-positive evidence. E5 (config revision): hardcoded USD prices purged from `onboard_base_profit.yaml`; drift-free `resolve_token_usd_price()` added to `strategy/quotes.py` with dynamic_anchors → config → STABLE → stale-fallback chain; `get_token_usd_from_anchors()` added to `strategy/dynamic_anchors.py`. 4027 pytest pass (+13 new).**  
 **Updated**: 2026-04-16
 **Scope**: M7.A only — runtime graph sourcing, measured scoring, same-state provenance, bounded size sweep, 9 canonical blocker tags, temporal repeatability, verdict summary, universe profiles, orderflow-driven backrun replay, live block-event scoring, ws-triggered streaming replay, two-stage multicall pruning, actual-pair token resolution, coverage decomposition, bounded enrichment, oracle sanity, local-sim state, gas decomposition, stale/low-lag split, pool-class truth, V2 direct resolve, blocker tags, local-state-first pricing, factory-driven pool registry, adapter-complete pricing, registry activation in ws-live, pipeline latency optimization, profit guard + hot-mode fast path, hot-lane no-fallback + execution-readiness timing, cold/hot artifact isolation + promoted watchlist, batch pre-resolve + supervisor fix. M7.B remains closed.
 
@@ -287,6 +287,53 @@ Fixes: `cold_executable_positive` semantic (route_viable AND size_valid), `start
   3. Reconcile scorer denomination: +20334 bps → 0 after round-trip suggests the spread calc is using stale/asymmetric pool state.
 
 ---
+
+## E5 — Config revision: dynamic USD price resolver (DONE)
+
+**Trigger**: E1.28 soak exposed that the scorer uses hardcoded USD prices (`WETH=2322`, `AERO=0.36`) from `config/onboard_base_profit.yaml` and the `DEFAULT_TOKEN_USD_PRICES` table in `strategy/quotes.py`. Any price drift vs live pools inflates scored bps and produces false-positive signals like the AERO/WETH +20334 bps case.
+
+**Changes**:
+- [strategy/quotes.py](strategy/quotes.py): new `STABLE_USD_PRICES` (13 pegged tokens) + `resolve_token_usd_price(symbol, *, config, chain, allow_default_fallback)` with resolution chain **dynamic_anchors → config → STABLE → stale DEFAULT (WARN)**. Strict callers pass `allow_default_fallback=False` to get `None` instead of stale values. Legacy `DEFAULT_TOKEN_USD_PRICES` kept for backward-compat; its use now emits `STALE_PRICE_FALLBACK` warnings.
+- [strategy/dynamic_anchors.py](strategy/dynamic_anchors.py): new module-level `get_token_usd_from_anchors(symbol, chain_key)` helper — looks up cached `<symbol>/<usd_leg>` anchor for any stable leg (`USDC/USDT/DAI/FRAX/LUSD/USDE/PYUSD/USDC_E/USDBC`), returns median live price with direction-aware inversion.
+- [config/onboard_base_profit.yaml](config/onboard_base_profit.yaml): purged `tokens_usd_price` non-stables (`WETH, WBTC, cbBTC, cbETH, AERO, VIRTUAL`); purged non-stable entries from `tokens_anchor_price`. Only `USDC/USDbC/USDT/DAI` remain (truly pegged). Other `onboard_*.yaml` files are lower-priority — tracked as follow-up when those chains come online.
+- [tests/unit/test_base_profit_contracts.py](tests/unit/test_base_profit_contracts.py): `test_merged_anchor_block` inverted — now asserts non-stable anchors are **absent** (hardcoded drift is a contract violation) and stable anchors stay near 1.0.
+- [tests/unit/test_dynamic_price_resolver.py](tests/unit/test_dynamic_price_resolver.py): new file, 10 tests (stable resolution, config override, strict mode returns `None`, stale-fallback WARN, edge inputs).
+
+**Regression**: 4027 pass (+13 new) / 1 pre-existing failure (`test_l1_cost` OP dispatch, unrelated to E5). `check_repo_safety.py` PASS.
+
+**Impact**: Execution path can now opt out of stale fallbacks (`allow_default_fallback=False`) and reject candidates whose USD price isn't live — eliminating the class of false-positive spreads caused by hardcoded 2024-snapshot prices. Note: resolution **still degrades to the stale DEFAULT table** by default for backward-compat; gate-level migrations (scorer/sizing/execution_gate) are the natural next step.
+
+**Follow-ups** (not in E5):
+1. ~~Migrate `m7/shared/constants.py::_FALLBACK_ETH_PRICE_USD = 3500.0` to call `resolve_token_usd_price("WETH", chain="base", allow_default_fallback=False)`~~ → **DONE in N1**.
+2. Migrate `m7/triangular/scoring.py::eth_usd_price` default (2000.0) to runtime resolution.
+3. Audit other `onboard_*.yaml` profiles (arbitrum_one, linea, mantle, scroll, zksync) — apply the same stable-only rule.
+4. ~~Verify dynamic_anchors cache actually accumulates samples during soak~~ → **ADDRESSED in N5 (hooks wired, unit-verified); live validation blocked by unrelated WS event-source starvation in short runs**.
+
+---
+
+## N1+N5 — Hot-loop anchor accumulation + strict-mode USD resolver (DONE)
+
+**Trigger**: E5 shipped the resolver but two critical runtime callsites still used hardcoded `_FALLBACK_ETH_PRICE_USD = 3500.0`, and no production code path actually *populated* the dynamic_anchors cache (M4 wrote it via explicit `flush()` on shutdown, M7 hot-loop had no hook). Without live anchor samples the resolver permanently falls through to the stale DEFAULT table, defeating the entire E5 goal. A 3-hour soak needs both the writer (N5) and strict reader (N1) live before it can generate meaningful USD-grounded data.
+
+**Changes**:
+- [strategy/dynamic_anchors.py](strategy/dynamic_anchors.py): added `record_m7_anchor_sample(chain_key, symbol_in, symbol_out, amount_in_wei, amount_out_wei, decimals_in, decimals_out, dex_id, fee_tier, block)` — decimals-aware price normalization, `is_valid_anchor_price()` bounds check, writes via chain-scoped `get_anchor_manager()`. Auto-flushes to disk every `ARBY_M7_ANCHOR_FLUSH_EVERY` samples (default 25) so data survives process restarts — M4 relied on explicit shutdown `flush()` which M7 hot-loop does not call. Returns `bool` (non-throwing; fire-and-forget from hot path).
+- [m7/orderflow/scoring_parallel.py](m7/orderflow/scoring_parallel.py): three anchor-record hooks wired into both scoring entrypoints — two in `score_backrun_live_parallel` (local_pricing and remote-quoter branches) and one in `score_backrun_fast` (fast hot path, after `pricing_result`). Fast-path hook also reverse-looks-up symbols via `token_addresses` map when `_ats` lacks them.
+- [m7/orderflow/pricing.py](m7/orderflow/pricing.py): `_gas_cost_in_token_wei` now tries `resolve_token_usd_price("WETH", allow_default_fallback=False)` before the local `_FALLBACK_ETH_PRICE_USD = 3500.0` literal.
+- [m7/orderflow/scoring_parallel.py](m7/orderflow/scoring_parallel.py): ETH price fallback site at the top of live scoring migrated the same way (strict resolver → 3500.0 constant).
+- [tests/unit/test_m7_anchor_recording.py](tests/unit/test_m7_anchor_recording.py): new file, 7 tests — basic record, decimals-aware normalization, missing symbols, zero amounts, missing decimals, anomalous-price rejection (e.g. 32 wei AERO/WETH), round-trip integration with `resolve_token_usd_price` (recorded WETH sample usable with `2040 < usd < 2060`).
+
+**Regression**: 4032 pass / 1 pre-existing (`test_l1_cost` OP dispatch) — same baseline as E5. The 2 transient failures seen during soak-setup (`test_rpc_fork_backend.py::test_successful_sim` and `test_router_dispatches_to_rpc_fork`) were env pollution from lingering `ARBY_FLASHBLOCKS_SIM=1` (backend switches to `rpc_fork_preconf`) — not a code regression. Clean-env rerun: 31/31 pass.
+
+**Live validation status**: unit tests prove hooks write samples correctly and the resolver integrates. **Live soak validation is blocked by an unrelated WS starvation issue** — 5-min Base runs with the supervisor finish cleanly but `m7a_orderflow_loop.py --lane hot` produces only `iteration 1 started` and no block/event logs within the 60–300s window, so no scoring occurs, so no anchor samples are produced. This is a pre-existing runtime gap (BASE_WSS subscription handshake, or `ws_blocks=3 timeout=30s max_events=5` not firing) that is separate from the N1/N5 code path and needs its own diagnostic step before the 3-hour soak.
+
+**Follow-ups before 3-hour readiness**:
+1. Diagnose why fresh `m7a_orderflow_loop.py --lane hot` runs do not progress past iteration 1 within 60–300s (likely BASE_WSS endpoint responsiveness or block-subscription configuration).
+2. N2 — expand `PREWARM_PAIRS_BASE` from the current 7 pairs to 20+ (so more candidate pools are pre-registered when events do arrive).
+3. N3 — size-sweep (0.01 / 0.1 / 1 WETH) to confirm bps is size-stable once live data flows.
+4. N4 — enrich `sim_output_samples` with `best_buy_venue` / `best_buy_fee` for post-hoc analysis.
+
+---
+
 
 ## M7.B: Atomic Multi-hop Execution (NOT STARTED)
 

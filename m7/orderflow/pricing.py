@@ -83,7 +83,21 @@ def _gas_cost_in_token_wei(
     dec = token_decimals if token_decimals is not None else 18
     if dec == 18 and token_price_usd is None:
         return gas_cost_eth_wei  # assume ETH-denominated token
-    _eth = eth_price_usd if eth_price_usd and eth_price_usd > 0 else _FALLBACK_ETH_PRICE_USD
+    _eth = eth_price_usd if eth_price_usd and eth_price_usd > 0 else None
+    if _eth is None:
+        # N1 (E5): try LIVE resolver only (no stale table) before the
+        # _FALLBACK_ETH_PRICE_USD constant. allow_default_fallback=False keeps
+        # backward-compat with existing gas-oracle tests that expect the
+        # constant when no dynamic_anchors/config source is wired.
+        try:
+            from strategy.quotes import resolve_token_usd_price
+            _resolved = resolve_token_usd_price("WETH", allow_default_fallback=False)
+            if _resolved is not None and _resolved > 0:
+                _eth = float(_resolved)
+        except Exception:
+            pass
+    if _eth is None:
+        _eth = _FALLBACK_ETH_PRICE_USD
     _tok = token_price_usd if token_price_usd and token_price_usd > 0 else 1.0
     # gas_token_wei = gas_cost_eth_wei / 10^18 * eth_usd / tok_usd * 10^dec
     gas_token_wei = int(gas_cost_eth_wei * _eth * (10 ** dec) / (_tok * 10 ** 18))

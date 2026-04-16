@@ -517,3 +517,119 @@ def reset_anchor_manager() -> None:
     # Create fresh manager without loading cache
     _anchor_manager = DynamicAnchorManager(load_cache=False)
     _current_chain_key = None
+
+
+# =============================================================================
+# E5: Token→USD helper (drift-free resolver entry point)
+# =============================================================================
+
+# Stable tokens that act as the USD leg in a pair; used to derive token→USD
+# price from anchors like WETH/USDC, AERO/USDC, cbBTC/USDC, etc.
+_USD_LEG_SYMBOLS = {"USDC", "USDC_E", "USDBC", "USDT", "DAI", "FRAX", "LUSD", "USDE", "PYUSD"}
+
+
+def get_token_usd_from_anchors(
+    symbol: str,
+    chain_key: Optional[str] = None,
+) -> Optional[float]:
+    """Return live USD price for ``symbol`` from the dynamic_anchors cache.
+
+    Looks for any cached canonical pair ``<symbol>/<usd_leg>`` (or the
+    inverse) and returns the median anchor converted to the symbol's USD
+    value. Returns ``None`` when no anchor exists yet (caller should fall
+    back to config/stable table).
+    """
+    if not symbol:
+        return None
+    sym = symbol.upper()
+    if sym in _USD_LEG_SYMBOLS:
+        return 1.0
+    try:
+        mgr = get_anchor_manager(chain_key)
+    except Exception:
+        return None
+    for usd_leg in _USD_LEG_SYMBOLS:
+        # mgr.get_anchor() is already direction-aware: requesting
+        # "<sym>/<usd_leg>" returns the price in that direction (usd per sym),
+        # regardless of whether the canonical key is inverted internally.
+        pair_tag = f"{sym}/{usd_leg}"
+        price, source = mgr.get_anchor(pair_tag)
+        if price is None or source != "dynamic" or price <= 0:
+            continue
+        return float(price)
+    return None
+
+
+_M7_ANCHOR_SAMPLE_COUNTER = 0
+_M7_ANCHOR_FLUSH_EVERY = int(_os.environ.get("ARBY_M7_ANCHOR_FLUSH_EVERY", "25"))
+
+
+def record_m7_anchor_sample(
+    chain_key: Optional[str],
+    symbol_in: Optional[str],
+    symbol_out: Optional[str],
+    amount_in_wei: int,
+    amount_out_wei: int,
+    decimals_in: Optional[int],
+    decimals_out: Optional[int],
+    dex_id: Optional[str] = None,
+    fee_tier: int = 0,
+    block: int = 0,
+) -> bool:
+    """M7 hot-loop anchor accumulation hook (N5).
+
+    Normalizes an observed swap quote (amount_in → amount_out on a real pool
+    at ``block``) into a decimals-aware price and records it into the
+    per-chain dynamic_anchors cache. Non-throwing: returns False on any
+    invalid input so callers can use it fire-and-forget.
+
+    Auto-flushes to disk every ``ARBY_M7_ANCHOR_FLUSH_EVERY`` recorded
+    samples (default 25) so data survives process restarts; M4 relied on
+    an explicit flush() at scanner shutdown which M7 hot-loop does not call.
+    """
+    global _M7_ANCHOR_SAMPLE_COUNTER
+    if not symbol_in or not symbol_out:
+        logger.debug("N5 reject: missing symbols in=%r out=%r", symbol_in, symbol_out)
+        return False
+    if amount_in_wei <= 0 or amount_out_wei <= 0:
+        logger.debug("N5 reject: zero amounts in=%d out=%d", amount_in_wei, amount_out_wei)
+        return False
+    if decimals_in is None or decimals_out is None:
+        logger.debug("N5 reject: missing decimals in=%r out=%r", decimals_in, decimals_out)
+        return False
+    try:
+        base_units_in = float(amount_in_wei) / (10 ** int(decimals_in))
+        base_units_out = float(amount_out_wei) / (10 ** int(decimals_out))
+        if base_units_in <= 0:
+            return False
+        price = base_units_out / base_units_in
+        if not is_valid_anchor_price(price):
+            logger.debug("N5 reject: price out-of-bounds %s/%s price=%g",
+                         symbol_in, symbol_out, price)
+            return False
+        mgr = get_anchor_manager(chain_key)
+        pair_tag = f"{symbol_in.upper()}/{symbol_out.upper()}"
+        mgr.record_quote(
+            pair=pair_tag,
+            price=price,
+            dex_id=dex_id or "unknown",
+            fee_tier=int(fee_tier) if fee_tier else 0,
+            block=int(block) if block else 0,
+        )
+        _M7_ANCHOR_SAMPLE_COUNTER += 1
+        logger.info("N5 record: %s price=%g chain=%s counter=%d flush_every=%d",
+                    pair_tag, price, chain_key, _M7_ANCHOR_SAMPLE_COUNTER,
+                    _M7_ANCHOR_FLUSH_EVERY)
+        if _M7_ANCHOR_FLUSH_EVERY > 0 and (
+            _M7_ANCHOR_SAMPLE_COUNTER % _M7_ANCHOR_FLUSH_EVERY == 0
+        ):
+            try:
+                mgr.flush()
+                logger.info("N5 flush OK after %d samples", _M7_ANCHOR_SAMPLE_COUNTER)
+            except Exception as _fl_exc:
+                logger.warning("N5 flush FAILED: %s", _fl_exc)
+        return True
+    except Exception as _rec_exc:
+        logger.warning("N5 record exception: %s", _rec_exc)
+        return False
+

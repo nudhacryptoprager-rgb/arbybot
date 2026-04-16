@@ -642,9 +642,16 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "scoring_path": best.get("scoring_path") if isinstance(best, dict) else getattr(best, "scoring_path", None),
             "size_valid": best.get("size_valid_for_token") if isinstance(best, dict) else getattr(best, "size_valid_for_token", None),
         }
-    if guard_results:
+    # N7: filter out guard==None entries (produced when ARBY_SIM_BYPASS_GUARD=1
+    # forces [(r, None), ...] tuples in execution_gate). Only entries with a
+    # real ProfitGuardResult can feed the best-guard / readiness summaries.
+    _real_guards = [
+        (r, g) for (r, g) in (guard_results or [])
+        if g is not None and getattr(g, "net_bps", None) is not None
+    ]
+    if _real_guards:
         # Show best guard-passed candidate
-        best_guard = max(guard_results, key=lambda x: x[1].net_bps)
+        best_guard = max(_real_guards, key=lambda x: x[1].net_bps)
         r_dict, guard = best_guard
         hot["best_guard_passed"] = {
             "event_id": r_dict.get("event_id") if isinstance(r_dict, dict) else getattr(r_dict, "event_id", None),
@@ -655,16 +662,20 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         }
         # M7.A.5.31: Execution readiness timing summary
         hot["execution_readiness"] = {
-            "guard_checks_total": len(guard_results),
+            "guard_checks_total": len(_real_guards),
             "mean_guard_latency_ms": round(
-                sum(g.guard_latency_ms for _, g in guard_results) / len(guard_results), 2
+                sum(g.guard_latency_ms for _, g in _real_guards) / len(_real_guards), 2
             ),
             "max_guard_latency_ms": round(
-                max(g.guard_latency_ms for _, g in guard_results), 2
+                max(g.guard_latency_ms for _, g in _real_guards), 2
             ),
-            "timeboost_eligible_count": sum(1 for _, g in guard_results if g.timeboost_eligible),
+            "timeboost_eligible_count": sum(1 for _, g in _real_guards if g.timeboost_eligible),
             "timeboost_budget_ms": 50,
         }
+    elif guard_results:
+        # Bypass-guard mode: record only the count, no net_bps (guard==None).
+        hot["guard_bypassed"] = True
+        hot["guard_bypassed_count"] = len(guard_results)
 
     try:
         _atomic_json_write(_rio._HOT_ARTIFACT_PATH, hot, indent=2, default=str)

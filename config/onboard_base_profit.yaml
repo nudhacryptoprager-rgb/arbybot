@@ -163,25 +163,19 @@ simulate_only: true
 
 price_sanity_max_deviation_bps: 5000
 
+# E5 (2026-04-16): Non-stable USD prices removed — they are now resolved
+# dynamically via strategy.quotes.resolve_token_usd_price() which reads
+# data/cache/dynamic_anchors_base.json → STABLE_USD_PRICES. Hardcoded WETH=2322,
+# AERO=0.36 etc. caused drift of >1000 bps vs live pools. Only true stables
+# remain here; add other tokens only as temporary emergency overrides.
 tokens_usd_price:
-  WETH: 2322.0
-  WBTC: 68000.0
-  cbBTC: 68000.0
   USDC: 1.0
   USDbC: 1.0
   USDT: 1.0
   DAI: 1.0
-  cbETH: 2200.0
-  AERO: 0.36
-  VIRTUAL: 1.50
 
-# R39n: Single merged anchor block (fixes R39m duplicate YAML key issue)
+# E5: Anchor block removed — dynamic_anchors cache is now the single source
+# of truth. Stable/stable pairs stay put because both sides are pegged.
 tokens_anchor_price:
-  cbBTC_USDC: 68000.0
-  cbBTC_WETH: 33.0
-  AERO_USDC: 0.36
-  WETH_USDC: 2322.0
-  VIRTUAL_USDC: 1.50
-  WETH_USDbC: 2322.0
   USDC_USDT: 1.0
   USDC_DAI: 1.0

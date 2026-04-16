@@ -249,21 +249,26 @@ class TestBaseProfitConfig:
         assert cfg["chain_id"] == 8453
 
     def test_merged_anchor_block(self):
-        """All anchors must be in a SINGLE tokens_anchor_price block (no duplicate YAML keys)."""
+        """E5 (2026-04-16): non-stable anchors must be removed from YAML and
+        resolved dynamically via dynamic_anchors cache. Only stable-stable
+        pairs may remain hardcoded (they are genuinely peg-stable)."""
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "config", "onboard_base_profit.yaml"
         )
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
         anchors = cfg.get("tokens_anchor_price", {})
-        # Must have all expected anchors including alpha pairs
-        assert "cbBTC_USDC" in anchors, "cbBTC_USDC anchor missing"
-        assert "cbBTC_WETH" in anchors, "cbBTC_WETH anchor missing"
-        assert "AERO_USDC" in anchors, "AERO_USDC anchor missing"
-        assert "WETH_USDC" in anchors, "WETH_USDC anchor missing"
-        # Verify anchor values are plausible
-        assert anchors["cbBTC_USDC"] > 10000, "cbBTC price too low"
-        assert anchors["AERO_USDC"] < 10, "AERO price too high"
+        # Non-stable anchors must NOT be hardcoded (drift risk).
+        for forbidden in ("cbBTC_USDC", "cbBTC_WETH", "AERO_USDC", "WETH_USDC", "VIRTUAL_USDC"):
+            assert forbidden not in anchors, (
+                f"E5 contract: {forbidden} must be resolved dynamically, "
+                f"not hardcoded in YAML"
+            )
+        # Stable-stable anchors remain (genuinely static).
+        assert "USDC_USDT" in anchors
+        assert "USDC_DAI" in anchors
+        for k, v in anchors.items():
+            assert 0.9 <= v <= 1.1, f"stable-only anchors must stay near 1.0, got {k}={v}"
 
     def test_sweep_sizes_wide_corridor(self):
         config_path = os.path.join(
