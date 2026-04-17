@@ -311,9 +311,22 @@ def _prewarm_registry_from_pairs(
     """Prewarm registry using accumulated session_low_lag_pairs.
 
     Returns number of pairs prewarmed.
+
+    N9: wall-clock budget via ARBY_HOT_PAIR_PREWARM_BUDGET_SEC (default 20s).
+    Each preload_pair can take 2-4s via public RPC — without a budget the
+    loop can block the entire hot-phase for 40+ seconds on 13 pairs.
     """
+    import time as _time_mod
+    _budget_sec = float(os.environ.get("ARBY_HOT_PAIR_PREWARM_BUDGET_SEC", "20"))
+    _start = _time_mod.monotonic()
     count = 0
     for pair_key, info in session_pairs.items():
+        if _budget_sec > 0 and (_time_mod.monotonic() - _start) >= _budget_sec:
+            logger.info(
+                "Pair prewarm: budget %.0fs exceeded after %d pairs (remaining=%d)",
+                _budget_sec, count, max(0, len(session_pairs) - count),
+            )
+            break
         if "/" not in pair_key:
             continue
         sym_a, sym_b = pair_key.split("/", 1)

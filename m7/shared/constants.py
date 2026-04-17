@@ -405,16 +405,59 @@ def get_min_profitable_size_wei(
 def get_prewarm_pairs(chain: str, profile: str = "production") -> list:
     """Return prewarm pair tuples for the given chain and profile.
 
+    E1.30: Reads pairs from ``config/intent.txt`` first (Roadmap Appendix A
+    Step 1 — intent-driven universe). Hardcoded lists remain as a safety
+    fallback if intent.txt is missing/empty/fails to load, and as a source
+    of extra diagnostic pairs for the ``discovery`` profile.
+
+    Merge rules:
+      * production: intent.txt pairs for the chain; fallback to hardcoded.
+      * discovery: intent.txt pairs ∪ hardcoded-only extras (e.g. meme
+        diagnostic_only entries absent from intent.txt). Dedup by canonical
+        (sorted) symbol pair.
+
     Parameters
     ----------
     chain : chain key (e.g. "base", "arbitrum_one").
     profile : "production" (narrow, default) or "discovery" (wider contour).
     """
+    # Hardcoded fallback set for this chain/profile.
     if chain == "base":
-        if profile == "discovery":
-            return PREWARM_PAIRS_BASE_DISCOVERY
-        return PREWARM_PAIRS_BASE
-    return PREWARM_PAIRS_ARBITRUM
+        hardcoded = PREWARM_PAIRS_BASE_DISCOVERY if profile == "discovery" else PREWARM_PAIRS_BASE
+    else:
+        hardcoded = PREWARM_PAIRS_ARBITRUM
+
+    # Try to load intent.txt.
+    intent_pairs: list = []
+    try:
+        from discovery.intent_loader import get_intent_universe
+
+        universe = get_intent_universe()
+        intent_pairs = universe.get_pair_tuples_for_chain(chain)
+    except Exception:
+        intent_pairs = []
+
+    if not intent_pairs:
+        # Intent unavailable — use hardcoded as-is.
+        return list(hardcoded)
+
+    if profile != "discovery":
+        # Production: intent.txt is authoritative.
+        return list(intent_pairs)
+
+    # Discovery: merge intent ∪ hardcoded-extras, dedup by canonical key.
+    def _canon(t: tuple) -> tuple:
+        a, b = t
+        return tuple(sorted([a, b]))
+
+    seen = {_canon(p) for p in intent_pairs}
+    merged = list(intent_pairs)
+    for p in hardcoded:
+        k = _canon(p)
+        if k not in seen:
+            merged.append(p)
+            seen.add(k)
+    return merged
 
 # ---------------------------------------------------------------------------
 # M7.A.5.36: Promoted watchlist rules — cold-to-hot pair promotion

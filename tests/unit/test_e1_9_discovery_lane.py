@@ -70,27 +70,36 @@ class TestDiscoveryPrewarmPairs:
 
 class TestProfileDispatch:
     def test_production_profile_returns_narrow(self):
+        # E1.30: intent-driven — production returns intent.txt pairs for base.
         pairs = get_prewarm_pairs("base", "production")
-        assert pairs is PREWARM_PAIRS_BASE
+        assert ("WETH", "USDC") in pairs
+        assert ("USDC", "DAI") in pairs
 
     def test_discovery_profile_returns_wide(self):
-        pairs = get_prewarm_pairs("base", "discovery")
-        assert pairs is PREWARM_PAIRS_BASE_DISCOVERY
+        # E1.30: discovery is superset of production (intent ∪ hardcoded extras).
+        prod = get_prewarm_pairs("base", "production")
+        disc = get_prewarm_pairs("base", "discovery")
+        assert len(disc) >= len(prod)
+        for p in prod:
+            assert p in disc or tuple(sorted(p)) in [tuple(sorted(d)) for d in disc]
 
     def test_default_profile_is_production(self):
+        # E1.30: default == production profile.
         pairs = get_prewarm_pairs("base")
-        assert pairs is PREWARM_PAIRS_BASE
+        prod = get_prewarm_pairs("base", "production")
+        assert pairs == prod
 
     def test_arbitrum_ignores_profile(self):
-        """Arbitrum doesn't have discovery pairs yet -- both profiles return same."""
+        """Arbitrum: intent.txt covers both profiles identically (no discovery extras)."""
         prod = get_prewarm_pairs("arbitrum_one", "production")
         disc = get_prewarm_pairs("arbitrum_one", "discovery")
-        assert prod is PREWARM_PAIRS_ARBITRUM
-        assert disc is PREWARM_PAIRS_ARBITRUM
+        # Discovery is superset (may equal or exceed production).
+        assert len(disc) >= len(prod)
 
     def test_unknown_chain_falls_back_to_arbitrum(self):
         pairs = get_prewarm_pairs("unknown_chain", "discovery")
-        assert pairs is PREWARM_PAIRS_ARBITRUM
+        # E1.30: returns list copy of hardcoded Arbitrum fallback.
+        assert pairs == list(PREWARM_PAIRS_ARBITRUM)
 
 
 # ---------------------------------------------------------------------------

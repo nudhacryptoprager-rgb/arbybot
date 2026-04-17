@@ -1,6 +1,140 @@
 # DEV REPORT
 
 ## 0) Meta
+timestamp_utc: 2026-04-17T09:17:15Z
+run_id: m7_hot_30min_soak_20260417_0846 (rolling artifacts only, runtime `data/runs/_rolling/*`)
+mode: ONLINE (30-min production hot-lane soak on Base, public RPC)
+artifact_mode: rolling
+config: M7 hot, Base chain, production profile, `config/real_minimal.yaml` equivalents via CLI
+code_identity:
+  primary: ts:2026-04-17T09:17:00Z
+  dirty: true
+  desc: E1.29 — runtime hardening N5-N9 (anchor recording hook + bridge/pair prewarm wall-clock budgets + NoneType guard filter + hex-tag fallback)
+provenance_note:
+  session_rolling_artifacts: data/runs/_rolling/m7_hot_latest.json, m7_hot_rollup_latest.json, m7_hot_intents_latest.json (all refreshed 2026-04-17 09:16-09:17Z).
+  anchor_cache_written: data/cache/dynamic_anchors_base.json (16413 B, multi-pair, 73 records, 14 flushes).
+  hot_log_bundle: data/tmp/m7hot_30m.log (734777 B, 210 iterations, no Traceback/ERROR/Exception lines).
+
+## Session Completion
+session_goal: Провести 30-хвилинний production soak для підтвердження дієздатності системи (iteration stability, anchor recording, guard pipeline, no hangs), оновити документацію з висновками.
+goal_status: REACHED
+close_allowed: true
+remaining_blockers: (1) guard_passed=0 across 210 iter — market-window blocker (no profitable edges during soak window, consistent with E5 honest pricing); (2) no real sim_passed/submit_ready (blocked by guard, expected).
+evidence_session_run_dirs: [data/tmp/m7hot_30m.log (30-min hot soak), data/cache/dynamic_anchors_base.json (anchor cache), data/runs/_rolling/m7_hot_*.json]
+primary_blocker_of_session: runtime_hangs_and_anchor_cache_empty (two prewarm stages without wall-clock budget + no N5 recording hook)
+blocker_status_before: ACTIVE — previous 30-min launch stuck 10+ min at "hot-phase: starting pair prewarm (n=13)"; no anchor samples being written
+blocker_status_after: RESOLVED — N6 (30s bridge budget) + N9 (15s pair budget) + N5 hook live (73 records, 14 flushes in 30 min); 210/210 iterations completed without a single hang or exception
+docs_reread_confirmed: true
+
+## 1) Scope
+goal (Roadmap пункт): M7.E1 — Base Flashblocks Event-Source Pilot: runtime stability + honest pricing (`dynamic_anchors` cache as canonical USD price source per E5).
+change_summary:
+  - N5: Added `record_m7_anchor_sample()` in `strategy/dynamic_anchors.py` + scoring_parallel fast-path hook with 3-tier symbol fallback.
+  - N6: Wall-clock budget on `_prewarm_registry_from_bridge` (`ARBY_HOT_PREWARM_BUDGET_SEC`=30s), remaining via `register_ptt_pools` batched multicall.
+  - N7: NoneType filter for guard tuples in `hot_runtime_artifacts.py` (protects against `ARBY_SIM_BYPASS_GUARD=1` crash).
+  - N8: N5 hook resolves unknown tokens via hex-tag (`0x{addr[:8]}`) + decimals heuristic (USDC/USDT/USDBC=6, WBTC/CBBTC=8, else 18).
+  - N9: Wall-clock budget on `_prewarm_registry_from_pairs` (`ARBY_HOT_PAIR_PREWARM_BUDGET_SEC`=15-20s) — fixes 10-min hang at n=13 pairs.
+  - 30-min production soak on Base (public RPC + rpc_fork sim backend): 210 iter, 208 event-producing, 0 failed, 0 crashes.
+touched_files:
+  - strategy/dynamic_anchors.py
+  - m7/orderflow/scoring_parallel.py
+  - m7/orderflow/resolve.py
+  - m7/orderflow/bridge_runtime.py
+  - m7/orderflow/hot_runtime_artifacts.py
+  - tests/unit/test_m7_anchor_recording.py (new)
+  - tests/unit/test_dynamic_anchors.py
+  - docs/status/Status_M7.md
+
+## 2) Commands Executed
+py -3.11 -m pytest tests/unit/test_m7_anchor_recording.py tests/unit/test_dynamic_anchors.py -q: PASS (20 passed)
+py -3.11 -m pytest -q: PASS (4003 pass, 16 pre-existing failures unrelated to E1.29)
+py -u scripts/m7a_orderflow_loop.py --lane hot --chain base --profile production --ws-blocks 3 --pause 0: RAN 30 min (08:46:54 → 09:17:15 UTC), 210 iterations, 0 crashes
+py -3.11 scripts/ci_m4_execution_gate.py: NOT RUN (session scope is M7 hot soak, not M4 gate)
+py -3.11 scripts/ci_m5_0_gate.py: NOT RUN (session scope is M7 hot soak, not M5)
+
+## 3) Artifacts Attached
+rolling:
+  - data/runs/_rolling/m7_hot_latest.json (18685 B, 2026-04-17 09:17Z)
+  - data/runs/_rolling/m7_hot_rollup_latest.json (9159 B, 2026-04-17 09:17Z)
+  - data/runs/_rolling/m7_hot_intents_latest.json (1271 B, 2026-04-17 09:17Z)
+  - data/runs/_rolling/m7_cold_hot_bridge.json (37927 B, 2026-04-17 09:17Z)
+cache:
+  - data/cache/dynamic_anchors_base.json (16413 B, 2026-04-17 09:15Z, multi-pair with CHIMP/WETH 10+ samples)
+session_runtime_log:
+  - data/tmp/m7hot_30m.log (734777 B)
+
+## 4) Key Results (30-min soak on Base, hot lane)
+
+| Metric | Value |
+|--------|-------|
+| iterations total | 210 |
+| iterations with events | 208 (99.0%) |
+| iterations failed | 0 |
+| Traceback/ERROR/Exception count | 0 |
+| N5 record count (anchor samples) | 73 |
+| N5 flush count (cache writes) | 14 |
+| Bridge prewarm budget triggered | 1 (9 pairs done in 32s → direct PTT inject 54 pools) |
+| Pair prewarm budget respected | yes (10/13 pairs done in 11s, under 15s budget) |
+| guard_passed | 0 across all 210 iter |
+| best_clean range | includes -6.07 bps — signals ARE being scored, just below profitability threshold |
+| sim_passed | 0 (expected — blocked by guard, not by sim errors) |
+| submit_ready | 0 (expected — downstream of guard) |
+| Process CPU | 268s over 30 min |
+| Process WorkingSet | 92 MB (steady) |
+| Restarts | 0 |
+| WS disconnects | observed (soft fallback, no impact on iteration loop) |
+
+**Anchor cache sample** (after 30 min):
+```
+CHIMP/WETH:  10+ samples uniswap_v3 fee=500 (block-stable price 5.127e-08)
+0X16EE7ECA/USDC:  1 sample ptt_direct fee=170 price=0.038413
+CHECK/USDC, WETH/CHIMP, 0X66DC9103/WETH, 3+ more pairs
+```
+
+## 4.1) Theoretical Net Profit
+**N/A for this session** — guard_passed=0, therefore no scored-positive signals exited the pipeline. This is expected for a single 30-min window and is consistent with `AGENTS.md §4` "MARKET_WINDOW" class blocker. The anchor-cache-driven honest pricing (E5) prevents the false-positives that were observed before (e.g. `+20334 bps AERO/WETH` bug).
+
+## 5) Contract Checks
+status/reasons consistency: OK (no contradiction; guard_passed=0 → sim_passed=0 → submit_ready=0)
+rolling discipline (3 files only for M4): N/A (M7 uses separate `m7_hot_*.json` rolling set)
+v2.x provenance contract: OK (run_timestamp used, no `code_sha`/`evidence_sha`)
+runtime artifacts not committed: OK (`data/runs/_rolling/*.json` and `data/cache/*` ignored; only docs + code committed)
+
+## 6) Blocker Classification
+code_blocker: LOW (4003 pytest PASS, no new regressions, N5-N9 tested)
+data_collection_blocker: LOW (208/210 iterations had events; anchor cache populated; bridge+pair prewarm both succeed under budget)
+market_window_blocker: MEDIUM (0/210 iterations produced guard_passed; best_clean values negative → no profitable edges in this 30-min window on Base)
+
+## 6.1) Blockers / Risks
+- Market window: no profitable spreads during 30-min soak — requires longer observation window or additional chains to capture edges.
+- Anchor cache dedup: repeated same-block prices inflate sample count without adding signal; could add `(block, dex, fee)` dedup key.
+- Hex-tag pseudo-symbols (`0X16EE7ECA/USDC`): working fallback but useless for analyst-facing reporting — enrichment cache warm-up should cover most hot-lane tokens.
+
+## 7) Lead's Previous 10 Steps: Execution Map
+1. **N5 anchor recording hook** — DONE (`strategy/dynamic_anchors.py::record_m7_anchor_sample` + `scoring_parallel.py` fast-path hook line 1443).
+2. **N6 bridge prewarm budget** — DONE (`bridge_runtime.py::_prewarm_registry_from_bridge`, ENV `ARBY_HOT_PREWARM_BUDGET_SEC`).
+3. **N7 NoneType guard filter** — DONE (`hot_runtime_artifacts.py` line 645+).
+4. **N8 symbol/decimals fallback** — DONE (3-tier chain + heuristic, `scoring_parallel.py` hook).
+5. **N9 pair prewarm budget** — DONE (`bridge_runtime.py::_prewarm_registry_from_pairs`, ENV `ARBY_HOT_PAIR_PREWARM_BUDGET_SEC`).
+6. **Unit tests for anchor recording** — DONE (20/20 pass).
+7. **Full regression (pytest -q)** — DONE (4003 pass, 16 pre-existing unrelated failures).
+8. **30-min production soak on Base hot lane** — DONE (210 iter, 0 crashes, 73 N5 records, 14 flushes).
+9. **Status_M7.md update with E1.29 section** — DONE.
+10. **DEV_REPORT_LATEST.md update** — DONE (this file).
+
+## 8) Conclusions / Висновки
+
+**System readiness for extended (3h+) scan: GO with market-window caveat.**
+
+- Runtime stability is **proven**: 210 iterations in 30 min with zero failures, zero hangs, zero restarts, zero NoneType crashes, zero tracebacks. CPU/memory footprint is steady (268s CPU / 92 MB RSS over 30 min).
+- Prewarm phases now have **hard wall-clock budgets** on both paths (bridge N6=30s, pair N9=15-20s). The previously observed 10-min hang at n=13 pairs is **eliminated**.
+- Anchor cache is being **written continuously** (73 records, 14 flushes in 30 min) → E5 honest-pricing chain has a live data source. Over longer runs the cache should fill with more pairs and enable drift-free USD resolution.
+- Guard pipeline is **strict but correct**: 0 guard_passed is a market signal, not a bug. best_clean=-6.07 bps in iter 207 demonstrates the scorer is running; the market simply had no profitable edges during this 30-min Base slice.
+- **Recommended next run**: 3-hour supervised soak (`scripts/start_nonstop_runtime.py --chain base --hours 3 --with-discovery --no-m4`) with identical ENV set (`ARBY_HOT_PREWARM_BUDGET_SEC=30`, `ARBY_HOT_PAIR_PREWARM_BUDGET_SEC=15`, `ARBY_ANCHOR_MIN_SAMPLES=1`, `ARBY_M7_ANCHOR_FLUSH_EVERY=5`, `ARBY_SIM_BACKEND=rpc_fork`, `ARBY_PAPER_SIGNING=1`). Watch for first `guard_passed>0` event to revalidate sim→submit path end-to-end.
+- **No-go only if**: guard_passed stays 0 for a 3h+ window across both prod + discovery lanes — that would indicate the guard thresholds may need recalibration against current Base fee market (but this is a profit-calibration question, not a stability question).
+# DEV REPORT
+
+## 0) Meta
 timestamp_utc: 2026-04-11T10:39:56Z
 run_id: rolling (E1.26 — B1 router mismatch fix + B2 PROD coverage + factory multicall + 30min soak)
 mode: ONLINE (30min production + discovery soak on Base, public RPC)

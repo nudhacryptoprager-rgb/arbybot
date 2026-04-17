@@ -364,6 +364,20 @@ def get_cached_decimals(token_addr: str) -> Optional[int]:
     return None
 
 
+def get_cached_symbol(token_addr: str) -> Optional[str]:
+    """Return cached symbol for a token address, or None if not cached.
+
+    Reads from the module-level _enrichment_cache. Used by N5 anchor
+    recording when addr_to_symbol lacks an entry for the event's token.
+    """
+    cached = _enrichment_cache.get(token_addr.lower())
+    if cached is not None:
+        sym = cached.get("symbol")
+        if sym:
+            return str(sym)
+    return None
+
+
 def batch_pre_resolve_pools(
     pool_addresses: List[str],
     rpc_url: str,

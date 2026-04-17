@@ -320,11 +320,22 @@ base:
     address: "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb"
     decimals: 18
     name: "Dai Stablecoin"
+    note: "E1.31: Aerodrome vAMM + Uniswap V3 coverage verified"
     volatility_tier: low
-    liquidity_tier: low
-    cross_dex_expected: 1
+    liquidity_tier: medium
+    cross_dex_expected: 2
     productive_default: false
-  
+
+  EURC:
+    address: "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"
+    decimals: 6
+    name: "Euro Coin"
+    note: "E1.31: Circle EURC on Base — Aerodrome CL + Uniswap V3 (native forex stable)"
+    volatility_tier: low
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: false
+
   cbETH:
     address: "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22"
     decimals: 18

@@ -64,6 +64,7 @@ from m7.orderflow.resolve import (
     _resolve_pool_addresses_multicall,
     enrich_tokens_batch,
     get_cached_decimals,
+    get_cached_symbol,
     _pool_token_cache,
 )
 from m7.orderflow.coverage import (
@@ -1441,14 +1442,39 @@ def score_backrun_fast(
     try:
         from strategy.dynamic_anchors import record_m7_anchor_sample
         _out_sym_fast = _ats.get(token_out_addr.lower(), "").upper()
-        # Fallback: reverse-lookup in token_addresses (symbol -> address map).
+        # Fallback 1: reverse-lookup in token_addresses (symbol -> address map).
         if not _in_sym or not _out_sym_fast:
             _rev = {v.lower(): k.upper() for k, v in (token_addresses or {}).items() if v}
             if not _in_sym:
                 _in_sym = _rev.get(token_in_addr.lower(), "")
             if not _out_sym_fast:
                 _out_sym_fast = _rev.get(token_out_addr.lower(), "")
+        # Fallback 2: enrichment cache populated by cold lane multicall.
+        if not _in_sym:
+            _cs = get_cached_symbol(token_in_addr)
+            if _cs:
+                _in_sym = _cs.upper()
+        if not _out_sym_fast:
+            _cs = get_cached_symbol(token_out_addr)
+            if _cs:
+                _out_sym_fast = _cs.upper()
+        # Fallback 3: short hex tag for unknown tokens (still records the pair,
+        # so we build an anchor key per-address).
+        if not _in_sym:
+            _in_sym = f"0x{token_in_addr.lower().replace('0x','')[:8]}"
+        if not _out_sym_fast:
+            _out_sym_fast = f"0x{token_out_addr.lower().replace('0x','')[:8]}"
+
+        # Decimals_out: cached first, else heuristic from symbol, else EVM default.
         _out_dec_fast = get_cached_decimals(token_out_addr)
+        if _out_dec_fast is None:
+            if _out_sym_fast in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC"):
+                _out_dec_fast = 6
+            elif _out_sym_fast in ("WBTC", "CBBTC"):
+                _out_dec_fast = 8
+            else:
+                _out_dec_fast = 18
+
         logger.info(
             "N5 hook(fast): chain=%s %s/%s in_wei=%d out_wei=%s dec_in=%s dec_out=%s",
             chain, _in_sym, _out_sym_fast, int(backrun_size_wei),

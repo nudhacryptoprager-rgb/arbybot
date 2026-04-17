@@ -77,6 +77,42 @@ class IntentUniverse:
             tokens.add(pair.token_a)
             tokens.add(pair.token_b)
         return tokens
+
+    def get_pair_tuples_for_chain(self, chain: str) -> List[tuple]:
+        """Get pairs as list of (token_a, token_b) symbol tuples for a chain.
+
+        Returns the display-order tuples (as written in intent.txt), deduplicated
+        by canonical key. Used by m7 prewarm and other consumers that only need
+        the symbol layer (addresses resolved separately via discovery).
+
+        E1.30: Tokens are case-normalized against ``config/core_tokens.yaml``
+        so that mixed-case symbols like ``cbBTC`` / ``cbETH`` resolve correctly
+        downstream (``parse_intent_line`` uppercases everything; this method
+        undoes that for tokens whose canonical casing differs).
+        """
+        # Build case-preserving symbol map for this chain from core_tokens.yaml.
+        casing: Dict[str, str] = {}
+        try:
+            from config import load_core_tokens
+
+            chain_tokens = load_core_tokens().get(chain, {}) or {}
+            for canonical in chain_tokens.keys():
+                casing[canonical.upper()] = canonical
+        except Exception:
+            casing = {}
+
+        def _canon_case(sym: str) -> str:
+            return casing.get(sym.upper(), sym)
+
+        seen = set()
+        result: List[tuple] = []
+        for pair in self._pairs.get(chain, []):
+            key = pair.canonical_key
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append((_canon_case(pair.token_a), _canon_case(pair.token_b)))
+        return result
     
     def __len__(self) -> int:
         return len(self._all_pairs)
