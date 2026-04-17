@@ -202,8 +202,22 @@ def _json_rpc(url: str, method: str, params: list, timeout: float = 10.0) -> Tup
             return None, f"HTTP {resp.status_code}: {resp.text[:200]}"
         data = resp.json()
         if "error" in data:
-            msg = data["error"].get("message", str(data["error"]))[:200]
-            return None, msg
+            err_obj = data["error"]
+            msg = err_obj.get("message", str(err_obj))[:200]
+            # E1.32/C2-extended: Many RPCs (Alchemy, Infura, publicnode) place
+            # the revert payload in ``error.data`` (bare hex) while the message
+            # stays generic "execution reverted". Combine both so the decoder
+            # can reach Error(string)/Panic/custom-selector data.
+            raw_data = err_obj.get("data")
+            if raw_data:
+                if isinstance(raw_data, dict):
+                    raw_data = raw_data.get("data") or raw_data.get("originalError", {}).get("data") or ""
+                if isinstance(raw_data, str) and raw_data.startswith("0x") and len(raw_data) > 2:
+                    # Preserve original message, append payload so the decoder
+                    # sees "execution reverted: 0x..." even when the RPC split them.
+                    if "0x" not in msg:
+                        msg = f"{msg}: {raw_data[:400]}"
+            return None, msg[:600]
         return data, None
     except Exception as e:
         return None, str(e)[:200]
@@ -228,12 +242,79 @@ def _decode_revert_reason(raw_error: str) -> str:
       - "execution reverted: 0x08c379a0..."        (ABI-encoded Error(string))
       - "execution reverted"                        (no data)
     """
+    # E1.32: Known custom-error selectors surfaced by common routers.
+    # Mapping selector (4 bytes, hex w/ 0x) → stable classification tag.
+    _CUSTOM_ERROR_SELECTORS = {
+        # Uniswap V3 SwapRouter / PositionManager
+        "0xf4d678b8": "INSUFFICIENT_OUTPUT_AMOUNT",   # Too little received
+        "0x39d35496": "PRICE_LIMIT",                   # SPL (sqrtPriceLimit)
+        "0x3994d14e": "AMOUNT_SPECIFIED_ZERO",
+        "0xc45a0155": "POOL_NOT_INITIALIZED",
+        # ERC20 SafeTransferFrom / Permit2
+        "0xf4059071": "STF",                           # safeTransferFrom failed
+        "0xe450d38c": "INSUFFICIENT_BALANCE",
+        "0x13e45317": "INSUFFICIENT_ALLOWANCE",
+        # Aerodrome / Velodrome router
+        "0x7c41cbe1": "INSUFFICIENT_OUTPUT_AMOUNT",
+        "0x749b5939": "INVALID_PATH",
+    }
+
+    # E1.32: Known inline substrings (case-insensitive) → tag.
+    # Ordered: most-specific first. Very-short tags checked separately below
+    # as exact tokens to avoid false matches (e.g. "as" inside "class").
+    _INLINE_PATTERNS = [
+        ("too little received", "SLIPPAGE"),
+        ("too much requested", "SLIPPAGE"),
+        ("insufficient_output_amount", "SLIPPAGE"),
+        ("insufficient output amount", "SLIPPAGE"),
+        ("minimum_output_amount", "SLIPPAGE"),
+        ("sqrtpricelimit", "PRICE_LIMIT"),
+        ("price_limit", "PRICE_LIMIT"),
+        ("transferhelper::safetransferfrom", "STF"),
+        ("safetransferfrom", "STF"),
+        ("transfer_from_failed", "STF"),
+        ("erc20: transfer amount exceeds allowance", "INSUFFICIENT_ALLOWANCE"),
+        ("insufficient allowance", "INSUFFICIENT_ALLOWANCE"),
+        ("erc20: transfer amount exceeds balance", "INSUFFICIENT_BALANCE"),
+        ("insufficient balance", "INSUFFICIENT_BALANCE"),
+        ("transaction too old", "DEADLINE_EXPIRED"),
+        ("deadline exceeded", "DEADLINE_EXPIRED"),
+        ("expired", "DEADLINE_EXPIRED"),
+        ("insufficient_liquidity", "INSUFFICIENT_LIQUIDITY"),
+        ("insufficient liquidity", "INSUFFICIENT_LIQUIDITY"),
+        ("pool not initialized", "POOL_NOT_INITIALIZED"),
+        ("reentrancy", "REENTRANCY"),
+    ]
+
+    # Standalone short tokens that are themselves valid Uniswap/Aerodrome
+    # revert strings. Checked as exact (whitespace or end-bounded) to avoid
+    # substring false positives.
+    _EXACT_TOKEN_TAGS = {
+        "stf": "STF",
+        "spl": "PRICE_LIMIT",
+        "lok": "POOL_LOCKED",
+        "as": "POOL_NOT_INITIALIZED",
+        "ai": "AMOUNT_IN_ZERO",
+        "ao": "AMOUNT_OUT_ZERO",
+        "l": "INSUFFICIENT_LIQUIDITY",
+        "ti": "TOKEN_INVALID",
+    }
+
     # Case 1: Already human-readable after "execution reverted: "
     _prefix = "execution reverted: "
     idx = raw_error.lower().find(_prefix.lower())
     if idx >= 0:
         after = raw_error[idx + len(_prefix):].strip()
         if after and not after.startswith("0x"):
+            # Try inline pattern match for known error strings.
+            low = after.lower()
+            # Exact-token match first (whole message IS the token).
+            tok = low.strip(" .\"'`")
+            if tok in _EXACT_TOKEN_TAGS:
+                return f"REVERT:{_EXACT_TOKEN_TAGS[tok]}"
+            for pat, tag in _INLINE_PATTERNS:
+                if pat in low:
+                    return f"REVERT:{tag}"
             return f"REVERT:{after[:120]}"
         # Case 2: ABI-encoded Error(string) — selector 0x08c379a0
         if after.startswith("0x08c379a0") and len(after) >= 138:
@@ -244,6 +325,13 @@ def _decode_revert_reason(raw_error: str) -> str:
                 str_bytes = bytes.fromhex(hex_data[136:136 + str_len * 2])
                 decoded = str_bytes.decode("utf-8", errors="replace").strip()
                 if decoded:
+                    low = decoded.lower()
+                    tok = low.strip(" .\"'`")
+                    if tok in _EXACT_TOKEN_TAGS:
+                        return f"REVERT:{_EXACT_TOKEN_TAGS[tok]}"
+                    for pat, tag in _INLINE_PATTERNS:
+                        if pat in low:
+                            return f"REVERT:{tag}"
                     return f"REVERT:{decoded[:120]}"
             except Exception:
                 pass
@@ -267,8 +355,49 @@ def _decode_revert_reason(raw_error: str) -> str:
                 return f"PANIC:{desc}"
             except Exception:
                 pass
+        # E1.32: Case 4 — custom error selector (4 bytes).
+        if after.startswith("0x") and len(after) >= 10:
+            selector = after[:10].lower()
+            tag = _CUSTOM_ERROR_SELECTORS.get(selector)
+            if tag:
+                return f"REVERT:{tag}"
         if after:
             return f"REVERT:hex:{after[:64]}"
+
+    # E1.32: Case 5 — no "execution reverted: " prefix, but message itself
+    # contains a known pattern or bare hex payload.
+    low = raw_error.lower()
+    for pat, tag in _INLINE_PATTERNS:
+        if pat in low:
+            return f"REVERT:{tag}"
+    # Bare hex payload embedded anywhere
+    import re as _re
+    m = _re.search(r"0x[0-9a-fA-F]{8,}", raw_error)
+    if m:
+        hex_blob = m.group(0).lower()
+        selector = hex_blob[:10]
+        tag = _CUSTOM_ERROR_SELECTORS.get(selector)
+        if tag:
+            return f"REVERT:{tag}"
+        if hex_blob.startswith("0x08c379a0") and len(hex_blob) >= 138:
+            # Try Error(string) even when not prefixed
+            try:
+                hex_data = hex_blob[2:]
+                str_len = int(hex_data[72:136], 16)
+                str_bytes = bytes.fromhex(hex_data[136:136 + str_len * 2])
+                decoded = str_bytes.decode("utf-8", errors="replace").strip()
+                if decoded:
+                    inner = decoded.lower()
+                    tok = inner.strip(" .\"'`")
+                    if tok in _EXACT_TOKEN_TAGS:
+                        return f"REVERT:{_EXACT_TOKEN_TAGS[tok]}"
+                    for pat, tag in _INLINE_PATTERNS:
+                        if pat in inner:
+                            return f"REVERT:{tag}"
+                    return f"REVERT:{decoded[:120]}"
+            except Exception:
+                pass
+        return f"REVERT:hex:{hex_blob[:64]}"
     return f"REVERT:unknown"
 
 

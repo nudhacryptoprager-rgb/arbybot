@@ -288,8 +288,19 @@ def _build_sim_tx_params(
                 # Unknown fee or standard V3 tiers → default to uniswap_v3
                 _preferred = ["uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"]
             elif _fee_hint > 10:
-                # Non-standard fee (Algebra dynamic) — no configured router
-                return None, f"UNSUPPORTED_FEE_TIER:{_fee_hint}"
+                # E1.32: Non-standard fee — classify origin for monitoring.
+                # Aerodrome CL (Slipstream) uses custom per-pool fees driven
+                # by tickSpacing (e.g. 150/445/600/2105/2655/3024). Algebra
+                # dynamic pools can emit fees like 85 that change on-demand.
+                # Until a dedicated Slipstream adapter lands (future E1.32.x),
+                # these remain unsupported but are now bucketed separately.
+                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2655, 3024, 5000, 20000}
+                if _fee_hint in _AERODROME_CL_KNOWN:
+                    return None, f"UNSUPPORTED_FEE_TIER:AERODROME_CL:{_fee_hint}"
+                # Very small non-standard (often Algebra dynamic starting fee)
+                if _fee_hint <= 100:
+                    return None, f"UNSUPPORTED_FEE_TIER:ALGEBRA_DYNAMIC:{_fee_hint}"
+                return None, f"UNSUPPORTED_FEE_TIER:UNKNOWN:{_fee_hint}"
             else:
                 _preferred = ["uniswap_v3", "sushiswap_v3", "pancakeswap_v3", "aerodrome"]
 
@@ -456,6 +467,13 @@ def _build_sell_leg_tx_params(
     if sell_fee is None:
         sell_fee = getattr(result, "best_buy_fee", None)  # fallback
     if sell_fee is None or sell_fee not in _ACCEPTED:
+        # E1.32: Classify by origin for monitoring clarity.
+        _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2655, 3024, 5000, 20000}
+        if isinstance(sell_fee, int):
+            if sell_fee in _AERODROME_CL_KNOWN:
+                return None, f"SELL_FEE_UNSUPPORTED:AERODROME_CL:{sell_fee}"
+            if 1 < sell_fee <= 100:
+                return None, f"SELL_FEE_UNSUPPORTED:ALGEBRA_DYNAMIC:{sell_fee}"
         return None, f"SELL_FEE_UNSUPPORTED:{sell_fee}"
 
     # Reverse token direction: buy.tokenOut becomes sell.tokenIn

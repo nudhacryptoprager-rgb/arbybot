@@ -584,6 +584,45 @@ class TestBuildSimTxParams:
         # E1.18: ve33 uses Velodrome selector (not V3 exactInputSingle)
         assert tx["calldata"][:4] == bytes.fromhex("cac88ea9")
 
+    # E1.32: fee-tier classification for non-standard fees -----------------
+
+    def test_aerodrome_cl_fee_classified(self):
+        """Non-standard Aerodrome CL fees get AERODROME_CL sub-tag."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        for fee in (150, 445, 600, 2105, 2655, 3024):
+            br = self._make_result(
+                best_buy_venue="0x" + "a" * 40,  # opaque pool address
+                best_buy_fee=fee,
+            )
+            tx, err = _build_sim_tx_params(br, chain="base")
+            assert tx is None
+            assert err == f"UNSUPPORTED_FEE_TIER:AERODROME_CL:{fee}", err
+
+    def test_algebra_dynamic_small_fee_classified(self):
+        """Small non-standard fee (<=100) → ALGEBRA_DYNAMIC sub-tag."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            best_buy_venue="0x" + "b" * 40,
+            best_buy_fee=85,
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert err == "UNSUPPORTED_FEE_TIER:ALGEBRA_DYNAMIC:85"
+
+    def test_unknown_non_standard_fee_classified(self):
+        """Truly unknown non-standard fee → UNKNOWN sub-tag."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            best_buy_venue="0x" + "c" * 40,
+            best_buy_fee=7777,
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert err == "UNSUPPORTED_FEE_TIER:UNKNOWN:7777"
+
 
 class TestAttemptSimulationRealCalldata:
     """E1.12.4B: _attempt_simulation sends real calldata to backend."""

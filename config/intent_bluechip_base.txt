@@ -1,0 +1,29 @@
+# intent_bluechip_base.txt — Blue-chip-only Base universe (E1.32 soak)
+# Purpose: 4h focused soak on highest-liquidity Base pairs only.
+#          Maximizes probability of capturing a real profit window by
+#          concentrating scanning on pairs with: multi-DEX coverage,
+#          >$5M TVL, stable price feeds, symmetric arb potential.
+# Source: derived from config/intent.txt v3.5.0 Base section, filtered
+#         to tier-1 blue-chip (productive=true, liquidity_tier=high).
+# Format: <chain_key>:<BASE>/<QUOTE>
+
+# ============================================================
+# BASE — blue-chip only (10 pairs, 7 tokens)
+# ============================================================
+# Stables & forex:
+base:USDC/DAI
+base:EURC/USDC
+
+# ETH & ETH derivatives:
+base:WETH/USDC
+base:WETH/USDbC
+base:WETH/DAI
+base:WETH/cbBTC
+base:cbETH/WETH
+
+# BTC derivatives:
+base:cbBTC/USDC
+base:cbBTC/cbETH
+
+# Native/governance:
+base:AERO/USDC

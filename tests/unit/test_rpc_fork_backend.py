@@ -509,8 +509,15 @@ class TestRevertReasonDecoding:
 
     def test_human_readable_revert(self):
         from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        # E1.32: known slippage strings now normalized to REVERT:SLIPPAGE
         result = _decode_revert_reason("execution reverted: Too little received")
-        assert result == "REVERT:Too little received"
+        assert result == "REVERT:SLIPPAGE"
+
+    def test_human_readable_unknown_string_preserved(self):
+        from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+        # Unknown free-form strings still pass through verbatim.
+        result = _decode_revert_reason("execution reverted: CustomError123")
+        assert result == "REVERT:CustomError123"
 
     def test_stf_revert(self):
         from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason

@@ -177,11 +177,19 @@ def load_intent(path: Optional[Path] = None) -> IntentUniverse:
     Load intent.txt and return IntentUniverse.
     
     Args:
-        path: Path to intent.txt (default: config/intent.txt)
+        path: Path to intent.txt (default: config/intent.txt; can be
+              overridden via ``ARBY_INTENT_FILE`` environment variable).
         
     Returns:
         IntentUniverse with all parsed pairs
     """
+    import os
+
+    if path is None:
+        env_override = os.environ.get("ARBY_INTENT_FILE", "").strip()
+        if env_override:
+            path = Path(env_override)
+            logger.info("Intent file overridden via ARBY_INTENT_FILE=%s", path)
     path = path or DEFAULT_INTENT_PATH
     universe = IntentUniverse()
     universe._source_path = path
