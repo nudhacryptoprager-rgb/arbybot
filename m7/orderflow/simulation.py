@@ -76,12 +76,41 @@ class SimulationResult:
 # Backend detection
 # ---------------------------------------------------------------------------
 
-def get_simulation_backend() -> str:
+# E1.34 P0.1: Profile-specific env override.
+# When profile="discovery", ARBY_SIM_BACKEND_DISC takes precedence over
+# ARBY_SIM_BACKEND. This lets operators flip DISC lane to rpc_fork/anvil
+# (no credit limits, no HTTP 403) while keeping PROD on Tenderly.
+_PROFILE_ENV = {
+    "discovery": "ARBY_SIM_BACKEND_DISC",
+    "disc": "ARBY_SIM_BACKEND_DISC",
+    "prod": "ARBY_SIM_BACKEND_PROD",
+    "production": "ARBY_SIM_BACKEND_PROD",
+}
+
+
+def get_simulation_backend(profile: Optional[str] = None) -> str:
     """Return the active simulation backend name.
 
-    Reads ARBY_SIM_BACKEND env var.  Defaults to "tenderly" for
-    backward compatibility.
+    E1.34 P0.1: Profile-aware selection.
+    - If ``profile`` is given (e.g. "discovery"/"prod") and its profile-specific
+      env var (``ARBY_SIM_BACKEND_DISC`` / ``ARBY_SIM_BACKEND_PROD``) is set
+      to a valid backend, that wins.
+    - Otherwise falls back to ``ARBY_SIM_BACKEND``.
+    - Default: ``tenderly`` for backward compatibility.
+
+    Unknown profile-env values log a warning and fall through to the generic
+    ``ARBY_SIM_BACKEND`` selector (not silently dropped to tenderly).
     """
+    if profile:
+        env_name = _PROFILE_ENV.get(profile.strip().lower())
+        if env_name:
+            override = os.environ.get(env_name, "").strip().lower()
+            if override:
+                if override in _VALID_BACKENDS:
+                    return override
+                logger.warning(
+                    "Unknown %s=%r, falling back to ARBY_SIM_BACKEND", env_name, override
+                )
     raw = os.environ.get("ARBY_SIM_BACKEND", BACKEND_TENDERLY).strip().lower()
     if raw in _VALID_BACKENDS:
         return raw
@@ -109,9 +138,14 @@ def is_rpc_fork_configured() -> bool:
     return _rpc_ok()
 
 
-def is_simulation_configured() -> bool:
-    """Generic readiness check for the currently selected backend."""
-    backend = get_simulation_backend()
+def is_simulation_configured(profile: Optional[str] = None) -> bool:
+    """Generic readiness check for the currently selected backend.
+
+    E1.34 P0.1: Accepts optional ``profile`` (passed through to
+    :func:`get_simulation_backend`) so callers in DISC vs PROD lanes
+    validate the right backend.
+    """
+    backend = get_simulation_backend(profile=profile)
     if backend == BACKEND_ANVIL:
         return is_anvil_configured()
     if backend == BACKEND_RPC_FORK:

@@ -1,3 +1,166 @@
+# STEP 4 (E1.34+): M7 Production-Readiness Roadmap — Post-E1.33
+
+## Контекст
+
+Попередні пункти Phase C (E1.27: sim_profit_bps / revert decode / PREWARM expansion)
+**вичерпано**:
+- C1 `sim_profit_bps/wei` — реалізовано і потім відкочено у E1.33 D1 через
+  cross-decimals bogus bps (буй-легу WETH(18d)→USDC(6d) давав -9999 bps).
+  Single-leg profit_bps семантично некоректний; замість нього введено
+  `ROUNDTRIP_*` truth contract.
+- C2 revert decode — реалізовано у `m7/orderflow/sim_backends/rpc_fork_backend.py::_decode_revert_reason` (Error(string) + Panic(uint256)).
+- C3 PREWARM expansion — виконано через E1.30 intent-driven prewarm
+  (`PREWARM_PAIRS_BASE` + `PREWARM_PAIRS_BASE_DISCOVERY` + dynamic loader).
+- Phase S (3h soak) — виконано кілька раз; підтверджено пайплайн стабільний,
+  але `roundtrip_profitable_count=0` за ~3.3k windows → ринок/latency-blocked,
+  а не код-blocked.
+- Phase A (execution wiring) — **заблоковано** GO-gate: `sim_profit_bps_best > 0`
+  так і не досягнуто жодного разу. Виконання не вмикаємо, поки не усунено
+  latency/economics bottleneck.
+
+Поточна блокуюча реальність (Status_M7, rolling window 200):
+- `sim_passed=29 / submit_ready=29 / roundtrip_profitable=0` (PROD)
+- `simulation_error_histogram` дoмінує `PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:2655`
+- DISC lane періодично 4× Tenderly HTTP 403
+- `ws_lag` ~2s (через `newHeads`), flashblocks (200ms) не використовуються у hot loop
+
+---
+
+## Новий план: Path to Net-Positive Roundtrip
+
+### P0 — Blocker Elimination (обов'язково, ROI миттєвий)
+
+#### P0.1. DISC lane: усунути Tenderly 403 → rpc_fork/anvil за замовчуванням
+- **Мета:** `ARBY_SIM_BACKEND` має бути profile-aware: дозволити DISC використовувати `rpc_fork/anvil` без зміни PROD-бекенда.
+- **Файли:**
+  - `m7/orderflow/simulation.py::get_simulation_backend(profile: Optional[str] = None)` — додати optional argument; читати `ARBY_SIM_BACKEND_DISC` коли `profile="discovery"` (fallback на `ARBY_SIM_BACKEND`).
+  - `m7/orderflow/execution_gate.py::run_execution_gate(..., profile: str = "prod")` — прокинути профіль у селектор.
+  - `tests/unit/test_sim_backend_profile.py` — 3 кейси (default, DISC override, unknown override fallback).
+- **Критерій:** `run_summary_latest.json.m7_lane_config.discovery.sim_backend` збігається з `ARBY_SIM_BACKEND_DISC`, коли виставлено.
+- **Ризики:** мінімальні (back-compat: без profile — стара поведінка).
+
+#### P0.2. Flashblocks 200ms pre-confirmation як primary event source
+- **Мета:** замінити `newHeads` (2s) на Base flashblocks (200ms) у hot loop → 10× зменшення `ws_lag`.
+- **Джерело:** https://docs.base.org/base-chain/flashblocks/app-integration
+- **Файли:**
+  - `m7/orderflow/event_source.py` (або аналог): додати `FlashblocksSource` (WS до `wss://mainnet-preconf.base.org/ws`), feature-flag `ARBY_FLASHBLOCKS_PRIMARY=1`.
+  - `m7/shared/constants.py`: `FLASHBLOCKS_ENDPOINT_BASE`.
+  - Тести: фіктивний WS server → подає 10 flashblocks → `event_source.iter_events()` повертає 10 окремих `preconf_block_N` подій.
+- **Критерій:** `ws_lag_ms_median < 500` замість `~2000` у наступному soak.
+- **Залежить від:** `ARBY_FLASHBLOCKS_HTTP` уже є у env (Status_M7 line 115).
+
+---
+
+### P1 — Signal Quality (ROI високий, зусилля середнє)
+
+#### P1.1. Fee-tier extension: Aerodrome Slipstream + Algebra Dynamic
+- **Мета:** усунути `PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:2655` (60%+ events).
+- **Файли:**
+  - Новий `dex/adapters/aerodrome_slipstream.py` (CL pools з tickSpacing-driven fees: 150/445/600/2105/2655/3024).
+  - `dex/registry.py`: зареєструвати `aerodrome_slipstream` adapter_type.
+  - `execution/gas_estimate.py::build_exact_input_single_calldata` — підтримати fee-as-tickSpacing.
+  - `tests/unit/test_aerodrome_slipstream.py` — базові кейси.
+- **Критерій:** `UNSUPPORTED_FEE_TIER:AERODROME_CL:*` падає з 60% до <5% у rolling.
+- **Ризики:** середні — router calldata може відрізнятись; треба verify по одному pool.
+
+#### P1.2. Victim-filter tightening
+- **Мета:** pre-filter у `scoring_parallel.py`: `notional_usd > ARBY_VICTIM_MIN_USD` (default $10k) AND `price_impact_bps > ARBY_VICTIM_MIN_IMPACT_BPS` (default 15).
+- **Файли:**
+  - `m7/orderflow/scoring_parallel.py`: додати pre-scoring фільтр `_victim_size_filter()`.
+  - `m7/shared/constants.py`: `VICTIM_MIN_USD_DEFAULT = 10_000`, `VICTIM_MIN_IMPACT_BPS_DEFAULT = 15`.
+  - Тести: малий swap ($1k) → rejected з `REJECT:VICTIM_TOO_SMALL`; великий → pass.
+- **Критерій:** `scored_count` падає ~2-5×, але `positive_count / scored_count` зростає (signal-to-noise).
+
+---
+
+### P2 — Execution Atomicity (ROI високий, зусилля велике, BLOCKED на P0/P1)
+
+#### P2.1. Atomic arb contract (flashloan-based)
+- **Мета:** замінити 2 sequential swap tx на 1 atomic tx із Balancer/Aave 0-fee flashloan.
+- **Референс:** https://github.com/flashbots/simple-arbitrage
+- **Компоненти:**
+  - Solidity contract `contracts/ArbyBackrun.sol` (Foundry project):
+    - `executeBackrun(bytes calldata buyLeg, bytes calldata sellLeg, uint256 minProfit)` з flashloan callback.
+    - Revert if `net < minProfit`.
+  - `execution/atomic_bundler.py`: build calldata для `executeBackrun`.
+  - Testnet deployment (Base Sepolia) + unit test via `forge test`.
+- **Критерій:** 1 успішна testnet transaction з `gasUsed < 220_000` (замість ~400k для 2 tx).
+- **Блокується на:** P0.1, P0.2, P1 (spending effort до того як ринок підтвердить edge — premature).
+
+#### P2.2. Private tx pool integration
+- **Мета:** `eth_sendPrivateTransaction` через Alchemy/bloXroute для Base → захист від front-run.
+- **Файли:**
+  - `execution/private_tx.py::submit_private(tx_signed: str, rpc: str)`.
+  - Wire в `loop_runner.py` коли `ARBY_PRIVATE_TX=1`.
+- **Критерій:** інтеграційний тест на testnet → tx з'являється в блоці без public mempool visibility.
+
+---
+
+### P3 — Strategy Pivot Fallback (якщо P0+P1 не дають net-positive)
+
+#### P3.1. Mainnet MEV-Share searcher (окремий lane, M8 scope)
+- **Умова активації:** 1000+ windows після P0+P1 і `roundtrip_profitable_total == 0`.
+- **Суть:** пiдписка на `wss://mev-share.flashbots.net`, `mev_sendBundle` на mainnet.
+- **Референс:** https://docs.flashbots.net/flashbots-mev-share/searchers/getting-started
+- **Виключено з M7** — формально M8; документую як fallback, не робимо цієї ітерації.
+
+---
+
+## Послідовність виконання (наступні ітерації)
+
+| Крок | Item | Зусилля | Статус |
+|------|------|---------|--------|
+| 1 | P0.1 profile-aware sim backend | XS | ✅ DONE (E1.34) |
+| 2 | P0.2 Flashblocks WS source | M | ✅ PRE-EXISTED (m7/orderflow/mode_ws_live.py + chains/flashblocks.py — wired, з fallback) |
+| 3 | P1.2 victim-filter (env overrides) | S | ✅ DONE (E1.34) |
+| 4 | P1.1 Aerodrome Slipstream adapter | L | **NEXT** |
+| 5 | P2.1 Atomic contract (gated на P0+P1 success) | XL | blocked |
+| 6 | P3.1 MEV-Share pivot (gated на no-profit verdict) | XL | blocked |
+
+---
+
+## Success Metrics (оновлено)
+
+| Metric | Baseline (E1.33) | P0 Target | P1 Target | P2 Target |
+|--------|------------------|-----------|-----------|-----------|
+| `ws_lag_ms_median` | ~2000 | <500 | <500 | <500 |
+| `UNSUPPORTED_FEE_TIER` share | 60% | 60% | <5% | <5% |
+| `sim_attempted / scored` | 99/4456 (2.2%) | 99/4456 | ~50/1000 | ~50/1000 |
+| `roundtrip_profitable_total` | 0 | 0 (diagnostic) | >0 (target) | >0 (stable) |
+| Tenderly HTTP 403 (DISC) | 4× / 200 runs | 0 | 0 | 0 |
+| `sim_net_usdc_best` | negative | negative | >0 | ≥$1 |
+
+---
+
+## Guard-rails (не порушувати)
+
+- `execution_enabled=false`, `kill_switch_active=true` зберігаються до P2 completion + Lead approval.
+- `config/intent.txt` — не редагувати без `--allow-intent-edit` (AGENTS.md).
+- Ніяких великих рефакторингів під час падіння тестів.
+- Усі зміни — мінімальні, backward-compatible, з юніт-тестом.
+- Docs: тільки overwrite `docs/DEV_REPORT_LATEST.md`, без версіонування.
+
+---
+
+## Зовнішні джерела (grounding для P0/P1/P2)
+
+- Base Flashblocks: https://docs.base.org/base-chain/flashblocks/app-integration
+- Flashbots RPC & bundles: https://docs.flashbots.net/flashbots-auction/searchers/advanced/rpc-endpoint
+- Post-merge searching: https://writings.flashbots.net/searching-post-merge
+- Reference atomic arb: https://github.com/flashbots/simple-arbitrage
+- Self-hosted rbuilder/sim: https://github.com/flashbots/rbuilder
+
+---
+
+## KEY INSIGHT
+
+E1.33 довело: код-шлях стабільний, truth-invariant консистентний, але
+**net-positive не досягається через комбінацію latency (newHeads 2s) + fee-tier miss (60% events) + Tenderly credit limits**.
+P0+P1 усувають усі три блокери одночасно. Якщо після цього roundtrip_profitable_total залишається 0 —
+це **ринковий висновок** (Base hot lane FCFS + no privileged ordering), не код-проблема, і
+легітимний trigger для P3 (mainnet MEV-Share pivot).
+
+Ітерація E1.34 = **P0.1 (profile-aware sim backend)** — наступний коміт.
 # STEP 4: Path to Proven Profitability + Execution (E1.27, 2026-04-16)
 
 ## Стратегічний контекст

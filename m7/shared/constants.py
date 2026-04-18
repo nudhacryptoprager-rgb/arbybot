@@ -196,6 +196,50 @@ SIGNIFICANT_IMPACT_BPS = 5.0
 DEFAULT_BACKRUN_GAS = 200_000
 DEFAULT_GAS_PRICE_GWEI = 0.1  # legacy fallback; prefer get_gas_price_gwei(chain)
 
+
+# E1.34 P1.2: Victim-filter tightening via env overrides.
+# Operators can raise the floor without code change, e.g.
+#   ARBY_VICTIM_MIN_USD=10000       — only backrun ≥ $10k swaps
+#   ARBY_VICTIM_MIN_IMPACT_BPS=15   — only backrun ≥ 15 bps price impact
+# Unset / empty / unparseable → falls back to the module-level defaults
+# above (backward-compatible). Accessors are small so tests can monkeypatch
+# env and see the effect without reloading the module.
+def get_victim_min_size_usd() -> float:
+    """Effective minimum victim swap size in USD.
+
+    Reads ``ARBY_VICTIM_MIN_USD``; falls back to ``MIN_EVENT_SIZE_USD``.
+    Negative / non-numeric values are ignored (fall back to default).
+    """
+    import os as _os
+    raw = _os.environ.get("ARBY_VICTIM_MIN_USD", "").strip()
+    if raw:
+        try:
+            val = float(raw)
+            if val >= 0:
+                return val
+        except ValueError:
+            pass
+    return float(MIN_EVENT_SIZE_USD)
+
+
+def get_victim_min_impact_bps() -> float:
+    """Effective minimum victim price-impact in bps.
+
+    Reads ``ARBY_VICTIM_MIN_IMPACT_BPS``; falls back to ``SIGNIFICANT_IMPACT_BPS``.
+    Used by ``classify_event_viability`` to tighten noise.
+    Negative / non-numeric values are ignored (fall back to default).
+    """
+    import os as _os
+    raw = _os.environ.get("ARBY_VICTIM_MIN_IMPACT_BPS", "").strip()
+    if raw:
+        try:
+            val = float(raw)
+            if val >= 0:
+                return val
+        except ValueError:
+            pass
+    return float(SIGNIFICANT_IMPACT_BPS)
+
 # Chain-specific L2 gas price estimates (gwei).
 # More accurate than universal DEFAULT_GAS_PRICE_GWEI for cross-chain scoring.
 _CHAIN_GAS_PRICE_GWEI: Dict[str, float] = {

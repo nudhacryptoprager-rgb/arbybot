@@ -63,11 +63,21 @@ def parse_args():
 class ManagedProcess:
     """A subprocess with restart semantics."""
 
-    def __init__(self, name: str, cmd: list[str], restart_delay: int, max_restarts: int):
+    def __init__(
+        self,
+        name: str,
+        cmd: list[str],
+        restart_delay: int,
+        max_restarts: int,
+        env: dict[str, str] | None = None,
+    ):
         self.name = name
         self.cmd = cmd
         self.restart_delay = restart_delay
         self.max_restarts = max_restarts
+        # E1.35 P0.1-wiring: per-process env override. None → inherit from supervisor
+        # (os.environ). dict → merge over os.environ so callers only specify deltas.
+        self.env = env
         self.proc: subprocess.Popen | None = None
         self.restarts = 0
         self.started_at: float = 0
@@ -80,10 +90,14 @@ class ManagedProcess:
         # On Windows, PIPE readline() is blocking — drain_output() would
         # stall the supervisor's health check loop, preventing deadline
         # termination. Child processes write to rolling artifacts, not stdout.
+        _env = None
+        if self.env:
+            _env = {**os.environ, **self.env}
         self.proc = subprocess.Popen(
             self.cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=_env,
         )
         self.started_at = time.monotonic()
         print(f"  [{self.name}] Started (PID {self.proc.pid}): {' '.join(self.cmd[:4])}...")
@@ -198,6 +212,20 @@ def main():
 
     # 5. Discovery lanes (parallel to production)
     if args.with_discovery and args.m7_profile == "production":
+        # E1.35 P0.1-wiring: promote ARBY_SIM_BACKEND_DISC (set on the supervisor)
+        # into the DISC subprocess as its effective ARBY_SIM_BACKEND.
+        # PROD lanes keep whatever ARBY_SIM_BACKEND / ARBY_SIM_BACKEND_PROD
+        # the supervisor inherited (handled via env inheritance; we only inject
+        # the delta here).
+        _disc_backend = os.environ.get("ARBY_SIM_BACKEND_DISC", "").strip()
+        _disc_env: dict[str, str] | None = None
+        if _disc_backend:
+            _disc_env = {"ARBY_SIM_BACKEND": _disc_backend}
+            print(
+                f"  [discovery] ARBY_SIM_BACKEND_DISC={_disc_backend} → "
+                "injected into DISC subprocesses as ARBY_SIM_BACKEND"
+            )
+
         processes.append(ManagedProcess(
             "m7_hot_discovery",
             [
@@ -210,6 +238,7 @@ def main():
             ],
             restart_delay=args.restart_delay,
             max_restarts=args.max_restarts,
+            env=_disc_env,
         ))
         if not args.no_m7_cold:
             processes.append(ManagedProcess(
@@ -224,6 +253,7 @@ def main():
                 ],
                 restart_delay=args.restart_delay,
                 max_restarts=args.max_restarts,
+                env=_disc_env,
             ))
 
     # Start all

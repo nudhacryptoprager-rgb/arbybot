@@ -137,6 +137,13 @@ def _register_adapters():
         _ADAPTER_REGISTRY["ambient"] = AmbientAdapter
     except ImportError as e:
         logger.warning(f"Failed to import ambient adapter: {e}")
+
+    # E1.35 P1.1: Aerodrome Slipstream (concentrated liquidity on Base)
+    try:
+        from dex.adapters.aerodrome_slipstream import AerodromeSlipstreamAdapter
+        _ADAPTER_REGISTRY["aerodrome_slipstream"] = AerodromeSlipstreamAdapter
+    except ImportError as e:
+        logger.warning(f"Failed to import aerodrome_slipstream adapter: {e}")
     
     logger.debug(f"Registered adapters: {list(_ADAPTER_REGISTRY.keys())}")
 

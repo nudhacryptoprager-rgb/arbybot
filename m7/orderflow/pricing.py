@@ -33,6 +33,8 @@ from m7.shared.constants import (
     estimate_gas_cost,
     get_gas_price_gwei,
     get_min_profitable_size_wei,
+    get_victim_min_size_usd,
+    get_victim_min_impact_bps,
 )
 from m7.orderflow.contracts import BackrunResult, OrderflowEvent
 
@@ -133,10 +135,22 @@ def classify_event_viability(event: OrderflowEvent) -> Optional[str]:
     """Pre-classify whether an event is viable for backrun scoring.
 
     Returns a reject reason string if not viable, None if viable.
+
+    E1.34 P1.2: Uses env-overridable thresholds
+    (``ARBY_VICTIM_MIN_USD`` / ``ARBY_VICTIM_MIN_IMPACT_BPS``) so operators
+    can tighten the noise floor without a code change.  Defaults preserve
+    prior behavior (``MIN_EVENT_SIZE_USD`` / ``SIGNIFICANT_IMPACT_BPS``'s
+    legacy 0.1-bps floor is kept as a hard lower bound).
     """
-    if event.estimated_size_usd < MIN_EVENT_SIZE_USD:
+    min_usd = get_victim_min_size_usd()
+    if event.estimated_size_usd < min_usd:
         return REJECT_EVENT_TOO_SMALL
-    if event.estimated_impact_bps < 0.1:
+    min_impact = get_victim_min_impact_bps()
+    # Preserve legacy behaviour: when operator hasn't tightened the bps
+    # floor (still at default SIGNIFICANT_IMPACT_BPS=5.0), the original
+    # 0.1-bps floor applies. When operator *has* overridden, use that value.
+    impact_floor = min_impact if min_impact != SIGNIFICANT_IMPACT_BPS else 0.1
+    if event.estimated_impact_bps < impact_floor:
         return REJECT_INSUFFICIENT_IMPACT
     return None
 
