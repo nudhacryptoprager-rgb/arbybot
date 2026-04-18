@@ -858,6 +858,9 @@ def emit_rolling_artifacts(run_dir: Path) -> dict:
         "updated_at": now_utc.isoformat(),
         "latest_run_timestamp": run_context.get("run_timestamp", now_utc.isoformat()),
         "code_identity": run_context.get("code_identity", f"ts:{now_utc.isoformat()}"),
+        # E1.33: Top-level run_dir_name for auditability — consumers should not have
+        # to drill into run_context or inputs to find the canonical runDir.
+        "run_dir_name": run_summary.get("inputs", {}).get("run_dir_name"),
         "run_context": {
             "run_timestamp": run_context.get("run_timestamp", now_utc.isoformat()),
             "code_identity": run_context.get("code_identity", f"ts:{now_utc.isoformat()}"),

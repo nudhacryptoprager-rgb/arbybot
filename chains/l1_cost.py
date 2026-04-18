@@ -33,6 +33,13 @@ Usage:
 import logging
 from typing import Optional, Tuple, Any
 
+# E1.33: Hoist Web3 to module-level so tests can patch chains.l1_cost.Web3
+# without triggering real network I/O from the public-RPC fallback path.
+try:  # pragma: no cover - import shim
+    from web3 import Web3  # type: ignore
+except Exception:  # pragma: no cover
+    Web3 = None  # type: ignore
+
 logger = logging.getLogger("chains.l1_cost")
 
 # Arbitrum NodeInterface precompile
@@ -324,7 +331,8 @@ def get_l1_cost_for_chain(
         }
         for fallback_url in _PUBLIC_RPCS.get(chain_lower, []):
             try:
-                from web3 import Web3
+                if Web3 is None:  # pragma: no cover
+                    break
                 fb_w3 = Web3(Web3.HTTPProvider(fallback_url, request_kwargs={"timeout": 3}))
                 cost = estimate_op_l1_fee_onchain(fb_w3, calldata)
                 if cost is not None:

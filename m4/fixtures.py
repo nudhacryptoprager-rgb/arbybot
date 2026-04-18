@@ -1240,6 +1240,9 @@ def generate_m4_from_online_inputs(
         "run_context": {
             "run_timestamp": run_timestamp,
             "code_identity": f"ts:{run_timestamp}",  # v2.0: deterministic code ref
+            # E1.33: run_dir_name in run_context so downstream consumers can trace
+            # runDir via run_context alone (matches _latest.json.run_context).
+            "run_dir_name": run_dir.name,
             "code_sha": None,  # v2.0: deprecated
             "code_dirty": None,  # v2.0: deprecated
             "code_desc": None,  # v2.0: deprecated

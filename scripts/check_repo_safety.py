@@ -26,6 +26,15 @@ from datetime import date
 from pathlib import Path
 from typing import List, Tuple
 
+# E1.33: Force UTF-8 for stdout/stderr so non-ASCII issue messages (arrows, emojis,
+# Unicode punctuation) do not crash on Windows cp1251 console. Best-effort; the
+# `reconfigure` method is present on Python 3.7+ TextIO wrappers.
+try:  # pragma: no cover - platform-specific
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 PROJECT_ROOT = Path(__file__).parent.parent
 
 __version__ = "1.15.0"

@@ -1,15 +1,23 @@
 # Status: M4 (DEX-DEX Atomic Execution)
 
-**Status**: **IN PROGRESS**  
-**Updated**: 2026-03-27  
-**Current reading**: `M4.1 simulate-only` is historically closed, but `M4 online profit` is still **not reached**.  
-**Fresh provenance**:
-- `run_summary_latest.json.run_context.run_timestamp = 2026-03-27T21:30:14.342304Z`
-- `long_scan_latest.json.generated_at = 2026-03-27T21:30:49.463920Z`
-- rolling window: `58` fresh online runs in current 20-minute evidence
-- run_id: `data/runs/ci_m5_gate_arbitrum_one_20260327_222948_123275`
-- run_mode: `REGISTRY_REAL` / `ONLINE`
-- tests: `2527 passed / 5 skipped`
+**Status**: **IN PROGRESS** (paper/sim capable, **NOT production-ready**)
+**Updated**: 2026-04-17
+**Current reading**: `M4.1 simulate-only` historically closed; `M4 online profit` **not reached** — economic truth remains negative.
+**Fresh provenance (E1.33 cycle)**:
+- `run_summary_latest.json.run_context.run_timestamp = 2026-04-17T12:59:11.866411Z`
+- `run_summary_latest.json.run_context.run_dir_name = ci_m5_gate_arbitrum_one_20260417_145636_478653` (E1.33: now populated, was None)
+- `_latest.json.run_dir_name = ci_m5_gate_arbitrum_one_20260417_145636_478653` (E1.33: top-level)
+- rolling window: `200` runs, `pass_count=187`, `data_run_rate=1.0`, `pass_rate=0.935`, `agg_status=WARN_QUALITY` (reason: `FRAGILE_P90_ELEVATED`)
+- long_scan: `total_runs=119`, `total_profitable_roundtrips=0` — confirms M4.2 not reached at market level
+- `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `real_quote_count=0`, `profitable_roundtrips=0` (internally consistent after E1.33 invariant guard)
+- tests: `4077 passed / 17 skipped` (E1.33 adds 5 new invariant + provenance tests)
+- safety gate: Windows `UnicodeEncodeError` crash fixed (`scripts/check_repo_safety.py` now reconfigures stdout/stderr to UTF-8)
+
+**E1.33 contract locks (new)**:
+- `build_truth_data` demotes `ROUNDTRIP_PROFITABLE` → `ROUNDTRIP_NOT_PROFITABLE` if `real_quote_count==0` OR `profitable_count==0`; emits `profit_realism_invariant_violation` block with original_status + reason `PROFITABLE_REQUIRES_REAL_QUOTES_AND_PROFITABLE_COUNT`.
+- Provenance: `run_dir_name` is now a first-class field at both top-level of `_latest.json` and inside `run_summary.run_context`.
+
+**Previous (superseded) reading**: `Updated: 2026-03-27`, run_timestamp `2026-03-27T21:30:14`, 58-run rolling window, 2527 tests. Retained below as historical record.
 
 **Canonical evidence**:
 - `data/runs/_rolling/_latest.json`

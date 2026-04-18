@@ -256,15 +256,21 @@ class TestSweepTruthPromotion(unittest.TestCase):
         self.assertEqual(result["profit_truth_source"], "ROUNDTRIP_CANONICAL")
 
     def test_sweep_profitable_promotes_to_profitable(self):
-        """Sweep profitable → ROUNDTRIP_PROFITABLE even with evaluated_count=0."""
+        """Sweep profitable → ROUNDTRIP_PROFITABLE when invariant satisfied.
+
+        E1.33: ROUNDTRIP_PROFITABLE requires real_quote_count>0 AND profitable_count>0
+        (measured QuoterV2 roundtrips). A sweep that claims PROFITABLE but has no
+        measured real quotes / profitable roundtrips is treated as upstream drift
+        and demoted by the invariant guard.
+        """
         from strategy.artifacts import build_truth_data
 
         stats = build_minimal_stats(
             roundtrip={
                 "enabled": True,
-                "evaluated_count": 0,
-                "profitable_count": 0,
-                "real_quote_count": 0,
+                "evaluated_count": 3,
+                "profitable_count": 2,  # E1.33: real profitable roundtrip count
+                "real_quote_count": 3,  # E1.33: real QuoterV2 successes
                 "executable_evidence": "SWEEP_PROFITABLE",
                 "dynamic_sweep": {
                     "enabled": True,

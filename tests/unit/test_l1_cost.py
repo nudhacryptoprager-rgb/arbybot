@@ -145,8 +145,12 @@ class TestGetL1CostForChain(unittest.TestCase):
         """Base chain should use OP-Stack GasPriceOracle, not NodeInterface."""
         from chains.l1_cost import get_l1_cost_for_chain, DEFAULT_OP_L1_FEE_WEI
 
-        # No w3 → should return OP default, not Arbitrum default
-        cost, source = get_l1_cost_for_chain(w3=None, chain="base")
+        # R40.1: With w3=None, code tries public-RPC fallback before default.
+        # For a deterministic unit test we must block fallback so we assert the
+        # default branch (`default_op`). Patch Web3 inside the module so any
+        # fallback attempt raises.
+        with patch("chains.l1_cost.Web3", side_effect=RuntimeError("no network in test")):
+            cost, source = get_l1_cost_for_chain(w3=None, chain="base")
         self.assertEqual(source, "default_op")
         self.assertEqual(cost, DEFAULT_OP_L1_FEE_WEI)
 

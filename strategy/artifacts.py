@@ -897,7 +897,30 @@ def build_truth_data(
     # R39r+ steps 2-4: Flashblocks execution proof — eth_simulateV1 + base_transactionStatus
     if stats.get("flashblocks_execution_proof"):
         truth_data["flashblocks_execution_proof"] = stats["flashblocks_execution_proof"]
-    
+
+    # E1.33: PROFIT_REALISM_INVARIANT — `ROUNDTRIP_PROFITABLE` requires BOTH
+    # `profitable_count > 0` AND `real_quote_count > 0` (or sweep-truth variant).
+    # If the upstream status-setter drifts (e.g. sweep path promotes without real
+    # quotes), demote to `ROUNDTRIP_NOT_PROFITABLE` and annotate for operator RCA.
+    # This mirrors the invariant the reviewer flagged in run_summary/truth_report.
+    _status = truth_data.get("profit_realism_status")
+    _rt2 = truth_data.get("roundtrip_summary", {}) or {}
+    _real_q = int(_rt2.get("real_quote_count", 0) or 0)
+    _prof_rt = int(_rt2.get("profitable_count", 0) or 0)
+    if _status == "ROUNDTRIP_PROFITABLE" and (_real_q == 0 or _prof_rt == 0):
+        logger.warning(
+            "PROFIT_REALISM_INVARIANT violation: status=%s but real_quote_count=%d "
+            "profitable_count=%d -> demoting to ROUNDTRIP_NOT_PROFITABLE",
+            _status, _real_q, _prof_rt,
+        )
+        truth_data["profit_realism_status"] = "ROUNDTRIP_NOT_PROFITABLE"
+        truth_data["profit_realism_invariant_violation"] = {
+            "original_status": _status,
+            "real_quote_count": _real_q,
+            "profitable_count": _prof_rt,
+            "reason": "PROFITABLE_REQUIRES_REAL_QUOTES_AND_PROFITABLE_COUNT",
+        }
+
     return truth_data
 
 
