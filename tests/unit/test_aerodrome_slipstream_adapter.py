@@ -133,9 +133,14 @@ class TestConfigWiring:
         from config import get_dex_config
         cfg = get_dex_config("base", "aerodrome_slipstream")
         assert cfg["adapter_type"] == "aerodrome_slipstream"
-        # Factory is verified and must be a real address.
-        assert isinstance(cfg["factory"], str) and cfg["factory"].startswith("0x")
-        # Router / quoter must remain null until verification step.
-        assert cfg.get("router") in (None, "", "null")
-        assert cfg.get("quoter_v2") in (None, "", "null")
-        assert cfg.get("verified") is False
+        # All three canonical addresses must be real (verified from
+        # aerodrome.finance/security).
+        for key in ("factory", "router", "quoter_v2"):
+            val = cfg.get(key)
+            assert isinstance(val, str) and val.startswith("0x") and len(val) == 42, (
+                f"{key} must be a verified 0x-address, got {val!r}"
+            )
+        assert cfg.get("verified") is True
+        # Known on-chain tick spacings on Base (sanity check).
+        tick_spacings = cfg.get("tick_spacings") or []
+        assert set(tick_spacings) >= {1, 50, 100, 200, 2000}

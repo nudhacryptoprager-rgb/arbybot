@@ -208,6 +208,120 @@ def build_exact_input_single_calldata(
     return selector + params
 
 
+# -----------------------------------------------------------------------------
+# E1.35 P1.1 (step 4): Aerodrome Slipstream SwapRouter calldata builder.
+# -----------------------------------------------------------------------------
+#
+# Slipstream's SwapRouter mirrors Uniswap V3's periphery SwapRouter, with one
+# ABI-level difference in the ExactInputSingleParams struct:
+#
+#     struct ExactInputSingleParams {
+#         address tokenIn;
+#         address tokenOut;
+#         int24   tickSpacing;     // <-- was `uint24 fee` in Uniswap V3
+#         address recipient;
+#         uint256 deadline;
+#         uint256 amountIn;
+#         uint256 amountOutMinimum;
+#         uint160 sqrtPriceLimitX96;
+#     }
+#
+# The 4-byte selector therefore differs from 0x414bf389.  We compute it at
+# import time using keccak-256 over the canonical function signature, so the
+# module has no silent constant drift if the ABI ever changes upstream.
+
+def _keccak_fallback(data: bytes) -> bytes:
+    """Keccak-256 with a chain of fallbacks (pycryptodome → pysha3 → web3)."""
+    try:
+        from Crypto.Hash import keccak as _k
+        return _k.new(data=data, digest_bits=256).digest()
+    except ImportError:
+        pass
+    try:
+        import sha3 as _s
+        return _s.keccak_256(data).digest()
+    except ImportError:
+        pass
+    from web3 import Web3 as _W3
+    return bytes(_W3.keccak(data))
+
+
+SLIPSTREAM_EXACT_INPUT_SINGLE_SIG = (
+    b"exactInputSingle("
+    b"(address,address,int24,address,uint256,uint256,uint256,uint160))"
+)
+SLIPSTREAM_EXACT_INPUT_SINGLE_SELECTOR = _keccak_fallback(
+    SLIPSTREAM_EXACT_INPUT_SINGLE_SIG
+)[:4]
+
+
+def build_slipstream_exact_input_single_calldata(
+    token_in: str,
+    token_out: str,
+    tick_spacing: int,
+    recipient: str,
+    amount_in: int,
+    amount_out_min: int = 0,
+    sqrt_price_limit: int = 0,
+    deadline: Optional[int] = None,
+) -> bytes:
+    """Build Aerodrome Slipstream SwapRouter.exactInputSingle calldata.
+
+    Structurally identical to Uniswap V3 exactInputSingle, except
+    ``uint24 fee`` is replaced with ``int24 tickSpacing`` (same 32-byte
+    slot, same two's-complement encoding for non-negative values).
+
+    Parameters
+    ----------
+    tick_spacing : int
+        Pool tickSpacing (positive, int24).  On Base the known set is
+        {1, 50, 100, 200, 2000}; any positive value in int24 range is
+        accepted here — the SwapRouter will revert if no pool exists.
+    """
+    import time
+
+    if tick_spacing <= 0 or tick_spacing >= (1 << 23):
+        raise ValueError(
+            f"tick_spacing must be in (0, 2**23), got {tick_spacing}"
+        )
+
+    selector = SLIPSTREAM_EXACT_INPUT_SINGLE_SELECTOR
+
+    if deadline is None:
+        deadline = int(time.time()) + 3600
+
+    def encode_address(addr: str) -> bytes:
+        clean = addr.lower().replace("0x", "")
+        return bytes.fromhex(clean.zfill(64))
+
+    def encode_uint256(val: int) -> bytes:
+        return val.to_bytes(32, "big")
+
+    def encode_int24_as_word(val: int) -> bytes:
+        # Positive-only path: pad to 32 bytes just like uint24.  Two's-
+        # complement for negatives is intentionally NOT supported — pools
+        # never carry negative tickSpacing.
+        if val < 0:
+            raise ValueError(f"negative tick_spacing not supported: {val}")
+        return val.to_bytes(32, "big")
+
+    def encode_uint160(val: int) -> bytes:
+        return val.to_bytes(32, "big")
+
+    params = (
+        encode_address(token_in)
+        + encode_address(token_out)
+        + encode_int24_as_word(tick_spacing)
+        + encode_address(recipient)
+        + encode_uint256(deadline)
+        + encode_uint256(amount_in)
+        + encode_uint256(amount_out_min)
+        + encode_uint160(sqrt_price_limit)
+    )
+
+    return selector + params
+
+
 def validate_gas_headroom(
     estimated_gas: int,
     gas_limit: int,

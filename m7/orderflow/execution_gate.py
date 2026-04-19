@@ -292,10 +292,26 @@ def _build_sim_tx_params(
                 # Aerodrome CL (Slipstream) uses custom per-pool fees driven
                 # by tickSpacing (e.g. 150/445/600/2105/2655/3024). Algebra
                 # dynamic pools can emit fees like 85 that change on-demand.
-                # Until a dedicated Slipstream adapter lands (future E1.32.x),
-                # these remain unsupported but are now bucketed separately.
+                # E1.35 P1.1 step 3: When a Slipstream adapter+config is
+                # present (verified=True), reclassify AERODROME_CL rejects
+                # under a distinct bucket to surface progress.  The adapter
+                # exists and calldata encoding is ready, but per-pool
+                # `tickSpacing` lookup is still pending (scanner does not
+                # yet carry it through BackrunResult).  Submit remains
+                # blocked until the lookup layer lands.
                 _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2655, 3024, 5000, 20000}
                 if _fee_hint in _AERODROME_CL_KNOWN:
+                    try:
+                        _slip_cfg = _gdc(chain, "aerodrome_slipstream")
+                    except (KeyError, ImportError):
+                        _slip_cfg = None
+                    if (
+                        _slip_cfg
+                        and _slip_cfg.get("verified") is True
+                        and _slip_cfg.get("router")
+                        and _slip_cfg.get("quoter_v2")
+                    ):
+                        return None, f"SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"
                     return None, f"UNSUPPORTED_FEE_TIER:AERODROME_CL:{_fee_hint}"
                 # Very small non-standard (often Algebra dynamic starting fee)
                 if _fee_hint <= 100:
@@ -696,7 +712,23 @@ def run_execution_gate(
         _fee_hint = getattr(r, "best_buy_fee", None)
         if _fee_hint is not None and _fee_hint not in _ACCEPTED_FEES:
             # Record in sim_errors (for histogram) but do NOT count as sim_attempted.
+            # E1.35 P1.1 step 3: classify Aerodrome Slipstream fees under
+            # SLIPSTREAM_PENDING_LOOKUP when adapter+config are verified.
+            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2655, 3024, 5000, 20000}
             _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint}"
+            if _fee_hint in _AERODROME_CL_KNOWN:
+                try:
+                    from config import get_dex_config as _gdc_pre
+                    _slip_cfg = _gdc_pre(chain, "aerodrome_slipstream")
+                except (KeyError, ImportError):
+                    _slip_cfg = None
+                if (
+                    _slip_cfg
+                    and _slip_cfg.get("verified") is True
+                    and _slip_cfg.get("router")
+                    and _slip_cfg.get("quoter_v2")
+                ):
+                    _skip_key = f"PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"
             gate.sim_errors.append(_skip_key)
             if hasattr(r, "sim_attempted"):
                 r.sim_attempted = False

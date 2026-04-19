@@ -587,7 +587,14 @@ class TestBuildSimTxParams:
     # E1.32: fee-tier classification for non-standard fees -----------------
 
     def test_aerodrome_cl_fee_classified(self):
-        """Non-standard Aerodrome CL fees get AERODROME_CL sub-tag."""
+        """Non-standard Aerodrome CL fees route to a Slipstream-aware bucket.
+
+        E1.35 P1.1 step 3: when `aerodrome_slipstream` config is verified
+        (router + quoter_v2 + verified=True), the reject bucket becomes
+        `SLIPSTREAM_PENDING_LOOKUP:<fee>` to surface adapter readiness.
+        Legacy bucket `UNSUPPORTED_FEE_TIER:AERODROME_CL:<fee>` is kept
+        only when the Slipstream config is absent/unverified.
+        """
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
         for fee in (150, 445, 600, 2105, 2655, 3024):
@@ -597,7 +604,7 @@ class TestBuildSimTxParams:
             )
             tx, err = _build_sim_tx_params(br, chain="base")
             assert tx is None
-            assert err == f"UNSUPPORTED_FEE_TIER:AERODROME_CL:{fee}", err
+            assert err == f"SLIPSTREAM_PENDING_LOOKUP:{fee}", err
 
     def test_algebra_dynamic_small_fee_classified(self):
         """Small non-standard fee (<=100) → ALGEBRA_DYNAMIC sub-tag."""
