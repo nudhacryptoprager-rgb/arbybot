@@ -67,6 +67,17 @@ class SimulationResult:
     roundtrip_sell_gas_used: int = 0
     roundtrip_sell_revert_reason: Optional[str] = None
 
+    # E1.35 P1.5: freshness telemetry.
+    # * ``sim_block_number`` — block against which the sim was executed
+    #   (None when backend does not expose it, e.g. Tenderly quick).
+    # * ``event_block_number`` — event.block_number at sim time.
+    # * ``block_lag_at_sim`` — sim_block − event_block when both known.
+    # Consumers (execution_gate) use this to reject stale submits.
+    sim_block_number: Optional[int] = None
+    event_block_number: Optional[int] = None
+    block_lag_at_sim: Optional[int] = None
+    freshness_violation: bool = False
+
     @property
     def passed(self) -> bool:
         return self.success and self.revert_reason is None
@@ -202,6 +213,35 @@ def _simulate_swap_tenderly(
     if block_number is not None:
         payload["block_number"] = block_number
 
+    # E1.36 P1: inject ERC-20 balance + allowance overrides into Tenderly
+    # simulation.  Without these, the sim EOA has 0 balance and STF reverts
+    # every swap.  Uses the same slot-map builder as rpc_fork_backend.
+    # Opt-out via ARBY_SIM_DISABLE_STATE_OVERRIDE=1 for debugging.
+    if (
+        os.environ.get("ARBY_SIM_DISABLE_STATE_OVERRIDE", "").strip() != "1"
+        and len(calldata) >= 36
+        and from_address != "0x" + "0" * 40
+    ):
+        try:
+            from m7.orderflow.sim_backends.rpc_fork_backend import (
+                build_slot_map,
+                extract_token_in_from_calldata,
+            )
+            _token_in = extract_token_in_from_calldata(calldata)
+            if _token_in:
+                _slot_map = build_slot_map(
+                    token_in_addr=_token_in,
+                    holder=from_address,
+                    router=to_address,
+                )
+                # Tenderly format: state_objects.<addr>.storage.<slot> = value
+                payload["state_objects"] = {
+                    _addr: {"storage": _slots}
+                    for _addr, _slots in _slot_map.items()
+                }
+        except Exception as _so_exc:
+            logger.debug("Tenderly state_objects build skipped: %s", str(_so_exc)[:100])
+
     try:
         resp = httpx.post(
             f"{base_url}/simulate",
@@ -251,6 +291,12 @@ def simulate_swap(
     Simulate a swap transaction via the configured backend.
 
     Backend is determined by ARBY_SIM_BACKEND env var (default: tenderly).
+
+    E1.35 P0.1: when the primary backend is ``tenderly`` and the call
+    fails with an HTTP 4xx response (e.g. 403 "insufficient credits"),
+    and ``ARBY_SIM_FALLBACK=rpc_fork`` is set, automatically retry once
+    against the rpc_fork backend. This keeps PROD alive without operator
+    intervention while Tenderly quota is being refilled.
     """
     backend = get_simulation_backend()
 
@@ -276,7 +322,7 @@ def simulate_swap(
             block_number=block_number,
         )
 
-    return _simulate_swap_tenderly(
+    result = _simulate_swap_tenderly(
         chain=chain,
         from_address=from_address,
         to_address=to_address,
@@ -284,3 +330,32 @@ def simulate_swap(
         value_wei=value_wei,
         block_number=block_number,
     )
+
+    # E1.35 P0.1: auto-fallback on Tenderly quota/auth failures.
+    _fallback = os.environ.get("ARBY_SIM_FALLBACK", "").strip().lower()
+    if (
+        not result.passed
+        and _fallback == BACKEND_RPC_FORK
+        and result.error
+        and ("HTTP 4" in result.error or "HTTP 5" in result.error)
+    ):
+        logger.warning(
+            "Tenderly backend error (%s) — falling back to rpc_fork",
+            (result.error or "?")[:80],
+        )
+        try:
+            from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+            fb_result = simulate_swap_rpc_fork(
+                chain=chain,
+                from_address=from_address,
+                to_address=to_address,
+                calldata=calldata,
+                value_wei=value_wei,
+                block_number=block_number,
+            )
+            fb_result.backend = f"{BACKEND_RPC_FORK}:fallback_from_tenderly"
+            return fb_result
+        except Exception as exc:
+            logger.warning("Fallback to rpc_fork also failed: %s", str(exc)[:120])
+
+    return result

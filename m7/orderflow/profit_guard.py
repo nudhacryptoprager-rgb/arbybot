@@ -63,6 +63,8 @@ def check_profit_guard(
     pipeline_latency_ms: Optional[float] = None,
     chain: str = "arbitrum_one",
     l1_fee_bps: float = 0.0,
+    pre_computed_gas_bps: Optional[float] = None,
+    pre_computed_gas_cost_wei: Optional[int] = None,
 ) -> ProfitGuardResult:
     """Check whether the ending balance exceeds starting balance after gas.
 
@@ -81,6 +83,10 @@ def check_profit_guard(
     min_net_bps : Minimum net bps threshold (default: 0 = any profit).
     pipeline_latency_ms : Total scoring pipeline latency; used for
         Timeboost eligibility (express lane budget = 50ms).
+    pre_computed_gas_bps, pre_computed_gas_cost_wei : E1.35 P2.6 dedupe.
+        When both are supplied (typically by the fast-scoring path that
+        already ran :func:`estimate_gas_cost`), the guard reuses them
+        instead of recomputing. Either both or neither must be provided.
 
     Returns
     -------
@@ -89,10 +95,17 @@ def check_profit_guard(
     _guard_start = time.monotonic()
     gross_pnl_wei = sell_amount_wei - backrun_size_wei
 
-    # Unified gas estimation — chain-aware, consistent with scoring
-    gas_bps, gas_cost_wei = estimate_gas_cost(
-        chain, backrun_size_wei, gas_units=gas_estimate, l1_fee_bps=l1_fee_bps,
-    )
+    # E1.35 P2.6: accept pre-computed gas values from scoring to avoid
+    # duplicate :func:`estimate_gas_cost` work.  Require both to be set
+    # together so the result stays internally consistent.
+    if (pre_computed_gas_bps is not None) and (pre_computed_gas_cost_wei is not None):
+        gas_bps = float(pre_computed_gas_bps)
+        gas_cost_wei = int(pre_computed_gas_cost_wei)
+    else:
+        # Unified gas estimation — chain-aware, consistent with scoring
+        gas_bps, gas_cost_wei = estimate_gas_cost(
+            chain, backrun_size_wei, gas_units=gas_estimate, l1_fee_bps=l1_fee_bps,
+        )
 
     if backrun_size_wei > 0:
         gross_bps = (gross_pnl_wei / backrun_size_wei) * 10000

@@ -80,6 +80,7 @@ from m7.shared.constants import (
     HOT_BUDGET_POOL_STATE_READ_MS,
     HOT_BUDGET_LOCAL_MATH_MS,
     HOT_BUDGET_PROFIT_GUARD_MS,
+    get_chain_stale_blocks,
 )
 
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
@@ -1530,6 +1531,8 @@ def score_backrun_fast(
             pipeline_latency_ms=pipeline_ms,
             chain=chain,
             l1_fee_bps=(l1_fee_bps or 0.0),
+            pre_computed_gas_bps=gas_bps,
+            pre_computed_gas_cost_wei=gas_cost_wei,
         )
         _profit_guard_passed = _guard.passed
         _guard_reject_reason = _guard.reject_reason
@@ -1560,9 +1563,10 @@ def score_backrun_fast(
         return None
 
     block_lag = current_block - event.block_number
+    _stale_threshold = get_chain_stale_blocks(chain)
     if block_lag == 0:
         same_state_class = "same_block"
-    elif block_lag <= 2:
+    elif block_lag <= _stale_threshold:
         same_state_class = "next_block"
     else:
         same_state_class = "stale"

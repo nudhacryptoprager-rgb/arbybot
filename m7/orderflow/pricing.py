@@ -35,6 +35,7 @@ from m7.shared.constants import (
     get_min_profitable_size_wei,
     get_victim_min_size_usd,
     get_victim_min_impact_bps,
+    get_chain_stale_blocks,
 )
 from m7.orderflow.contracts import BackrunResult, OrderflowEvent
 
@@ -131,7 +132,7 @@ def classify_event_backrun_type(event: OrderflowEvent) -> str:
 
 
 
-def classify_event_viability(event: OrderflowEvent) -> Optional[str]:
+def classify_event_viability(event: OrderflowEvent, chain: Optional[str] = None) -> Optional[str]:
     """Pre-classify whether an event is viable for backrun scoring.
 
     Returns a reject reason string if not viable, None if viable.
@@ -141,8 +142,11 @@ def classify_event_viability(event: OrderflowEvent) -> Optional[str]:
     can tighten the noise floor without a code change.  Defaults preserve
     prior behavior (``MIN_EVENT_SIZE_USD`` / ``SIGNIFICANT_IMPACT_BPS``'s
     legacy 0.1-bps floor is kept as a hard lower bound).
+
+    E1.35 P1.4: When ``chain`` is provided, uses the chain-aware
+    floor from ``_CHAIN_MIN_EVENT_SIZE_USD`` (Base=100, Arbitrum=500).
     """
-    min_usd = get_victim_min_size_usd()
+    min_usd = get_victim_min_size_usd(chain=chain)
     if event.estimated_size_usd < min_usd:
         return REJECT_EVENT_TOO_SMALL
     min_impact = get_victim_min_impact_bps()
@@ -344,9 +348,10 @@ def score_backrun_live(
 
     # Compute block lag and state classification
     block_lag = quote_block - event.block_number
+    _stale_threshold = get_chain_stale_blocks(chain)
     if block_lag == 0:
         same_state_class = "same_block"
-    elif block_lag <= 2:
+    elif block_lag <= _stale_threshold:
         same_state_class = "next_block"
     else:
         same_state_class = "stale"
@@ -366,7 +371,7 @@ def score_backrun_live(
         net_bps = (net_wei / backrun_size_wei) * 10000 if backrun_size_wei > 0 else 0.0
 
         # M7.A.5.10: Stale-gate — positive but stale quotes are not executable
-        if net_bps > 0 and block_lag <= 2:
+        if net_bps > 0 and block_lag <= _stale_threshold:
             route_viable = True
             reject_reason = None
         elif net_bps > 0:

@@ -6,7 +6,7 @@ Single source of truth — all M7 modules import from here.
 """
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 # ---------------------------------------------------------------------------
 # Event types
@@ -196,6 +196,34 @@ SIGNIFICANT_IMPACT_BPS = 5.0
 DEFAULT_BACKRUN_GAS = 200_000
 DEFAULT_GAS_PRICE_GWEI = 0.1  # legacy fallback; prefer get_gas_price_gwei(chain)
 
+# E1.35 P1.4: Chain-aware victim-size floor. L2s with cheap gas (Base/Optimism)
+# can profit from smaller swaps than Arbitrum-like chains. When a chain is
+# not listed, the universal MIN_EVENT_SIZE_USD floor applies.
+_CHAIN_MIN_EVENT_SIZE_USD: Dict[str, float] = {
+    "base": 100.0,
+    "optimism": 100.0,
+    "arbitrum_one": 500.0,
+    "linea": 500.0,
+    "scroll": 500.0,
+    "mantle": 500.0,
+    "zksync": 500.0,
+}
+
+# E1.35 P2.7: Chain-aware stale-gate thresholds (in blocks). A backrun is
+# considered "fresh" when ``block_lag <= get_chain_stale_blocks(chain)``.
+# Tuned roughly to ~4–5 seconds of real time per chain, accounting for
+# differing block times (Arbitrum ≈ 250ms, Base/Optimism ≈ 2s, others 1–2s).
+_CHAIN_STALE_BLOCKS: Dict[str, int] = {
+    "arbitrum_one": 20,  # 20 × 250ms ≈ 5s
+    "base": 3,           # 3 × 2s = 6s
+    "optimism": 3,
+    "linea": 3,
+    "scroll": 3,
+    "mantle": 3,
+    "zksync": 5,
+}
+_DEFAULT_STALE_BLOCKS = 2  # backward-compatible default for unknown chains
+
 
 # E1.34 P1.2: Victim-filter tightening via env overrides.
 # Operators can raise the floor without code change, e.g.
@@ -204,11 +232,14 @@ DEFAULT_GAS_PRICE_GWEI = 0.1  # legacy fallback; prefer get_gas_price_gwei(chain
 # Unset / empty / unparseable → falls back to the module-level defaults
 # above (backward-compatible). Accessors are small so tests can monkeypatch
 # env and see the effect without reloading the module.
-def get_victim_min_size_usd() -> float:
+def get_victim_min_size_usd(chain: Optional[str] = None) -> float:
     """Effective minimum victim swap size in USD.
 
-    Reads ``ARBY_VICTIM_MIN_USD``; falls back to ``MIN_EVENT_SIZE_USD``.
-    Negative / non-numeric values are ignored (fall back to default).
+    Reads ``ARBY_VICTIM_MIN_USD`` (global override). When not set, and
+    ``chain`` is provided, consults the chain-aware
+    ``_CHAIN_MIN_EVENT_SIZE_USD`` table (E1.35 P1.4). Finally falls back
+    to ``MIN_EVENT_SIZE_USD``. Negative / non-numeric env values are
+    ignored.
     """
     import os as _os
     raw = _os.environ.get("ARBY_VICTIM_MIN_USD", "").strip()
@@ -219,6 +250,10 @@ def get_victim_min_size_usd() -> float:
                 return val
         except ValueError:
             pass
+    if chain:
+        chain_val = _CHAIN_MIN_EVENT_SIZE_USD.get(chain.strip().lower())
+        if chain_val is not None:
+            return float(chain_val)
     return float(MIN_EVENT_SIZE_USD)
 
 
@@ -444,6 +479,45 @@ def get_min_profitable_size_wei(
         ratio = 10 ** max(0, 18 - token_decimals)
         return max(1, min_size_18 // ratio)
     return min_size_18
+
+
+def get_chain_stale_blocks(chain: str) -> int:
+    """E1.35 P2.7: chain-aware block-lag threshold for "fresh" backrun.
+
+    Returns the maximum ``block_lag`` (current_block − event_block) for
+    which a candidate is still considered actionable. Callers that
+    previously hardcoded ``block_lag <= 2`` should now gate on
+    ``block_lag <= get_chain_stale_blocks(chain)`` so that the window
+    scales with chain block time.
+    """
+    if not chain:
+        return _DEFAULT_STALE_BLOCKS
+    return _CHAIN_STALE_BLOCKS.get(chain.strip().lower(), _DEFAULT_STALE_BLOCKS)
+
+
+def get_min_profitable_size_usd(
+    chain: str,
+    target_net_bps: float = 1.0,
+    gas_units: int = DEFAULT_BACKRUN_GAS,
+    eth_price_usd: float = _FALLBACK_ETH_PRICE_USD,
+) -> float:
+    """E1.35 P3.9: minimum trade size in USD to achieve *target_net_bps* net.
+
+    Mirrors :func:`get_min_profitable_size_wei` but returns USD directly,
+    which is useful for cross-chain comparisons and USD-based
+    pre-filters. The conversion uses ``eth_price_usd`` (defaulting to the
+    module-level fallback) so callers that have a live oracle price can
+    pass it in.
+    """
+    gas_price_gwei = get_gas_price_gwei(chain)
+    gas_cost_wei = int(gas_units * gas_price_gwei * 1e9)
+    gas_cost_eth = gas_cost_wei / 1e18
+    gas_cost_usd = gas_cost_eth * float(eth_price_usd)
+    if target_net_bps > 0:
+        # target_net_bps of size_usd must equal gas_cost_usd
+        return round(gas_cost_usd * 10000.0 / target_net_bps, 4)
+    # Degenerate case: return cost alone
+    return round(gas_cost_usd, 4)
 
 
 def get_prewarm_pairs(chain: str, profile: str = "production") -> list:

@@ -46,6 +46,66 @@ from m7.orderflow.simulation import (
 logger = logging.getLogger("m7.orderflow.execution_gate")
 
 
+# ---------------------------------------------------------------------------
+# E1.35 P1.3: registry-driven accepted fee tiers
+# ---------------------------------------------------------------------------
+# Previously the execution gate hardcoded a frozen set
+#   {100, 500, 2500, 3000, 10000, 0, 1}.
+# Every new DEX family (Algebra dynamic, Slipstream CL, Curve) required a
+# manual patch. We now build the accepted-fees set from ``config/dexes.yaml``
+# at first use, collecting every DEX's ``fee_tiers`` for the target chain
+# plus the ve33 sentinels {0, 1}. The result is cached per-chain.
+_VE33_FEE_SENTINELS = {0, 1}
+_STANDARD_V3_FEES_FALLBACK = {100, 500, 2500, 3000, 10000}
+_ACCEPTED_FEES_CACHE: Dict[str, frozenset] = {}
+
+
+def _compute_accepted_fees(chain: str) -> frozenset:
+    """Collect accepted fee tiers for *chain* from the DEX registry.
+
+    Falls back to the legacy hardcoded set ∪ {0, 1} if the registry is
+    unreadable (missing yaml, parse error). A DEX may opt out by omitting
+    ``fee_tiers`` from its config; Slipstream-style CL venues should be
+    routed via their ``tick_spacings`` through the adapter layer, not
+    through this gate.
+    """
+    try:
+        from config import load_dexes as _load_dexes
+        dexes = _load_dexes() or {}
+    except Exception as exc:
+        logger.debug("_compute_accepted_fees: registry load failed (%s)", exc)
+        return frozenset(_STANDARD_V3_FEES_FALLBACK | _VE33_FEE_SENTINELS)
+
+    chain_cfg = dexes.get(chain) or {}
+    fees: set = set(_VE33_FEE_SENTINELS)
+    for _dex_key, _dex_cfg in chain_cfg.items():
+        if not isinstance(_dex_cfg, dict):
+            continue
+        _tiers = _dex_cfg.get("fee_tiers")
+        if isinstance(_tiers, (list, tuple)):
+            for _t in _tiers:
+                try:
+                    fees.add(int(_t))
+                except (TypeError, ValueError):
+                    continue
+    if not fees - _VE33_FEE_SENTINELS:
+        fees |= _STANDARD_V3_FEES_FALLBACK
+    return frozenset(fees)
+
+
+def get_accepted_fees(chain: str) -> frozenset:
+    """Cached access to the registry-driven accepted-fees set."""
+    _key = (chain or "").strip().lower()
+    if _key not in _ACCEPTED_FEES_CACHE:
+        _ACCEPTED_FEES_CACHE[_key] = _compute_accepted_fees(_key)
+    return _ACCEPTED_FEES_CACHE[_key]
+
+
+def _reset_accepted_fees_cache() -> None:
+    """Test helper — drops the per-chain fee cache."""
+    _ACCEPTED_FEES_CACHE.clear()
+
+
 @dataclass
 class ExecutionGateResult:
     """Aggregate result of running the full execution gate pipeline."""
@@ -471,9 +531,8 @@ def _build_sell_leg_tx_params(
     if sell_input_wei <= 0:
         return None, "SELL_INPUT_ZERO"
 
-    _STANDARD_V3_FEES = {100, 500, 2500, 3000, 10000}
-    _VE33_FEES = {0, 1}
-    _ACCEPTED = _STANDARD_V3_FEES | _VE33_FEES
+    # E1.35 P1.3: registry-driven accepted fee set
+    _ACCEPTED = get_accepted_fees(chain)
 
     sell_venue = getattr(result, "best_sell_venue", None)
     if not sell_venue:
@@ -569,6 +628,12 @@ def _attempt_simulation(
     to the configured simulation backend.  Falls back to an explicit
     error when calldata cannot be built (VENUE_MISSING, PAIR_UNRESOLVED,
     ADAPTER_UNSUPPORTED, etc.).
+
+    E1.35 P0.2 + P1.5: passes ``event.block_number`` to the simulation
+    backend so pricing is checked in-block (instead of against the
+    already-committed ``latest`` head).  After the sim, computes
+    ``block_lag_at_sim`` and marks a freshness violation if the block
+    moved past ``get_chain_stale_blocks(chain)`` during the attempt.
     """
     if not is_simulation_configured():
         return SimulationResult(success=False, error="SIM_DISABLED")
@@ -586,13 +651,47 @@ def _attempt_simulation(
         _pair, _venue, _fee, tx_params["to"][:18],
     )
 
+    # E1.35 P0.2: Pass event_block so the fork executes against the state
+    # we actually saw, not against a block that already closed.
+    _event_block = getattr(result, "event_block", None)
+    try:
+        _event_block_int = int(_event_block) if _event_block is not None else None
+    except (TypeError, ValueError):
+        _event_block_int = None
+
     sim_result = simulate_swap(
         chain=chain,
         from_address=_get_sim_from_address(),
         to_address=tx_params["to"],
         calldata=tx_params["calldata"],
         value_wei=tx_params["value"],
+        block_number=_event_block_int,
     )
+
+    # E1.35 P1.5: post-sim freshness. Record event-block context so
+    # downstream consumers can decide whether to submit. We purposefully
+    # do NOT query a fresh `latest` here (extra RPC latency) — we rely
+    # on `quote_block` from scoring which was captured immediately
+    # before sim. If unavailable, the violation stays False.
+    sim_result.event_block_number = _event_block_int
+    _quote_block = getattr(result, "quote_block", None)
+    try:
+        _quote_block_int = int(_quote_block) if _quote_block is not None else None
+    except (TypeError, ValueError):
+        _quote_block_int = None
+    sim_result.sim_block_number = _quote_block_int
+    if _event_block_int is not None and _quote_block_int is not None:
+        _lag = _quote_block_int - _event_block_int
+        sim_result.block_lag_at_sim = _lag
+        try:
+            from m7.shared.constants import get_chain_stale_blocks as _gcsb
+            _threshold = _gcsb(chain)
+        except Exception:
+            _threshold = 2
+        if _lag > _threshold:
+            sim_result.freshness_violation = True
+            # Do not overwrite a successful sim, but mark it as stale
+            # so execution_gate can reject it at submit_ready stage.
 
     if not sim_result.passed:
         logger.info(
@@ -622,6 +721,7 @@ def _attempt_simulation(
                     to_address=_sell_tx["to"],
                     calldata=_sell_tx["calldata"],
                     value_wei=_sell_tx["value"],
+                    block_number=_event_block_int,
                 )
                 sim_result.roundtrip_sell_gas_used = _sell_sim.gas_used
                 if _sell_sim.passed and _sell_sim.output_amount_wei > 0:
@@ -704,9 +804,9 @@ def run_execution_gate(
     # E1.27/D3: Pre-sim fee tier check. Skip non-standard fees (e.g. Algebra
     # dynamic 150/600/3024) before counting them as sim_attempted. These consume
     # no RPC calls and are tracked separately via pre_sim_skip_histogram.
-    _STANDARD_V3_FEES = {100, 500, 2500, 3000, 10000}
-    _VE33_FEES = {0, 1}
-    _ACCEPTED_FEES = _STANDARD_V3_FEES | _VE33_FEES
+    # E1.35 P1.3: fee set now comes from the DEX registry (config/dexes.yaml)
+    # so new venues are accepted without patching this module.
+    _ACCEPTED_FEES = get_accepted_fees(chain)
 
     for r, g in gate.guard_passed:
         _fee_hint = getattr(r, "best_buy_fee", None)

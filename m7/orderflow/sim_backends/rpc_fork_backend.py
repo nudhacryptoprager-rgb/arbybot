@@ -107,6 +107,59 @@ def _compute_allowance_slot(owner: str, spender: str, base_slot: int) -> str:
 # State override builder
 # ---------------------------------------------------------------------------
 
+def build_slot_map(
+    token_in_addr: str,
+    holder: str,
+    router: str,
+    amount: int = 10**30,
+) -> Dict[str, Dict[str, str]]:
+    """Return a plain ``{token_addr: {slot_hex: value_hex}}`` mapping.
+
+    Backend-agnostic helper — caller wraps it into its own format
+    (``stateDiff`` for eth_call, ``state_objects.storage`` for Tenderly,
+    ``anvil_setStorageAt`` RPC for local Anvil).
+
+    Covers all balance-slots in ``_effective_balance_slots()`` and for
+    each tries allowance offsets {+1, +0, +2, +3, +4} so proxy/dense/
+    upgradeable ERC-20 layouts are all seeded in one call.
+    """
+    large_value = "0x" + amount.to_bytes(32, "big").hex()
+    max_allowance = "0x" + (2**256 - 1).to_bytes(32, "big").hex()
+
+    slots: Dict[str, str] = {}
+    for base_slot in _effective_balance_slots():
+        bal_slot = _compute_mapping_slot(holder, base_slot)
+        slots[bal_slot] = large_value
+        for allowance_offset in [1, 0, 2, 3, 4]:
+            allow_slot = _compute_allowance_slot(holder, router, base_slot + allowance_offset)
+            slots[allow_slot] = max_allowance
+
+    return {token_in_addr.lower(): slots}
+
+
+def extract_token_in_from_calldata(calldata: bytes) -> Optional[str]:
+    """Recover ``token_in`` address from swap calldata.
+
+    Supports Uniswap V3 ``exactInputSingle`` (selectors 0x04e45aaf and
+    0x414bf389) and Velodrome V2 ``swapExactTokensForTokens`` (selector
+    0xcac88ea9).  Returns ``None`` for unrecognised calldata.
+    """
+    if len(calldata) < 36:
+        return None
+    try:
+        selector = calldata[:4]
+        _VE33_SELECTOR = bytes.fromhex("cac88ea9")
+        if selector == _VE33_SELECTOR and len(calldata) >= 260:
+            routes_offset = int.from_bytes(calldata[68:100], "big")
+            route0_from_start = 4 + routes_offset + 32
+            addr_bytes = calldata[route0_from_start:route0_from_start + 32]
+        else:
+            addr_bytes = calldata[4:36]
+        return "0x" + addr_bytes.hex().lstrip("0").zfill(40)
+    except Exception:
+        return None
+
+
 def _build_state_overrides(
     token_in_addr: str,
     holder: str,
@@ -115,28 +168,12 @@ def _build_state_overrides(
 ) -> Dict:
     """Build eth_call stateOverride for ERC-20 balance + allowance seeding.
 
-    Overrides ALL common balance slots and corresponding allowance slots
-    so the simulation has sufficient balance regardless of token layout.
+    Wraps :func:`build_slot_map` into the standard eth_call ``stateDiff``
+    envelope.
     """
-    large_value = "0x" + amount.to_bytes(32, "big").hex()
-    max_allowance = "0x" + (2**256 - 1).to_bytes(32, "big").hex()
-
-    state_diff: Dict[str, str] = {}
-
-    for base_slot in _effective_balance_slots():
-        # Balance slot
-        bal_slot = _compute_mapping_slot(holder, base_slot)
-        state_diff[bal_slot] = large_value
-
-        # Allowance slots: try allowance base = balance base + 1 (most common),
-        # +0 (same slot in dense layouts), +2 (spacing), and +3/+4 (proxies).
-        for allowance_offset in [1, 0, 2, 3, 4]:
-            allow_slot = _compute_allowance_slot(holder, router, base_slot + allowance_offset)
-            state_diff[allow_slot] = max_allowance
-
-    return {
-        token_in_addr: {"stateDiff": state_diff}
-    }
+    slot_map = build_slot_map(token_in_addr, holder, router, amount=amount)
+    # Convert to {token: {stateDiff: {...}}}
+    return {addr: {"stateDiff": slots} for addr, slots in slot_map.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -462,28 +499,18 @@ def simulate_swap_rpc_fork(
     # E1.18: Detect calldata type by selector to extract token_in correctly.
     # V3 (0x04e45aaf / 0x414bf389): token_in at calldata[4:36]
     # ve33 (0xcac88ea9): token_in in routes array (dynamic offset)
+    # E1.36 P1: Helper moved to extract_token_in_from_calldata() (shared
+    # with Tenderly backend).
     state_overrides: Dict = {}
     if len(calldata) >= 36 and from_address != "0x" + "0" * 40:
         try:
-            selector = calldata[:4]
-            _VE33_SELECTOR = bytes.fromhex("cac88ea9")
-            if selector == _VE33_SELECTOR and len(calldata) >= 260:
-                # Velodrome: parse routes offset → routes[0].from
-                # Layout: selector(4) + amountIn(32) + amountOutMin(32) +
-                #   offset(32) + to(32) + deadline(32) + length(32) + route0.from(32)
-                # offset value at bytes [68:100] points to routes data start
-                # routes[0].from is at position: 4 + offset + 32 (length field)
-                routes_offset = int.from_bytes(calldata[68:100], "big")
-                route0_from_start = 4 + routes_offset + 32  # skip selector + offset + length
-                token_in_hex = "0x" + calldata[route0_from_start:route0_from_start + 32].hex().lstrip("0").zfill(40)
-            else:
-                # V3: token_in is first parameter at calldata[4:36]
-                token_in_hex = "0x" + calldata[4:36].hex().lstrip("0").zfill(40)
-            state_overrides = _build_state_overrides(
-                token_in_addr=token_in_hex,
-                holder=from_address,
-                router=to_address,
-            )
+            token_in_hex = extract_token_in_from_calldata(calldata)
+            if token_in_hex:
+                state_overrides = _build_state_overrides(
+                    token_in_addr=token_in_hex,
+                    holder=from_address,
+                    router=to_address,
+                )
         except Exception as e:
             logger.debug("State override build failed (non-fatal): %s", str(e)[:100])
 
