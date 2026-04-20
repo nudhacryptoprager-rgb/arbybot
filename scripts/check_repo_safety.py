@@ -804,8 +804,9 @@ def check_intent_tier_limits(allow_edit: bool = False) -> List[str]:
     - Calibration tier: stable pairs added for coverage (+USDC/DAI, +USDC/USDT)
     - Probe tier: experimental pairs (requires explicit --allow-intent-edit)
     
-    The calibration tier baseline is 42 pairs. Any expansion beyond this
-    requires explicit permission to prevent accidental contour inflation.
+    The calibration tier baseline is 51 pairs (E1.30/E1.31 productive+calibration
+    expansion approved 2026-04-17, see config/intent.txt header). Any expansion
+    beyond this requires explicit permission to prevent accidental contour inflation.
     
     Args:
         allow_edit: If True, skip this check (explicit permission granted)
@@ -813,8 +814,8 @@ def check_intent_tier_limits(allow_edit: bool = False) -> List[str]:
     Returns:
         List of error messages if tier limits exceeded
     """
-    # Calibration tier baseline (R39h)
-    CALIBRATION_TIER_BASELINE = 42
+    # Calibration tier baseline (R39h; bumped 42->51 per E1.30/E1.31 approved expansion)
+    CALIBRATION_TIER_BASELINE = 51
     
     if allow_edit:
         return []  # Explicit permission granted
@@ -1660,7 +1661,7 @@ def main():
     for issue in issues:
         print(f"  {issue}")
     if not issues:
-        print("  OK: intent.txt within calibration tier limits (42 pairs)")
+        print("  OK: intent.txt within calibration tier limits (51 pairs)")
     
     print("\n[13] Checking session completion gate...")
     issues = check_session_completion_gate()

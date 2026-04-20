@@ -338,3 +338,46 @@ sim_profit_bps = (sim_profit_wei / input_amount_wei) * 10000
 Phase C дасть конкретні числа (sim_profit_bps), Phase S дасть статистичну значимість (3 години),
 Phase A дасть реальне виконання (перша tx на testnet).
 Без C1 (profit extraction) все інше — гадання.
+
+---
+
+## 2026-04-20 AUDIT CYCLE UPDATE (team-lead, post-E1.36)
+
+### Repo-gate resolution (10 critical issues from team-lead)
+
+| # | Issue | Status | Action taken |
+|---|---|---|---|
+| 1 | `check_repo_safety.py` FAIL on INTENT_TIER_LIMIT 42>51 | ? RESOLVED | Baseline bumped 42>51 (E1.30/E1.31 productive+calibration approved expansion); test updated. |
+| 2 | `pytest` red: 2 failures from `soak_*.log` in `_rolling` | ? RESOLVED | Removed stray `soak_e136_30min.log`; 4174 passed / 6 skipped. |
+| 3 | Real-money execution not enabled | ? CORRECT (safety) | Keep `execution_enabled=false, kill_switch_active=true` until `roundtrip_profitable_total>0`. |
+| 4 | M4 online profit not proven (`profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`) | ?? KNOWN | Truth contract honest; offline `--strict` PASS (sim=2, net=0.5 USDC). Online profit requires a market window AND state-override validation (E1.36). |
+| 5 | M4 rolling quality = `WARN_QUALITY` (`FRAGILE_P90_ELEVATED`) | ?? MONITOR | Not a blocker for truth contract; add P90 stability investigation later. |
+| 6 | Long-scan `total_profitable_roundtrips=0` | ?? KNOWN | Same root cause as #4; expand revert decode + widen universe per Phase B below. |
+| 7 | M7 fresh runtime: PROD `guard=0`, `sim_attempted=0` | ?? KNOWN | Quiet-market window (2026-04-20). Repeat soak on busier window / anvil backend. |
+| 8 | M7 mixed backend by lane (PROD=tenderly, DISC=rpc_fork) | ?? DOCUMENT | Intentional (`ARBY_SIM_BACKEND_DISC`) � document as declared policy in Status_M7 before next soak. |
+| 9 | M7 infra noise: 23/61 `session_http_fallback_windows` | ?? ACCEPT | dRPC intermittent fallback to publicnode; expected on paid-tier exhaustion. |
+| 10 | `Status_M7.md` = 459 > 300 lines | ? RESOLVED | Archived verbose E1.24/E1.26/E1.27/E1.28/E1.29/E5/N1+N5 blocks to `archive/status/Status_M7_history.md`; Status_M7.md = 143 lines. |
+
+### Green-gate re-run evidence (2026-04-20)
+
+`
+py -3.11 scripts/check_repo_safety.py          > PASS (0 warnings)
+py -3.11 -m pytest tests/unit -q               > 4174 passed / 6 skipped
+py -3.11 scripts/ci_full_pipeline.py --mode ci > ALL REQUIRED GATES PASSED
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict
+                                               > PASS sim=2, net=0.5 USDC
+`
+
+### Remaining production blockers (ordered by ROI)
+
+1. **Expand revert decoding** beyond 62 chars; cover `Error(string)`, `Panic(uint256)`, custom selector table. Blocks diagnosis of `REVERT:unknown` (1 observed on DISC lane 2026-04-20).
+2. **Validate E1.36 state-override on PROD** � fresh 30-min Base soak with a busier market window, unified backend (anvil local fork or rpc_fork). Require at least 1 `sim_attempted` on PROD lane.
+3. **Widen size-sweep upper bound** � 10 events rejected `fast_score_rejected_economics` and 5 `matched_then_gas_rejected` on a size that is too small vs. gas.
+4. **Registry rehydrate for family_unresolved** (4/71 bridge-selected pools have `family_unresolved` > missed scoring opportunities).
+5. **Bridge pool widening for BNKR/WETH-class "cold hot"** � `cold_net_bps=764` but `hot_events_seen=0` shows scoring identifies profit while event capture misses victims.
+6. Only after items 1�5 yield `roundtrip_profitable_total>0` on PROD: canary `\�30` live tx on M8 (small WETH/USDC 500-tier).
+
+### Hard rule (from `AGENTS.md` �4)
+
+Do NOT claim production-ready while `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` or `profitable_roundtrips=0`. Offline gate PASS is infrastructure-level evidence only.
+

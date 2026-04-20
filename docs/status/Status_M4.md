@@ -1,8 +1,8 @@
 # Status: M4 (DEX-DEX Atomic Execution)
 
 **Status**: **IN PROGRESS** (paper/sim capable, **NOT production-ready**)
-**Updated**: 2026-04-17
-**Current reading**: `M4.1 simulate-only` historically closed; `M4 online profit` **not reached** — economic truth remains negative.
+**Updated**: 2026-04-20
+**Current reading**: `M4.1 simulate-only` historically closed; `M4 online profit` **not reached** — economic truth remains negative. Truth contract (E1.33) now internally consistent: `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `real_quote_count=0`, `profitable_roundtrips=0`. Release gates (repo safety, pytest 4174 passed, ci_full_pipeline CI, M4 offline profit `--strict`) all PASS as of 2026-04-20.
 **Fresh provenance (E1.33 cycle)**:
 - `run_summary_latest.json.run_context.run_timestamp = 2026-04-17T12:59:11.866411Z`
 - `run_summary_latest.json.run_context.run_dir_name = ci_m5_gate_arbitrum_one_20260417_145636_478653` (E1.33: now populated, was None)
@@ -10,7 +10,7 @@
 - rolling window: `200` runs, `pass_count=187`, `data_run_rate=1.0`, `pass_rate=0.935`, `agg_status=WARN_QUALITY` (reason: `FRAGILE_P90_ELEVATED`)
 - long_scan: `total_runs=119`, `total_profitable_roundtrips=0` — confirms M4.2 not reached at market level
 - `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`, `real_quote_count=0`, `profitable_roundtrips=0` (internally consistent after E1.33 invariant guard)
-- tests: `4077 passed / 17 skipped` (E1.33 adds 5 new invariant + provenance tests)
+- tests: `4174 passed / 6 skipped` (2026-04-20 regression; E1.35/E1.36/E1.37 tests included)
 - safety gate: Windows `UnicodeEncodeError` crash fixed (`scripts/check_repo_safety.py` now reconfigures stdout/stderr to UTF-8)
 
 **E1.33 contract locks (new)**:
