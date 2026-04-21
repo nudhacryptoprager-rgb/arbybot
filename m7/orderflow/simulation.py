@@ -263,11 +263,25 @@ def _simulate_swap_tenderly(
         tx = data.get("transaction", {})
         status = tx.get("status", False)
 
+        # P0 (2026-04-20): Run Tenderly's raw ``error_message`` through the
+        # unified revert decoder so histogram keys converge with rpc_fork
+        # backend (e.g. "STF", "PRICE_LIMIT", "SLIPPAGE") rather than
+        # leaving free-form strings that fragment the distribution.
+        _raw_err = tx.get("error_message") if not status else None
+        if _raw_err:
+            try:
+                from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+                _revert = _decode_revert_reason(_raw_err)
+            except Exception:
+                _revert = str(_raw_err)[:200]
+        else:
+            _revert = None
+
         return SimulationResult(
             success=bool(status),
             gas_used=tx.get("gas_used", 0),
             simulation_id=data.get("simulation", {}).get("id"),
-            revert_reason=tx.get("error_message") if not status else None,
+            revert_reason=_revert,
             backend=BACKEND_TENDERLY,
         )
     except Exception as e:

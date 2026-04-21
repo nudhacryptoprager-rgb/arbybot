@@ -294,6 +294,16 @@ def _decode_revert_reason(raw_error: str) -> str:
         # Aerodrome / Velodrome router
         "0x7c41cbe1": "INSUFFICIENT_OUTPUT_AMOUNT",
         "0x749b5939": "INVALID_PATH",
+        # P0 (2026-04-20): Common Uniswap/Permit2/router custom errors
+        "0xfb8f41b2": "INSUFFICIENT_ALLOWANCE",         # ERC20InsufficientAllowance
+        "0xe602df05": "INSUFFICIENT_ALLOWANCE",         # ERC20: insufficient allowance
+        "0xea553b34": "DEADLINE_EXPIRED",               # TransactionDeadlinePassed
+        "0x48f5c3ed": "DEADLINE_EXPIRED",               # Expired
+        "0xf4844814": "UNAUTHORIZED",
+        "0x9996b315": "UNAUTHORIZED",
+        "0x8f4eb604": "INVALID_SIGNATURE",
+        "0xbfb22adf": "PERMIT_EXPIRED",
+        "0x8baa579f": "INVALID_SIGNATURE",
     }
 
     # E1.32: Known inline substrings (case-insensitive) → tag.
@@ -352,7 +362,7 @@ def _decode_revert_reason(raw_error: str) -> str:
             for pat, tag in _INLINE_PATTERNS:
                 if pat in low:
                     return f"REVERT:{tag}"
-            return f"REVERT:{after[:120]}"
+            return f"REVERT:{after[:200]}"
         # Case 2: ABI-encoded Error(string) — selector 0x08c379a0
         if after.startswith("0x08c379a0") and len(after) >= 138:
             try:
@@ -369,7 +379,7 @@ def _decode_revert_reason(raw_error: str) -> str:
                     for pat, tag in _INLINE_PATTERNS:
                         if pat in low:
                             return f"REVERT:{tag}"
-                    return f"REVERT:{decoded[:120]}"
+                    return f"REVERT:{decoded[:200]}"
             except Exception:
                 pass
         # Case 3: ABI-encoded Panic(uint256) — selector 0x4e487b71
@@ -399,7 +409,7 @@ def _decode_revert_reason(raw_error: str) -> str:
             if tag:
                 return f"REVERT:{tag}"
         if after:
-            return f"REVERT:hex:{after[:64]}"
+            return f"REVERT:hex:{after[:200]}"
 
     # E1.32: Case 5 — no "execution reverted: " prefix, but message itself
     # contains a known pattern or bare hex payload.
@@ -431,11 +441,18 @@ def _decode_revert_reason(raw_error: str) -> str:
                     for pat, tag in _INLINE_PATTERNS:
                         if pat in inner:
                             return f"REVERT:{tag}"
-                    return f"REVERT:{decoded[:120]}"
+                    return f"REVERT:{decoded[:200]}"
             except Exception:
                 pass
-        return f"REVERT:hex:{hex_blob[:64]}"
-    return f"REVERT:unknown"
+        return f"REVERT:hex:{hex_blob[:200]}"
+    # P0 (2026-04-20): fallback surfaces short fingerprint of raw_error so
+    # histogram buckets stay diagnosable even when no pattern matches.
+    _trim = (raw_error or "").strip().replace("\n", " ")[:200]
+    if _trim:
+        logger.warning("REVERT:unknown | raw_error=%s", raw_error)
+        return f"REVERT:unknown:{_trim}"
+    logger.warning("REVERT:unknown | raw_error is empty or None")
+    return "REVERT:unknown"
 
 
 # ---------------------------------------------------------------------------

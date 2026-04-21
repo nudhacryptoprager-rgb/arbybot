@@ -505,6 +505,24 @@ def run_ws_live(
             if not block_events:
                 continue
 
+            # P6 (2026-04-20): raise floor for broad_fallback blocks to cut
+            # noise. Watchlist (focused bridge blocks) keeps chain floor;
+            # broad fallback events require ARBY_BROAD_FALLBACK_MIN_USD
+            # (default $500) to proceed.
+            if _is_broad_block or not (_hot_mode_active and bridge_pool_addresses):
+                try:
+                    _broad_floor = float(os.environ.get(
+                        "ARBY_BROAD_FALLBACK_MIN_USD", "500") or "500")
+                except Exception:
+                    _broad_floor = 500.0
+                if _broad_floor > 0:
+                    block_events = [
+                        e for e in block_events
+                        if getattr(e, "estimated_size_usd", 0) >= _broad_floor
+                    ]
+                if not block_events:
+                    continue
+
             # Sort by size, take up to max_events per block
             block_events.sort(key=lambda e: e.estimated_size_usd, reverse=True)
             events_to_score = block_events[:max(1, args.max_events // args.ws_blocks)]

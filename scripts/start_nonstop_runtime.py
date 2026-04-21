@@ -55,6 +55,10 @@ def parse_args():
                     help="M7 pair profile: production (narrow) or discovery (wider contour)")
     ap.add_argument("--with-discovery", action="store_true",
                     help="Also launch parallel discovery hot+cold lanes alongside production")
+    ap.add_argument("--with-anvil", action="store_true",
+                    help="P4: Start local Anvil fork and route sim backend to anvil (x5 speed)")
+    ap.add_argument("--anvil-port", type=int, default=8545,
+                    help="Local Anvil RPC port (default 8545)")
     ap.add_argument("--restart-delay", type=int, default=5, help="Seconds before restarting a crashed process")
     ap.add_argument("--max-restarts", type=int, default=10, help="Max restarts per process before giving up")
     return ap.parse_args()
@@ -152,7 +156,42 @@ def main():
     print(f"  Runtime: {args.hours}h")
     print(f"  Dashboard: http://127.0.0.1:{args.dashboard_port}")
 
+    # P1 (2026-04-20): Auto-enable Flashblocks sim on Base when supervisor
+    # launches. Opt-out via ``ARBY_FLASHBLOCKS_SIM=0``. Gives 1-2 blocks
+    # (~2-4s) of pre-confirmed state for rpc_fork/tenderly eth_call, which
+    # directly improves stale_gate pass rate for Base's 2s blocks.
+    if args.chain == "base":
+        _fb_sim = os.environ.get("ARBY_FLASHBLOCKS_SIM", "").strip()
+        if _fb_sim == "":
+            os.environ["ARBY_FLASHBLOCKS_SIM"] = "1"
+            print("  [P1] ARBY_FLASHBLOCKS_SIM=1 (auto-enabled for Base)")
+        elif _fb_sim == "0":
+            print("  [P1] ARBY_FLASHBLOCKS_SIM=0 (explicit opt-out, Base)")
+        else:
+            print(f"  [P1] ARBY_FLASHBLOCKS_SIM={_fb_sim} (honored from env)")
+        _fb_http = os.environ.get("ARBY_FLASHBLOCKS_HTTP", "").strip()
+        if not _fb_http:
+            os.environ["ARBY_FLASHBLOCKS_HTTP"] = "https://mainnet-preconf.base.org"
+            print("  [P1] ARBY_FLASHBLOCKS_HTTP=https://mainnet-preconf.base.org (default)")
+
     processes: list[ManagedProcess] = []
+
+    # P4 (2026-04-20): optional local Anvil fork. Wires ARBY_SIM_BACKEND=anvil
+    # and ARBY_ANVIL_RPC_URL so hot/cold lanes route simulations through the
+    # local fork (~x5 speed vs Tenderly, 0 rate-limit). Opt-in via --with-anvil.
+    if args.with_anvil:
+        _anvil_port = args.anvil_port
+        _anvil_url = f"http://127.0.0.1:{_anvil_port}"
+        os.environ["ARBY_SIM_BACKEND"] = "anvil"
+        os.environ["ARBY_ANVIL_RPC_URL"] = _anvil_url
+        print(f"  [P4] ARBY_SIM_BACKEND=anvil, ARBY_ANVIL_RPC_URL={_anvil_url}")
+        processes.append(ManagedProcess(
+            "anvil_fork",
+            [py, "scripts/start_anvil_fork.py",
+             "--chain", args.chain, "--port", str(_anvil_port)],
+            restart_delay=args.restart_delay,
+            max_restarts=args.max_restarts,
+        ))
 
     # 1. Dashboard
     processes.append(ManagedProcess(

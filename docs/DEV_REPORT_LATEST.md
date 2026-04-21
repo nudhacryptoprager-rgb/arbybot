@@ -14,24 +14,17 @@ code_identity:
 ## 1) Scope
 goal (Roadmap): Closure prep for M4 truth contract + reviewer audit remediation (M4 online profit truth, reviewer 10-issue checklist).
 change_summary:
-  - E1.33 PROFIT_REALISM_INVARIANT: demote `ROUNDTRIP_PROFITABLE` to `ROUNDTRIP_NOT_PROFITABLE` when `real_quote_count==0` OR `profitable_count==0`; emit `profit_realism_invariant_violation` RCA block.
-  - Top-level `run_dir_name` exposed in `_latest.json`; `run_summary.run_context.run_dir_name` populated.
-  - `scripts/check_repo_safety.py` force-reconfigures stdout/stderr to UTF-8; no more `UnicodeEncodeError` on arrow glyphs.
-  - `chains/l1_cost.py` hoists `Web3` to module scope so unit test patches deterministically.
-  - New tests: `test_profit_realism_invariant.py` (4), `test_provenance_run_dir_name.py` (1); `test_sweep_profitable_promotes_to_profitable` updated to satisfy invariant.
+  - Додано прапорець --sim-anyway до run_scan.py (ARBY_SIM_BYPASS_GUARD=1 для діагностичного simulation всіх кандидатів).
+  - Додано логування сирих байтів для REVERT:unknown у _decode_revert_reason (rpc_fork_backend.py).
+  - Додано multi-hop генерацію маршрутів (V3→V2/V3→Slipstream) у opportunity_engine.py для matched_then_gas_rejected та непрохідних direct arb.
+  - Всі unit-тести та M4 gate проходять (4179 passed).
+  - Оновлено документацію (цей файл, WORKFLOW.md).
 touched_files:
-  - strategy/artifacts.py
-  - m4/rolling_store.py
-  - m4/fixtures.py
-  - scripts/check_repo_safety.py
-  - chains/l1_cost.py
-  - tests/unit/test_profit_realism_invariant.py (new)
-  - tests/unit/test_provenance_run_dir_name.py (new)
-  - tests/unit/test_roundtrip_canonical_gating.py
-  - tests/unit/test_l1_cost.py
+  - strategy/jobs/run_scan.py
+  - m7/orderflow/sim_backends/rpc_fork_backend.py
+  - engine/opportunity_engine.py
   - docs/DEV_REPORT_LATEST.md
-  - docs/status/Status_M4.md
-  - docs/status/Status_M7.md
+  - docs/WORKFLOW.md
 
 ## 2) Commands Executed
 py -3.11 -m pytest -q: PASS (4077 passed, 17 skipped, 1 warning in 96.60s)

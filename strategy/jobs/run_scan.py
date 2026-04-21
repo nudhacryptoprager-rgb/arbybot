@@ -137,6 +137,12 @@ MODES:
         help="Config file path.",
     )
 
+    # Diagnostic: sim-anyway mode
+    parser.add_argument(
+        "--sim-anyway",
+        action="store_true",
+        help="Bypass profit_guard and run simulation on all candidates (sets ARBY_SIM_BYPASS_GUARD=1)",
+    )
     # Legacy flags
     parser.add_argument("--smoke", action="store_true", help="[DEPRECATED]")
     parser.add_argument("--allow-real", action="store_true", help="[DEPRECATED]")
@@ -149,6 +155,10 @@ MODES:
 
     if args.allow_real:
         warnings.warn("--allow-real is deprecated and no longer needed", DeprecationWarning)
+
+    # NEW: sim-anyway mode for diagnostic simulation bypass
+    if getattr(args, "sim_anyway", False):
+        os.environ["ARBY_SIM_BYPASS_GUARD"] = "1"
 
     scanner_mode = ScannerMode.SMOKE if args.mode == "smoke" else ScannerMode.REAL
 

@@ -321,7 +321,7 @@ class OpportunityEngine:
         
         dexes = list(by_dex.keys())
         
-        # Compare all DEX pairs
+        # Compare all DEX pairs (direct arb)
         for i, dex_a in enumerate(dexes):
             for dex_b in dexes[i + 1:]:
                 for qa in by_dex[dex_a]:
@@ -332,7 +332,32 @@ class OpportunityEngine:
                         )
                         if opp:
                             opportunities.append(opp)
-        
+
+        # Multi-hop: try all (dex_a -> dex_mid -> dex_b) routes
+        for i, dex_a in enumerate(dexes):
+            for j, dex_b in enumerate(dexes):
+                if i == j:
+                    continue
+                for k, dex_mid in enumerate(dexes):
+                    if k == i or k == j:
+                        continue
+                    for qa in by_dex[dex_a]:
+                        for qm in by_dex[dex_mid]:
+                            for qb in by_dex[dex_b]:
+                                # Multi-hop: qa (buy), qm (mid), qb (sell)
+                                # TODO: implement real multi-hop scoring (now: just append for diagnostics)
+                                # For now, mark as 'multi-hop' in diagnostics
+                                try:
+                                    multi_hop_opp = self._build_opportunity(
+                                        pair, qa, qb, cycle, timestamp,
+                                        start_index + len(opportunities)
+                                    )
+                                    if multi_hop_opp:
+                                        multi_hop_opp.diagnostics["multi_hop"] = True
+                                        multi_hop_opp.diagnostics["mid_dex"] = dex_mid
+                                        opportunities.append(multi_hop_opp)
+                                except Exception as e:
+                                    logger.debug("Failed to build multi-hop opportunity: %s", e)
         return opportunities
     
     def _build_opportunity(

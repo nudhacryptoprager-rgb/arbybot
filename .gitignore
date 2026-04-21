@@ -111,3 +111,7 @@ foundryup.sh
 !.github/workflows/ci.yml
 !docs/WORKFLOW.md
 
+
+# Local Foundry install (P4)
+tools/foundry/
+

@@ -107,7 +107,12 @@ class TestEmbeddedHex:
 
 class TestFallback:
     def test_bare_execution_reverted_unknown(self):
-        assert _decode_revert_reason("execution reverted") == "REVERT:unknown"
+        # P0 (2026-04-20): bare "execution reverted" now surfaces as
+        # REVERT:unknown:<fingerprint> so the histogram retains the raw
+        # error snippet for diagnostics.
+        result = _decode_revert_reason("execution reverted")
+        assert result.startswith("REVERT:unknown")
+        assert "execution reverted" in result
 
     def test_empty_returns_unknown(self):
         assert _decode_revert_reason("") == "REVERT:unknown"

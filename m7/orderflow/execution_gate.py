@@ -847,7 +847,7 @@ def run_execution_gate(
         except Exception as exc:
             # E1.15: Catch unexpected exceptions so sim_errors histogram
             # is always populated (fixes "10 unknown" telemetry gap).
-            _exc_msg = f"SIM_EXCEPTION:{type(exc).__name__}:{str(exc)[:120]}"
+            _exc_msg = f"SIM_EXCEPTION:{type(exc).__name__}:{str(exc)[:200]}"
             logger.warning("Simulation exception for %s: %s",
                            getattr(r, "event_id", "?"), _exc_msg)
             sim_result = SimulationResult(success=False, error=_exc_msg)

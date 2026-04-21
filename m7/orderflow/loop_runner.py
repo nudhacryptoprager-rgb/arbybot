@@ -303,6 +303,28 @@ def run_loop(cli_args) -> None:
                                 )
                                 logger.info("hot-phase: bridge prewarm done=%d", _bridge_prewarm_count)
 
+                            # P2 (2026-04-20): rehydrate token0/token1 for hot-seen
+                            # pools missing from PTT (family_unresolved). Controlled by
+                            # ARBY_HOT_REHYDRATE=1 (default on).
+                            if os.environ.get("ARBY_HOT_REHYDRATE", "1") != "0":
+                                try:
+                                    from m7.orderflow.bridge_runtime import (
+                                        _rehydrate_hot_unresolved_pools,
+                                    )
+                                    _rh = _rehydrate_hot_unresolved_pools(
+                                        _bridge, _rpc, _block,
+                                    )
+                                    if _rh:
+                                        logger.info(
+                                            "hot-phase: rehydrated %d unresolved pools",
+                                            _rh,
+                                        )
+                                except Exception as _rh_exc:
+                                    logger.debug(
+                                        "hot-phase: rehydrate failed: %s",
+                                        str(_rh_exc)[:120],
+                                    )
+
                             # Legacy symbol-pair prewarm for seeds and accumulated pairs
                             if _hot_pairs_to_prewarm:
                                 logger.info("hot-phase: starting pair prewarm (n=%d)",

@@ -472,8 +472,19 @@ def _run_size_sweep(
     """
     from strategy.quote_rpc import read_quoter_v2, QUOTER_RATE_LIMITED
 
-    # Build 5-point ladder: 0.2x, 0.5x, 1x, 2x, 5x of base
-    multipliers = [0.2, 0.5, 1.0, 2.0, 5.0]
+    # Build ladder around base size. P5 (2026-04-20): widened upper bound
+    # from 5x → 10x to capture matched_then_gas_rejected cases where the gas
+    # gap shrinks at larger notionals. Configurable via ARBY_SIZE_SWEEP_MULTS
+    # (comma-separated floats). Default: 0.1,0.2,0.5,1,2,5,10.
+    import os as _os_sweep
+    _mults_env = _os_sweep.environ.get("ARBY_SIZE_SWEEP_MULTS", "").strip()
+    if _mults_env:
+        try:
+            multipliers = [float(x) for x in _mults_env.split(",") if x.strip()]
+        except Exception:
+            multipliers = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
+    else:
+        multipliers = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
     # M7.A.5.9: decimal-aware bounds
     MIN_WEI, MAX_WEI = _normalized_bounds(token_in_decimals if token_in_decimals is not None else 18)
     MIN_WEI = max(

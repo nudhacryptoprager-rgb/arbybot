@@ -213,6 +213,128 @@ def _populate_pool_token_cache_from_bridge(bridge: dict) -> int:
     return 0
 
 
+def _rehydrate_hot_unresolved_pools(
+    bridge: dict,
+    rpc_url: str,
+    block_num: int,
+    max_pools: int | None = None,
+) -> int:
+    """P2 (2026-04-20): Fetch token0()/token1() for pools that hot lane has
+    seen in events but that are not yet in ``pool_token_transport`` / the
+    cross-process ``_pool_token_cache``.
+
+    These pools show up as ``family_unresolved`` in the bridge summary and
+    ``reason_if_not_hit=not_in_bridge`` in the cold_exec trace — which
+    blocks scoring for any future events landing on them.
+
+    Performs two ``eth_call``s per pool (selectors ``0x0dfe1681`` = token0,
+    ``0xd21220a7`` = token1) and injects the resolved triple ``(t0, t1, 0)``
+    into both ``_pool_token_cache`` and the bridge's ``pool_token_transport``
+    so subsequent events land on resolved families.
+
+    Bounded by ``ARBY_HOT_REHYDRATE_MAX`` (default 10) and
+    ``ARBY_HOT_REHYDRATE_BUDGET_SEC`` (default 5s) to avoid RPC overuse.
+
+    Returns: number of pools newly resolved.
+    """
+    import time as _time_mod
+
+    _limit = max_pools if max_pools is not None else int(
+        os.environ.get("ARBY_HOT_REHYDRATE_MAX", "10") or "10"
+    )
+    _budget_sec = float(os.environ.get("ARBY_HOT_REHYDRATE_BUDGET_SEC", "5") or "5")
+    if _limit <= 0:
+        return 0
+
+    _unresolved_list = bridge.get("hot_seen_unresolved_pools") or []
+    # Candidate addresses: unresolved=True entries sorted by seen_count desc.
+    _cands: list = []
+    for _row in _unresolved_list:
+        if not isinstance(_row, dict):
+            continue
+        if _row.get("resolved"):
+            continue
+        _pa = (_row.get("pool_address") or "").lower()
+        if not _pa.startswith("0x") or len(_pa) != 42:
+            continue
+        _cands.append((_pa, int(_row.get("seen_count", 0) or 0)))
+    if not _cands:
+        return 0
+    _cands.sort(key=lambda kv: kv[1], reverse=True)
+
+    try:
+        from web3 import Web3  # type: ignore
+    except Exception:
+        return 0
+
+    try:
+        _w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+    except Exception as exc:
+        logger.debug("rehydrate: Web3 init failed: %s", str(exc)[:80])
+        return 0
+
+    try:
+        from m7.orderflow.resolve import _pool_token_cache  # type: ignore
+    except Exception:
+        _pool_token_cache = {}
+
+    _ptt = bridge.setdefault("pool_token_transport", {})
+    _resolved = 0
+    _start = _time_mod.monotonic()
+
+    try:
+        from core.rpc_rate_limiter import rpc_throttle  # type: ignore
+    except Exception:
+        rpc_throttle = None
+
+    for _pa, _seen in _cands[:_limit]:
+        if _budget_sec > 0 and (_time_mod.monotonic() - _start) >= _budget_sec:
+            logger.info(
+                "rehydrate: budget %.0fs exceeded after %d pools",
+                _budget_sec, _resolved,
+            )
+            break
+        try:
+            _addr_cs = Web3.to_checksum_address(_pa)
+        except Exception:
+            continue
+        _t0_hex = None
+        _t1_hex = None
+        try:
+            if rpc_throttle is not None:
+                rpc_throttle.acquire()
+            _t0_raw = _w3.eth.call({"to": _addr_cs, "data": "0x0dfe1681"}, block_num)
+            if len(_t0_raw) >= 32:
+                _t0_hex = "0x" + _t0_raw[-20:].hex()
+        except Exception:
+            continue
+        try:
+            if rpc_throttle is not None:
+                rpc_throttle.acquire()
+            _t1_raw = _w3.eth.call({"to": _addr_cs, "data": "0xd21220a7"}, block_num)
+            if len(_t1_raw) >= 32:
+                _t1_hex = "0x" + _t1_raw[-20:].hex()
+        except Exception:
+            continue
+        if not (_t0_hex and _t1_hex):
+            continue
+        _triple = (_t0_hex.lower(), _t1_hex.lower(), 0)
+        _ptt[_pa] = _triple
+        try:
+            _pool_token_cache[_pa] = _triple
+        except Exception:
+            pass
+        _resolved += 1
+
+    if _resolved > 0:
+        logger.info(
+            "rehydrate: resolved token0/token1 for %d/%d hot unresolved pools",
+            _resolved, min(_limit, len(_cands)),
+        )
+    return _resolved
+
+
+
 def _prewarm_registry_from_bridge(
     registry, bridge: dict,
     dex_configs: dict, rpc_url: str, block_num: int,

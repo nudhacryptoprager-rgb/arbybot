@@ -4,6 +4,11 @@
 > See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
 > See `docs/status/Status_M4.md` for current milestone status.
 
+## Нові режими та діагностика
+- Для збору simulation_error_histogram (діагностичний прогін simulation для всіх кандидатів) використовуйте прапорець --sim-anyway (або ARBY_SIM_BYPASS_GUARD=1).
+- Для аналізу нестандартних REVERT:unknown у discovery lane додано логування сирих байтів (див. _decode_revert_reason).
+- Multi-hop (V3→V2/V3→Slipstream) маршрути автоматично генеруються для matched_then_gas_rejected та непрохідних direct arb (див. opportunity_engine.py).
+
 ## Setup (STEP 1+2)
 
 ```powershell
