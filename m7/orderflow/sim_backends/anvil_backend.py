@@ -336,6 +336,69 @@ def estimate_gas_anvil(
         return 0, str(e)[:200]
 
 
+def get_anvil_block_number() -> Optional[int]:
+    """Return current Anvil local head block, or None on failure.
+
+    Step 9: used to detect static-fork drift — if the requested event_block
+    is higher than the local head, Anvil has no state for it and eth_call
+    raises BlockOutOfRangeError.
+    """
+    url = get_anvil_rpc_url()
+    try:
+        import httpx
+    except ImportError:
+        return None
+    try:
+        resp = httpx.post(
+            url,
+            json={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []},
+            timeout=5.0,
+        )
+        data = resp.json()
+        if "error" in data:
+            return None
+        res = data.get("result")
+        if isinstance(res, str) and res.startswith("0x"):
+            return int(res, 16)
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_anvil_block_tag(block_number: Optional[int]) -> tuple:
+    """Step 9: clamp block_number to local Anvil head to prevent drift.
+
+    ARBY_ANVIL_CLAMP_BLOCK (default "1"): when the requested block_number
+    exceeds the local Anvil head, replace it with "latest" so eth_call
+    uses the fork state we actually have instead of raising
+    BlockOutOfRangeError.
+
+    Returns:
+        (block_tag, clamped_flag, local_head)
+
+    block_tag is the value to pass as eth_call params[1].
+    clamped_flag is True when a drift was detected and the tag was
+    replaced with "latest".
+    """
+    clamp_enabled = os.environ.get("ARBY_ANVIL_CLAMP_BLOCK", "1").strip() == "1"
+    if block_number is None:
+        return "latest", False, None
+    if not clamp_enabled:
+        return hex(block_number), False, None
+
+    local_head = get_anvil_block_number()
+    if local_head is None:
+        # Cannot probe local head — fall back to "latest" to stay safe.
+        return "latest", True, None
+    if block_number > local_head:
+        logger.info(
+            "anvil block clamp: requested=%d > local_head=%d → using latest",
+            block_number, local_head,
+        )
+        return "latest", True, local_head
+    return hex(block_number), False, local_head
+
+
 def _eth_call_anvil(
     from_address: str,
     to_address: str,
@@ -344,6 +407,11 @@ def _eth_call_anvil(
     block_number: Optional[int] = None,
 ) -> tuple:
     """Raw eth_call via Anvil.
+
+    Step 9: when ``block_number`` exceeds local Anvil head, the tag is
+    clamped to "latest" (controlled by ARBY_ANVIL_CLAMP_BLOCK, default on).
+    The returned error also normalises ``BlockOutOfRangeError`` spellings
+    into a stable prefix so rollups can histogram them cleanly.
 
     Returns:
         (output_hex: str, error: str | None)
@@ -362,7 +430,7 @@ def _eth_call_anvil(
     if value_wei:
         tx_obj["value"] = hex(value_wei)
 
-    block_tag = "latest" if block_number is None else hex(block_number)
+    block_tag, _clamped, _local_head = _resolve_anvil_block_tag(block_number)
 
     try:
         resp = httpx.post(
@@ -373,10 +441,120 @@ def _eth_call_anvil(
         data = resp.json()
         if "error" in data:
             err_msg = data["error"].get("message", str(data["error"]))[:200]
+            low = err_msg.lower()
+            # Step 9 fallback: if the endpoint still complained about an
+            # out-of-range block (e.g., clamp was disabled or local_head
+            # probe raced a reorg), retry once with "latest".
+            if ("blockoutofrange" in low or "block out of range" in low
+                    or "beyond the latest" in low) and block_tag != "latest":
+                logger.info(
+                    "anvil eth_call BlockOutOfRange on tag=%s → retrying latest",
+                    block_tag,
+                )
+                resp2 = httpx.post(
+                    url,
+                    json={
+                        "jsonrpc": "2.0", "id": 1, "method": "eth_call",
+                        "params": [tx_obj, "latest"],
+                    },
+                    timeout=10.0,
+                )
+                data2 = resp2.json()
+                if "error" in data2:
+                    err2 = data2["error"].get("message", str(data2["error"]))[:200]
+                    return "", f"eth_call: {err2}"
+                return data2.get("result", "0x"), None
             return "", f"eth_call: {err_msg}"
         return data.get("result", "0x"), None
     except Exception as e:
         return "", str(e)[:200]
+
+
+def refresh_anvil_fork_if_stale(
+    chain: str = "base",
+    max_drift_blocks: int = 120,
+    offset: int = 5,
+    upstream_url: Optional[str] = None,
+) -> tuple:
+    """Step 9: re-fork Anvil when its local head drifts too far behind the
+    upstream chain.
+
+    This is the long-running counterpart of :func:`_resolve_anvil_block_tag`:
+    clamping keeps single sims from failing, but without a periodic reset
+    the local state grows stale against the live chain. Calling this from
+    a supervisor loop every few minutes keeps the fork roughly in sync.
+
+    Args:
+        chain: Chain key — only used for the default upstream lookup via
+            ``ARBY_FORK_RPC_URL`` / chain-env fallback.
+        max_drift_blocks: Minimum drift before we bother resetting.
+        offset: Target = upstream_head - offset (avoids reorg races).
+        upstream_url: Override the upstream RPC URL (mainly for tests).
+
+    Returns:
+        (refreshed: bool, diagnostic: dict)
+    """
+    diag: dict = {"chain": chain, "reset": False}
+    upstream = upstream_url or os.environ.get("ARBY_FORK_RPC_URL", "").strip()
+    if not upstream:
+        # Fallback to chain-scoped legacy env
+        env_map = {
+            "base": ("BASE_RPC_URL", "BASE_RPC"),
+            "arbitrum_one": ("ARBITRUM_RPC_URL", "ARBITRUM_RPC"),
+            "optimism": ("OPTIMISM_RPC_URL", "OPTIMISM_RPC"),
+        }
+        for key in env_map.get(chain, ()):
+            val = os.environ.get(key, "").strip()
+            if val:
+                upstream = val
+                break
+    if not upstream:
+        diag["reason"] = "NO_UPSTREAM_URL"
+        return False, diag
+
+    try:
+        import httpx
+    except ImportError:
+        diag["reason"] = "NO_HTTPX"
+        return False, diag
+
+    # Probe upstream head
+    try:
+        resp = httpx.post(
+            upstream,
+            json={"jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []},
+            timeout=10.0,
+        )
+        payload = resp.json()
+        head_hex = payload.get("result")
+        upstream_head = int(head_hex, 16) if isinstance(head_hex, str) else None
+    except Exception as e:
+        diag["reason"] = f"UPSTREAM_PROBE_FAILED:{str(e)[:100]}"
+        return False, diag
+
+    if upstream_head is None:
+        diag["reason"] = "NO_UPSTREAM_HEAD"
+        return False, diag
+
+    local_head = get_anvil_block_number()
+    diag["local_head"] = local_head
+    diag["upstream_head"] = upstream_head
+    if local_head is None:
+        diag["reason"] = "NO_LOCAL_HEAD"
+        return False, diag
+
+    drift = upstream_head - local_head
+    diag["drift"] = drift
+    if drift < max_drift_blocks:
+        diag["reason"] = "DRIFT_OK"
+        return False, diag
+
+    target_block = max(1, upstream_head - max(0, offset))
+    diag["target_block"] = target_block
+    ok = reset_anvil_fork(block_number=target_block)
+    diag["reset"] = ok
+    diag["reason"] = "RESET_OK" if ok else "RESET_FAILED"
+    return ok, diag
 
 
 def simulate_swap_anvil(

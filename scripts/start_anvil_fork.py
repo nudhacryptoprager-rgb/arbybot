@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import Optional
 
 # Load .env from repo root (so BASE_RPC/ALCHEMY_API_KEY are visible when run standalone)
 try:
@@ -216,12 +217,114 @@ def main() -> int:
     print(f"\nSet env: ARBY_SIM_BACKEND=anvil  ARBY_ANVIL_RPC_URL=http://{args.host}:{args.port}")
     print("Press Ctrl+C to stop.\n")
 
+    # Step 9 + reviewer issue #9: on Windows, subprocess.run(Ctrl+C) leaves
+    # anvil.exe orphaned because Ctrl+C only breaks the Python wrapper.
+    # Use Popen + a watchdog that also starts the Anvil fork refresher thread.
+    refresh_enabled = os.environ.get("ARBY_ANVIL_AUTO_REFRESH", "1").strip() == "1"
     try:
-        proc = subprocess.run(cmd, check=False)
-        return proc.returncode
+        refresh_interval = int(os.environ.get("ARBY_ANVIL_REFRESH_INTERVAL_S", "60"))
+    except ValueError:
+        refresh_interval = 60
+    try:
+        refresh_drift = int(os.environ.get("ARBY_ANVIL_REFRESH_DRIFT_BLOCKS", "120"))
+    except ValueError:
+        refresh_drift = 120
+
+    import signal
+    import threading
+
+    popen_kwargs: dict = {}
+    if os.name == "nt":
+        # New process group so we can ctrl-break it (and cleanly hard-kill).
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    stop_event = threading.Event()
+
+    def _killall_anvil() -> None:
+        """Ensure no orphan anvil.exe remains on Windows when we exit."""
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        if os.name == "nt":
+            try:
+                # /IM matches any surviving anvil.exe from this session.
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "anvil.exe", "/T"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+    def _refresher() -> None:
+        # Wait a bit before first probe so Anvil can bind the port and
+        # finish the initial fork bootstrap.
+        stop_event.wait(10.0)
+        # Expose URL to the backend helper before probing.
+        os.environ.setdefault("ARBY_ANVIL_RPC_URL", f"http://{args.host}:{args.port}")
+        if rpc_url:
+            os.environ.setdefault("ARBY_FORK_RPC_URL", rpc_url)
+        try:
+            from m7.orderflow.sim_backends.anvil_backend import (  # type: ignore
+                refresh_anvil_fork_if_stale,
+            )
+        except Exception as e:
+            print(f"[start_anvil_fork] refresher disabled (import failed: {e})", file=sys.stderr)
+            return
+        while not stop_event.is_set():
+            try:
+                ok, diag = refresh_anvil_fork_if_stale(
+                    chain=args.chain,
+                    max_drift_blocks=refresh_drift,
+                    offset=max(1, args.fork_block_offset),
+                    upstream_url=rpc_url,
+                )
+                if ok:
+                    print(
+                        f"[start_anvil_fork] refresh: drift={diag.get('drift')} "
+                        f"→ reset to block {diag.get('target_block')}"
+                    )
+            except Exception as e:
+                print(f"[start_anvil_fork] refresher error: {str(e)[:120]}", file=sys.stderr)
+            # Sleep in small chunks so Ctrl+C propagates quickly.
+            for _ in range(max(1, refresh_interval)):
+                if stop_event.wait(1.0):
+                    return
+
+    refresher_thread: Optional[threading.Thread] = None
+    if refresh_enabled:
+        refresher_thread = threading.Thread(
+            target=_refresher, name="anvil-fork-refresher", daemon=True,
+        )
+        refresher_thread.start()
+        print(
+            f"[start_anvil_fork] refresher: interval={refresh_interval}s "
+            f"drift_threshold={refresh_drift} blocks",
+        )
+
+    try:
+        proc.wait()
+        return proc.returncode or 0
     except KeyboardInterrupt:
-        print("\nAnvil stopped.")
+        print("\n[start_anvil_fork] Ctrl+C received; terminating Anvil…")
+        stop_event.set()
+        _killall_anvil()
         return 0
+    finally:
+        stop_event.set()
+        _killall_anvil()
+        if refresher_thread is not None:
+            refresher_thread.join(timeout=2.0)
 
 
 if __name__ == "__main__":

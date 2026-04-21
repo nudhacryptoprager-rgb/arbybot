@@ -64,19 +64,31 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             # E1.16: Baseline snapshots (saved before long scans)
             "_baseline_pre4h.json",
             "_baseline_pre4h_discovery.json",
+            # M7.E1.34 Step 9 reviewer tooling (pre-soak baseline + delta)
+            "reviewer_soak_baseline_latest.json",
+            "reviewer_soak_baseline_latest_discovery.json",
+            "reviewer_soak_delta_latest.json",
         }
         
         # Archive files are allowed (created on reset)
         archive_pattern = lambda f: f.startswith("m4_stability_agg_archive_")
         # Log files are allowed (created by scan sessions)
         log_pattern = lambda f: f.endswith(".log")
-        
+        # M7.E1.34: reviewer tooling may drop PID files and launcher
+        # scripts (+ stdout/stderr log) while a soak is running; they are
+        # runtime ephemera and not part of the canonical artifact contract.
+        runtime_pattern = lambda f: (
+            f.endswith(".pid") or f.endswith(".py") or f.endswith(".log")
+            or f.startswith("reviewer_soak_")
+        )        
         all_files = set(f.name for f in rolling_dir.iterdir() if f.is_file())
         
         # Filter out archive and log files
         non_archive_files = {f for f in all_files if not archive_pattern(f) and not log_pattern(f)}
         # Filter out temp files (atomic-write intermediaries)
         non_archive_files = {f for f in non_archive_files if not f.endswith(".tmp")}
+        # Filter out reviewer-soak runtime ephemera (PID / launcher script)
+        non_archive_files = {f for f in non_archive_files if not runtime_pattern(f)}
         
         # Check that canonical files exist
         for canon in canonical_files:

@@ -279,3 +279,146 @@ class TestCheckSimulationBackendConnection:
         enabled, ok, err = check_simulation_backend_connection()
         assert enabled is True
         assert ok is False  # No anvil running on 19999
+
+
+class TestStep9BlockClamp:
+    """Step 9: Anvil fork drift mitigation.
+
+    Guarantees that an event_block beyond the local Anvil head does NOT
+    raise BlockOutOfRangeError but is clamped to "latest" so fresh sim
+    attempts can still execute against the available fork state.
+    """
+
+    def test_clamp_when_requested_block_exceeds_local_head(self, monkeypatch):
+        monkeypatch.setenv("ARBY_ANVIL_CLAMP_BLOCK", "1")
+        monkeypatch.setenv("ARBY_ANVIL_RPC_URL", "http://test-clamp:8545")
+        from m7.orderflow.sim_backends.anvil_backend import _resolve_anvil_block_tag
+        from unittest.mock import patch, MagicMock
+
+        fake = MagicMock()
+        fake.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": hex(100)}
+        with patch("httpx.post", return_value=fake):
+            tag, clamped, local_head = _resolve_anvil_block_tag(200)
+        assert tag == "latest"
+        assert clamped is True
+        assert local_head == 100
+
+    def test_no_clamp_when_block_within_local_head(self, monkeypatch):
+        monkeypatch.setenv("ARBY_ANVIL_CLAMP_BLOCK", "1")
+        monkeypatch.setenv("ARBY_ANVIL_RPC_URL", "http://test-clamp:8545")
+        from m7.orderflow.sim_backends.anvil_backend import _resolve_anvil_block_tag
+        from unittest.mock import patch, MagicMock
+
+        fake = MagicMock()
+        fake.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": hex(500)}
+        with patch("httpx.post", return_value=fake):
+            tag, clamped, local_head = _resolve_anvil_block_tag(400)
+        assert tag == hex(400)
+        assert clamped is False
+        assert local_head == 500
+
+    def test_clamp_disabled_preserves_hex_tag(self, monkeypatch):
+        monkeypatch.setenv("ARBY_ANVIL_CLAMP_BLOCK", "0")
+        from m7.orderflow.sim_backends.anvil_backend import _resolve_anvil_block_tag
+        tag, clamped, _ = _resolve_anvil_block_tag(12345)
+        assert tag == hex(12345)
+        assert clamped is False
+
+    def test_eth_call_retries_latest_on_block_out_of_range(self, monkeypatch):
+        """_eth_call_anvil must transparently retry with "latest" when the
+        server rejects the exact block tag (e.g., clamp disabled + reorg)."""
+        monkeypatch.setenv("ARBY_ANVIL_CLAMP_BLOCK", "0")
+        from unittest.mock import patch, MagicMock
+
+        calls = []
+
+        def fake_post(url, json=None, **kwargs):
+            calls.append(json.get("params", [None, None])[1])
+            resp = MagicMock()
+            resp.status_code = 200
+            if calls[-1] == "latest":
+                resp.json.return_value = {
+                    "jsonrpc": "2.0", "id": 1, "result": "0x" + "01" * 32
+                }
+            else:
+                resp.json.return_value = {
+                    "jsonrpc": "2.0", "id": 1,
+                    "error": {"code": -32000, "message": "BlockOutOfRangeError"},
+                }
+            return resp
+
+        with patch("httpx.post", side_effect=fake_post):
+            from m7.orderflow.sim_backends.anvil_backend import _eth_call_anvil
+            out, err = _eth_call_anvil(
+                from_address="0x" + "00" * 20,
+                to_address="0x" + "11" * 20,
+                calldata=b"\xab\xcd",
+                value_wei=0,
+                block_number=999_999_999,
+            )
+        assert err is None, f"unexpected err={err}"
+        assert out.startswith("0x")
+        assert "latest" in calls  # retry happened
+
+    def test_refresh_anvil_fork_if_stale_resets_when_drift_exceeds(self, monkeypatch):
+        monkeypatch.setenv("ARBY_ANVIL_RPC_URL", "http://test-refresh:8545")
+        monkeypatch.setenv("ARBY_FORK_RPC_URL", "http://upstream/base")
+        from unittest.mock import patch, MagicMock
+
+        reset_calls = []
+
+        def fake_post(url, json=None, **kwargs):
+            method = (json or {}).get("method", "")
+            resp = MagicMock()
+            resp.status_code = 200
+            if method == "eth_blockNumber" and "upstream" in url:
+                resp.json.return_value = {"result": hex(1000)}
+            elif method == "eth_blockNumber":
+                resp.json.return_value = {"result": hex(700)}  # local head
+            elif method == "anvil_reset":
+                reset_calls.append((json or {}).get("params"))
+                resp.json.return_value = {"result": True}
+            else:
+                resp.json.return_value = {"result": "0x0"}
+            return resp
+
+        with patch("httpx.post", side_effect=fake_post):
+            from m7.orderflow.sim_backends.anvil_backend import refresh_anvil_fork_if_stale
+            ok, diag = refresh_anvil_fork_if_stale(
+                chain="base",
+                max_drift_blocks=100,
+                offset=5,
+                upstream_url="http://upstream/base",
+            )
+        assert ok is True
+        assert diag["drift"] == 300
+        assert diag["target_block"] == 995
+        assert reset_calls, "anvil_reset must be called when drift > threshold"
+
+    def test_refresh_anvil_fork_skips_when_drift_small(self, monkeypatch):
+        monkeypatch.setenv("ARBY_ANVIL_RPC_URL", "http://test-refresh:8545")
+        monkeypatch.setenv("ARBY_FORK_RPC_URL", "http://upstream/base")
+        from unittest.mock import patch, MagicMock
+
+        def fake_post(url, json=None, **kwargs):
+            method = (json or {}).get("method", "")
+            resp = MagicMock()
+            resp.status_code = 200
+            if method == "eth_blockNumber" and "upstream" in url:
+                resp.json.return_value = {"result": hex(1000)}
+            elif method == "eth_blockNumber":
+                resp.json.return_value = {"result": hex(990)}
+            else:
+                resp.json.return_value = {"result": True}
+            return resp
+
+        with patch("httpx.post", side_effect=fake_post):
+            from m7.orderflow.sim_backends.anvil_backend import refresh_anvil_fork_if_stale
+            ok, diag = refresh_anvil_fork_if_stale(
+                chain="base",
+                max_drift_blocks=50,
+                offset=5,
+                upstream_url="http://upstream/base",
+            )
+        assert ok is False
+        assert diag["reason"] == "DRIFT_OK"

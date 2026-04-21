@@ -1645,6 +1645,11 @@ class TestM7A532RollingCanonicalSet:
         if not rolling.exists():
             return  # Skip if rolling doesn't exist (CI)
         for f in rolling.iterdir():
+            # M7.E1.34: reviewer tooling (.pid / .py launcher / .log)
+            # is runtime ephemera, not an archive; skip it.
+            if (f.name.endswith(".pid") or f.name.endswith(".py")
+                    or f.name.startswith("reviewer_soak_")):
+                continue
             assert "archive" not in f.name, f"Non-canonical file in _rolling: {f.name}"
             assert not f.name.endswith(".log"), f"Log file in _rolling: {f.name}"
 
@@ -1675,10 +1680,22 @@ class TestM7A532RollingCanonicalSet:
             # E1.16: Baseline snapshots (saved before long scans)
             "_baseline_pre4h.json",
             "_baseline_pre4h_discovery.json",
+            # M7.E1.34 Step 9 reviewer tooling (pre-soak baseline + delta)
+            "reviewer_soak_baseline_latest.json",
+            "reviewer_soak_baseline_latest_discovery.json",
+            "reviewer_soak_delta_latest.json",
         }
         for f in rolling.iterdir():
-            if f.is_file() and not f.name.endswith(".tmp"):
-                assert f.name in canonical, f"Unexpected file in _rolling: {f.name}"
+            if not f.is_file() or f.name.endswith(".tmp"):
+                continue
+            # M7.E1.34: reviewer-soak launcher / PID / .log files are
+            # ephemeral runtime artifacts; ignore them for canonical-set
+            # checks (canonical JSON snapshots are already listed above).
+            if (f.name.endswith(".pid") or f.name.endswith(".py")
+                    or f.name.endswith(".log")
+                    or (f.name.startswith("reviewer_soak_") and not f.name.endswith(".json"))):
+                continue
+            assert f.name in canonical, f"Unexpected file in _rolling: {f.name}"
 
 
 # ===========================================================================
