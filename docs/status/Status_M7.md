@@ -1,17 +1,23 @@
 ﻿# Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.34b — Step 9 Anvil drift mitigation landed, production readiness NOT REACHED.** 1h reviewer soak 2026-04-21: 0 restarts; production 99 fast_scored / 21 guard_passed / 19 sim_attempted / 0 sim_passed; discovery 99 / 21 / 15 / 0; ΔVENUE_MISSING=0, ΔAMOUNT_ZERO=0 (Step 7 admission filter directionally validated); 100% fresh sim attempts failed with `BlockOutOfRangeError` from the static anvil fork. **Step 9 now implemented**: `anvil_backend._resolve_anvil_block_tag()` clamps event-block > local-head to "latest"; `_eth_call_anvil` retries "latest" on `BlockOutOfRangeError`; new `refresh_anvil_fork_if_stale()` calls `anvil_reset` with a fresh `head-offset` target; `scripts/start_anvil_fork.py` runs a periodic refresher thread (ENV `ARBY_ANVIL_AUTO_REFRESH=1`, `ARBY_ANVIL_REFRESH_INTERVAL_S=60`, `ARBY_ANVIL_REFRESH_DRIFT_BLOCKS=120`) and cleans orphan `anvil.exe` on Windows via `taskkill` on exit. `scripts/analyze_roundtrip_profitability.py` now demotes cumulative verdicts to `HISTORICAL_PROFITABLE_CASE` unless run with `--session-only` or `--baseline`; new `scripts/reviewer_soak_summary.py` compares a pre-soak baseline and prints ONLY fresh deltas. Unit baseline: **4199 PASS / 6 skipped / 0 failed** (+6 new Step 9 tests).
+**Status**: **M7.E1.34c — Step 9 Anvil drift partially validated, acceptance NOT REACHED.** Reviewer 30-min control soak 2026-04-21: Step 9 drift mitigation confirmed live (`ΔBlockOutOfRangeError=0` on both lanes), but `Δsim_passed=0` on both lanes (prod +1 sim_attempted / +0 passed; disc +3 / +0). Active blocker moved from Anvil fork drift to `eth_call: execution reverted: STF`-class reverts and terminal-stage calldata viability (toxic/illiquid pair candidates: KellyClaude/USDC, RNBW/USDC, 0xa538…/USDC). M7.B remains closed. Landed this cycle: (a) `anvil_backend._eth_call` revert strings now routed through `_decode_revert_reason` so `STF`, `SLIPPAGE`, `INSUFFICIENT_ALLOWANCE`, etc. get dedicated histogram buckets instead of collapsing to generic `execution reverted`; (b) `execution_gate.ExecutionGateResult.sim_failed_samples` + `hot_runtime_artifacts` now persist a bounded ring (50) of terminal-stage failed-sim samples with `pair/venue/router/token_in/token_out/amount_in_wei/bucket`, propagated to `sim_failed_samples_recent` / `sim_failed_samples_total` in each rollup; (c) rollup invariant `profit_guard_passed_total ≤ route_viable_total` surfaces `invariant_violations.profit_guard_exceeds_route_viable` when breached (discovery lane 30m soak showed +3 guard vs +0 viable — contract smell reviewer flagged); (d) new `ARBY_STRICT_PROVIDER_POLICY=1` ENV counts windows served by `public_fallback` into `strict_provider_breaches_total` per fix step #7. Unit baseline: **4216 PASS / 17 skipped / 0 failed** (+8 new `test_m7_e1_34c_reviewer_fixes.py`; `test_anvil_backend::test_eth_call_revert` updated to match decoded `REVERT:*` format).
 **Updated**: 2026-04-21
 
-**Acceptance criterion tightened** per reviewer feedback: the previous
-`BlockOutOfRangeError < 50/min` threshold is replaced by
-`Δsim_passed > 0 AND ΔBlockOutOfRangeError == 0` — enforced by
-`reviewer_soak_summary.py` exit code (2 = FAIL).
+**Acceptance criterion (unchanged from M7.E1.34b)**:
+`Δsim_passed > 0 AND ΔBlockOutOfRangeError == 0 AND Δroundtrip_attempted > 0`
+on both lanes — enforced by `scripts/reviewer_soak_summary.py` (exit 2 = FAIL).
+30-min control soak 2026-04-21 result: **FAIL** (`sim_passed_delta=0`).
 
-**Next P0 blockers**: (a) 2-hour soak with Step 9 refresher active to
-confirm `Δsim_passed>0`; (b) Step 8 TOKEN_ADDRESS_UNKNOWN (152 cumulative);
-(c) canonical M4 truth path still reports
-`profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` (M7.B remains closed).
+**Next P0 blockers** (updated after 30m soak):
+(a) diagnose `execution reverted: STF` root cause using new
+`sim_failed_samples_recent` — inspect calldata per `REVERT:STF` bucket;
+(b) filter or deprioritise toxic/illiquid pair candidates
+(KellyClaude/USDC, RNBW/USDC, 0xa538…/USDC);
+(c) after STF mitigation, re-run 30-min soak; only then escalate to 2h soak
+per DEV_REPORT runbook; (d) canonical M4 truth path still
+`profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` — M7.B stays closed.
+
+**Previous (M7.E1.34b) note** retained: 1h reviewer soak 2026-04-21: 0 restarts; production 99 fast_scored / 21 guard_passed / 19 sim_attempted / 0 sim_passed; discovery 99 / 21 / 15 / 0; ΔVENUE_MISSING=0, ΔAMOUNT_ZERO=0 (Step 7 admission filter directionally validated); 100% fresh sim attempts failed with `BlockOutOfRangeError` from the static anvil fork. **Step 9**: `anvil_backend._resolve_anvil_block_tag()` clamps event-block > local-head to "latest"; `_eth_call_anvil` retries "latest" on `BlockOutOfRangeError`; new `refresh_anvil_fork_if_stale()` calls `anvil_reset` with a fresh `head-offset` target; `scripts/start_anvil_fork.py` runs a periodic refresher thread (ENV `ARBY_ANVIL_AUTO_REFRESH=1`, `ARBY_ANVIL_REFRESH_INTERVAL_S=60`, `ARBY_ANVIL_REFRESH_DRIFT_BLOCKS=120`) and cleans orphan `anvil.exe` on Windows via `taskkill` on exit. `scripts/analyze_roundtrip_profitability.py` now demotes cumulative verdicts to `HISTORICAL_PROFITABLE_CASE` unless run with `--session-only` or `--baseline`; `scripts/reviewer_soak_summary.py` compares a pre-soak baseline and prints ONLY fresh deltas (ASCII `delta=` for Windows compatibility).
 
 **2026-04-20 note** (audit cycle): 30-min Base `prod+discovery` soak shows runtime activity (PROD 61 windows / 121 events / 10 fast_scored; DISC 60/133/16/1 sim_attempted → REVERT:unknown), **but no profitable roundtrip**. `roundtrip_profitable_total=0` across both lanes. **Production readiness remains blocked** by economics (scorer-vs-sim gap, thin market windows) and was previously red on repo gates (INTENT_TIER_LIMIT, DOCS_CONTENT_BLOAT). As of 2026-04-20 repo gates are GREEN (safety PASS, pytest 4174 passed, ci_full_pipeline CI PASS, M4 `--strict` offline profit PASS). Historical verbose detail archived to [archive/status/Status_M7_history.md](../../archive/status/Status_M7_history.md). E1.35 (audit-recs P0–P3) and E1.36 (Tenderly state-override) are implemented but **not yet validated on PROD lane** — PROD got 0 `sim_attempted` in the last quiet-market window; validation deferred until a busier market window or `anvil`/`rpc_fork` PROD soak.
 

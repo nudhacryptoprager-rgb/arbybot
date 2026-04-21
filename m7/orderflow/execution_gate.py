@@ -125,6 +125,10 @@ class ExecutionGateResult:
     # E1.27/D1: Raw sim output amounts (wei) for offline profit analysis.
     # Profit in bps cannot be derived here because token decimals differ.
     sim_output_samples: List[Dict[str, Any]] = field(default_factory=list)
+    # M7.E1.34c: Terminal-stage samples for FAILED sims — reviewer asked
+    # for calldata-level visibility (token/venue/router/amount + decoded
+    # revert tag) beyond the aggregate simulation_error_histogram.
+    sim_failed_samples: List[Dict[str, Any]] = field(default_factory=list)
     # E2: Round-trip (buy+sell) same-token bps metrics. These are VALID bps
     # because initial and final amounts are the same token.
     roundtrip_attempted: int = 0
@@ -1064,6 +1068,24 @@ def run_execution_gate(
             # E1.27/D2: Prefer decoded revert_reason over raw error for histogram
             _sim_err = sim_result.revert_reason or sim_result.error or "unknown"
             gate.sim_errors.append(_sim_err)
+            # M7.E1.34c: bounded terminal-stage sample for failed sims so the
+            # reviewer can correlate histogram buckets with specific pair/venue
+            # /amount combos (fixes "only aggregate histogram, no calldata"
+            # gap flagged in 30m soak 2026-04-21).
+            if len(gate.sim_failed_samples) < 50:
+                _pair_fs = getattr(r, "actual_pair", None)
+                _venue_fs = getattr(r, "actual_venue", None) or getattr(r, "venue", None)
+                gate.sim_failed_samples.append({
+                    "pair": _pair_fs,
+                    "venue": _venue_fs,
+                    "token_in": getattr(r, "token_in", None),
+                    "token_out": getattr(r, "token_out", None),
+                    "router": getattr(r, "router_address", None),
+                    "amount_in_wei": getattr(r, "amount_in_wei", 0) or 0,
+                    "sim_error": (sim_result.error or "")[:200],
+                    "revert_reason": (sim_result.revert_reason or "")[:200],
+                    "bucket": (_sim_err or "unknown")[:120],
+                })
             if hasattr(r, "submit_ready"):
                 r.submit_ready = False
                 r.submit_blocker = f"SIM_FAILED:{_sim_err}"

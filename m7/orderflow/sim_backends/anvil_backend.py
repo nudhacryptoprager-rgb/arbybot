@@ -612,10 +612,16 @@ def simulate_swap_anvil(
     )
 
     if call_err:
-        # Classify revert vs generic error
+        # M7.E1.34c: decode revert reason (STF, SLIPPAGE, INSUFFICIENT_*, ...)
+        # so histogram buckets distinguish root causes instead of collapsing
+        # to generic "execution reverted". Mirrors rpc_fork_backend.
         revert_reason = None
         if "revert" in call_err.lower() or "execution reverted" in call_err.lower():
-            revert_reason = call_err
+            try:
+                from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
+                revert_reason = _decode_revert_reason(call_err)
+            except Exception:
+                revert_reason = call_err
         return SimulationResult(
             success=False,
             error=call_err,

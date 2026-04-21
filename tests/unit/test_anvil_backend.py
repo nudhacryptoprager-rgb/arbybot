@@ -161,7 +161,11 @@ class TestSimulateSwapAnvil:
             result = simulate_swap_anvil(chain="base", calldata=b"\xab\xcd")
             assert result.success is False
             assert result.revert_reason is not None
-            assert "reverted" in result.revert_reason.lower()
+            # M7.E1.34c: anvil_backend now routes revert strings through
+            # _decode_revert_reason so INSUFFICIENT_OUTPUT becomes a tagged
+            # bucket ("REVERT:INSUFFICIENT_OUTPUT") instead of the raw
+            # "execution reverted: ..." string.
+            assert result.revert_reason.startswith("REVERT:")
             assert result.backend == "anvil"
 
     def test_successful_simulation(self, monkeypatch):

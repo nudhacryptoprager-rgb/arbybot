@@ -981,6 +981,20 @@ def _update_hot_rollup(
     _sess["last_ws_connection_status"] = _ws_status
     _sess["last_rpc_provider"] = _rpc_prov
     _sess["last_ws_provider"] = _ws_prov
+    # M7.E1.34c: strict provider policy. When ARBY_STRICT_PROVIDER_POLICY=1,
+    # any window served by public_fallback is counted as a policy breach and
+    # surfaced in the rollup so the reviewer's production-grade guardrail
+    # (fix step #7, 30m soak 2026-04-21) stays visible without silently
+    # tolerating best-effort public RPCs.
+    _strict_provider = os.environ.get("ARBY_STRICT_PROVIDER_POLICY", "0").strip() == "1"
+    if _strict_provider and (_rpc_prov == "public_fallback" or _ws_prov == "public_fallback"):
+        rollup["strict_provider_breaches_total"] = (
+            rollup.get("strict_provider_breaches_total", 0) + 1
+        )
+        rollup["strict_provider_last_breach"] = {
+            "rpc_provider": _rpc_prov,
+            "ws_provider": _ws_prov,
+        }
     rollup["bridge_loaded_candidate_count_total"] = (
         rollup.get("bridge_loaded_candidate_count_total", 0)
         + _bd.get("bridge_loaded_candidate_count", 0)
@@ -1010,6 +1024,25 @@ def _update_hot_rollup(
         rollup.get("profit_guard_passed_total", 0)
         + sum(1 for r in _fast if getattr(r, "profit_guard_passed", False))
     )
+    # M7.E1.34c: invariant — profit_guard is gated on route_viable, so the
+    # cumulative counters must obey profit_guard_passed_total <= route_viable_total.
+    # Discovery lane 30m soak 2026-04-21 showed +3 guard vs +0 viable, i.e. a
+    # contract smell. Surface it here so reviewer / tests can catch regressions
+    # without silently corrupting the rollup.
+    _pgpt = int(rollup.get("profit_guard_passed_total", 0) or 0)
+    _rvt = int(rollup.get("route_viable_total", 0) or 0)
+    if _pgpt > _rvt:
+        _inv = rollup.get("invariant_violations") or {}
+        _inv["profit_guard_exceeds_route_viable"] = {
+            "profit_guard_passed_total": _pgpt,
+            "route_viable_total": _rvt,
+            "delta": _pgpt - _rvt,
+        }
+        rollup["invariant_violations"] = _inv
+        logger.warning(
+            "invariant violation: profit_guard_passed_total=%d > route_viable_total=%d",
+            _pgpt, _rvt,
+        )
     _guard_hist = rollup.get("guard_reject_reason_histogram") or {}
     for r in _fast:
         _guard_reason = getattr(r, "guard_reject_reason", None)
@@ -1074,6 +1107,16 @@ def _update_hot_rollup(
             _se_key = (_se or "unknown")[:256]
             _sim_hist[_se_key] = _sim_hist.get(_se_key, 0) + 1
         rollup["simulation_error_histogram"] = _sim_hist
+        # M7.E1.34c: Terminal-stage failed-sim samples (bounded ring of 50) so
+        # reviewer can see token/venue/amount behind each histogram bucket
+        # (answers fix step #5 from 30m control soak).
+        _failed_samples = getattr(gate_result, "sim_failed_samples", [])
+        if _failed_samples:
+            _existing_f = rollup.get("sim_failed_samples_recent", [])
+            rollup["sim_failed_samples_recent"] = (_existing_f + _failed_samples)[-50:]
+            rollup["sim_failed_samples_total"] = (
+                rollup.get("sim_failed_samples_total", 0) + len(_failed_samples)
+            )
         # E1.12.3: Cumulative submit blocker histogram — surfaces WHY submit blocked
         _sub_hist = rollup.get("submit_blocker_histogram") or {}
         for _sb in getattr(gate_result, "submit_blockers_detail", []):
