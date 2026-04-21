@@ -1054,6 +1054,21 @@ def run_loop(cli_args) -> None:
                                     _ent_all = _hot_registry.lookup_pair(_t0a, _t1a)
                                     if _ent_all:
                                         _hot_bridge_diag["bridge_pair_hit_count"] += 1
+                            # M7.E1.34g fix #2: classify WHY this bridge hit
+                            # did not become a fast-scored candidate. Kept as
+                            # first-seen reason per window; histogram is
+                            # aggregated in the rollup layer. Only set when
+                            # scoring_path != "registry_fast" so successful
+                            # scores never overwrite a null.
+                            _sp_r = getattr(_r, "scoring_path", None)
+                            if _sp_r != "registry_fast" and "bridge_hit_not_scored_reason" not in _hot_bridge_diag:
+                                if _sp_r is None:
+                                    _reason_code = "NOT_SCORED"
+                                elif _sp_r == "hot_skip":
+                                    _reason_code = "HOT_SKIP_UNKNOWN_PAIR"
+                                else:
+                                    _reason_code = f"SCORING_PATH_{str(_sp_r).upper()}"
+                                _hot_bridge_diag["bridge_hit_not_scored_reason"] = _reason_code
                     # Log diagnostic for bridge hit investigation
                     if _raw_results_for_bridge and _bridge_ptt_lower:
                         _sample_evt_pools = []

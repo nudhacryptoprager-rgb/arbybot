@@ -915,6 +915,17 @@ def _update_hot_rollup(
     rollup["current_window_timestamp"] = ts
     # M7.E1.7: Complete heartbeat contract вЂ” same fields as cold lane
     rollup["snapshot_run_timestamp"] = ts
+    # M7.E1.34f fix #3: per-lane freshness anchors.
+    # last_heartbeat_utc is written on every update (bounded worker cycle
+    # completion OR mid-cycle heartbeat); last_event_utc only moves when
+    # real order events were ingested; last_scored_utc only moves when
+    # the fast path produced any scored candidate. Reviewer staleness
+    # gates operate on these instead of wall-clock vs last_updated.
+    rollup["last_heartbeat_utc"] = ts
+    if events_count > 0:
+        rollup["last_event_utc"] = ts
+    if len(_fast) > 0:
+        rollup["last_scored_utc"] = ts
     # M7.A.5.47e: Track first window timestamp for dashboard
     rollup.setdefault("first_window_at", ts)
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
@@ -938,6 +949,25 @@ def _update_hot_rollup(
     _sess["session_events_seen_total"] = (
         _sess.get("session_events_seen_total", 0) + events_count
     )
+    # M7.E1.34g fix #1: feed-rate diagnostic. Reviewer's P0 finding after
+    # 30m E1.34e soak was funnel starvation at input (PROD +5 events / 30m,
+    # DISC +15 events / 30m). Exposing events_per_minute for the current
+    # session lets the next soak classify this as WS feed starvation vs
+    # scoring drop without external math.
+    try:
+        _start = _sess.get("session_started_at")
+        if isinstance(_start, str):
+            _start_dt = datetime.fromisoformat(_start.replace("Z", "+00:00"))
+            if _start_dt.tzinfo is None:
+                _start_dt = _start_dt.replace(tzinfo=timezone.utc)
+            _now_dt = datetime.now(timezone.utc)
+            _elapsed_min = max((_now_dt - _start_dt).total_seconds() / 60.0, 1.0 / 60.0)
+            _sess["session_elapsed_minutes"] = round(_elapsed_min, 3)
+            _sess["session_events_per_minute"] = round(
+                _sess["session_events_seen_total"] / _elapsed_min, 3
+            )
+    except Exception:
+        pass
     _sess["session_bridge_pool_hit_total"] = (
         _sess.get("session_bridge_pool_hit_total", 0)
         + _bd.get("bridge_pool_address_hit_count", 0)
@@ -1007,6 +1037,26 @@ def _update_hot_rollup(
         rollup.get("bridge_pool_address_hit_count_total", 0)
         + _bd.get("bridge_pool_address_hit_count", 0)
     )
+    # M7.E1.34f fix #5: bridge-hit-to-fast-score drop diagnostic.
+    # If this window saw bridge pool hits but produced no fast_results,
+    # record it so reviewer can distinguish "no bridge coverage" from
+    # "bridge hit but scoring dropped the candidate".
+    _bridge_hits_win = int(_bd.get("bridge_pool_address_hit_count", 0) or 0)
+    if _bridge_hits_win > 0 and len(_fast) == 0:
+        _diag = rollup.get("bridge_hit_but_not_fast_scored") or {}
+        _diag["windows"] = int(_diag.get("windows", 0) or 0) + 1
+        _diag["bridge_hits"] = int(_diag.get("bridge_hits", 0) or 0) + _bridge_hits_win
+        _diag["last_observed_at"] = ts
+        # Reason hint (reviewer diagnostic bucket): most common cause is
+        # that the bridge-hit event came from a pair the fast path did
+        # not recognise as a scoring candidate. Concrete reason codes
+        # (e.g. UNKNOWN_PAIR, FAST_PATH_DISABLED) can be added by callers
+        # via bridge_diagnostics["bridge_hit_not_scored_reason"].
+        _reason = (_bd.get("bridge_hit_not_scored_reason") or "UNKNOWN") if isinstance(_bd, dict) else "UNKNOWN"
+        _rh = _diag.get("reason_histogram") or {}
+        _rh[_reason] = int(_rh.get(_reason, 0) or 0) + 1
+        _diag["reason_histogram"] = _rh
+        rollup["bridge_hit_but_not_fast_scored"] = _diag
     rollup["fast_path_scored_total"] = (
         rollup.get("fast_path_scored_total", 0) + len(_fast)
     )
@@ -1014,6 +1064,40 @@ def _update_hot_rollup(
         rollup.get("fast_path_positive_total", 0)
         + sum(1 for r in _fast if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0)
     )
+    # M7.E1.34g fix #3: net_bps distribution — cost-model vs spread visibility.
+    # Reviewer's P2 finding is that most scored candidates fail
+    # ARBY_SIM_MIN_NET_BPS=1.0 after gas+fees. Bucketing the observed
+    # best_backrun_net_bps (signed int floor) across the session shows
+    # whether the distribution is "close-to-threshold" (operational tuning)
+    # or "deeply unprofitable" (cost model dominates).
+    if _fast:
+        _hist = rollup.get("fast_path_net_bps_histogram") or {}
+        for _r in _fast:
+            _bps = getattr(_r, "best_backrun_net_bps", None)
+            if _bps is None:
+                _bucket = "unknown"
+            else:
+                try:
+                    _b = float(_bps)
+                except (TypeError, ValueError):
+                    _bucket = "unknown"
+                else:
+                    if _b < -10:
+                        _bucket = "lt_-10"
+                    elif _b < -1:
+                        _bucket = "-10_to_-1"
+                    elif _b < 0:
+                        _bucket = "-1_to_0"
+                    elif _b < 1:
+                        _bucket = "0_to_1"
+                    elif _b < 5:
+                        _bucket = "1_to_5"
+                    elif _b < 10:
+                        _bucket = "5_to_10"
+                    else:
+                        _bucket = "gte_10"
+            _hist[_bucket] = int(_hist.get(_bucket, 0) or 0) + 1
+        rollup["fast_path_net_bps_histogram"] = _hist
     # M7.E1.5: route_viable_total вЂ” route-level economics check (gas < gross, fee < gross, net > 0)
     rollup["route_viable_total"] = (
         rollup.get("route_viable_total", 0)

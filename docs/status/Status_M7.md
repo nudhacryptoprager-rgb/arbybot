@@ -1,30 +1,40 @@
 ﻿# Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.34e — supervisor restart-budget split + reviewer acceptance hardened; acceptance still BLOCKED until corrected long-block soak.** Reviewer 30-min STF validation soak 2026-04-21 17:58–18:28Z executed M7.E1.34d code; positive deltas: `strict_provider_breaches +0` (strict policy hardening confirmed), `BlockOutOfRangeError +0` (Step 9 confirmed); negative deltas: `sim_passed +0`, `roundtrip_attempted +0`, `fast_path_scored +0`. Root cause: supervisor `--m7-hot-blocks 20` + `--max-restarts 10` defaults caused bounded workers to clean-exit every ~30s and exhaust restart budget after ~4 min, leaving ~17 min of supervisor wallclock with no live hot lane. Landed this cycle (M7.E1.34e): (a) `scripts/start_nonstop_runtime.py` — `ManagedProcess.check_and_restart` now distinguishes clean cycle exits (rc==0 from bounded workers) from crashes (rc!=0); only crashes consume `--max-restarts` budget; new `cycles_completed`, `crash_restarts`, `max_crash_restarts_hit` counters and a per-process supervisor summary at shutdown; defaults bumped (`--m7-hot-blocks` 20→900, `--m7-cold-blocks` 300→900, `--max-restarts` 10→100); (b) `scripts/reviewer_soak_summary.py` — acceptance now also requires `fast_path_scored_delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED` (default 20, override with `ARBY_REVIEWER_QUIET_OK=1` for MARKET_QUIET_BLOCKED classification); new `--max-rollup-staleness-s` gate (default 120s) fails the run if the production rollup hasn't been refreshed near the supervisor end; (c) `m7/orderflow/hot_runtime_artifacts.py` — `invariant_violations.profit_guard_exceeds_route_viable` now carries `session_profit_guard_passed_delta` / `session_route_viable_delta` / `session_delta` / `is_session_regression`, so historical pollution from prior sessions does not mask whether the new code is correct; (d) every entry in `sim_failed_samples_recent` is tagged with `session_id` and `sample_updated_at` so reviewers can drop stale samples from previous sessions. Unit baseline: **4229 PASS / 6 skipped / 0 failed** (+7 new `test_m7_e1_34e_reviewer_fixes.py`; existing `test_reviewer_soak_summary` updated for the fast_path gate).
+**Status**: **M7.E1.34g — funnel diagnostics landed: feed-rate, bridge-drop reason propagation, net_bps distribution.** Analytically driven by the four reasons behind "no profitable opportunities" observed after 30m E1.34e soak (PROD +5 events, DISC +15 events, +2 bridge_hits, +0 fast_scored). Landed this cycle (M7.E1.34g): (a) `m7/orderflow/hot_runtime_artifacts.py` — feed-rate counters `session.session_elapsed_minutes` + `session.session_events_per_minute` (exposes WS/RPC starvation directly, no external math); `fast_path_net_bps_histogram` with buckets `lt_-10 / -10_to_-1 / -1_to_0 / 0_to_1 / 1_to_5 / 5_to_10 / gte_10 / unknown` so reviewer sees whether cost-model dominates or candidates are close-to-threshold; (b) `m7/orderflow/loop_runner.py` — bridge-hit block 2 now classifies WHY each bridge-pool hit did not produce a `registry_fast` score and writes first-seen reason into `bridge_diagnostics["bridge_hit_not_scored_reason"]` (`HOT_SKIP_UNKNOWN_PAIR` when scoring_path=="hot_skip", `NOT_SCORED` when scoring_path is None, or `SCORING_PATH_<UPPER>` for everything else); the existing rollup bucket `bridge_hit_but_not_fast_scored.reason_histogram` now gets real categorical data instead of UNKNOWN. M7.B remains closed: no submit_ready/roundtrip_profitable evidence, so policy is unchanged per reviewer fix #10.
+
+Unit baseline: **4244 PASS / 6 skipped / 0 failed** (+6 new in `test_m7_e1_34g_funnel_diagnostics.py`). `check_repo_safety.py`: PASS 0 warnings.
+
 **Updated**: 2026-04-21
 
-**Acceptance criterion (tightened M7.E1.34e)**:
+**Acceptance criterion (unchanged from M7.E1.34e)**:
 `Δsim_passed > 0 AND Δroundtrip_attempted > 0 AND ΔBlockOutOfRangeError == 0
 AND strict_provider_breaches_total_delta == 0
 AND fast_path_scored_delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED (default 20,
 unless ARBY_REVIEWER_QUIET_OK=1)
-AND production rollup not stale (default 120s)`
-on both lanes — enforced by `scripts/reviewer_soak_summary.py` (exit 2 = FAIL).
-30-min STF validation soak 2026-04-21 17:58–18:28Z result: **FAIL**
-(`fast_path_scored_delta=0`, runtime workers expired early due to old defaults).
+AND production rollup not stale (default 120s, anchor = supervisor end
+when available)` on both lanes.
 
-**Next P0 blockers** (updated after corrected supervisor):
-(a) re-run 30-min Base soak with new defaults (`--m7-hot-blocks 900
---m7-cold-blocks 900 --max-restarts 100`) and premium RPC/WS provisioned;
-(b) if corrected soak still has `fast_path_scored=0`, debug bridge coverage
-using `m7_cold_hot_bridge*.json` vs hot event token pairs;
-(c) only after corrected soak passes, escalate to `submit_ready`/M7.B
-discussion — canonical M4 truth path still
-`profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`.
+**Next P0 blockers**:
+(a) re-run 30m Base soak with M7.E1.34g instrumentation — post-soak
+`session.session_events_per_minute` tells us immediately whether the
+funnel is WS-starved (< ~5 events/min on a busy L2) or scoring-dropped;
+`bridge_hit_but_not_fast_scored.reason_histogram` classifies the DISC
+`+2 bridge_hits / +0 fast_scored` gap by real reason codes; the new
+`fast_path_net_bps_histogram` (when fast_results>0) shows whether the
+cost model dominates or we are close to the 1.0 bps threshold;
+(b) if `session_events_per_minute < 5` → WS/RPC feed coverage fix
+(hot set widening, pair filter review); if `HOT_SKIP_UNKNOWN_PAIR`
+dominates reason_histogram → hot registry / canonical pair broker;
+if net_bps histogram clusters in `lt_-10` / `-10_to_-1` → recalibrate
+cost model, not the gate;
+(c) do NOT mark Status REACHED or open M7.B until `sim_passed>0`,
+`roundtrip_attempted>0`, `fast_path_scored>=20`, no BlockOutOfRange,
+no strict breaches, no stale rollup.
 
-**Previous (M7.E1.34d)** retained: strict provider hard-fail, profit_guard
-invariant enforced at source, REVERT:unknown sub-buckets, sim_failed_samples
-canonical attrs, runbook `--hours 0.5`.
+**Previous (M7.E1.34f)** retained: per-lane `last_heartbeat_utc` /
+`last_event_utc` / `last_scored_utc`; `bridge_hit_but_not_fast_scored`
+diagnostic bucket; `--staleness-anchor-utc` CLI flag;
+`fresh_failed_samples` helper.
 
 **Previous (M7.E1.34b) note** retained: 1h reviewer soak 2026-04-21: 0 restarts; production 99 fast_scored / 21 guard_passed / 19 sim_attempted / 0 sim_passed; discovery 99 / 21 / 15 / 0; ΔVENUE_MISSING=0, ΔAMOUNT_ZERO=0 (Step 7 admission filter directionally validated); 100% fresh sim attempts failed with `BlockOutOfRangeError` from the static anvil fork. **Step 9**: `anvil_backend._resolve_anvil_block_tag()` clamps event-block > local-head to "latest"; `_eth_call_anvil` retries "latest" on `BlockOutOfRangeError`; new `refresh_anvil_fork_if_stale()` calls `anvil_reset` with a fresh `head-offset` target; `scripts/start_anvil_fork.py` runs a periodic refresher thread (ENV `ARBY_ANVIL_AUTO_REFRESH=1`, `ARBY_ANVIL_REFRESH_INTERVAL_S=60`, `ARBY_ANVIL_REFRESH_DRIFT_BLOCKS=120`) and cleans orphan `anvil.exe` on Windows via `taskkill` on exit. `scripts/analyze_roundtrip_profitability.py` now demotes cumulative verdicts to `HISTORICAL_PROFITABLE_CASE` unless run with `--session-only` or `--baseline`; `scripts/reviewer_soak_summary.py` compares a pre-soak baseline and prints ONLY fresh deltas (ASCII `delta=` for Windows compatibility).
 

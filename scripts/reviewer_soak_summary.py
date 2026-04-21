@@ -31,6 +31,26 @@ from pathlib import Path
 
 ROLL = Path("data/runs/_rolling")
 
+
+def fresh_failed_samples(rollup: dict, session_id: str | None) -> list[dict]:
+    """M7.E1.34f fix #7: only samples tagged with current session_id.
+
+    Drops stale `sim_failed_samples_recent` entries from prior sessions so
+    reviewer STF diagnosis never cites pre-fix evidence. If session_id is
+    falsy, returns an empty list rather than falling back to the raw list.
+    """
+    if not session_id:
+        return []
+    samples = rollup.get("sim_failed_samples_recent") or []
+    if not isinstance(samples, list):
+        return []
+    out: list[dict] = []
+    for s in samples:
+        if isinstance(s, dict) and s.get("session_id") == session_id:
+            out.append(s)
+    return out
+
+
 TRACKED_SCALARS = [
     "sim_attempted_total",
     "sim_passed_total",
@@ -215,6 +235,15 @@ def main() -> int:
             "now - this many seconds. Default 120s. Set 0 to disable."
         ),
     )
+    parser.add_argument(
+        "--staleness-anchor-utc", type=str, default=None,
+        help=(
+            "M7.E1.34f fix #2: anchor staleness check to this UTC "
+            "timestamp (supervisor end time from the soak log) instead "
+            "of wall-clock now. Accepts ISO-8601 (e.g. "
+            "2026-04-21T18:28:21Z). When omitted, falls back to now."
+        ),
+    )
     args = parser.parse_args()
 
     base = _load(args.baseline)
@@ -234,7 +263,22 @@ def main() -> int:
     # the funnel was effectively dead and the soak does not count.
     stale_reasons: list[str] = []
     if args.max_rollup_staleness_s > 0:
-        _now = datetime.now(timezone.utc)
+        # M7.E1.34f fix #2: staleness is measured against supervisor end
+        # (if supplied) rather than wall-clock now, so later reviewer
+        # analysis doesn't retro-fail a soak that kept the rollup fresh
+        # all the way to the deadline.
+        _now = None
+        if isinstance(args.staleness_anchor_utc, str) and args.staleness_anchor_utc.strip():
+            try:
+                _now = datetime.fromisoformat(
+                    args.staleness_anchor_utc.strip().replace("Z", "+00:00")
+                )
+                if _now.tzinfo is None:
+                    _now = _now.replace(tzinfo=timezone.utc)
+            except Exception:
+                _now = None
+        if _now is None:
+            _now = datetime.now(timezone.utc)
         for label, art in (("production", cur),):
             _lu = art.get("last_updated") if isinstance(art, dict) else None
             if isinstance(_lu, str):
@@ -265,6 +309,16 @@ def main() -> int:
     print(f"  production_lane_ok = {prod_ok}  ({prod_reason})")
     if args.discovery:
         print(f"  discovery_lane_ok  = {disc_ok}  ({disc_reason})")
+
+    # M7.E1.34f fix #7: only cite sim_failed_samples whose session_id
+    # matches the current session. Everything else is historical noise.
+    _sess = (cur.get("session") or {}) if isinstance(cur, dict) else {}
+    _cur_sid = _sess.get("session_id") if isinstance(_sess, dict) else None
+    _fresh = fresh_failed_samples(cur, _cur_sid)
+    print(
+        f"  fresh_sim_failed_samples = {len(_fresh)} "
+        f"(session_id={_cur_sid or 'UNKNOWN'})"
+    )
 
     overall = prod_ok and disc_ok and not stale_reasons
     print(f"\n  OVERALL_ACCEPTANCE : {'PASS' if overall else 'FAIL'}")
