@@ -44,6 +44,7 @@ def test_reviewer_acceptance_passes_with_fresh_sim_and_no_block_out_of_range() -
         "last_updated": "2026-04-21T00:00:00Z",
         "sim_passed_total": 10,
         "roundtrip_attempted_total": 5,
+        "fast_path_scored_total": 0,
         "simulation_error_histogram": {},
     }
     current = {
@@ -51,6 +52,9 @@ def test_reviewer_acceptance_passes_with_fresh_sim_and_no_block_out_of_range() -
         "last_updated": "2026-04-21T00:30:00Z",
         "sim_passed_total": 12,
         "roundtrip_attempted_total": 6,
+        # M7.E1.34e fix #5: acceptance now requires fast_path_scored_delta
+        # >= 20 unless ARBY_REVIEWER_QUIET_OK=1.
+        "fast_path_scored_total": 25,
         "simulation_error_histogram": {
             "CALLDATA_BUILD_FAILED:VENUE_MISSING": 1,
         },

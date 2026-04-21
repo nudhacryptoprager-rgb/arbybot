@@ -1,24 +1,30 @@
 ﻿# Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.34d — strict provider policy hardened + profit_guard invariant enforced at source; acceptance NOT REACHED pending premium-provider soak.** Reviewer 30-min STF validation soak 2026-04-21 hit `sim_passed>0` for the first time (PROD +2, DISC +3) and `ΔBlockOutOfRangeError=0` on both lanes, but `strict_provider_breaches_total` accumulated (+15 PROD / +11 DISC) because the runtime continued to route windows through `public_fallback` despite `ARBY_STRICT_PROVIDER_POLICY=1`, and `roundtrip_success=0` / `submit_ready=0`. Reviewer explicitly required the strict policy to hard-fail rather than silently count. Landed this cycle (M7.E1.34d): (a) `mode_ws_live.py` — strict policy now implies `ARBY_RPC_PREMIUM_ONLY=1`, rejects public WS fallback on 429, and hard-exits if primary WS resolves to `public_fallback`; (b) `profit_guard.annotate_profit_guard_results` enforces the invariant at source — `route_viable=False` candidates are rejected with `guard_reject_reason="ROUTE_NOT_VIABLE"` before any guard math runs (discovery +3 guard vs +0 viable now impossible to reproduce); (c) `rpc_fork_backend._decode_revert_reason` splits the fallback into `REVERT:unknown:no_data` and `REVERT:unknown:text:<trim>` sub-buckets (hex payloads already caught by Case 5); (d) `execution_gate.ExecutionGateResult.sim_failed_samples` now populates `venue/router/token_in/token_out` from canonical BackrunResult attributes (`best_sell_venue`, `backrun_token_in_address`, …); (e) DEV_REPORT runbook corrected to `--hours 0.5` (script does not accept `--minutes 30`). Unit baseline: **4222 PASS / 6 skipped / 0 failed** (+8 new `test_m7_e1_34d_reviewer_fixes.py`; `test_rpc_fork_backend::test_bare_revert` and `test_orderflow_artifacts::test_profit_guard_on_backrun_result_object` updated for the new contracts).
+**Status**: **M7.E1.34e — supervisor restart-budget split + reviewer acceptance hardened; acceptance still BLOCKED until corrected long-block soak.** Reviewer 30-min STF validation soak 2026-04-21 17:58–18:28Z executed M7.E1.34d code; positive deltas: `strict_provider_breaches +0` (strict policy hardening confirmed), `BlockOutOfRangeError +0` (Step 9 confirmed); negative deltas: `sim_passed +0`, `roundtrip_attempted +0`, `fast_path_scored +0`. Root cause: supervisor `--m7-hot-blocks 20` + `--max-restarts 10` defaults caused bounded workers to clean-exit every ~30s and exhaust restart budget after ~4 min, leaving ~17 min of supervisor wallclock with no live hot lane. Landed this cycle (M7.E1.34e): (a) `scripts/start_nonstop_runtime.py` — `ManagedProcess.check_and_restart` now distinguishes clean cycle exits (rc==0 from bounded workers) from crashes (rc!=0); only crashes consume `--max-restarts` budget; new `cycles_completed`, `crash_restarts`, `max_crash_restarts_hit` counters and a per-process supervisor summary at shutdown; defaults bumped (`--m7-hot-blocks` 20→900, `--m7-cold-blocks` 300→900, `--max-restarts` 10→100); (b) `scripts/reviewer_soak_summary.py` — acceptance now also requires `fast_path_scored_delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED` (default 20, override with `ARBY_REVIEWER_QUIET_OK=1` for MARKET_QUIET_BLOCKED classification); new `--max-rollup-staleness-s` gate (default 120s) fails the run if the production rollup hasn't been refreshed near the supervisor end; (c) `m7/orderflow/hot_runtime_artifacts.py` — `invariant_violations.profit_guard_exceeds_route_viable` now carries `session_profit_guard_passed_delta` / `session_route_viable_delta` / `session_delta` / `is_session_regression`, so historical pollution from prior sessions does not mask whether the new code is correct; (d) every entry in `sim_failed_samples_recent` is tagged with `session_id` and `sample_updated_at` so reviewers can drop stale samples from previous sessions. Unit baseline: **4229 PASS / 6 skipped / 0 failed** (+7 new `test_m7_e1_34e_reviewer_fixes.py`; existing `test_reviewer_soak_summary` updated for the fast_path gate).
 **Updated**: 2026-04-21
 
-**Acceptance criterion**:
-`Δsim_passed > 0 AND ΔBlockOutOfRangeError == 0 AND Δroundtrip_attempted > 0 AND strict_provider_breaches_total == 0`
+**Acceptance criterion (tightened M7.E1.34e)**:
+`Δsim_passed > 0 AND Δroundtrip_attempted > 0 AND ΔBlockOutOfRangeError == 0
+AND strict_provider_breaches_total_delta == 0
+AND fast_path_scored_delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED (default 20,
+unless ARBY_REVIEWER_QUIET_OK=1)
+AND production rollup not stale (default 120s)`
 on both lanes — enforced by `scripts/reviewer_soak_summary.py` (exit 2 = FAIL).
-30-min STF validation soak 2026-04-21 result: **FAIL** (`strict_provider_breaches_total>0`).
+30-min STF validation soak 2026-04-21 17:58–18:28Z result: **FAIL**
+(`fast_path_scored_delta=0`, runtime workers expired early due to old defaults).
 
-**Next P0 blockers** (updated after STF validation soak):
-(a) provision premium RPC/WS credentials before next soak — strict policy
-will now hard-exit on public fallback rather than silently degrade;
-(b) diagnose `execution reverted: STF` root cause using the now-populated
-`sim_failed_samples_recent` calldata (`venue`, `router`, `token_in`,
-`token_out` no longer None); (c) canonical M4 truth path still
-`profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` — M7.B stays closed.
+**Next P0 blockers** (updated after corrected supervisor):
+(a) re-run 30-min Base soak with new defaults (`--m7-hot-blocks 900
+--m7-cold-blocks 900 --max-restarts 100`) and premium RPC/WS provisioned;
+(b) if corrected soak still has `fast_path_scored=0`, debug bridge coverage
+using `m7_cold_hot_bridge*.json` vs hot event token pairs;
+(c) only after corrected soak passes, escalate to `submit_ready`/M7.B
+discussion — canonical M4 truth path still
+`profit_realism_status=ROUNDTRIP_NOT_PROFITABLE`.
 
-**Previous (M7.E1.34c)** retained: Step 9 drift mitigation confirmed
-(`ΔBlockOutOfRangeError=0`); Anvil revert decode surface added; invariant
-violation surfaced but not yet enforced; counter-only strict policy landed.
+**Previous (M7.E1.34d)** retained: strict provider hard-fail, profit_guard
+invariant enforced at source, REVERT:unknown sub-buckets, sim_failed_samples
+canonical attrs, runbook `--hours 0.5`.
 
 **Previous (M7.E1.34b) note** retained: 1h reviewer soak 2026-04-21: 0 restarts; production 99 fast_scored / 21 guard_passed / 19 sim_attempted / 0 sim_passed; discovery 99 / 21 / 15 / 0; ΔVENUE_MISSING=0, ΔAMOUNT_ZERO=0 (Step 7 admission filter directionally validated); 100% fresh sim attempts failed with `BlockOutOfRangeError` from the static anvil fork. **Step 9**: `anvil_backend._resolve_anvil_block_tag()` clamps event-block > local-head to "latest"; `_eth_call_anvil` retries "latest" on `BlockOutOfRangeError`; new `refresh_anvil_fork_if_stale()` calls `anvil_reset` with a fresh `head-offset` target; `scripts/start_anvil_fork.py` runs a periodic refresher thread (ENV `ARBY_ANVIL_AUTO_REFRESH=1`, `ARBY_ANVIL_REFRESH_INTERVAL_S=60`, `ARBY_ANVIL_REFRESH_DRIFT_BLOCKS=120`) and cleans orphan `anvil.exe` on Windows via `taskkill` on exit. `scripts/analyze_roundtrip_profitability.py` now demotes cumulative verdicts to `HISTORICAL_PROFITABLE_CASE` unless run with `--session-only` or `--baseline`; `scripts/reviewer_soak_summary.py` compares a pre-soak baseline and prints ONLY fresh deltas (ASCII `delta=` for Windows compatibility).
 

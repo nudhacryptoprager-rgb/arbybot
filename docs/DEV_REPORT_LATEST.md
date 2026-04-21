@@ -2,173 +2,136 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-17T12:59:11Z
-run_id: reviewer 30-min STF validation soak 2026-04-21 (Base, anvil + dRPC)
-mode: ONLINE
+run_id: M7.E1.34e
+mode: OFFLINE
 artifact_mode: rolling
-config: Base, strict admission, Step 9 drift mitigation live
+config: Base, M7.E1.34d acceptance contracts retained
 code_identity:
   primary: ts:2026-04-17T12:59:11Z
-  dirty: true — M7.E1.34d reviewer-fix cycle
-  desc: REVERT:unknown sub-buckets, strict-provider hard-fail, profit_guard invariant enforced at source, sim_failed_samples canonical attrs
+  dirty: true — M7.E1.34e reviewer-fix cycle
+  desc: supervisor clean-vs-crash restart accounting, fast_path_scored gate, stale-rollup gate, session-delta invariant, sim_failed_samples session provenance
 
 ## 1) Scope
-goal: Implement reviewer fix batch from 2026-04-21 STF validation soak.
-Counter-only observability was insufficient; runtime must enforce declared
-policies (strict provider, profit_guard ≤ route_viable) and the sim
-histogram must distinguish REVERT:unknown shapes.
+goal: Land reviewer fix steps from 2026-04-21 17:58–18:28Z STF soak FAIL.
+Strict-provider regression delta is fixed (+0) and Anvil drift remains
+fixed (+0 BlockOutOfRangeError). Defect was operational: supervisor
+default --max-restarts=10 plus --m7-hot-blocks=20 exhausted budget
+after ~4 min, leaving ~17 min idle and +0 fast_path_scored /
++0 sim_passed / +0 roundtrip_attempted.
 
 change_summary:
-  - `m7/orderflow/sim_backends/rpc_fork_backend.py` — REVERT:unknown split
-    into `no_data` / `text:*` sub-buckets (raw_hex already caught by
-    Case 5). Fix #4 tightened.
-  - `m7/orderflow/mode_ws_live.py` — `ARBY_STRICT_PROVIDER_POLICY=1` now
-    (a) implies `ARBY_RPC_PREMIUM_ONLY=1`, (b) rejects public WS fallback
-    on 429, (c) hard-exits if primary WS resolves to `public_fallback`.
-    Fix #2.
-  - `m7/orderflow/profit_guard.py::annotate_profit_guard_results` —
-    enforces invariant at source: `route_viable=False` → guard rejected
-    with `guard_reject_reason="ROUTE_NOT_VIABLE"`. Fix #6.
-  - `m7/orderflow/execution_gate.py` — `sim_failed_samples` now populates
-    venue/router/token_in/token_out via canonical BackrunResult attrs
-    (`best_sell_venue`, `backrun_token_in_address`, …). Fix #3.
-  - `tests/unit/test_m7_e1_34d_reviewer_fixes.py` (NEW, 8 tests).
-  - `tests/unit/test_revert_decoder.py`, `tests/unit/test_rpc_fork_backend.py`,
-    `tests/unit/test_orderflow_artifacts.py` — assertions updated for the
-    new no_data bucket and the viability-gated guard path.
+- scripts/start_nonstop_runtime.py — ManagedProcess gains
+  cycles_completed, crash_restarts, max_crash_restarts_hit;
+  check_and_restart treats rc==0 as clean cycle exit (always relaunch,
+  never consume --max-restarts); rc!=0 consumes budget. Defaults
+  bumped: --m7-hot-blocks 20 -> 900, --m7-cold-blocks 300 -> 900,
+  --max-restarts 10 -> 100. Per-process supervisor summary at shutdown.
+- scripts/reviewer_soak_summary.py — new fast_path_scored gate
+  (delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED, default 20; opt-in
+  override via ARBY_REVIEWER_QUIET_OK=1); new
+  --max-rollup-staleness-s (default 120) fails when production
+  rollup did not refresh near supervisor end.
+- m7/orderflow/hot_runtime_artifacts.py —
+  invariant_violations.profit_guard_exceeds_route_viable now carries
+  session_profit_guard_passed_delta, session_route_viable_delta,
+  session_delta, is_session_regression. sim_failed_samples_recent
+  entries stamped with session_id and sample_updated_at.
+- tests: NEW tests/unit/test_m7_e1_34e_reviewer_fixes.py (7 tests);
+  tests/unit/test_reviewer_soak_summary.py PASS fixture updated.
 
-touched_files:
-  - m7/orderflow/sim_backends/rpc_fork_backend.py
-  - m7/orderflow/mode_ws_live.py
-  - m7/orderflow/profit_guard.py
-  - m7/orderflow/execution_gate.py
-  - tests/unit/test_m7_e1_34d_reviewer_fixes.py (NEW)
-  - tests/unit/test_revert_decoder.py
-  - tests/unit/test_rpc_fork_backend.py
-  - tests/unit/test_orderflow_artifacts.py
-  - docs/status/Status_M7.md
-  - docs/DEV_REPORT_LATEST.md
+scope_NOT_done: corrected 30m soak with new defaults (deferred per
+reviewer fix #10 — do not open M7.B before fresh submit_ready>0 and
+roundtrip_profitable_delta>0); bridge coverage debug.
 
 ## 2) Commands Executed
-pytest tests/unit: **PASS** 4222 / 0 failed / 6 skipped (133.33s)
-pytest target (`test_m7_e1_34d_reviewer_fixes` +
-  `test_revert_decoder` + `test_m7_e1_34c_reviewer_fixes`): **PASS** 33 / 0
-check_repo_safety.py: expected PASS after this overwrite
+- py -3.11 -m pytest tests/unit -q -> 4229 passed, 6 skipped, 0 failed (114.22s).
+- py -3.11 scripts/check_repo_safety.py -> PASS.
 
 ## 3) Artifacts
-canonical rolling: `_latest.json`, `run_summary_latest.json`,
-  `m4_stability_agg.json`, `m7_hot_rollup_latest.json`,
-  `m7_hot_rollup_latest_discovery.json`, `m7_orderflow_latest*.json`
-run_dir_bundle: `data/runs/ci_m5_gate_arbitrum_one_20260417_145636_478653/reports`
-reviewer ephemera: `reviewer_soak_baseline_latest{,_discovery}.json`,
-  `reviewer_soak_delta_latest.json`, `reviewer_soak_30m_stdout.log`
-new histogram sub-buckets: `REVERT:unknown:no_data`,
-  `REVERT:unknown:text:<trim>`.
+no new runtime artifacts produced this cycle (code + tests only).
+canonical run_dir reference (unchanged from rolling pointer):
+ci_m5_gate_arbitrum_one_20260417_145636_478653.
+canonical operational artifacts unchanged from M7.E1.34d soak end:
+- data/runs/_rolling/m7_hot_rollup_latest.json last_updated 2026-04-21T18:09:01Z (PROD)
+- data/runs/_rolling/m7_hot_rollup_latest_discovery.json last_updated 2026-04-21T18:10:23Z (DISC)
+- data/runs/_rolling/reviewer_soak_baseline_latest{,_discovery}.json
+- data/runs/_rolling/_latest.json, run_summary_latest.json, m4_stability_agg.json
 
-## 4) Key Results — Reviewer 30-min STF validation soak (2026-04-21)
-production: +58 windows / +3 fast_scored / +2 guard_passed /
-  +2 sim_attempted / **+2 sim_passed** / +0 BlockOutOfRangeError /
-  +15 strict_provider_breaches
-discovery:  +59 windows / +3 fast_scored / +3 guard_passed /
-  +3 sim_attempted / **+3 sim_passed** / +0 BlockOutOfRangeError /
-  +11 strict_provider_breaches
-verdict: **ACCEPTANCE FAIL** — strict provider breaches > 0 on both
-lanes; roundtrip_success=0; submit_ready=0. sim_passed > 0 for the first
-time, but runtime still routed windows through public_fallback.
-Counter-only policy insufficient → M7.E1.34d raises strict provider to
-hard-fail; next soak must run with premium RPC/WS configured.
+## 4) Key Results — 30m STF validation soak 2026-04-21 17:58–18:28Z (M7.E1.34d code)
+PRODUCTION lane:
+- last_updated 2026-04-21T18:09:01Z (~19 min before supervisor end)
+- delta sim_passed=+0, roundtrip_attempted=+0, fast_path_scored=+0
+- delta BlockOutOfRangeError=+0 (Step 9 confirmed)
+- delta strict_provider_breaches=+0 (M7.E1.34d hardening confirmed)
+- windows ~+6, events ~+15
 
-## 4.1) Theoretical Net Profit
-mode: paper_simulated; net_pnl_usdc: n/a (no profitable roundtrip).
-execution_enabled=false, kill_switch_active=true. No real trades.
+DISCOVERY lane:
+- last_updated 2026-04-21T18:10:23Z (~18 min before supervisor end)
+- delta sim_passed=+0, roundtrip_attempted=+0, fast_path_scored=+0
+- delta strict_provider_breaches=+0, BlockOutOfRangeError=+0
+- windows ~+5, events ~+13
 
-## 5) Contract Checks
-pytest tests/unit: **PASS** 4222 / 0
-status/reasons consistency: OK; rolling discipline: OK
-new invariants enforced:
-  - profit_guard requires route_viable (annotate path + scoring_parallel agree)
-  - strict provider policy is active, not observational
+Supervisor end: 2026-04-21T18:28:21Z. Both hot lanes idle for final ~17 min.
 
-## 6) Blocker Classification
-code_blocker: **LOW** — 4222 PASS (+8 new fix tests).
-data_collection_blocker: **HIGH** — premium RPC/WS required for next
-  soak; `ARBY_STRICT_PROVIDER_POLICY=1` will now hard-exit on fallback.
-market_window_blocker: **HIGH** — STF / toxic-pair reverts remain
-  dominant; canonical M4 still `ROUNDTRIP_NOT_PROFITABLE`.
+Reviewer summary verdict: FAIL (supervisor restart-budget exhaustion).
+M7.E1.34d code-side regressions confirmed not to recur.
 
-## 6.1) Risks
-- Strict policy now halts runtime on public fallback; if premium WS rate
-  limits during a soak the run will abort rather than silently degrade.
-  This is intentional, but reviewer must provision headroom.
-- REVERT:unknown:text bucket can still grow; treat as triage input.
+## 5) Theoretical Net Profit
+n/a (no new soak this cycle). M4 truth path unchanged:
+profit_realism_status=ROUNDTRIP_NOT_PROFITABLE.
 
-## 7) Execution Map
-step_01 venue fallback: DONE | step_02 block retry: DONE | step_05 quality
-gates: DONE | step_06 AMOUNT_ZERO autofill: DONE | step_07 admission
-filter: DONE | step_08 TOKEN_ADDRESS_UNKNOWN: NOT STARTED |
-step_09 anvil drift: VALIDATED | step_10 reviewer fix batch
-(#2/#4/#5/#7): DONE | **step_11 reviewer fix batch
-(#2-hard / #3 / #4-sub / #6 / #8): DONE** |
-step_12 next 30m soak with strict policy + populated samples: NEXT.
+## 6) Contract Checks
+- pytest: 4229 PASS, 6 skipped, 0 failed (+7 new in
+  test_m7_e1_34e_reviewer_fixes.py).
+- check_repo_safety: PASS.
 
-## 8) Requests to Lead
-request_1: Confirm premium RPC/WS credentials provisioned before next
-  30-min soak; strict policy will hard-exit on 429 fallback.
-request_2: Confirm acceptance contract for submit_ready (currently
-  excluded; `ARBY_PAPER_SIGNING=1` can be set to exercise the signing
-  path if desired).
-q_1: Should `REVERT:unknown:text` crossing a threshold escalate to a
-  dedicated histogram tag per top-N prefixes?
+## 7) Blocker Classification
+- code_blocker: LOW — supervisor + acceptance contracts reviewer-proof.
+- data_collection_blocker: HIGH — premium RPC/WS still required.
+- market_window_blocker: HIGH until corrected long-block soak runs.
 
----
+## 8) Risks
+- new defaults extend cycle wallclock; if a worker truly wedges, restart
+  cadence is slower (mitigated by per-process supervisor summary).
+- ARBY_REVIEWER_QUIET_OK=1 is operator-only; if accidentally exported
+  during a real soak it could mask a starved funnel.
+- session-delta invariant flags only intra-session regressions;
+  cumulative pollution surfaces but is explicitly tagged.
 
-## REVIEWER RUNBOOK — 30-min STF validation soak (M7.E1.34d)
+## 9) Execution Map
+- step_11 — supervisor restart-budget split + reviewer acceptance
+  hardened: DONE this cycle (M7.E1.34e).
+- step_12 — corrected 30m STF soak with new defaults: NEXT (cmd in §11).
+- step_13 — bridge coverage debug: NEXT after step_12 if
+  fast_path_scored_delta>=20 but sim_passed_delta==0.
 
-### Term A — anvil fork + refresher
-```powershell
-.\venv\Scripts\Activate.ps1
-$env:PATH = "$PWD\tools\foundry;$env:PATH"
-$env:ARBY_FORK_RPC_URL = "<dRPC base archive URL>"
-$env:ARBY_ANVIL_AUTO_REFRESH="1"; $env:ARBY_ANVIL_REFRESH_INTERVAL_S="60"; $env:ARBY_ANVIL_REFRESH_DRIFT_BLOCKS="120"
-py -3.11 scripts/start_anvil_fork.py --chain base --fork-block-offset 5
-```
+## 10) Requests to Lead
+- approve corrected 30m STF soak with long-block defaults from §11.
+- confirm ARBY_REVIEWER_QUIET_OK policy (opt-in only vs auto-set on
+  MARKET_QUIET_BLOCKED).
 
-### Term B — 30m soak with STF classification + strict provider
-```powershell
-$env:ARBY_SIM_BACKEND="anvil"; $env:ARBY_ANVIL_RPC_URL="http://127.0.0.1:8545"
-$env:ARBY_SIM_FALLBACK="rpc_fork"; $env:ARBY_HOT_REHYDRATE="1"
-$env:ARBY_SIM_ADMISSION_STRICT="1"; $env:ARBY_SIM_MIN_NET_BPS="1.0"
-$env:ARBY_SIM_BYPASS_GUARD="0"; $env:ARBY_ANVIL_CLAMP_BLOCK="1"
-$env:ARBY_STRICT_PROVIDER_POLICY="1"
-Copy-Item data/runs/_rolling/m7_hot_rollup_latest.json data/runs/_rolling/reviewer_soak_baseline_latest.json
-Copy-Item data/runs/_rolling/m7_hot_rollup_latest_discovery.json data/runs/_rolling/reviewer_soak_baseline_latest_discovery.json
-py -3.11 scripts/start_nonstop_runtime.py --chain base --hours 0.5 --with-discovery --no-m4
-```
+## 11) Reviewer Runbook
+RUNBOOK:
+  $Env:ARBY_STRICT_PROVIDER_POLICY = "1"
+  $Env:ARBY_RPC_PREMIUM_ONLY      = "1"
+  $Env:ARBY_REQUIRE_PREMIUM       = "1"
+  $Env:ARBY_REQUIRE_ARCHIVE       = "1"
+  $Env:ARBY_SIM_BACKEND           = "anvil"
+  $Env:ARBY_ANVIL_AUTO_REFRESH    = "1"
+  $Env:ARBY_ANVIL_CLAMP_BLOCK     = "1"
+  $Env:ARBY_SIM_ADMISSION_STRICT  = "1"
+  $Env:ARBY_SIM_MIN_NET_BPS       = "1.0"
+  $Env:ARBY_SIM_BYPASS_GUARD      = "0"
 
-### Post-soak acceptance
-```powershell
-py -3.11 scripts/reviewer_soak_summary.py --discovery   # exit 0=PASS / 2=FAIL
-py -3.11 -c "import json,pathlib; d=json.loads(pathlib.Path('data/runs/_rolling/m7_hot_rollup_latest.json').read_text()); [print(s['bucket'],s['pair'],s['venue']) for s in d.get('sim_failed_samples_recent',[])]"
-```
-**Acceptance:** `Δsim_passed>0` both lanes, `ΔBlockOutOfRangeError==0`,
-`Δroundtrip_attempted>0`, `strict_provider_breaches_total==0`.
+  py -3.11 scripts\reviewer_soak_summary.py --capture-baseline
+  py -3.11 scripts\start_nonstop_runtime.py --chain base --hours 0.5 --with-discovery --no-m4 --with-anvil --anvil-port 8545 --m7-hot-blocks 900 --m7-cold-blocks 900 --max-restarts 100
+  py -3.11 scripts\reviewer_soak_summary.py --max-rollup-staleness-s 120
 
----
+exit 0 = PASS, 2 = FAIL acceptance, 1 = missing artifacts.
 
-## Session Completion
-session_goal: Reviewer fix batch M7.E1.34d (#2 hard-fail, #3 samples,
-  #4 sub-buckets, #6 invariant at source, #8 runbook).
-goal_status: REACHED (code-level) — 4222 PASS. BLOCKED at field
-  validation until next 30m soak with premium RPC/WS provisioned.
-close_allowed: true
-remaining_blockers: premium provider provisioning; STF root-cause triage;
-  Step 8 TOKEN_ADDRESS_UNKNOWN; canonical M4 still NOT_PROFITABLE.
-evidence_session_run_dirs: data/runs/_rolling.
-primary_blocker_of_session: strict provider enforcement + invariant drift.
-blocker_status_before: ACTIVE — strict policy counted but did not halt;
-  profit_guard could pass with route_viable=False; sim_failed_samples
-  carried None venue/router/token_in/token_out.
-blocker_status_after: MITIGATED at runtime level — strict provider now
-  hard-fails; guard rejects non-viable routes at source; sim_failed
-  samples populated from canonical attrs; REVERT:unknown split into
-  no_data/text sub-buckets. Field validation pending next soak.
+## 12) Session Completion
+goal_status: BLOCKED
+primary_blocker_of_session: M7.E1.34d acceptance validation soak FAIL
+blocker_status_after: BLOCKED (corrected long-block soak required)
 docs_reread_confirmed: true
+next_session_entrypoint: corrected 30m STF soak with M7.E1.34e supervisor

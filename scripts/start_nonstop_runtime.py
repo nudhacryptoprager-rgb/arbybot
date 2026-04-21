@@ -43,8 +43,13 @@ def parse_args():
     ap.add_argument("--m4-prune-keep", type=int, default=50)
     ap.add_argument("--m7-hot-pause", type=int, default=1)
     ap.add_argument("--m7-cold-pause", type=int, default=5)
-    ap.add_argument("--m7-hot-blocks", type=int, default=20)
-    ap.add_argument("--m7-cold-blocks", type=int, default=300)
+    # M7.E1.34e: bumped default hot/cold blocks per reviewer ask after
+    # 30m STF soak (2026-04-21) where the previous default of 20 caused
+    # bounded workers to clean-exit every ~30s and exhaust restart budget
+    # before useful funnel activity occurred.
+    ap.add_argument("--m7-hot-blocks", type=int, default=900)
+    # M7.E1.34e: bumped from 300 to 900 in line with --m7-hot-blocks.
+    ap.add_argument("--m7-cold-blocks", type=int, default=900)
     ap.add_argument("--no-m4", action="store_true", help="Skip M4/M5 scan orchestrator")
     ap.add_argument("--no-m7-cold", action="store_true", help="Skip M7 cold lane")
     ap.add_argument("--chain", type=str, default="arbitrum_one",
@@ -60,7 +65,14 @@ def parse_args():
     ap.add_argument("--anvil-port", type=int, default=8545,
                     help="Local Anvil RPC port (default 8545)")
     ap.add_argument("--restart-delay", type=int, default=5, help="Seconds before restarting a crashed process")
-    ap.add_argument("--max-restarts", type=int, default=10, help="Max restarts per process before giving up")
+    ap.add_argument(
+        "--max-restarts", type=int, default=100,
+        help=(
+            "Max CRASH restarts per process before giving up. M7.E1.34e: "
+            "clean cycle exits (rc==0 from bounded workers) no longer "
+            "consume this budget; only non-zero exits do."
+        ),
+    )
     return ap.parse_args()
 
 
@@ -83,7 +95,13 @@ class ManagedProcess:
         # (os.environ). dict → merge over os.environ so callers only specify deltas.
         self.env = env
         self.proc: subprocess.Popen | None = None
-        self.restarts = 0
+        # M7.E1.34e: split restart accounting so bounded clean exits
+        # (rc==0 from --ws-blocks N completion) don't burn the crash
+        # budget that protects against actual failures.
+        self.restarts = 0          # legacy total (clean+crash) for back-compat logs
+        self.cycles_completed = 0  # rc==0 clean exits
+        self.crash_restarts = 0    # rc!=0 exits (consumed budget)
+        self.max_crash_restarts_hit = False
         self.started_at: float = 0
         self.stopped = False
 
@@ -107,21 +125,44 @@ class ManagedProcess:
         print(f"  [{self.name}] Started (PID {self.proc.pid}): {' '.join(self.cmd[:4])}...")
 
     def check_and_restart(self) -> bool:
-        """Check if process is alive. Restart if crashed. Return False if max restarts hit."""
+        """Check process health.
+
+        M7.E1.34e: distinguish clean cycle completion (rc==0 from bounded
+        --ws-blocks workers) from crashes (rc!=0). Only crashes consume
+        the --max-restarts budget; clean exits increment cycles_completed
+        and always relaunch unconditionally so the supervisor keeps
+        feeding the funnel until its own deadline.
+        """
         if self.stopped or self.proc is None:
             return True
         rc = self.proc.poll()
         if rc is None:
             return True  # still running
         uptime = time.monotonic() - self.started_at
+        is_clean = (rc == 0)
+        if is_clean:
+            self.cycles_completed += 1
+            self.restarts += 1
+            print(
+                f"  [{self.name}] Clean cycle exit rc=0 after {uptime:.0f}s "
+                f"(cycles_completed={self.cycles_completed}, "
+                f"crash_restarts={self.crash_restarts}/{self.max_restarts})"
+            )
+            time.sleep(self.restart_delay)
+            self.start()
+            return True
+        # Crash path — consumes budget.
         print(
-            f"  [{self.name}] Exited with code {rc} after {uptime:.0f}s "
-            f"(restarts: {self.restarts}/{self.max_restarts})"
+            f"  [{self.name}] CRASH exit rc={rc} after {uptime:.0f}s "
+            f"(cycles_completed={self.cycles_completed}, "
+            f"crash_restarts={self.crash_restarts}/{self.max_restarts})"
         )
-        if self.restarts >= self.max_restarts:
-            print(f"  [{self.name}] Max restarts reached, giving up")
+        if self.crash_restarts >= self.max_restarts:
+            print(f"  [{self.name}] Max CRASH restarts reached, giving up")
+            self.max_crash_restarts_hit = True
             self.stopped = True
             return False
+        self.crash_restarts += 1
         self.restarts += 1
         time.sleep(self.restart_delay)
         self.start()
@@ -350,6 +391,15 @@ def main():
         print(f"\n  Shutting down all processes...")
         for p in processes:
             p.terminate()
+        # M7.E1.34e: emit per-process supervisor summary so reviewer can
+        # see whether bounded workers ran continuously or hit max-crash.
+        print("  [supervisor] per-process summary:")
+        for p in processes:
+            print(
+                f"    - {p.name}: cycles_completed={p.cycles_completed} "
+                f"crash_restarts={p.crash_restarts}/{p.max_restarts} "
+                f"max_crash_restarts_hit={p.max_crash_restarts_hit}"
+            )
         print(
             f"  Supervisor finished at "
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"

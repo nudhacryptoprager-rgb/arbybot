@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROLL = Path("data/runs/_rolling")
@@ -152,11 +154,18 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
     #   roundtrip_attempted_delta > 0
     #   BlockOutOfRangeError_delta == 0
     #   strict_provider_breaches_delta == 0
+    #   fast_path_scored_delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED (default 20)
+    #     unless ARBY_REVIEWER_QUIET_OK=1 (operator-classified MARKET_QUIET_BLOCKED)
+    _quiet_ok = os.environ.get("ARBY_REVIEWER_QUIET_OK", "0").strip() == "1"
+    _min_fps = int(os.environ.get("ARBY_REVIEWER_MIN_FAST_PATH_SCORED", "20") or 20)
+    _fps_delta = deltas.get("fast_path_scored_total", 0)
+    _fps_ok = _quiet_ok or (_fps_delta >= _min_fps)
     ok = (
         (deltas["sim_passed_total"] > 0)
         and (deltas["roundtrip_attempted_total"] > 0)
         and (block_oor == 0)
         and (deltas["strict_provider_breaches_total"] == 0)
+        and _fps_ok
     )
     reasons = []
     if deltas["sim_passed_total"] <= 0:
@@ -168,6 +177,11 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
     if deltas["strict_provider_breaches_total"] > 0:
         reasons.append(
             f"STRICT_PROVIDER_BREACHES={deltas['strict_provider_breaches_total']}"
+        )
+    if not _fps_ok:
+        reasons.append(
+            f"FAST_PATH_SCORED_TOO_LOW={_fps_delta}<{_min_fps}"
+            " (set ARBY_REVIEWER_QUIET_OK=1 to classify as MARKET_QUIET_BLOCKED)"
         )
     reasons.append(f"pre_sim_skip_total={pre_sim_hits}")
     return ok, ",".join(reasons)
@@ -194,6 +208,13 @@ def main() -> int:
         default=ROLL / "reviewer_soak_baseline_latest_discovery.json",
         help="Discovery-lane baseline.",
     )
+    parser.add_argument(
+        "--max-rollup-staleness-s", type=int, default=120,
+        help=(
+            "Fail acceptance if current rollup last_updated is older than "
+            "now - this many seconds. Default 120s. Set 0 to disable."
+        ),
+    )
     args = parser.parse_args()
 
     base = _load(args.baseline)
@@ -207,6 +228,28 @@ def main() -> int:
         return 1
 
     prod_ok, prod_reason = summarise_lane("production", base, cur)
+
+    # M7.E1.34e fix #4: stale-rollup gate. If the supervisor terminated
+    # cleanly but the hot rollup wasn't refreshed in the final stretch,
+    # the funnel was effectively dead and the soak does not count.
+    stale_reasons: list[str] = []
+    if args.max_rollup_staleness_s > 0:
+        _now = datetime.now(timezone.utc)
+        for label, art in (("production", cur),):
+            _lu = art.get("last_updated") if isinstance(art, dict) else None
+            if isinstance(_lu, str):
+                try:
+                    _lu_dt = datetime.fromisoformat(_lu.replace("Z", "+00:00"))
+                    if _lu_dt.tzinfo is None:
+                        _lu_dt = _lu_dt.replace(tzinfo=timezone.utc)
+                    _age = (_now - _lu_dt).total_seconds()
+                    if _age > args.max_rollup_staleness_s:
+                        stale_reasons.append(
+                            f"STALE_ROLLUP[{label}] age={int(_age)}s"
+                            f">{args.max_rollup_staleness_s}s"
+                        )
+                except Exception:
+                    pass
 
     disc_ok = True
     disc_reason = "SKIPPED"
@@ -223,13 +266,17 @@ def main() -> int:
     if args.discovery:
         print(f"  discovery_lane_ok  = {disc_ok}  ({disc_reason})")
 
-    overall = prod_ok and disc_ok
+    overall = prod_ok and disc_ok and not stale_reasons
     print(f"\n  OVERALL_ACCEPTANCE : {'PASS' if overall else 'FAIL'}")
+    if stale_reasons:
+        print("  Stale rollup(s): " + "; ".join(stale_reasons))
     if not overall:
         print(
             "  Reason: session delta does not meet acceptance "
             "(sim_passed>0 AND roundtrip_attempted>0 AND "
-            "BlockOutOfRangeError_delta==0 AND strict_provider_breaches==0).",
+            "BlockOutOfRangeError_delta==0 AND strict_provider_breaches==0 "
+            "AND fast_path_scored_delta>=ARBY_REVIEWER_MIN_FAST_PATH_SCORED "
+            "AND rollup not stale).",
         )
     return 0 if overall else 2
 

@@ -1024,25 +1024,51 @@ def _update_hot_rollup(
         rollup.get("profit_guard_passed_total", 0)
         + sum(1 for r in _fast if getattr(r, "profit_guard_passed", False))
     )
-    # M7.E1.34c: invariant — profit_guard is gated on route_viable, so the
-    # cumulative counters must obey profit_guard_passed_total <= route_viable_total.
-    # Discovery lane 30m soak 2026-04-21 showed +3 guard vs +0 viable, i.e. a
-    # contract smell. Surface it here so reviewer / tests can catch regressions
-    # without silently corrupting the rollup.
+    # M7.E1.34c/M7.E1.34e: invariant — profit_guard is gated on route_viable,
+    # so the cumulative counters must obey
+    # profit_guard_passed_total <= route_viable_total. Discovery lane 30m soak
+    # 2026-04-21 showed +3 guard vs +0 viable, i.e. a contract smell.
+    # M7.E1.34e fix #6: report SESSION-delta invariant in addition to the
+    # cumulative one so historical pollution from prior sessions does not
+    # mask whether the new code is correct. The session baseline is
+    # captured the first time we observe this rollup under the current
+    # _SESSION_ID; subsequent updates compare against that baseline.
     _pgpt = int(rollup.get("profit_guard_passed_total", 0) or 0)
     _rvt = int(rollup.get("route_viable_total", 0) or 0)
-    if _pgpt > _rvt:
+    _sess = rollup.get("session") or {}
+    _sess_baseline = _sess.get("invariant_baseline")
+    if not isinstance(_sess_baseline, dict):
+        _sess_baseline = {
+            "profit_guard_passed_total": _pgpt,
+            "route_viable_total": _rvt,
+        }
+        _sess["invariant_baseline"] = _sess_baseline
+        rollup["session"] = _sess
+    _sess_pgpt_delta = _pgpt - int(_sess_baseline.get("profit_guard_passed_total", 0) or 0)
+    _sess_rvt_delta = _rvt - int(_sess_baseline.get("route_viable_total", 0) or 0)
+    if _pgpt > _rvt or _sess_pgpt_delta > _sess_rvt_delta:
         _inv = rollup.get("invariant_violations") or {}
         _inv["profit_guard_exceeds_route_viable"] = {
             "profit_guard_passed_total": _pgpt,
             "route_viable_total": _rvt,
             "delta": _pgpt - _rvt,
+            "session_profit_guard_passed_delta": _sess_pgpt_delta,
+            "session_route_viable_delta": _sess_rvt_delta,
+            "session_delta": _sess_pgpt_delta - _sess_rvt_delta,
+            "is_session_regression": _sess_pgpt_delta > _sess_rvt_delta,
         }
         rollup["invariant_violations"] = _inv
-        logger.warning(
-            "invariant violation: profit_guard_passed_total=%d > route_viable_total=%d",
-            _pgpt, _rvt,
-        )
+        if _sess_pgpt_delta > _sess_rvt_delta:
+            logger.warning(
+                "invariant SESSION regression: profit_guard_passed +%d > route_viable +%d",
+                _sess_pgpt_delta, _sess_rvt_delta,
+            )
+        else:
+            logger.warning(
+                "invariant cumulative-only: profit_guard_passed_total=%d > route_viable_total=%d "
+                "(session deltas in line: +%d vs +%d)",
+                _pgpt, _rvt, _sess_pgpt_delta, _sess_rvt_delta,
+            )
     _guard_hist = rollup.get("guard_reject_reason_histogram") or {}
     for r in _fast:
         _guard_reason = getattr(r, "guard_reject_reason", None)
@@ -1110,8 +1136,17 @@ def _update_hot_rollup(
         # M7.E1.34c: Terminal-stage failed-sim samples (bounded ring of 50) so
         # reviewer can see token/venue/amount behind each histogram bucket
         # (answers fix step #5 from 30m control soak).
+        # M7.E1.34e fix #7: tag every sample with session_id +
+        # sample_updated_at so reviewers can drop stale samples from
+        # previous sessions when judging a fresh soak.
         _failed_samples = getattr(gate_result, "sim_failed_samples", [])
         if _failed_samples:
+            _sid_now = getattr(_rio, "_SESSION_ID", None)
+            _now_iso = ts
+            for _s in _failed_samples:
+                if isinstance(_s, dict):
+                    _s.setdefault("session_id", _sid_now)
+                    _s["sample_updated_at"] = _now_iso
             _existing_f = rollup.get("sim_failed_samples_recent", [])
             rollup["sim_failed_samples_recent"] = (_existing_f + _failed_samples)[-50:]
             rollup["sim_failed_samples_total"] = (
