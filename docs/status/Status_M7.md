@@ -1,21 +1,24 @@
 ﻿# Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.34c — Step 9 Anvil drift partially validated, acceptance NOT REACHED.** Reviewer 30-min control soak 2026-04-21: Step 9 drift mitigation confirmed live (`ΔBlockOutOfRangeError=0` on both lanes), but `Δsim_passed=0` on both lanes (prod +1 sim_attempted / +0 passed; disc +3 / +0). Active blocker moved from Anvil fork drift to `eth_call: execution reverted: STF`-class reverts and terminal-stage calldata viability (toxic/illiquid pair candidates: KellyClaude/USDC, RNBW/USDC, 0xa538…/USDC). M7.B remains closed. Landed this cycle: (a) `anvil_backend._eth_call` revert strings now routed through `_decode_revert_reason` so `STF`, `SLIPPAGE`, `INSUFFICIENT_ALLOWANCE`, etc. get dedicated histogram buckets instead of collapsing to generic `execution reverted`; (b) `execution_gate.ExecutionGateResult.sim_failed_samples` + `hot_runtime_artifacts` now persist a bounded ring (50) of terminal-stage failed-sim samples with `pair/venue/router/token_in/token_out/amount_in_wei/bucket`, propagated to `sim_failed_samples_recent` / `sim_failed_samples_total` in each rollup; (c) rollup invariant `profit_guard_passed_total ≤ route_viable_total` surfaces `invariant_violations.profit_guard_exceeds_route_viable` when breached (discovery lane 30m soak showed +3 guard vs +0 viable — contract smell reviewer flagged); (d) new `ARBY_STRICT_PROVIDER_POLICY=1` ENV counts windows served by `public_fallback` into `strict_provider_breaches_total` per fix step #7. Unit baseline: **4216 PASS / 17 skipped / 0 failed** (+8 new `test_m7_e1_34c_reviewer_fixes.py`; `test_anvil_backend::test_eth_call_revert` updated to match decoded `REVERT:*` format).
+**Status**: **M7.E1.34d — strict provider policy hardened + profit_guard invariant enforced at source; acceptance NOT REACHED pending premium-provider soak.** Reviewer 30-min STF validation soak 2026-04-21 hit `sim_passed>0` for the first time (PROD +2, DISC +3) and `ΔBlockOutOfRangeError=0` on both lanes, but `strict_provider_breaches_total` accumulated (+15 PROD / +11 DISC) because the runtime continued to route windows through `public_fallback` despite `ARBY_STRICT_PROVIDER_POLICY=1`, and `roundtrip_success=0` / `submit_ready=0`. Reviewer explicitly required the strict policy to hard-fail rather than silently count. Landed this cycle (M7.E1.34d): (a) `mode_ws_live.py` — strict policy now implies `ARBY_RPC_PREMIUM_ONLY=1`, rejects public WS fallback on 429, and hard-exits if primary WS resolves to `public_fallback`; (b) `profit_guard.annotate_profit_guard_results` enforces the invariant at source — `route_viable=False` candidates are rejected with `guard_reject_reason="ROUTE_NOT_VIABLE"` before any guard math runs (discovery +3 guard vs +0 viable now impossible to reproduce); (c) `rpc_fork_backend._decode_revert_reason` splits the fallback into `REVERT:unknown:no_data` and `REVERT:unknown:text:<trim>` sub-buckets (hex payloads already caught by Case 5); (d) `execution_gate.ExecutionGateResult.sim_failed_samples` now populates `venue/router/token_in/token_out` from canonical BackrunResult attributes (`best_sell_venue`, `backrun_token_in_address`, …); (e) DEV_REPORT runbook corrected to `--hours 0.5` (script does not accept `--minutes 30`). Unit baseline: **4222 PASS / 6 skipped / 0 failed** (+8 new `test_m7_e1_34d_reviewer_fixes.py`; `test_rpc_fork_backend::test_bare_revert` and `test_orderflow_artifacts::test_profit_guard_on_backrun_result_object` updated for the new contracts).
 **Updated**: 2026-04-21
 
-**Acceptance criterion (unchanged from M7.E1.34b)**:
-`Δsim_passed > 0 AND ΔBlockOutOfRangeError == 0 AND Δroundtrip_attempted > 0`
+**Acceptance criterion**:
+`Δsim_passed > 0 AND ΔBlockOutOfRangeError == 0 AND Δroundtrip_attempted > 0 AND strict_provider_breaches_total == 0`
 on both lanes — enforced by `scripts/reviewer_soak_summary.py` (exit 2 = FAIL).
-30-min control soak 2026-04-21 result: **FAIL** (`sim_passed_delta=0`).
+30-min STF validation soak 2026-04-21 result: **FAIL** (`strict_provider_breaches_total>0`).
 
-**Next P0 blockers** (updated after 30m soak):
-(a) diagnose `execution reverted: STF` root cause using new
-`sim_failed_samples_recent` — inspect calldata per `REVERT:STF` bucket;
-(b) filter or deprioritise toxic/illiquid pair candidates
-(KellyClaude/USDC, RNBW/USDC, 0xa538…/USDC);
-(c) after STF mitigation, re-run 30-min soak; only then escalate to 2h soak
-per DEV_REPORT runbook; (d) canonical M4 truth path still
+**Next P0 blockers** (updated after STF validation soak):
+(a) provision premium RPC/WS credentials before next soak — strict policy
+will now hard-exit on public fallback rather than silently degrade;
+(b) diagnose `execution reverted: STF` root cause using the now-populated
+`sim_failed_samples_recent` calldata (`venue`, `router`, `token_in`,
+`token_out` no longer None); (c) canonical M4 truth path still
 `profit_realism_status=ROUNDTRIP_NOT_PROFITABLE` — M7.B stays closed.
+
+**Previous (M7.E1.34c)** retained: Step 9 drift mitigation confirmed
+(`ΔBlockOutOfRangeError=0`); Anvil revert decode surface added; invariant
+violation surfaced but not yet enforced; counter-only strict policy landed.
 
 **Previous (M7.E1.34b) note** retained: 1h reviewer soak 2026-04-21: 0 restarts; production 99 fast_scored / 21 guard_passed / 19 sim_attempted / 0 sim_passed; discovery 99 / 21 / 15 / 0; ΔVENUE_MISSING=0, ΔAMOUNT_ZERO=0 (Step 7 admission filter directionally validated); 100% fresh sim attempts failed with `BlockOutOfRangeError` from the static anvil fork. **Step 9**: `anvil_backend._resolve_anvil_block_tag()` clamps event-block > local-head to "latest"; `_eth_call_anvil` retries "latest" on `BlockOutOfRangeError`; new `refresh_anvil_fork_if_stale()` calls `anvil_reset` with a fresh `head-offset` target; `scripts/start_anvil_fork.py` runs a periodic refresher thread (ENV `ARBY_ANVIL_AUTO_REFRESH=1`, `ARBY_ANVIL_REFRESH_INTERVAL_S=60`, `ARBY_ANVIL_REFRESH_DRIFT_BLOCKS=120`) and cleans orphan `anvil.exe` on Windows via `taskkill` on exit. `scripts/analyze_roundtrip_profitability.py` now demotes cumulative verdicts to `HISTORICAL_PROFITABLE_CASE` unless run with `--session-only` or `--baseline`; `scripts/reviewer_soak_summary.py` compares a pre-soak baseline and prints ONLY fresh deltas (ASCII `delta=` for Windows compatibility).
 

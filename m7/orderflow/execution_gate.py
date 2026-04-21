@@ -1074,14 +1074,35 @@ def run_execution_gate(
             # gap flagged in 30m soak 2026-04-21).
             if len(gate.sim_failed_samples) < 50:
                 _pair_fs = getattr(r, "actual_pair", None)
-                _venue_fs = getattr(r, "actual_venue", None) or getattr(r, "venue", None)
+                # M7.E1.34d: use canonical BackrunResult attribute names so
+                # venue/router/token_in/token_out are no longer None in the
+                # rollup ring. Reviewer 30m STF soak 2026-04-21 flagged them
+                # as None → root-cause diagnosis impossible.
+                _venue_fs = (
+                    getattr(r, "best_sell_venue", None)
+                    or getattr(r, "best_buy_venue", None)
+                    or getattr(r, "actual_venue", None)
+                )
+                _token_in = (
+                    getattr(r, "backrun_token_in_address", None)
+                    or getattr(r, "token_in", None)
+                )
+                _token_out = (
+                    getattr(r, "backrun_token_out_address", None)
+                    or getattr(r, "token_out", None)
+                )
+                _router = (
+                    getattr(r, "router_address", None)
+                    or getattr(r, "sim_router_address", None)
+                )
                 gate.sim_failed_samples.append({
                     "pair": _pair_fs,
                     "venue": _venue_fs,
-                    "token_in": getattr(r, "token_in", None),
-                    "token_out": getattr(r, "token_out", None),
-                    "router": getattr(r, "router_address", None),
+                    "token_in": _token_in,
+                    "token_out": _token_out,
+                    "router": _router,
                     "amount_in_wei": getattr(r, "amount_in_wei", 0) or 0,
+                    "backrun_direction": getattr(r, "backrun_direction", None),
                     "sim_error": (sim_result.error or "")[:200],
                     "revert_reason": (sim_result.revert_reason or "")[:200],
                     "bucket": (_sim_err or "unknown")[:120],

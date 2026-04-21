@@ -1977,6 +1977,7 @@ class TestM7A533ProfitGuardFieldFix:
             gross_pnl_wei=10**16,  # sell = input + 10**16
             size_valid_for_token=True,
             quote_pipeline_latency_ms=50.0,
+            route_viable=True,  # M7.E1.34d: invariant — guard requires viable route
         )
         passed = _run_profit_guard_on_results([r])
         assert len(passed) == 1

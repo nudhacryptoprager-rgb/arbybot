@@ -107,12 +107,19 @@ class TestEmbeddedHex:
 
 class TestFallback:
     def test_bare_execution_reverted_unknown(self):
-        # P0 (2026-04-20): bare "execution reverted" now surfaces as
-        # REVERT:unknown:<fingerprint> so the histogram retains the raw
-        # error snippet for diagnostics.
+        # P0 (2026-04-20) / M7.E1.34d: bare "execution reverted" now surfaces
+        # as "REVERT:unknown:no_data" so the histogram distinguishes
+        # payload-less reverts from hex payloads and text reasons.
         result = _decode_revert_reason("execution reverted")
-        assert result.startswith("REVERT:unknown")
-        assert "execution reverted" in result
+        assert result == "REVERT:unknown:no_data"
+
+    def test_unknown_text_reason_classified(self):
+        # Human-readable revert we have no pattern for should land in the
+        # "text" sub-bucket, not collapse into the generic fallback.
+        result = _decode_revert_reason("execution reverted: SomeNovelRouterError")
+        assert result.startswith("REVERT:")
+        # Must NOT be the no_data bucket.
+        assert result != "REVERT:unknown:no_data"
 
     def test_empty_returns_unknown(self):
         assert _decode_revert_reason("") == "REVERT:unknown"

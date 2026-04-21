@@ -18,7 +18,7 @@ Usage:
 Exit codes:
     0 — delta computed, acceptance passed
     1 — baseline missing / unreadable
-    2 — delta computed, acceptance FAILED (sim_passed==0 OR BlockOutOfRange>0)
+    2 — delta computed, acceptance FAILED
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ TRACKED_SCALARS = [
     "profit_guard_passed_total",
     "events_seen_total",
     "windows_seen",
+    "strict_provider_breaches_total",
 ]
 
 HISTOGRAM_BUCKETS_OF_INTEREST = [
@@ -147,13 +148,27 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
     )
 
     # Reviewer acceptance:
-    #   sim_passed_delta > 0  AND  BlockOutOfRangeError_delta == 0
-    ok = (deltas["sim_passed_total"] > 0) and (block_oor == 0)
+    #   sim_passed_delta > 0
+    #   roundtrip_attempted_delta > 0
+    #   BlockOutOfRangeError_delta == 0
+    #   strict_provider_breaches_delta == 0
+    ok = (
+        (deltas["sim_passed_total"] > 0)
+        and (deltas["roundtrip_attempted_total"] > 0)
+        and (block_oor == 0)
+        and (deltas["strict_provider_breaches_total"] == 0)
+    )
     reasons = []
     if deltas["sim_passed_total"] <= 0:
         reasons.append("NO_FRESH_SIM_PASSED")
+    if deltas["roundtrip_attempted_total"] <= 0:
+        reasons.append("NO_FRESH_ROUNDTRIP_ATTEMPTED")
     if block_oor > 0:
         reasons.append(f"BLOCK_OUT_OF_RANGE_ERRORS={block_oor}")
+    if deltas["strict_provider_breaches_total"] > 0:
+        reasons.append(
+            f"STRICT_PROVIDER_BREACHES={deltas['strict_provider_breaches_total']}"
+        )
     reasons.append(f"pre_sim_skip_total={pre_sim_hits}")
     return ok, ",".join(reasons)
 
@@ -213,7 +228,8 @@ def main() -> int:
     if not overall:
         print(
             "  Reason: session delta does not meet acceptance "
-            "(sim_passed>0 AND BlockOutOfRangeError_delta==0).",
+            "(sim_passed>0 AND roundtrip_attempted>0 AND "
+            "BlockOutOfRangeError_delta==0 AND strict_provider_breaches==0).",
         )
     return 0 if overall else 2
 

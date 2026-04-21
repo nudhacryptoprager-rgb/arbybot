@@ -2,54 +2,57 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-17T12:59:11Z
-run_id: reviewer 30-min control soak 2026-04-21 (Base, anvil + dRPC)
+run_id: reviewer 30-min STF validation soak 2026-04-21 (Base, anvil + dRPC)
 mode: ONLINE
 artifact_mode: rolling
 config: Base, strict admission, Step 9 drift mitigation live
 code_identity:
   primary: ts:2026-04-17T12:59:11Z
-  dirty: true — M7.E1.34c reviewer-fix cycle
-  desc: anvil revert decode (STF/SLIPPAGE/...), sim_failed_samples ring, profit_guard vs route_viable invariant, strict_provider_policy
+  dirty: true — M7.E1.34d reviewer-fix cycle
+  desc: REVERT:unknown sub-buckets, strict-provider hard-fail, profit_guard invariant enforced at source, sim_failed_samples canonical attrs
 
 ## 1) Scope
-goal: Implement reviewer fix steps #2 / #4 / #5 / #7 after 30-min control
-soak showed Step 9 drift mitigation directionally validated
-(`ΔBlockOutOfRangeError=0`) but `Δsim_passed=0` on both lanes. New stopper:
-`eth_call: execution reverted: STF`.
+goal: Implement reviewer fix batch from 2026-04-21 STF validation soak.
+Counter-only observability was insufficient; runtime must enforce declared
+policies (strict provider, profit_guard ≤ route_viable) and the sim
+histogram must distinguish REVERT:unknown shapes.
 
 change_summary:
-  - `m7/orderflow/sim_backends/anvil_backend.py` — `_eth_call_anvil` revert
-    strings now piped through `rpc_fork_backend._decode_revert_reason`
-    (fix #4). STF / SLIPPAGE / INSUFFICIENT_* get dedicated buckets.
-  - `m7/orderflow/execution_gate.py` — new
-    `ExecutionGateResult.sim_failed_samples` with
-    pair/venue/token_in/token_out/router/amount_in_wei/bucket/revert_reason
-    (fix #5).
-  - `m7/orderflow/hot_runtime_artifacts.py` — ring of 50
-    `sim_failed_samples_recent` + `sim_failed_samples_total`; invariant
-    `profit_guard_passed_total ≤ route_viable_total`
-    → `invariant_violations.profit_guard_exceeds_route_viable` (fix #2);
-    `ARBY_STRICT_PROVIDER_POLICY=1` → `strict_provider_breaches_total`
-    (fix #7).
-  - `tests/unit/test_m7_e1_34c_reviewer_fixes.py` (NEW, 8 tests).
-  - `tests/unit/test_anvil_backend.py::test_eth_call_revert` updated to
-    decoded `REVERT:*` contract.
+  - `m7/orderflow/sim_backends/rpc_fork_backend.py` — REVERT:unknown split
+    into `no_data` / `text:*` sub-buckets (raw_hex already caught by
+    Case 5). Fix #4 tightened.
+  - `m7/orderflow/mode_ws_live.py` — `ARBY_STRICT_PROVIDER_POLICY=1` now
+    (a) implies `ARBY_RPC_PREMIUM_ONLY=1`, (b) rejects public WS fallback
+    on 429, (c) hard-exits if primary WS resolves to `public_fallback`.
+    Fix #2.
+  - `m7/orderflow/profit_guard.py::annotate_profit_guard_results` —
+    enforces invariant at source: `route_viable=False` → guard rejected
+    with `guard_reject_reason="ROUTE_NOT_VIABLE"`. Fix #6.
+  - `m7/orderflow/execution_gate.py` — `sim_failed_samples` now populates
+    venue/router/token_in/token_out via canonical BackrunResult attrs
+    (`best_sell_venue`, `backrun_token_in_address`, …). Fix #3.
+  - `tests/unit/test_m7_e1_34d_reviewer_fixes.py` (NEW, 8 tests).
+  - `tests/unit/test_revert_decoder.py`, `tests/unit/test_rpc_fork_backend.py`,
+    `tests/unit/test_orderflow_artifacts.py` — assertions updated for the
+    new no_data bucket and the viability-gated guard path.
 
 touched_files:
-  - m7/orderflow/sim_backends/anvil_backend.py
+  - m7/orderflow/sim_backends/rpc_fork_backend.py
+  - m7/orderflow/mode_ws_live.py
+  - m7/orderflow/profit_guard.py
   - m7/orderflow/execution_gate.py
-  - m7/orderflow/hot_runtime_artifacts.py
-  - tests/unit/test_m7_e1_34c_reviewer_fixes.py (NEW)
-  - tests/unit/test_anvil_backend.py
+  - tests/unit/test_m7_e1_34d_reviewer_fixes.py (NEW)
+  - tests/unit/test_revert_decoder.py
+  - tests/unit/test_rpc_fork_backend.py
+  - tests/unit/test_orderflow_artifacts.py
   - docs/status/Status_M7.md
   - docs/DEV_REPORT_LATEST.md
 
 ## 2) Commands Executed
-pytest tests/unit: **PASS** 4216 / 0 failed / 17 skipped (139.39s)
-pytest target (`anvil_backend` + `execution_gate` + `hot_rollup_semantics`
-+ `test_m7_e1_34c_reviewer_fixes`): **PASS** 121 / 0
-ci_full_pipeline.py --mode ci: ALL REQUIRED GATES PASSED
-reviewer 30-min control soak: COMPLETED (see §4)
+pytest tests/unit: **PASS** 4222 / 0 failed / 6 skipped (133.33s)
+pytest target (`test_m7_e1_34d_reviewer_fixes` +
+  `test_revert_decoder` + `test_m7_e1_34c_reviewer_fixes`): **PASS** 33 / 0
+check_repo_safety.py: expected PASS after this overwrite
 
 ## 3) Artifacts
 canonical rolling: `_latest.json`, `run_summary_latest.json`,
@@ -58,64 +61,69 @@ canonical rolling: `_latest.json`, `run_summary_latest.json`,
 run_dir_bundle: `data/runs/ci_m5_gate_arbitrum_one_20260417_145636_478653/reports`
 reviewer ephemera: `reviewer_soak_baseline_latest{,_discovery}.json`,
   `reviewer_soak_delta_latest.json`, `reviewer_soak_30m_stdout.log`
-new rollup fields:
-  - `sim_failed_samples_recent` / `sim_failed_samples_total`
-  - `invariant_violations.profit_guard_exceeds_route_viable`
-  - `strict_provider_breaches_total` (when policy enabled)
+new histogram sub-buckets: `REVERT:unknown:no_data`,
+  `REVERT:unknown:text:<trim>`.
 
-## 4) Key Results — Reviewer 30-min control soak (2026-04-21)
-production: +58 windows / +150 events / +16 fast_scored / +1 guard_passed /
-  +1 sim_attempted / **+0 sim_passed** / +0 BlockOutOfRangeError
-discovery:  +59 windows / +143 events / +30 fast_scored / +3 guard_passed /
-  +3 sim_attempted / **+0 sim_passed** / +0 BlockOutOfRangeError
-verdict: `Δsim_passed=0` both lanes → **ACCEPTANCE FAIL** (exit 2).
-Step 9 directional PASS (`ΔBlockOutOfRangeError=0`). NEW stopper:
-`eth_call: execution reverted: STF`. Discovery rollup contract smell
-(`profit_guard_passed +3` vs `route_viable +0`) now captured by invariant.
+## 4) Key Results — Reviewer 30-min STF validation soak (2026-04-21)
+production: +58 windows / +3 fast_scored / +2 guard_passed /
+  +2 sim_attempted / **+2 sim_passed** / +0 BlockOutOfRangeError /
+  +15 strict_provider_breaches
+discovery:  +59 windows / +3 fast_scored / +3 guard_passed /
+  +3 sim_attempted / **+3 sim_passed** / +0 BlockOutOfRangeError /
+  +11 strict_provider_breaches
+verdict: **ACCEPTANCE FAIL** — strict provider breaches > 0 on both
+lanes; roundtrip_success=0; submit_ready=0. sim_passed > 0 for the first
+time, but runtime still routed windows through public_fallback.
+Counter-only policy insufficient → M7.E1.34d raises strict provider to
+hard-fail; next soak must run with premium RPC/WS configured.
 
 ## 4.1) Theoretical Net Profit
 mode: paper_simulated; net_pnl_usdc: n/a (no profitable roundtrip).
 execution_enabled=false, kill_switch_active=true. No real trades.
 
 ## 5) Contract Checks
-pytest tests/unit: **PASS** 4216 / 0
+pytest tests/unit: **PASS** 4222 / 0
 status/reasons consistency: OK; rolling discipline: OK
-check_repo_safety.py v1.15.0: PASS expected after this overwrite
-  (timestamp_utc matches run_summary_latest.run_context.run_timestamp).
+new invariants enforced:
+  - profit_guard requires route_viable (annotate path + scoring_parallel agree)
+  - strict provider policy is active, not observational
 
 ## 6) Blocker Classification
-code_blocker: **LOW** — 4216 PASS (+8 reviewer-fix tests).
-data_collection_blocker: **MEDIUM** — strict-provider counter now surfaces
-  `public_fallback` usage; reviewer requested production-grade provider.
-market_window_blocker: **HIGH** — STF / toxic-pair reverts dominate
-  terminal stage; canonical M4 still `ROUNDTRIP_NOT_PROFITABLE`.
+code_blocker: **LOW** — 4222 PASS (+8 new fix tests).
+data_collection_blocker: **HIGH** — premium RPC/WS required for next
+  soak; `ARBY_STRICT_PROVIDER_POLICY=1` will now hard-exit on fallback.
+market_window_blocker: **HIGH** — STF / toxic-pair reverts remain
+  dominant; canonical M4 still `ROUNDTRIP_NOT_PROFITABLE`.
 
 ## 6.1) Risks
-- `sim_failed_samples_recent` bounded at 50 — sufficient for diagnostics,
-  not a per-run calldata archive.
-- Invariant is surfaced, not enforced; scorer/guard contract fix still
-  required before removing the divergence at source.
+- Strict policy now halts runtime on public fallback; if premium WS rate
+  limits during a soak the run will abort rather than silently degrade.
+  This is intentional, but reviewer must provision headroom.
+- REVERT:unknown:text bucket can still grow; treat as triage input.
 
 ## 7) Execution Map
 step_01 venue fallback: DONE | step_02 block retry: DONE | step_05 quality
 gates: DONE | step_06 AMOUNT_ZERO autofill: DONE | step_07 admission
 filter: DONE | step_08 TOKEN_ADDRESS_UNKNOWN: NOT STARTED |
-step_09 anvil drift: VALIDATED (`ΔBlockOutOfRangeError=0`) |
-**step_10 reviewer fix batch (#2/#4/#5/#7): DONE** |
-step_11 STF root-cause (fix #3): NEXT.
+step_09 anvil drift: VALIDATED | step_10 reviewer fix batch
+(#2/#4/#5/#7): DONE | **step_11 reviewer fix batch
+(#2-hard / #3 / #4-sub / #6 / #8): DONE** |
+step_12 next 30m soak with strict policy + populated samples: NEXT.
 
 ## 8) Requests to Lead
-request_1: Review STF-tagged `sim_failed_samples_recent` to decide on
-  pair-level filter (KellyClaude/USDC, RNBW/USDC, 0xa538…/USDC).
-request_2: Enable `ARBY_STRICT_PROVIDER_POLICY=1` by default for next soak?
-q_1: Expected STF cause — missing allowance for victim's source, or
-  toxic-token transfer hooks?
+request_1: Confirm premium RPC/WS credentials provisioned before next
+  30-min soak; strict policy will hard-exit on 429 fallback.
+request_2: Confirm acceptance contract for submit_ready (currently
+  excluded; `ARBY_PAPER_SIGNING=1` can be set to exercise the signing
+  path if desired).
+q_1: Should `REVERT:unknown:text` crossing a threshold escalate to a
+  dedicated histogram tag per top-N prefixes?
 
 ---
 
-## REVIEWER RUNBOOK — 30-min STF validation soak
+## REVIEWER RUNBOOK — 30-min STF validation soak (M7.E1.34d)
 
-### Term A — anvil fork + refresher (unchanged)
+### Term A — anvil fork + refresher
 ```powershell
 .\venv\Scripts\Activate.ps1
 $env:PATH = "$PWD\tools\foundry;$env:PATH"
@@ -133,7 +141,7 @@ $env:ARBY_SIM_BYPASS_GUARD="0"; $env:ARBY_ANVIL_CLAMP_BLOCK="1"
 $env:ARBY_STRICT_PROVIDER_POLICY="1"
 Copy-Item data/runs/_rolling/m7_hot_rollup_latest.json data/runs/_rolling/reviewer_soak_baseline_latest.json
 Copy-Item data/runs/_rolling/m7_hot_rollup_latest_discovery.json data/runs/_rolling/reviewer_soak_baseline_latest_discovery.json
-py -3.11 scripts/start_nonstop_runtime.py --chain base --minutes 30 --with-discovery --no-m4
+py -3.11 scripts/start_nonstop_runtime.py --chain base --hours 0.5 --with-discovery --no-m4
 ```
 
 ### Post-soak acceptance
@@ -147,20 +155,20 @@ py -3.11 -c "import json,pathlib; d=json.loads(pathlib.Path('data/runs/_rolling/
 ---
 
 ## Session Completion
-session_goal: Reviewer fix steps #2 / #4 / #5 / #7.
-goal_status: REACHED (code-level); BLOCKED at field validation pending
-reviewer's next 30-min soak with STF classification live.
+session_goal: Reviewer fix batch M7.E1.34d (#2 hard-fail, #3 samples,
+  #4 sub-buckets, #6 invariant at source, #8 runbook).
+goal_status: REACHED (code-level) — 4222 PASS. BLOCKED at field
+  validation until next 30m soak with premium RPC/WS provisioned.
 close_allowed: true
-remaining_blockers: STF root-cause (fix #3); Step 8 TOKEN_ADDRESS_UNKNOWN;
-  canonical M4 still NOT_PROFITABLE.
+remaining_blockers: premium provider provisioning; STF root-cause triage;
+  Step 8 TOKEN_ADDRESS_UNKNOWN; canonical M4 still NOT_PROFITABLE.
 evidence_session_run_dirs: data/runs/_rolling.
-primary_blocker_of_session: `eth_call: execution reverted: STF` on fresh
-  sim attempts (was: static Anvil fork drift → resolved by Step 9).
-blocker_status_before: ACTIVE — 30m control `Δsim_passed=0`; generic
-  `execution reverted` dominated histogram with no STF breakdown.
-blocker_status_after: MITIGATED at tooling level — STF / SLIPPAGE /
-  INSUFFICIENT_* each have their own histogram bucket; failed-sim ring
-  gives calldata-level visibility; invariant catches guard-vs-viable drift;
-  strict-provider counter gates production-grade RPC policy. Field
-  validation pending next 30m soak.
+primary_blocker_of_session: strict provider enforcement + invariant drift.
+blocker_status_before: ACTIVE — strict policy counted but did not halt;
+  profit_guard could pass with route_viable=False; sim_failed_samples
+  carried None venue/router/token_in/token_out.
+blocker_status_after: MITIGATED at runtime level — strict provider now
+  hard-fails; guard rejects non-viable routes at source; sim_failed
+  samples populated from canonical attrs; REVERT:unknown split into
+  no_data/text sub-buckets. Field validation pending next soak.
 docs_reread_confirmed: true

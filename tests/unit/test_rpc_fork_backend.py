@@ -582,11 +582,11 @@ class TestRevertReasonDecoding:
 
     def test_bare_revert(self):
         from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason
-        # P0 (2026-04-20): bare revert now surfaces short fingerprint
-        # to keep diagnosis possible for unmatched cases.
+        # P0 (2026-04-20) / M7.E1.34d: bare revert now surfaces the
+        # "no_data" sub-bucket so histograms distinguish payload-less
+        # reverts from text-only or hex-payload cases.
         result = _decode_revert_reason("execution reverted")
-        assert result.startswith("REVERT:unknown")
-        assert "execution reverted" in result
+        assert result == "REVERT:unknown:no_data"
 
     def test_truly_empty_revert(self):
         from m7.orderflow.sim_backends.rpc_fork_backend import _decode_revert_reason

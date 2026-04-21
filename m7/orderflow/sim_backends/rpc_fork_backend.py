@@ -447,10 +447,23 @@ def _decode_revert_reason(raw_error: str) -> str:
         return f"REVERT:hex:{hex_blob[:200]}"
     # P0 (2026-04-20): fallback surfaces short fingerprint of raw_error so
     # histogram buckets stay diagnosable even when no pattern matches.
+    # M7.E1.34d: sub-classify the "unknown" fallback so the histogram no
+    # longer collapses every undecoded revert into a single bucket. We
+    # distinguish three sub-shapes:
+    #   REVERT:unknown:no_data   — bare "execution reverted" with no payload
+    #   REVERT:unknown:raw_hex   — hex payload present but unmatched selector
+    #   REVERT:unknown:text:...  — human-readable but unmatched reason string
+    # (raw_hex payloads are already classified by Case 5 above, so here
+    # we only need no_data / text branches.)
     _trim = (raw_error or "").strip().replace("\n", " ")[:200]
     if _trim:
-        logger.warning("REVERT:unknown | raw_error=%s", raw_error)
-        return f"REVERT:unknown:{_trim}"
+        _low = _trim.lower()
+        # Bare "execution reverted" with no payload after it.
+        if _low.rstrip(".: ") in ("execution reverted", "eth_call: execution reverted"):
+            logger.warning("REVERT:unknown:no_data | raw_error=%s", raw_error)
+            return "REVERT:unknown:no_data"
+        logger.warning("REVERT:unknown:text | raw_error=%s", raw_error)
+        return f"REVERT:unknown:text:{_trim[:160]}"
     logger.warning("REVERT:unknown | raw_error is empty or None")
     return "REVERT:unknown"
 

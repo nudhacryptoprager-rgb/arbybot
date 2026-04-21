@@ -174,6 +174,20 @@ def annotate_profit_guard_results(
                else getattr(r, "best_backrun_net_bps", None))
         if net is None or net <= 0:
             continue
+        # M7.E1.34d: enforce invariant at source —
+        # profit_guard_passed ≤ route_viable. Without this gate the
+        # cumulative counters can diverge (30m discovery soak
+        # 2026-04-21 showed +3 guard vs +0 viable).
+        rv = (r.get("route_viable") if isinstance(r, dict)
+              else getattr(r, "route_viable", None))
+        if rv is False:
+            if hasattr(r, "profit_guard_passed"):
+                r.profit_guard_passed = False
+            try:
+                setattr(r, "guard_reject_reason", "ROUTE_NOT_VIABLE")
+            except Exception:
+                pass
+            continue
         size = (r.get("amount_in_wei") if isinstance(r, dict)
                 else getattr(r, "amount_in_wei", 0))
         gross = (r.get("gross_pnl_wei") if isinstance(r, dict)

@@ -93,6 +93,15 @@ def run_ws_live(
     # M7.E1.12.1: Retry with exponential backoff before falling back to public.
     # Alchemy accounts can get rate-limited on both WS and HTTP simultaneously.
     _http_premium_only = os.environ.get("ARBY_RPC_PREMIUM_ONLY", "") == "1"
+    # M7.E1.34d: strict provider policy implies premium-only for both HTTP
+    # and WS paths. Reviewer 30m soak 2026-04-21 showed counter-only tracking
+    # was insufficient — runtime still routed windows through public_fallback
+    # and accumulated breaches. Now: hard-fail rather than silently count.
+    _strict_provider_policy = (
+        os.environ.get("ARBY_STRICT_PROVIDER_POLICY", "") == "1"
+    )
+    if _strict_provider_policy:
+        _http_premium_only = True
     _http_429_retries = 0
     _http_429_max_retries = 3
     _http_connected = False
@@ -330,6 +339,13 @@ def run_ws_live(
     try:
         # M7.E1.10: WS connection with automatic fallback on 429/connection failure
         _ws_tried_urls = [(ws_url, ws_provider)]
+        # M7.E1.34d: reject the window immediately if the resolved primary
+        # provider is already public_fallback under strict policy.
+        if _strict_provider_policy and ws_provider == "public_fallback":
+            raise SystemExit(
+                f"ARBY_STRICT_PROVIDER_POLICY=1 forbids public_fallback as "
+                f"primary WS provider (resolved url={ws_url})"
+            )
         _ws_connected = False
         ws_conn = None
         for _try_ws_url, _try_ws_name in _ws_tried_urls:
@@ -358,6 +374,16 @@ def run_ws_live(
                     from core.rpc_urls import _PUBLIC_WS_FALLBACKS, _normalize_network, _NETWORK_ALIASES
                     _net_key = _NETWORK_ALIASES.get(args.chain.lower())
                     _pub_ws = _PUBLIC_WS_FALLBACKS.get(_net_key) if _net_key else None
+                    # M7.E1.34d: under strict provider policy, refuse to
+                    # enqueue the public WS fallback. This keeps runtime
+                    # production-grade even when premium WS is throttled.
+                    if _strict_provider_policy and _pub_ws:
+                        logger.error(
+                            "WS 429 on %s and ARBY_STRICT_PROVIDER_POLICY=1 "
+                            "forbids public WS fallback (%s)",
+                            _try_ws_name, _pub_ws,
+                        )
+                        _pub_ws = None
                     if _pub_ws and (_pub_ws, "public_fallback") not in _ws_tried_urls:
                         _ws_tried_urls.append((_pub_ws, "public_fallback"))
                     continue
