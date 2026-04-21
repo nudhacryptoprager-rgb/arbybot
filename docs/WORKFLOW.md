@@ -9,6 +9,44 @@
 - Для аналізу нестандартних REVERT:unknown у discovery lane додано логування сирих байтів (див. _decode_revert_reason).
 - Multi-hop (V3→V2/V3→Slipstream) маршрути автоматично генеруються для matched_then_gas_rejected та непрохідних direct arb (див. opportunity_engine.py).
 
+## RPC endpoints (archive + realtime head)
+
+Soak і anvil-fork потребують **archive-capable** HTTP RPC і **WS** для newHeads. Публічний `mainnet.base.org` НЕ archive і обмежений rate-limit.
+
+**Резолвер** (`core.rpc_urls.resolve_rpc_http`) читає у такому порядку:
+1. Chain-scoped env — `BASE_RPC` / `ARBITRUM_RPC` (і відповідні `BASE_WSS`/`ARBITRUM_WSS`)
+2. Global — `ALCHEMY_RPC_HTTP` / `ARBY_RPC_HTTP_PRIMARY`
+3. `ALCHEMY_API_KEY` → автобудування `wss://base-mainnet.g.alchemy.com/v2/<key>` і HTTP
+4. Public fallback (`mainnet.base.org`) — тільки для лайвнес-чеків, не для fork/історії
+
+**Діагностика перед soak (обов'язково):**
+```powershell
+py -3.11 scripts/check_rpc_endpoints.py --chain base --ws-timeout 15
+# Exit 0 = PASS; 1 = archive FAIL; 2 = WS FAIL; 3 = chain_id mismatch; 4 = no url
+```
+
+**Рекомендований ENV (Base, archive + realtime WS):**
+```powershell
+$env:ALCHEMY_API_KEY = "<your key>"
+# або явні ендпойнти якщо використовуєте dRPC Premium / QuickNode:
+# $env:BASE_RPC  = "https://lb.drpc.org/ogrpc?network=base&dkey=<key>"
+# $env:BASE_WSS  = "wss://lb.drpc.org/ogws?network=base&dkey=<key>"
+$env:ARBY_FLASHBLOCKS_SIM  = "1"
+$env:ARBY_FLASHBLOCKS_HTTP = "https://mainnet-preconf.base.org"  # sub-200ms preconf feed
+$env:ARBY_SIM_BACKEND      = "anvil"
+$env:ARBY_ANVIL_RPC_URL    = "http://127.0.0.1:8545"
+$env:ARBY_REQUIRE_ARCHIVE  = "1"   # hard-refuse public RPC in anvil fork bootstrap
+$env:ARBY_FORK_BLOCK_OFFSET = "3"  # pin fork to head-3 to avoid reorg race
+```
+
+**НЕ встановлюйте `BASE_RPC_URL=https://mainnet.base.org` перед soak** — це перевизначить Alchemy/dRPC і anvil-fork не зможе прочитати історичні блоки (`BlockOutOfRangeError`).
+
+**Правильна команда soak (Base, 30 хв):**
+```powershell
+py -3.11 scripts/check_rpc_endpoints.py --chain base  # PASS expected
+py -3.11 scripts/start_nonstop_runtime.py --chain base --hours 0.5 --with-discovery --no-m4 --with-anvil
+```
+
 ## Setup (STEP 1+2)
 
 ```powershell

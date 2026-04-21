@@ -248,6 +248,10 @@ def emit_to_aggregator_light(
                              if metrics.get("drift_summary", {}).get("per_pair_drift_summary") else None),
         "drift_worst_pair_bps": (metrics.get("drift_summary", {}).get("per_pair_drift_summary", [{}])[0].get("notional_drift_median_bps")
                                  if metrics.get("drift_summary", {}).get("per_pair_drift_summary") else None),
+        # Step 5 (Apr-21 soak): per-pair signal counts used by the
+        # aggregator-level TOP_PAIR_DOMINANCE quality gate. Optional — if
+        # the run does not report it, the gate silently skips the check.
+        "signals_per_pair": metrics.get("signals_per_pair") or {},
     })
     
     # Clean legacy: keep only light-format runs
@@ -692,6 +696,75 @@ def _compute_quick_stats(
                 f"PROFIT_SANITY_WARN(all_{len(data_runs)}_profitable,div={net_diversity_rate:.2f}<{Thresholds.PROFIT_SANITY_NET_DIV_MIN})"
             )
             agg_reasons.append("PROFIT_SANITY_WARN")
+    
+    # Step 5 (Apr-21 soak): aggregator-level TOP_PAIR_DOMINANCE check.
+    # Aggregate top-pair signal share across normal runs. A pair that
+    # monopolizes > 40% of signals means the scan is not exploring the
+    # declared universe — operationally flag WARN, hard FAIL at 70%.
+    try:
+        _pair_signal_counts: Dict[str, float] = {}
+        _total_pair_signals = 0.0
+        for _run in normal_runs:
+            _counts = _run.get("signals_per_pair") or _run.get("pair_signal_counts") or {}
+            if not isinstance(_counts, dict):
+                continue
+            for _p, _n in _counts.items():
+                try:
+                    _n_f = float(_n)
+                except (TypeError, ValueError):
+                    continue
+                if _n_f <= 0 or not _p:
+                    continue
+                _pair_signal_counts[_p] = _pair_signal_counts.get(_p, 0.0) + _n_f
+                _total_pair_signals += _n_f
+        if _total_pair_signals > 0 and _pair_signal_counts:
+            _top_pair, _top_n = max(_pair_signal_counts.items(), key=lambda kv: kv[1])
+            _top_share = _top_n / _total_pair_signals
+            if _top_share > Thresholds.AGG_TOP_PAIR_DOMINANCE_FAIL:
+                quality_warnings.append(
+                    f"TOP_PAIR_DOMINANCE_FAIL({_top_pair}:{_top_share:.2f}>{Thresholds.AGG_TOP_PAIR_DOMINANCE_FAIL})"
+                )
+                agg_reasons.append("TOP_PAIR_DOMINANCE_FAIL")
+            elif _top_share > Thresholds.AGG_TOP_PAIR_DOMINANCE_WARN:
+                quality_warnings.append(
+                    f"TOP_PAIR_DOMINANCE_WARN({_top_pair}:{_top_share:.2f}>{Thresholds.AGG_TOP_PAIR_DOMINANCE_WARN})"
+                )
+                agg_reasons.append("TOP_PAIR_DOMINANCE_WARN")
+    except Exception as _exc:
+        # Defensive: missing field must not break aggregator. Log at debug.
+        import logging as _lg
+        _lg.getLogger(__name__).debug("top_pair_dominance check skipped: %s", _exc)
+    
+    # Step 5 (Apr-21 soak): aggregator-level DRIFT_WORST_PAIR check.
+    # Surfaces fragile pairs where notional drift exceeds a safe bound so
+    # downstream components can auto-exclude. Uses the per-chain frontier
+    # worst-pair drift when the window is single-chain.
+    try:
+        _frontier = (agg_data.get("quick_stats") or {}).get("per_chain_frontier") or {}
+        for _chain_key, _chain_info in _frontier.items():
+            if not isinstance(_chain_info, dict):
+                continue
+            _drift_bps = _chain_info.get("drift_worst_pair_bps")
+            _drift_pair = _chain_info.get("drift_worst_pair") or "?"
+            try:
+                _drift_bps_f = float(_drift_bps) if _drift_bps is not None else None
+            except (TypeError, ValueError):
+                _drift_bps_f = None
+            if _drift_bps_f is None:
+                continue
+            if _drift_bps_f > Thresholds.AGG_DRIFT_WORST_PAIR_BPS_FAIL:
+                quality_warnings.append(
+                    f"DRIFT_WORST_PAIR_FAIL({_chain_key}:{_drift_pair}:{_drift_bps_f:.0f}>{Thresholds.AGG_DRIFT_WORST_PAIR_BPS_FAIL:.0f})"
+                )
+                agg_reasons.append("DRIFT_WORST_PAIR_FAIL")
+            elif _drift_bps_f > Thresholds.AGG_DRIFT_WORST_PAIR_BPS_WARN:
+                quality_warnings.append(
+                    f"DRIFT_WORST_PAIR_WARN({_chain_key}:{_drift_pair}:{_drift_bps_f:.0f}>{Thresholds.AGG_DRIFT_WORST_PAIR_BPS_WARN:.0f})"
+                )
+                agg_reasons.append("DRIFT_WORST_PAIR_WARN")
+    except Exception as _exc:
+        import logging as _lg
+        _lg.getLogger(__name__).debug("drift_worst_pair check skipped: %s", _exc)
     
     # v3.2.7: Mixed chain_key guardrail for multi-chain correctness
     # If rolling window contains runs from different chains, aggregate metrics are invalid

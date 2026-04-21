@@ -309,7 +309,54 @@ def _build_sim_tx_params(
     """
     venue = getattr(result, "best_buy_venue", None)
     if not venue:
-        return None, "VENUE_MISSING"
+        # Step 1 (venue auto-registry fallback):
+        # If scoring did not set best_buy_venue (quoter quota, stale fallback,
+        # event-sourced flow), pick the first V3-compatible DEX from the
+        # chain's registry that supports best_buy_fee. This eliminates the
+        # CALLDATA_BUILD_FAILED:VENUE_MISSING blocker which dominated the
+        # hot lane (~85% of sim errors in the Apr-21 soak).
+        _fee_hint = getattr(result, "best_buy_fee", None)
+        try:
+            from config import load_dexes as _load_dexes_fallback
+            _all_dexes = (_load_dexes_fallback() or {}).get(chain, {}) or {}
+        except Exception:
+            _all_dexes = {}
+        _V3_LIKE = {"uniswap_v3", "algebra", "ve33"}
+        _preferred_order = ["uniswap_v3", "aerodrome", "sushiswap_v3", "pancakeswap_v3"]
+        _picked: Optional[str] = None
+        for _cand in _preferred_order:
+            _cfg = _all_dexes.get(_cand)
+            if not isinstance(_cfg, dict):
+                continue
+            if _cfg.get("adapter_type", "") not in _V3_LIKE:
+                continue
+            if not _cfg.get("router"):
+                continue
+            _tiers = _cfg.get("fee_tiers") or []
+            if _fee_hint is None or _fee_hint in {0, 1} or (
+                isinstance(_fee_hint, int) and _fee_hint in _tiers
+            ):
+                _picked = _cand
+                break
+        if _picked is None:
+            for _name, _cfg in _all_dexes.items():
+                if not isinstance(_cfg, dict):
+                    continue
+                if _cfg.get("adapter_type", "") in _V3_LIKE and _cfg.get("router"):
+                    _picked = _name
+                    break
+        if _picked is None:
+            return None, "VENUE_MISSING"
+        # Annotate result so downstream diagnostic logs see the resolved venue.
+        try:
+            result.best_buy_venue = _picked  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        venue = _picked
+        logger.debug(
+            "sim venue auto-resolved: pair=%s fee=%s -> %s",
+            getattr(result, "actual_pair", "?"), _fee_hint, venue,
+        )
 
     pair = getattr(result, "actual_pair", None)
     if not pair or "/" not in pair:
@@ -317,7 +364,35 @@ def _build_sim_tx_params(
 
     amount = getattr(result, "amount_in_wei", 0)
     if not amount or amount <= 0:
-        return None, "AMOUNT_ZERO"
+        # Step 6 (AMOUNT_ZERO auto-fill):
+        # Some producers (PTT-direct, broad-fallback without pool-resolve,
+        # hot-rehydrate) construct BackrunResult with default amount_in_wei=0.
+        # Rather than failing the sim, derive a safe fallback size from
+        # available fields before giving up.
+        _decimals = getattr(result, "token_in_decimals", None) or 18
+        _autofill = 0
+        # Prefer explicit sweep result when scoring computed it
+        _sweep = getattr(result, "best_sweep_size_wei", None)
+        if isinstance(_sweep, int) and _sweep > 0:
+            _autofill = _sweep
+        # Otherwise fall back to chain minimum profitable size
+        if _autofill <= 0:
+            try:
+                from m7.shared.constants import get_min_profitable_size_wei
+                _autofill = get_min_profitable_size_wei(chain, _decimals)
+            except Exception:
+                _autofill = 0
+        if _autofill <= 0:
+            return None, "AMOUNT_ZERO"
+        try:
+            result.amount_in_wei = _autofill  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        amount = _autofill
+        logger.debug(
+            "sim amount auto-filled: pair=%s decimals=%s -> %d wei",
+            pair, _decimals, amount,
+        )
 
     # Resolve DEX config → router + adapter type
     # E1.16: When venue is a pool address (starts with 0x), fall back to
@@ -800,6 +875,71 @@ def run_execution_gate(
                 r.submit_ready = False
                 r.submit_blocker = "SIM_DISABLED"
         return gate
+
+    # Step 7 (Pre-sim admission filter):
+    # To reduce load on rate-limited RPC providers, only admit candidates that
+    # actually deserve a full simulation. Rejections here consume ZERO RPC calls
+    # and are counted in `gate.sim_errors` as PRE_SIM_SKIP:<reason>, not in
+    # `sim_attempted`. Controlled by ARBY_SIM_ADMISSION_STRICT (default "1").
+    #
+    # Criteria (all configurable via env):
+    #   - ARBY_SIM_MIN_NET_BPS   (default "1.0")  — min scored net_bps
+    #   - ARBY_SIM_MIN_AMOUNT_WEI (default "0")   — require amount_in_wei or sweep
+    #   - require actual_pair with "/"
+    #   - require best_buy_fee (so fee-tier lookup downstream has a hint)
+    if os.getenv("ARBY_SIM_ADMISSION_STRICT", "1") == "1":
+        try:
+            _min_net_bps = float(os.getenv("ARBY_SIM_MIN_NET_BPS", "1.0"))
+        except (TypeError, ValueError):
+            _min_net_bps = 1.0
+        try:
+            _min_amount_wei = int(os.getenv("ARBY_SIM_MIN_AMOUNT_WEI", "0"))
+        except (TypeError, ValueError):
+            _min_amount_wei = 0
+
+        _admitted: List[Tuple[Any, ProfitGuardResult]] = []
+        for r, g in gate.guard_passed:
+            _skip_reason: Optional[str] = None
+
+            _pair = getattr(r, "actual_pair", None)
+            if not _pair or "/" not in str(_pair):
+                _skip_reason = "PRE_SIM_SKIP:PAIR_UNRESOLVED"
+
+            if _skip_reason is None:
+                _net_bps = getattr(r, "best_backrun_net_bps", 0.0) or 0.0
+                if float(_net_bps) < _min_net_bps:
+                    _skip_reason = f"PRE_SIM_SKIP:BELOW_MIN_NET_BPS:{_min_net_bps}"
+
+            if _skip_reason is None:
+                _amount = getattr(r, "amount_in_wei", 0) or 0
+                _sweep = getattr(r, "best_sweep_size_wei", 0) or 0
+                if _amount <= 0 and _sweep <= 0:
+                    # AMOUNT_ZERO autofill downstream relies on chain min-size;
+                    # treat as borderline — only skip if no fee hint either.
+                    if not getattr(r, "best_buy_fee", None):
+                        _skip_reason = "PRE_SIM_SKIP:NO_AMOUNT_NO_FEE_HINT"
+                elif _amount > 0 and _amount < _min_amount_wei:
+                    _skip_reason = f"PRE_SIM_SKIP:BELOW_MIN_AMOUNT_WEI:{_min_amount_wei}"
+
+            if _skip_reason is None and not getattr(r, "best_buy_fee", None):
+                # No fee hint AND no sweep size: downstream venue fallback will
+                # either guess wrong or fail. Cheaper to skip than to sim.
+                if not getattr(r, "best_sweep_size_wei", 0):
+                    _skip_reason = "PRE_SIM_SKIP:NO_FEE_HINT"
+
+            if _skip_reason is not None:
+                gate.sim_errors.append(_skip_reason)
+                if hasattr(r, "sim_attempted"):
+                    r.sim_attempted = False
+                    r.simulation_error = _skip_reason
+                if hasattr(r, "submit_ready"):
+                    r.submit_ready = False
+                    r.submit_blocker = _skip_reason
+                continue
+            _admitted.append((r, g))
+        gate.guard_passed = _admitted
+        if not gate.guard_passed:
+            return gate
 
     # E1.27/D3: Pre-sim fee tier check. Skip non-standard fees (e.g. Algebra
     # dynamic 150/600/3024) before counting them as sim_attempted. These consume

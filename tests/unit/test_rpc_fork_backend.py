@@ -220,6 +220,43 @@ class TestSimulateSwapRpcFork:
         # Third param is state overrides dict
         assert isinstance(eth_call_params[2], dict)
 
+    def test_block_out_of_range_retries_latest(self, monkeypatch):
+        """Step 2 (Apr-21 soak): when a pinned block_number hits a lagging RPC
+        node, the backend must retry with 'latest' instead of failing.
+        """
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
+            lambda chain: "http://fake:8545",
+        )
+        calls = {"eth_call": 0}
+
+        def mock_json_rpc(url, method, params, timeout=10.0):
+            if method == "eth_call":
+                calls["eth_call"] += 1
+                if calls["eth_call"] == 1:
+                    assert params[1] != "latest", "first call must target pinned block"
+                    return None, "eth_call: BlockOutOfRangeError: block height is 44942494 but requested was 44982227"
+                assert params[1] == "latest", "retry must use 'latest'"
+                return {"result": "0x" + "00" * 32}, None
+            if method == "eth_estimateGas":
+                return {"result": hex(100_000)}, None
+            return None, "unknown method"
+
+        monkeypatch.setattr(
+            "m7.orderflow.sim_backends.rpc_fork_backend._json_rpc",
+            mock_json_rpc,
+        )
+        from m7.orderflow.sim_backends.rpc_fork_backend import simulate_swap_rpc_fork
+        result = simulate_swap_rpc_fork(
+            chain="base",
+            from_address="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            to_address="0x2626664c2603336E57B271c5C0b26F421741e481",
+            calldata=bytes(36),
+            block_number=44982227,
+        )
+        assert result.success, f"expected success after retry, got {result.error}"
+        assert calls["eth_call"] == 2
+
 
 class TestViaRouter:
     """simulate_swap() routes to rpc_fork when ARBY_SIM_BACKEND=rpc_fork."""

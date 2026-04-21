@@ -500,8 +500,28 @@ class TestBuildSimTxParams:
     def test_missing_venue_returns_error(self):
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
+        # Step 1 (Apr-21 soak): when the scorer does not fill
+        # best_buy_venue but the chain registry has a V3-compatible DEX,
+        # the gate must auto-resolve to that DEX and build calldata
+        # instead of failing with VENUE_MISSING.
         br = self._make_result(best_buy_venue=None)
         tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None, f"expected auto-resolve, got err={err}"
+        assert tx is not None
+        assert tx["to"].startswith("0x")
+        # Post-call result carries the resolved venue for downstream diagnostics
+        assert getattr(br, "best_buy_venue", None) in {"uniswap_v3", "aerodrome", "sushiswap_v3", "pancakeswap_v3"}
+
+    def test_missing_venue_no_registry_returns_error(self, monkeypatch):
+        """Still returns VENUE_MISSING when registry has no V3-compatible DEX."""
+        from m7.orderflow import execution_gate as _eg
+
+        br = self._make_result(best_buy_venue=None)
+        # Force empty registry for the fallback code path.
+        monkeypatch.setattr(
+            "config.load_dexes", lambda: {"base": {}}, raising=False
+        )
+        tx, err = _eg._build_sim_tx_params(br, chain="base")
         assert tx is None
         assert err == "VENUE_MISSING"
 
@@ -513,11 +533,39 @@ class TestBuildSimTxParams:
         assert tx is None
         assert err == "PAIR_UNRESOLVED"
 
-    def test_zero_amount_returns_error(self):
+    def test_zero_amount_auto_fills_from_min_size(self):
+        """Step 6: amount_in_wei=0 now triggers auto-fill to chain min size."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
-        br = self._make_result(amount_in_wei=0)
+        br = self._make_result(amount_in_wei=0, token_in_decimals=18)
         tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert br.amount_in_wei > 0
+
+    def test_zero_amount_prefers_sweep_size(self):
+        """Step 6: best_sweep_size_wei takes precedence over min-size fallback."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        sweep_wei = 7 * 10**17
+        br = self._make_result(
+            amount_in_wei=0, token_in_decimals=18, best_sweep_size_wei=sweep_wei
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert br.amount_in_wei == sweep_wei
+
+    def test_zero_amount_returns_error_when_autofill_disabled(self, monkeypatch):
+        """Step 6: AMOUNT_ZERO still fires if get_min_profitable_size_wei returns 0."""
+        from m7.orderflow import execution_gate as _eg
+
+        monkeypatch.setattr(
+            "m7.shared.constants.get_min_profitable_size_wei",
+            lambda *a, **kw: 0,
+            raising=False,
+        )
+        br = self._make_result(amount_in_wei=0, best_sweep_size_wei=None)
+        tx, err = _eg._build_sim_tx_params(br, chain="base")
         assert tx is None
         assert err == "AMOUNT_ZERO"
 
@@ -732,6 +780,8 @@ class TestE115SimExceptionCapture:
             gross_pnl_wei=10**16,
             route_viable=True,
             size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
         )
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_attempted == 1
@@ -776,6 +826,8 @@ class TestE115PaperSigning:
             gross_pnl_wei=10**16,
             route_viable=True,
             size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
         )
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_passed == 1
@@ -815,6 +867,8 @@ class TestE115PaperSigning:
             gross_pnl_wei=10**16,
             route_viable=True,
             size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
         )
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_passed == 1
@@ -1176,3 +1230,64 @@ class TestE118VelodromeEncoder:
         route0_from_start = 4 + routes_offset + 32
         token_in_hex = "0x" + calldata[route0_from_start:route0_from_start + 32].hex().lstrip("0").zfill(40)
         assert token_in_hex.lower() == weth.lower()
+
+
+class TestPreSimAdmissionFilter:
+    """Step 7: Strict pre-sim admission reduces RPC load by skipping unworthy candidates."""
+
+    def _make_br(self, **kwargs):
+        from m7.orderflow.contracts import BackrunResult
+        defaults = dict(
+            event_id="t", event_source="fixture", event_type="swap",
+            post_trade_state_used="estimated", backrun_direction="buy",
+            best_backrun_net_bps=150.0, amount_in_wei=10**18,
+            gross_pnl_wei=10**16, route_viable=True, size_valid_for_token=True,
+            actual_pair="WETH/USDC", best_buy_fee=500,
+        )
+        defaults.update(kwargs)
+        return BackrunResult(**defaults)
+
+    def test_admission_skips_low_net_bps(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        import m7.orderflow.execution_gate as gate_mod
+        monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "1")
+        monkeypatch.setenv("ARBY_SIM_MIN_NET_BPS", "10.0")
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        br = self._make_br(best_backrun_net_bps=5.0)
+        gate = run_execution_gate([br], chain="base")
+        assert gate.sim_attempted == 0
+        assert any("BELOW_MIN_NET_BPS" in e for e in gate.sim_errors)
+        assert br.sim_attempted is False
+
+    def test_admission_skips_unresolved_pair(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        import m7.orderflow.execution_gate as gate_mod
+        monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "1")
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        br = self._make_br(actual_pair=None)
+        gate = run_execution_gate([br], chain="base")
+        assert gate.sim_attempted == 0
+        assert any("PAIR_UNRESOLVED" in e for e in gate.sim_errors)
+
+    def test_admission_skips_no_fee_hint_under_bypass(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        import m7.orderflow.execution_gate as gate_mod
+        monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "1")
+        monkeypatch.setenv("ARBY_SIM_BYPASS_GUARD", "1")
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        # Guard would normally reject amount=0, but BYPASS_GUARD lets it through.
+        # Admission must still skip due to missing fee hint + no sweep size.
+        br = self._make_br(amount_in_wei=0, best_sweep_size_wei=None, best_buy_fee=None)
+        gate = run_execution_gate([br], chain="base")
+        assert gate.sim_attempted == 0
+        assert any("NO_AMOUNT_NO_FEE_HINT" in e or "NO_FEE_HINT" in e for e in gate.sim_errors)
+
+    def test_admission_disabled_allows_all(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        import m7.orderflow.execution_gate as gate_mod
+        monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "0")
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: False)
+        br = self._make_br(best_backrun_net_bps=0.1)
+        gate = run_execution_gate([br], chain="base")
+        # With strict=0, sub-threshold candidate passes admission (SIM_DISABLED hits later).
+        assert len(gate.guard_passed) == 1

@@ -569,6 +569,29 @@ def simulate_swap_rpc_fork(
             if not call_err:
                 sim_url = fallback_url
 
+    # Step 2 (block TTL): When we pinned an explicit block_number and the RPC
+    # load-balancer routed us to a lagging node (``block height is X but
+    # requested was Y``), retry against "latest". This preserves the
+    # freshness contract (event_block is reported in sim_result) while
+    # preventing spurious failures that dominated the Apr-21 soak.
+    if (
+        call_err
+        and block_number is not None
+        and "BlockOutOfRangeError" in call_err
+    ):
+        logger.info(
+            "rpc_fork BlockOutOfRange(block=%s) — retrying with 'latest'",
+            block_number,
+        )
+        params[1] = "latest"
+        data, call_err = _json_rpc(sim_url, "eth_call", params)
+        if call_err and "HTTP 429" in call_err:
+            fallback_url = _SIM_FALLBACK_HTTP.get(chain)
+            if fallback_url and fallback_url != sim_url:
+                data, call_err = _json_rpc(fallback_url, "eth_call", params)
+                if not call_err:
+                    sim_url = fallback_url
+
     if call_err:
         revert_reason = None
         if "revert" in call_err.lower() or "execution reverted" in call_err.lower():

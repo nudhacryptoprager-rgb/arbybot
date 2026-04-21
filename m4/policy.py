@@ -498,6 +498,18 @@ class Thresholds:
     # ============================================================================
     DIVERSITY_ROUTES_MIN = 1       # v2.9.8: Accept single direction arbitrage
     
+    # === Step 5 (Apr-21 soak): operational quality gates ===
+    # Top-pair concentration: aggregator-level dominance warning when a
+    # single pair generates > AGG_TOP_PAIR_DOMINANCE_WARN of all signals.
+    # Consistent with run-level TOP_PAIR_DOMINANCE_WARN (0.6) but applied
+    # across the rolling window.
+    AGG_TOP_PAIR_DOMINANCE_WARN = 0.40
+    AGG_TOP_PAIR_DOMINANCE_FAIL = 0.70
+    # Drift worst-pair: when the worst-pair notional drift exceeds the
+    # threshold, the pair is auto-excluded upstream; we still emit a
+    # rolling-level warning so the gate surfaces it.
+    AGG_DRIFT_WORST_PAIR_BPS_WARN = 500.0
+    AGG_DRIFT_WORST_PAIR_BPS_FAIL = 2000.0
     # v2.0.2: Profit sanity thresholds (too-good-to-be-true detection)
     # If all N>=10 runs are profitable with very low variance, flag as suspicious
     PROFIT_SANITY_MIN_RUNS = 10    # Min runs to trigger sanity check
