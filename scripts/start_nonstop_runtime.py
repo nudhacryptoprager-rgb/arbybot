@@ -130,11 +130,19 @@ class ManagedProcess:
     def terminate(self) -> None:
         self.stopped = True
         if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(self.proc.pid), "/T"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
             print(f"  [{self.name}] Terminated")
 
     def drain_output(self) -> list[str]:

@@ -53,6 +53,28 @@ class TestManagedProcessEnvInjection:
         kwargs = fake_popen.call_args.kwargs
         assert kwargs.get("env") is None
 
+    def test_terminate_uses_taskkill_tree_on_windows(self, monkeypatch):
+        """Windows supervisor shutdown must kill child trees, including Anvil."""
+        fake_proc = MagicMock()
+        fake_proc.pid = 777
+        fake_proc.poll.return_value = None
+        monkeypatch.setattr(snr.os, "name", "nt")
+
+        with patch.object(snr.subprocess, "run") as run:
+            proc = snr.ManagedProcess(
+                name="anvil_fork",
+                cmd=["py", "scripts/start_anvil_fork.py"],
+                restart_delay=1,
+                max_restarts=1,
+            )
+            proc.proc = fake_proc
+
+            proc.terminate()
+
+        run.assert_called_once()
+        assert run.call_args.args[0] == ["taskkill", "/F", "/PID", "777", "/T"]
+        fake_proc.terminate.assert_not_called()
+
     def test_env_dict_merges_over_environ(self, fake_popen, monkeypatch):
         monkeypatch.setenv("ARBY_SIM_BACKEND", "tenderly")
         monkeypatch.setenv("SOME_OTHER", "kept")

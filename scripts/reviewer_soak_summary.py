@@ -39,8 +39,8 @@ TRACKED_SCALARS = [
     "roundtrip_success_total",
     "roundtrip_profitable_total",
     "fast_path_scored_total",
-    "guard_passed_total",
-    "events_total",
+    "profit_guard_passed_total",
+    "events_seen_total",
     "windows_seen",
 ]
 
@@ -50,7 +50,9 @@ HISTOGRAM_BUCKETS_OF_INTEREST = [
     "TOKEN_ADDRESS_UNKNOWN",
     "PRE_SIM_SKIP:BELOW_MIN_NET_BPS:1.0",
     "PRE_SIM_SKIP:NO_AMOUNT_NO_FEE_HINT",
+    "PRE_SIM_SKIP:PAIR_UNRESOLVED",
     "PRE_SIM_SKIP:UNRESOLVED_PAIR",
+    "PRE_SIM_SKIP:BELOW_MIN_AMOUNT_WEI",
     "PRE_SIM_SKIP:INSUFFICIENT_AMOUNT_WEI",
 ]
 
@@ -85,10 +87,16 @@ def _delta_histogram(cur: dict, base: dict, key: str = "simulation_error_histogr
 
 
 def _find_bucket_delta(delta_hist: dict, needle: str) -> int:
-    """Match histogram keys by prefix (needle). Returns summed delta."""
+    """Match histogram keys by exact, prefix, or substring. Returns summed delta.
+
+    Rollup buckets often have stable prefixes such as
+    ``eth_call: BlockOutOfRangeError`` or ``CALLDATA_BUILD_FAILED:AMOUNT_ZERO``.
+    Substring matching keeps the reviewer summary aligned with those emitted
+    buckets without forcing every caller to know the transport prefix.
+    """
     total = 0
     for k, v in delta_hist.items():
-        if k == needle or k.startswith(needle):
+        if k == needle or k.startswith(needle) or needle in k:
             total += int(v)
     return total
 
@@ -128,10 +136,10 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
     print("\n-- Reviewer acceptance buckets --")
     for needle in HISTOGRAM_BUCKETS_OF_INTEREST:
         match = _find_bucket_delta(delta_hist, needle)
-        print(f"  {needle:<48s} Δ={match:+d}")
+        print(f"  {needle:<48s} delta={match:+d}")
 
     block_oor = _find_bucket_delta(delta_hist, "BlockOutOfRangeError")
-    print(f"  BlockOutOfRangeError                             Δ={block_oor:+d}")
+    print(f"  BlockOutOfRangeError                             delta={block_oor:+d}")
 
     pre_sim_hits = sum(
         _find_bucket_delta(delta_hist, n)
