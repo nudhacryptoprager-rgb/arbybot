@@ -1,12 +1,12 @@
 ﻿# Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.34g — funnel diagnostics landed: feed-rate, bridge-drop reason propagation, net_bps distribution.** Analytically driven by the four reasons behind "no profitable opportunities" observed after 30m E1.34e soak (PROD +5 events, DISC +15 events, +2 bridge_hits, +0 fast_scored). Landed this cycle (M7.E1.34g): (a) `m7/orderflow/hot_runtime_artifacts.py` — feed-rate counters `session.session_elapsed_minutes` + `session.session_events_per_minute` (exposes WS/RPC starvation directly, no external math); `fast_path_net_bps_histogram` with buckets `lt_-10 / -10_to_-1 / -1_to_0 / 0_to_1 / 1_to_5 / 5_to_10 / gte_10 / unknown` so reviewer sees whether cost-model dominates or candidates are close-to-threshold; (b) `m7/orderflow/loop_runner.py` — bridge-hit block 2 now classifies WHY each bridge-pool hit did not produce a `registry_fast` score and writes first-seen reason into `bridge_diagnostics["bridge_hit_not_scored_reason"]` (`HOT_SKIP_UNKNOWN_PAIR` when scoring_path=="hot_skip", `NOT_SCORED` when scoring_path is None, or `SCORING_PATH_<UPPER>` for everything else); the existing rollup bucket `bridge_hit_but_not_fast_scored.reason_histogram` now gets real categorical data instead of UNKNOWN. M7.B remains closed: no submit_ready/roundtrip_profitable evidence, so policy is unchanged per reviewer fix #10.
+**Status**: **M7.E1.34h — reviewer 10-step batch: code-addressable fixes (#3, #5, #6, #7) landed; #1/#2/#4/#8/#9/#10 are operational/policy, documented. Acceptance still BLOCKED until next 30m soak produces `fast_path_scored>=20`, `sim_passed>0`, `roundtrip_attempted>0`.** Reviewer 30-min E1.34g validation soak 2026-04-21T20:12:56Z–20:42:59Z classified the funnel blockers using the new G-level instrumentation: PROD `0.467 events/min`, DISC `0.8 events/min` (both < 5 threshold) → **feed starvation confirmed**; DISC `reason_histogram` dominated by `HOT_SKIP_UNKNOWN_PAIR` (3/3 PROD, 2 DISC) → **canonical pair registry not stitched to bridge universe**; PROD `fast_path_net_bps_histogram` empty, DISC single bucket `-10_to_-1: 1` → insufficient net_bps data; `sim_passed_delta=0`, `roundtrip_attempted_delta=0`, `submit_ready_delta=0` across both lanes; `strict_provider_breaches=0`, `BlockOutOfRange=0`. Landed this cycle (M7.E1.34h): (a) [m7/orderflow/loop_runner.py](m7/orderflow/loop_runner.py) — bridge-hit block 2 now emits `bridge_hit_not_scored_sample` with raw `pool_address` + `scoring_path` + `actual_pair` + `token_in` + `token_out` + `fee_tier` + `venue` + `adapter_type`, so reviewer can route each HOT_SKIP_UNKNOWN_PAIR drop directly to the canonical registry without re-running; loop-exit path calls `flush_rollup_shutdown` so supervisor end stamps `shutdown_flush_at` + fresh `last_heartbeat_utc` (stops reviewer staleness gate from retro-failing clean supervisor-managed soaks); (b) [m7/orderflow/hot_runtime_artifacts.py](m7/orderflow/hot_runtime_artifacts.py) — new `supervisor_window` block (`first_window_at`, `events_total`, `elapsed_minutes`, `events_per_minute`) computed from rollup-level `events_seen_total` + `first_window_at`, so feed rate reflects the full supervisor window instead of the most recent short-lived child process; `sim_failed_samples_recent` ring is now pruned to current `session_id` before each append (stale pre-fix samples can no longer contaminate fresh-soak diagnosis); new `flush_rollup_shutdown(chain)` helper wired from loop_runner. Bridge-hit sample propagates into `rollup["bridge_hit_but_not_fast_scored"]["samples"]` (bounded ring of 10). M7.B remains closed: no `submit_ready_delta>0` evidence.
 
-Unit baseline: **4244 PASS / 6 skipped / 0 failed** (+6 new in `test_m7_e1_34g_funnel_diagnostics.py`). `check_repo_safety.py`: PASS 0 warnings.
+Unit baseline: **4251 PASS / 6 skipped / 0 failed** (+7 new in `test_m7_e1_34h_reviewer_fixes.py`). `check_repo_safety.py`: PASS 0 warnings.
 
 **Updated**: 2026-04-21
 
-**Acceptance criterion (unchanged from M7.E1.34e)**:
+**Acceptance criterion (unchanged)**:
 `Δsim_passed > 0 AND Δroundtrip_attempted > 0 AND ΔBlockOutOfRangeError == 0
 AND strict_provider_breaches_total_delta == 0
 AND fast_path_scored_delta >= ARBY_REVIEWER_MIN_FAST_PATH_SCORED (default 20,
@@ -14,23 +14,30 @@ unless ARBY_REVIEWER_QUIET_OK=1)
 AND production rollup not stale (default 120s, anchor = supervisor end
 when available)` on both lanes.
 
-**Next P0 blockers**:
-(a) re-run 30m Base soak with M7.E1.34g instrumentation — post-soak
-`session.session_events_per_minute` tells us immediately whether the
-funnel is WS-starved (< ~5 events/min on a busy L2) or scoring-dropped;
-`bridge_hit_but_not_fast_scored.reason_histogram` classifies the DISC
-`+2 bridge_hits / +0 fast_scored` gap by real reason codes; the new
-`fast_path_net_bps_histogram` (when fast_results>0) shows whether the
-cost model dominates or we are close to the 1.0 bps threshold;
-(b) if `session_events_per_minute < 5` → WS/RPC feed coverage fix
-(hot set widening, pair filter review); if `HOT_SKIP_UNKNOWN_PAIR`
-dominates reason_histogram → hot registry / canonical pair broker;
-if net_bps histogram clusters in `lt_-10` / `-10_to_-1` → recalibrate
-cost model, not the gate;
-(c) do NOT mark Status REACHED or open M7.B until `sim_passed>0`,
-`roundtrip_attempted>0`, `fast_path_scored>=20`, no BlockOutOfRange,
-no strict breaches, no stale rollup.
+**Next P0 blockers (operational, not code)**:
+(a) **feed coverage fix** (reviewer step #2) — hot set widening, pair-filter
+review, WS event coverage on Base. `supervisor_window.events_per_minute`
+is now the authoritative metric; target ≥ 5 on Base before any scoring
+recalibration;
+(b) **bridge ↔ canonical pair registry join** (reviewer step #4) — route
+every `bridge_hit_not_scored_sample` with `reason=HOT_SKIP_UNKNOWN_PAIR`
+through the registry entry check; outcome must be either a scoring
+candidate or a concrete rejection reason other than UNKNOWN_PAIR;
+(c) **do NOT touch cost gate** (reviewer step #8) — `ARBY_SIM_MIN_NET_BPS`
+stays at 1.0 until at least one fresh 30m soak shows
+`fast_path_scored >= 20` with a populated net_bps histogram;
+(d) **repeat same strict 30m Anvil soak** after (a)+(b); acceptance verdict
+relies on the E1.34h supervisor-window metric + enriched bridge samples.
 
+**M7.B remains policy-closed** (reviewer step #10). Opening requires all six:
+`fast_path_scored >= 20`, `sim_passed > 0`, `roundtrip_attempted > 0`,
+`BlockOutOfRangeError == 0`, `strict_provider_breaches == 0`, rollup not
+stale.
+
+**Previous (M7.E1.34g)** retained: feed-rate counters
+(`session.session_events_per_minute` + `session.session_elapsed_minutes`);
+bridge-drop reason classification (`HOT_SKIP_UNKNOWN_PAIR` / `NOT_SCORED`
+/ `SCORING_PATH_*`); `fast_path_net_bps_histogram` (8 buckets).
 **Previous (M7.E1.34f)** retained: per-lane `last_heartbeat_utc` /
 `last_event_utc` / `last_scored_utc`; `bridge_hit_but_not_fast_scored`
 diagnostic bucket; `--staleness-anchor-utc` CLI flag;

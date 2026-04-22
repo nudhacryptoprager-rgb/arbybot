@@ -1069,6 +1069,24 @@ def run_loop(cli_args) -> None:
                                 else:
                                     _reason_code = f"SCORING_PATH_{str(_sp_r).upper()}"
                                 _hot_bridge_diag["bridge_hit_not_scored_reason"] = _reason_code
+                                # M7.E1.34h fix #3: enrich reason with raw pair
+                                # context so reviewer can route HOT_SKIP_UNKNOWN_PAIR
+                                # drops to the canonical pair registry.
+                                try:
+                                    _sample = {
+                                        "pool_address": _ck_all,
+                                        "scoring_path": _sp_r,
+                                        "reason": _reason_code,
+                                        "actual_pair": getattr(_r, "actual_pair", None),
+                                        "token_in": getattr(_r, "backrun_token_in_address", None),
+                                        "token_out": getattr(_r, "backrun_token_out_address", None),
+                                        "fee_tier": getattr(_r, "best_buy_fee", None),
+                                        "venue": getattr(_r, "best_buy_venue", None),
+                                        "adapter_type": getattr(_r, "adapter_type_used", None),
+                                    }
+                                    _hot_bridge_diag["bridge_hit_not_scored_sample"] = _sample
+                                except Exception:
+                                    pass
                     # Log diagnostic for bridge hit investigation
                     if _raw_results_for_bridge and _bridge_ptt_lower:
                         _sample_evt_pools = []
@@ -1450,5 +1468,15 @@ def run_loop(cli_args) -> None:
                 break
 
     logger.info("M7 %s loop finished after %d iterations", lane.upper(), iteration)
+    # M7.E1.34h fix #6: explicit shutdown flush so rollup carries a fresh
+    # last_heartbeat_utc at supervisor end. Without this, per-process
+    # clean-exits leave the rollup stamped with the last mid-cycle ts,
+    # and reviewer's staleness gate retro-fails a valid soak.
+    if lane == "hot":
+        try:
+            from m7.orderflow.hot_runtime_artifacts import flush_rollup_shutdown
+            flush_rollup_shutdown(chain=cli_args.chain)
+        except Exception as _exc_flush:
+            logger.debug("Hot rollup shutdown flush failed: %s", str(_exc_flush)[:120])
 
 

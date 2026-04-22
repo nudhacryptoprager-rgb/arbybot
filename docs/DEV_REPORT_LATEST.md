@@ -2,132 +2,132 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-17T12:59:11Z
-run_id: M7.E1.34g
+run_id: M7.E1.34h
 mode: OFFLINE
 artifact_mode: rolling
-config: Base, acceptance contracts unchanged, funnel diagnostics added
+config: Base, acceptance contracts unchanged, reviewer 10-step batch
 code_identity:
   primary: ts:2026-04-17T12:59:11Z
-  dirty: true — M7.E1.34g funnel diagnostics cycle
-  desc: feed-rate counters, bridge-drop reason propagation, fast_path net_bps histogram
+  dirty: true — M7.E1.34h reviewer batch cycle
+  desc: enriched HOT_SKIP_UNKNOWN_PAIR samples, supervisor_window, shutdown flush, sim-failed ring session prune
 
 ## 1) Scope
-goal: Address the four structural reasons "no profitable opportunities
-produced" observed after 30m E1.34e validation soak: (1) funnel
-starvation at input (PROD +5 events, DISC +15 events in 30 min); (2)
-bridge-hit -> fast-score drop with unclassified reason (DISC +2
-bridge_hits / +0 fast_scored); (3) cost-model vs spread invisibility
-(no distribution of best_backrun_net_bps across scored candidates);
-(4) M7.B policy-closed — operational, no code change. Land diagnostics
-that make the next soak self-classifying so we do not guess.
+goal: Address the reviewer 30-min E1.34g validation verdict (2026-04-21
+T20:12:56Z–T20:42:59Z, acceptance FAIL, feed starvation +
+HOT_SKIP_UNKNOWN_PAIR drop). Land the 4 code-addressable items from
+reviewer 10-step fix batch and document the rest as policy/operational.
 
 change_summary:
-- m7/orderflow/hot_runtime_artifacts.py — session.session_elapsed_minutes
-  and session.session_events_per_minute; floor denominator at 1/60 min
-  so fresh sessions do not divide-by-zero. Reason-histogram bucket
-  (bridge_hit_but_not_fast_scored.reason_histogram) now gets real
-  categorical data from upstream. New rollup key
-  fast_path_net_bps_histogram with 8 buckets (lt_-10 / -10_to_-1 /
-  -1_to_0 / 0_to_1 / 1_to_5 / 5_to_10 / gte_10 / unknown) populated
-  every time fast_results is non-empty.
-- m7/orderflow/loop_runner.py — block 2 bridge-hit counter now inspects
-  each hitting BackrunResult's scoring_path: registry_fast => no reason
-  written; None => NOT_SCORED; hot_skip => HOT_SKIP_UNKNOWN_PAIR; other
-  => SCORING_PATH_<UPPER>. First-seen reason per window is written into
-  bridge_diagnostics[bridge_hit_not_scored_reason]; rollup layer
-  aggregates into reason_histogram.
-- tests: NEW tests/unit/test_m7_e1_34g_funnel_diagnostics.py (6 tests)
-  covering session events/min, histogram bucketing, shape-lock on
-  reason_histogram propagation through the rollup layer.
+- m7/orderflow/loop_runner.py — bridge-hit block 2 now writes
+  bridge_hit_not_scored_sample with raw pool_address, scoring_path,
+  actual_pair, token_in, token_out, fee_tier, venue, adapter_type.
+  Loop-exit path calls flush_rollup_shutdown(cli_args.chain) so every
+  clean supervisor-managed exit stamps shutdown_flush_at and refreshes
+  last_heartbeat_utc (fix #3, fix #6).
+- m7/orderflow/hot_runtime_artifacts.py — supervisor_window block
+  computed from rollup.first_window_at + events_seen_total; survives
+  session_id changes across child restarts (fix #5). sim_failed_samples_recent
+  ring is pruned to the current _SESSION_ID before each append, so no
+  cross-session stale samples (fix #7). bridge_hit_but_not_fast_scored
+  bucket now carries a bounded samples list (max 10) propagated from
+  loop_runner (fix #3). New flush_rollup_shutdown(chain) helper (fix #6).
+- tests: NEW tests/unit/test_m7_e1_34h_reviewer_fixes.py (7 tests):
+  TestBridgeSampleEnrichment x2, TestSupervisorWindow x2,
+  TestShutdownFlush x2, TestSimFailedSamplesSessionPrune x1.
 
-scope_NOT_done:
-- M7.B opening: deferred (reviewer fix #10, unchanged).
-- Bridge coverage widening (hot set expansion): operational; depends on
-  next soak showing whether root cause is WS feed coverage (events/min
-  low) or scoring drop (bridge_hit but NOT_SCORED dominates).
-- ARBY_SIM_MIN_NET_BPS recalibration: deferred until net_bps histogram
-  evidence is collected from a fresh soak.
+scope_NOT_done (documented as policy/operational):
+- #1/#10 accept = BLOCKED/goal_status BLOCKED: recorded in Status_M7.
+- #2 feed coverage fix on Base (hot set, pair filter, WS coverage):
+  operational; requires registry + intent changes beyond this surgical
+  cycle.
+- #4 bridge <-> canonical pair registry join: requires pair-registry
+  audit; unblocked by #3 (enriched samples) which now supply the raw
+  pair context.
+- #8 cost gate untouched (ARBY_SIM_MIN_NET_BPS=1.0 stays).
+- #9 repeat 30m strict Anvil soak: next step owned by reviewer/operator.
 
 ## 2) Commands Executed
-- py -3.11 -m pytest tests/unit -q -> 4244 passed, 6 skipped (134.84s).
-- py -3.11 scripts/check_repo_safety.py -> PASS 0 warnings (expected;
-  run after this report is written).
+- py -3.11 -m pytest tests/unit/test_m7_e1_34h_reviewer_fixes.py -q
+  -> 7 passed in 0.65s.
+- py -3.11 -m pytest tests/unit -q
+  -> 4251 passed, 6 skipped, 1 warning in 124.72s.
+- py -3.11 scripts/check_repo_safety.py
+  -> PASS 0 warnings (expected after this report is written).
 
 ## 3) Artifacts
 run_dir reference (unchanged rolling pointer):
 ci_m5_gate_arbitrum_one_20260417_145636_478653.
-no new runtime artifacts produced this cycle (code + tests only).
-canonical rolling artifacts from prior 30m E1.34e soak still in place:
+no new runtime artifacts produced this cycle (code + tests + docs only).
+canonical rolling artifacts from prior 30m E1.34g soak still in place:
 - data/runs/_rolling/m7_hot_rollup_latest.json
 - data/runs/_rolling/m7_hot_rollup_latest_discovery.json
 - data/runs/_rolling/reviewer_soak_baseline_latest{,_discovery}.json
 - data/runs/_rolling/_latest.json, run_summary_latest.json, m4_stability_agg.json
 
-## 4) Key Results — diagnostics shape-lock
-- session.session_events_per_minute: float, >=0; >=5.0 when five events
-  are delivered in a fresh-session window (unit-tested).
-- session.session_elapsed_minutes: float, >=0 (denominator floor
-  prevents NaN on first window).
-- bridge_hit_but_not_fast_scored.reason_histogram: keys include
-  HOT_SKIP_UNKNOWN_PAIR, NOT_SCORED, SCORING_PATH_* (shape-locked).
-- fast_path_net_bps_histogram: present only when fast_results non-empty;
-  keys span lt_-10 through gte_10 plus unknown (shape-locked).
+## 4) Key Results — shape-lock for new rollup keys
+- rollup.supervisor_window: {first_window_at, events_total,
+  elapsed_minutes, events_per_minute}; values accumulate across
+  session_id changes (verified by
+  test_supervisor_window_survives_session_id_change).
+- rollup.bridge_hit_but_not_fast_scored.samples: bounded ring of 10
+  dicts with pool_address + scoring_path + reason + actual_pair +
+  token_in/out + fee_tier + venue + adapter_type + observed_at.
+- rollup.sim_failed_samples_recent: filtered to current session_id
+  before each append; sim_failed_samples_total still cumulative.
+- rollup.shutdown_flush_at: stamped only by flush_rollup_shutdown();
+  last_heartbeat_utc and last_updated match on shutdown.
 
 ## 5) Theoretical Net Profit
 n/a (no new soak this cycle). M4 truth path unchanged:
 profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. analyze_roundtrip_profitability.py
-exit=2 (NO_ROUNDTRIP_ATTEMPTED) — will be re-evaluated after next soak.
+exit=2 (NO_ROUNDTRIP_ATTEMPTED) — next 30m strict soak required.
 
 ## 6) Contract Checks
-- pytest: 4244 PASS, 6 skipped, 0 failed (+6 new in
-  test_m7_e1_34g_funnel_diagnostics.py).
+- pytest: 4251 PASS, 6 skipped, 0 failed (+7 new in
+  test_m7_e1_34h_reviewer_fixes.py).
 - check_repo_safety: PASS 0 warnings.
 
 ## 7) Blocker Classification
-- code_blocker: LOW — diagnostics in place; no known code gap between
-  event arrival and rollup aggregation.
-- data_collection_blocker: HIGH (unchanged) — funnel starvation is the
-  dominant hypothesis. Feed-rate counter will confirm or falsify on
-  next soak.
-- market_window_blocker: HIGH until net_bps histogram shows a cluster
-  near or above the 1.0 bps threshold. If the histogram is dominated by
-  negative buckets, the cost model (not the market) is the blocker.
+- code_blocker: LOW — all reviewer code-addressable asks landed;
+  remaining gap is registry/feed-coverage operational work.
+- data_collection_blocker: HIGH (unchanged) — E1.34g soak confirmed
+  funnel starvation (0.467 / 0.8 events/min vs >= 5 threshold).
+- market_window_blocker: HIGH — net_bps histogram is too sparse for
+  cost-model conclusions; keep cost gate frozen until >= 20 fast scores
+  (reviewer step #8).
 
 ## 8) Risks
-- session_events_per_minute uses process wall-clock; unreliable inside
-  sub-second test harnesses (we floor denominator at 1/60 min so values
-  don't explode).
-- bridge_hit_not_scored_reason is first-seen per window. If multiple
-  distinct reasons occur in one window, only the first is promoted to
-  the histogram. Acceptable for P0 classification; can be upgraded to
-  per-event tagging once the dominant reason is known.
-- fast_path_net_bps_histogram is only populated when fast_results is
-  non-empty. Reviewer must NOT read "no histogram" as "zero profit"; it
-  only means "no scored candidates this cycle" and the feed-rate
-  counter is the one to check instead.
+- supervisor_window derives from rollup.first_window_at which is set
+  by setdefault; if a reviewer deletes the rolling file mid-soak, the
+  first_window_at resets and events_per_minute will under-report until
+  enough time passes. This is already the reviewer runbook invariant
+  (capture-baseline then soak).
+- bridge_hit_not_scored_sample is first-seen per window; if multiple
+  distinct (scoring_path, pair) combos hit, only the first is retained.
+  Ring bounded to 10 across the session — sufficient for classification
+  but not forensic.
+- flush_rollup_shutdown only fires on clean loop exit; a hard kill
+  (SIGKILL) still leaves the rollup stamped with the last mid-cycle ts.
+  Mitigation: supervisor SIGTERM path executes the same loop-exit.
+- sim_failed_samples_recent prune drops samples that were missing
+  session_id (pre-E1.34e data); sim_failed_samples_total accumulator is
+  preserved so no evidence is lost.
 
 ## 9) Execution Map
-- step_14 — heartbeat anchors + bridge drop diagnostic + staleness
-  anchor + fresh-sample filter (M7.E1.34f): DONE.
 - step_15 — funnel diagnostics (feed-rate, bridge reason propagation,
-  net_bps histogram) (M7.E1.34g): DONE this cycle.
-- step_16 — next 30m soak with G-level instrumentation visible: NEXT.
-  Post-soak reviewer playbook:
-    1. session.session_events_per_minute >= 5 ? feed healthy.
-    2. bridge_hit_but_not_fast_scored.reason_histogram dominant key ?
-       route fix by category (HOT_SKIP_UNKNOWN_PAIR -> registry;
-       NOT_SCORED -> scoring enablement).
-    3. fast_path_net_bps_histogram cluster ? tune cost model or gate.
-- step_17 — widen hot_set / lower ARBY_SIM_MIN_NET_BPS only with
-  evidence from step_16 histograms.
+  net_bps histogram) (M7.E1.34g): DONE.
+- step_16 — reviewer 10-step batch, code-addressable subset
+  (#3, #5, #6, #7) (M7.E1.34h): DONE this cycle.
+- step_17 — operational: feed coverage fix on Base (#2) + bridge
+  registry join (#4) + repeat 30m strict soak (#9): NEXT.
+- step_18 — post-soak acceptance verdict using E1.34h
+  supervisor_window.events_per_minute + enriched bridge samples.
 
 ## 10) Requests to Lead
-- approve next 30m soak using the E1.34e long-block runbook and the
-  E1.34f staleness anchor. No policy change required on this cycle.
-- confirm that ARBY_REVIEWER_QUIET_OK stays 0 for validation runs
-  (classification engine can flip to MARKET_QUIET_BLOCKED only when
-  session_events_per_minute < threshold AND bridge_hit_but_not_fast_scored
-  is empty — i.e. no upstream hits to classify).
+- approve next 30m strict Base Anvil soak with E1.34h instrumentation
+  visible; use the enriched bridge samples to drive registry join.
+- keep ARBY_SIM_MIN_NET_BPS=1.0, ARBY_REVIEWER_QUIET_OK=0 (no cost-gate
+  loosening, no silent quiet pass) until acceptance criterion holds.
 
 ## 11) Reviewer Runbook
 RUNBOOK:
@@ -147,18 +147,18 @@ RUNBOOK:
   py -3.11 scripts\start_nonstop_runtime.py --chain base --hours 0.5 --with-discovery --no-m4 --with-anvil --anvil-port 8545 --m7-hot-blocks 900 --m7-cold-blocks 900 --max-restarts 100
   py -3.11 scripts\reviewer_soak_summary.py --discovery --max-rollup-staleness-s 120 --staleness-anchor-utc <supervisor_end_iso>
 
-  # Post-soak G-level inspection (no new script; standard JSON read):
+  # Post-soak H-level inspection (no new script; standard JSON read):
   Get-Content data\runs\_rolling\m7_hot_rollup_latest.json | ConvertFrom-Json |
-    Select-Object -ExpandProperty session |
-    Select-Object session_events_per_minute, session_elapsed_minutes
+    Select-Object -ExpandProperty supervisor_window
   Get-Content data\runs\_rolling\m7_hot_rollup_latest.json | ConvertFrom-Json |
-    Select-Object -ExpandProperty bridge_hit_but_not_fast_scored
+    Select-Object -ExpandProperty bridge_hit_but_not_fast_scored |
+    Select-Object reason_histogram, samples
 
 exit 0 = PASS, 2 = FAIL acceptance, 1 = missing artifacts.
 
 ## 12) Session Completion
 goal_status: BLOCKED
-primary_blocker_of_session: M7.E1.34e soak acceptance FAIL (funnel starved)
-blocker_status_after: BLOCKED (diagnostics landed; next soak required)
+primary_blocker_of_session: M7.E1.34g soak acceptance FAIL (feed starvation + HOT_SKIP_UNKNOWN_PAIR drop)
+blocker_status_after: BLOCKED (code fixes landed; feed + registry work + next soak required)
 docs_reread_confirmed: true
-next_session_entrypoint: next 30m Base soak + G-level rollup inspection
+next_session_entrypoint: operational feed coverage + registry join + fresh 30m strict Base soak

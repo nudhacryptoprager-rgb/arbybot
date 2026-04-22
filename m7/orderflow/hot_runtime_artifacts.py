@@ -968,6 +968,27 @@ def _update_hot_rollup(
             )
     except Exception:
         pass
+    # M7.E1.34h fix #5: supervisor-window feed rate. Rollup-level
+    # first_window_at + events_seen_total survive child restarts, so
+    # these describe the full supervisor window rather than the most
+    # recent short-lived child process. Reviewer must prefer these
+    # whenever the supervisor restarts children across a soak.
+    try:
+        _sw = rollup.get("supervisor_window") or {}
+        _fw = rollup.get("first_window_at")
+        if isinstance(_fw, str):
+            _fw_dt = datetime.fromisoformat(_fw.replace("Z", "+00:00"))
+            if _fw_dt.tzinfo is None:
+                _fw_dt = _fw_dt.replace(tzinfo=timezone.utc)
+            _now_dt_sw = datetime.now(timezone.utc)
+            _sw_elapsed = max((_now_dt_sw - _fw_dt).total_seconds() / 60.0, 1.0 / 60.0)
+            _sw["first_window_at"] = _fw
+            _sw["events_total"] = int(rollup.get("events_seen_total", 0) or 0)
+            _sw["elapsed_minutes"] = round(_sw_elapsed, 3)
+            _sw["events_per_minute"] = round(_sw["events_total"] / _sw_elapsed, 3)
+            rollup["supervisor_window"] = _sw
+    except Exception:
+        pass
     _sess["session_bridge_pool_hit_total"] = (
         _sess.get("session_bridge_pool_hit_total", 0)
         + _bd.get("bridge_pool_address_hit_count", 0)
@@ -1056,6 +1077,14 @@ def _update_hot_rollup(
         _rh = _diag.get("reason_histogram") or {}
         _rh[_reason] = int(_rh.get(_reason, 0) or 0) + 1
         _diag["reason_histogram"] = _rh
+        # M7.E1.34h fix #3: propagate enriched sample (raw pair context)
+        # into the rollup bucket so reviewer can route drops by pair
+        # without re-running the soak. Bounded ring of 10 keeps size small.
+        _sample = _bd.get("bridge_hit_not_scored_sample") if isinstance(_bd, dict) else None
+        if isinstance(_sample, dict):
+            _samples = _diag.get("samples") or []
+            _samples.append({**_sample, "observed_at": ts})
+            _diag["samples"] = _samples[-10:]
         rollup["bridge_hit_but_not_fast_scored"] = _diag
     rollup["fast_path_scored_total"] = (
         rollup.get("fast_path_scored_total", 0) + len(_fast)
@@ -1232,6 +1261,13 @@ def _update_hot_rollup(
                     _s.setdefault("session_id", _sid_now)
                     _s["sample_updated_at"] = _now_iso
             _existing_f = rollup.get("sim_failed_samples_recent", [])
+            # M7.E1.34h fix #7: prune ring to current session_id before
+            # appending so stale samples from previous child sessions
+            # cannot contaminate fresh-soak diagnosis.
+            _existing_f = [
+                _x for _x in _existing_f
+                if isinstance(_x, dict) and _x.get("session_id") == _sid_now
+            ]
             rollup["sim_failed_samples_recent"] = (_existing_f + _failed_samples)[-50:]
             rollup["sim_failed_samples_total"] = (
                 rollup.get("sim_failed_samples_total", 0) + len(_failed_samples)
@@ -1602,4 +1638,33 @@ def _update_hot_rollup(
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:
         logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
+
+
+def flush_rollup_shutdown(chain: str = "arbitrum_one") -> None:
+    """M7.E1.34h fix #6: stamp rollup with shutdown-flush timestamps.
+
+    Called by loop_runner when the supervisor-managed child process
+    exits cleanly. Writes ``last_heartbeat_utc`` / ``last_updated`` /
+    ``shutdown_flush_at`` = now() so the reviewer staleness gate sees a
+    fresh rollup at supervisor end instead of the last mid-cycle stamp.
+    No counters are mutated.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rollup: dict = {}
+    try:
+        if os.path.exists(_rio._HOT_ROLLUP_PATH):
+            with open(_rio._HOT_ROLLUP_PATH, "r", encoding="utf-8") as f:
+                rollup = json.load(f)
+    except Exception:
+        rollup = {}
+    if not isinstance(rollup, dict):
+        return
+    rollup["last_heartbeat_utc"] = ts
+    rollup["last_updated"] = ts
+    rollup["shutdown_flush_at"] = ts
+    rollup.setdefault("chain", chain)
+    try:
+        _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
+    except Exception as exc:
+        logger.debug("Failed to flush hot rollup at shutdown: %s", str(exc)[:80])
 
