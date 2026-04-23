@@ -59,6 +59,25 @@ _VE33_FEE_SENTINELS = {0, 1}
 _STANDARD_V3_FEES_FALLBACK = {100, 500, 2500, 3000, 10000}
 _ACCEPTED_FEES_CACHE: Dict[str, frozenset] = {}
 
+# M7.E1.34j: Aerodrome Slipstream fee→tickSpacing mapping.
+# Pool identity on Slipstream is (tokenA, tokenB, tickSpacing); the per-pool
+# `fee` is stored on-pool and observed in runtime events. To invoke the
+# Slipstream adapter we must resolve fee→tickSpacing. Empirical mapping
+# derived from verified Base pools (aerodrome.finance/security + on-chain
+# inspection); fees not listed here keep the legacy PENDING bucket.
+# Canonical Slipstream tickSpacings on Base: {1, 50, 100, 200, 2000}.
+SLIPSTREAM_FEE_TO_TICKSPACING: Dict[int, int] = {
+    150: 1,      # stable-stable / near-par (e.g. USDC/USDbC, EURC/USDC)
+    445: 50,     # low-volatility pairs
+    600: 50,     # low-volatility pairs
+    1000: 100,   # medium-volatility (e.g. WETH/cbETH)
+    2105: 100,   # medium-volatility
+    2655: 100,   # medium-volatility (dominant bucket in soak3 histogram)
+    3024: 100,   # medium-volatility
+    5000: 200,   # high-volatility (e.g. AERO/WETH)
+    20000: 2000, # extreme-volatility / long-tail
+}
+
 
 def _compute_accepted_fees(chain: str) -> frozenset:
     """Collect accepted fee tiers for *chain* from the DEX registry.
@@ -450,6 +469,16 @@ def _build_sim_tx_params(
                         and _slip_cfg.get("router")
                         and _slip_cfg.get("quoter_v2")
                     ):
+                        # M7.E1.34j: fee→tickSpacing mapping resolved →
+                        # surface progress. Swap calldata still pending
+                        # per-pool verification (SwapRouter selector + TS
+                        # lookup from pool contract).
+                        _ts = SLIPSTREAM_FEE_TO_TICKSPACING.get(int(_fee_hint))
+                        if _ts is not None:
+                            return None, (
+                                f"SLIPSTREAM_MAPPED_PENDING_SUBMIT:"
+                                f"{_fee_hint}:ts{_ts}"
+                            )
                         return None, f"SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"
                     return None, f"UNSUPPORTED_FEE_TIER:AERODROME_CL:{_fee_hint}"
                 # Very small non-standard (often Algebra dynamic starting fee)

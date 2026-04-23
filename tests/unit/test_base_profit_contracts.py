@@ -281,22 +281,35 @@ class TestBaseProfitConfig:
         assert cfg["dynamic_probe"]["adaptive_refinement"] is True, "R40: Adaptive refinement enabled"
 
     def test_include_pairs_contour(self):
-        """R40: Expanded contour = 7 pairs (2 PRIMARY + 1 BENCHMARK + 4 ALPHA).
-        cbBTC/* and VIRTUAL re-enabled for alpha pair discovery."""
+        """M7.E1.34j: expanded contour — original 7 PROFIT pairs MUST stay,
+        plus TVL-growth pairs added to widen bridge PTT seed (soak3 showed
+        bridge_cache_populated=7 → registry starvation).
+
+        All tokens must be present in core_tokens.yaml base; reserved-slot
+        policy still only guarantees budget for the stable primaries.
+        """
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "config", "onboard_base_profit.yaml"
         )
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
         pairs = cfg.get("include_pairs", [])
-        assert len(pairs) == 7, f"Expected 7 active pairs, got {len(pairs)}: {pairs}"
-        assert "USDC/DAI" in pairs
-        assert "USDC/USDT" in pairs
-        assert "WETH/USDC" in pairs
-        assert "AERO/USDC" in pairs
-        assert "cbBTC/USDC" in pairs
-        assert "cbBTC/WETH" in pairs
-        assert "VIRTUAL/USDC" in pairs
+        # Original R40 profit contour — must remain
+        required = {
+            "USDC/DAI",
+            "USDC/USDT",
+            "WETH/USDC",
+            "AERO/USDC",
+            "cbBTC/USDC",
+            "cbBTC/WETH",
+            "VIRTUAL/USDC",
+        }
+        missing = required - set(pairs)
+        assert not missing, f"Profit contour pairs missing: {missing}"
+        # Widened seed: expect > 7 pairs; keep a sane upper bound.
+        assert 7 < len(pairs) <= 30, (
+            f"Expected widened PTT seed (>7, <=30), got {len(pairs)}: {pairs}"
+        )
 
     def test_no_duplicate_yaml_keys(self):
         """Ensure tokens_anchor_price appears exactly once in the raw YAML."""

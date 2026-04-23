@@ -1,7 +1,7 @@
 ---
 name: opus+
-description: Run a query in a subagent that uses the Opus-4.6 model.
-model: Claude Opus 4.6 (copilot)
+description: Run a query in a subagent that uses the Opus-4.7 model.
+model: Claude Opus 4.7 (copilot)
 agent: agent
 ---
 <USER_REQUEST_INSTRUCTIONS>

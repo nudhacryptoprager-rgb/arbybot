@@ -347,7 +347,12 @@ def run_loop(cli_args) -> None:
                             _registry_warmed = True
                             _bridge_prewarmed_ptt_count = _current_ptt_count
                     except Exception as _pw_exc:
-                        logger.debug("Hot prewarm failed: %s", str(_pw_exc)[:120])
+                        # E1.34i: elevate hot prewarm failure to warning so
+                        # soak artifacts surface the root cause of 0 prewarms.
+                        logger.warning(
+                            "Hot prewarm failed iter=%d err=%s",
+                            iteration, str(_pw_exc)[:200],
+                        )
                 else:
                     logger.info(
                         "Hot prewarm skipped (registry warm, iter %d, "

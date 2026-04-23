@@ -310,7 +310,7 @@ def main():
         if _disc_backend:
             _disc_env = {"ARBY_SIM_BACKEND": _disc_backend}
             print(
-                f"  [discovery] ARBY_SIM_BACKEND_DISC={_disc_backend} → "
+                f"  [discovery] ARBY_SIM_BACKEND_DISC={_disc_backend} -> "
                 "injected into DISC subprocesses as ARBY_SIM_BACKEND"
             )
 

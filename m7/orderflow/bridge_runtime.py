@@ -396,8 +396,11 @@ def _prewarm_registry_from_bridge(
         try:
             registry.preload_pair(t0, t1, dex_configs, rpc_url, block_num)
             count += 1
-        except Exception:
-            pass
+        except Exception as _pp_exc:
+            logger.warning(
+                "Bridge prewarm preload_pair failed pair=%s err=%s",
+                pair_key, str(_pp_exc)[:120],
+            )
 
     if _budget_exceeded:
         logger.info(

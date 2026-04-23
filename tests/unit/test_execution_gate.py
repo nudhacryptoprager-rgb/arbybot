@@ -638,12 +638,17 @@ class TestBuildSimTxParams:
         """Non-standard Aerodrome CL fees route to a Slipstream-aware bucket.
 
         E1.35 P1.1 step 3: when `aerodrome_slipstream` config is verified
-        (router + quoter_v2 + verified=True), the reject bucket becomes
+        (router + quoter_v2 + verified=True), the reject bucket is
         `SLIPSTREAM_PENDING_LOOKUP:<fee>` to surface adapter readiness.
+        M7.E1.34j: if the fee is in `SLIPSTREAM_FEE_TO_TICKSPACING`, the
+        bucket is promoted to `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>`.
         Legacy bucket `UNSUPPORTED_FEE_TIER:AERODROME_CL:<fee>` is kept
         only when the Slipstream config is absent/unverified.
         """
-        from m7.orderflow.execution_gate import _build_sim_tx_params
+        from m7.orderflow.execution_gate import (
+            SLIPSTREAM_FEE_TO_TICKSPACING,
+            _build_sim_tx_params,
+        )
 
         for fee in (150, 445, 600, 2105, 2655, 3024):
             br = self._make_result(
@@ -652,7 +657,11 @@ class TestBuildSimTxParams:
             )
             tx, err = _build_sim_tx_params(br, chain="base")
             assert tx is None
-            assert err == f"SLIPSTREAM_PENDING_LOOKUP:{fee}", err
+            ts = SLIPSTREAM_FEE_TO_TICKSPACING.get(fee)
+            if ts is not None:
+                assert err == f"SLIPSTREAM_MAPPED_PENDING_SUBMIT:{fee}:ts{ts}", err
+            else:
+                assert err == f"SLIPSTREAM_PENDING_LOOKUP:{fee}", err
 
     def test_algebra_dynamic_small_fee_classified(self):
         """Small non-standard fee (<=100) → ALGEBRA_DYNAMIC sub-tag."""

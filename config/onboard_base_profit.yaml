@@ -70,9 +70,18 @@ dexes:
   - sushiswap_v3
   - pancakeswap_v3
   - aerodrome
+  # M7.E1.34j: Slipstream CL on Base — adapter registered (dex/registry.py),
+  # calldata/quoter ABI verified. Submit wiring pending per-pool
+  # tickSpacing lookup — until then histogram bucket
+  # `SLIPSTREAM_MAPPED_PENDING_SUBMIT:*` surfaces progress vs.
+  # legacy `UNSUPPORTED_FEE_TIER:AERODROME_CL:*`.
+  - aerodrome_slipstream
 
-# R39n: Narrow discovery to profit-relevant pairs only
-discovery_runtime_max_pairs: 15
+# M7.E1.34j: widen discovery seed — previous value (15) was too narrow
+# for Base. hot_gap_debug on soak3 showed `bridge_cache_populated=7` and
+# `bridge_registry_prewarmed=0`. Raising the cap lets the subgraph feed
+# more distinct pools into the PTT without changing reserved-slot policy.
+discovery_runtime_max_pairs: 30
 require_cross_dex: true
 
 # R39q: Profit lane pairs — cheap fee/size routes first, expensive diagnostic last.
@@ -89,6 +98,18 @@ include_pairs:
   - "cbBTC/USDC"     # ALPHA — Coinbase BTC, high TVL, volatile
   - "cbBTC/WETH"     # ALPHA — cbBTC/WETH cross-dex route
   - "VIRTUAL/USDC"   # ALPHA — Base-native, high TVL, volatile
+  # M7.E1.34j: expand to top Base TVL (core_tokens.yaml base subset).
+  # Soak3 hot_gap_debug: bridge_cache_populated=7 → starves registry.
+  # Reserved-slot policy unchanged — only primary stables get guaranteed
+  # budget; new entries compete on spread_minus_required_bps.
+  - "AERO/WETH"      # TVL — Aerodrome native pair
+  - "VIRTUAL/WETH"   # TVL — Base-native, ALPHA/WETH route
+  - "cbETH/WETH"     # TVL — Coinbase staked ETH (LST arb)
+  - "wstETH/WETH"    # TVL — Lido wstETH on Base (LST arb)
+  - "rETH/WETH"      # TVL — Rocket Pool staked ETH
+  - "EURC/USDC"      # TVL — Circle EUR stable, near-par forex
+  - "DAI/USDT"       # TVL — tri-stable leg
+  - "USDT/DAI"       # TVL — reverse, picked up by some DEXes only
 
 # R28.27: Exclude known-dead/stale pairs on base
 excluded_pair_hints:

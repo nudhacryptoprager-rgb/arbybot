@@ -1,10 +1,10 @@
 ﻿# Status: M7 (Triangular Feasibility)
 
-**Status**: **M7.E1.34h — reviewer 10-step batch: code-addressable fixes (#3, #5, #6, #7) landed; #1/#2/#4/#8/#9/#10 are operational/policy, documented. Acceptance still BLOCKED until next 30m soak produces `fast_path_scored>=20`, `sim_passed>0`, `roundtrip_attempted>0`.** Reviewer 30-min E1.34g validation soak 2026-04-21T20:12:56Z–20:42:59Z classified the funnel blockers using the new G-level instrumentation: PROD `0.467 events/min`, DISC `0.8 events/min` (both < 5 threshold) → **feed starvation confirmed**; DISC `reason_histogram` dominated by `HOT_SKIP_UNKNOWN_PAIR` (3/3 PROD, 2 DISC) → **canonical pair registry not stitched to bridge universe**; PROD `fast_path_net_bps_histogram` empty, DISC single bucket `-10_to_-1: 1` → insufficient net_bps data; `sim_passed_delta=0`, `roundtrip_attempted_delta=0`, `submit_ready_delta=0` across both lanes; `strict_provider_breaches=0`, `BlockOutOfRange=0`. Landed this cycle (M7.E1.34h): (a) [m7/orderflow/loop_runner.py](m7/orderflow/loop_runner.py) — bridge-hit block 2 now emits `bridge_hit_not_scored_sample` with raw `pool_address` + `scoring_path` + `actual_pair` + `token_in` + `token_out` + `fee_tier` + `venue` + `adapter_type`, so reviewer can route each HOT_SKIP_UNKNOWN_PAIR drop directly to the canonical registry without re-running; loop-exit path calls `flush_rollup_shutdown` so supervisor end stamps `shutdown_flush_at` + fresh `last_heartbeat_utc` (stops reviewer staleness gate from retro-failing clean supervisor-managed soaks); (b) [m7/orderflow/hot_runtime_artifacts.py](m7/orderflow/hot_runtime_artifacts.py) — new `supervisor_window` block (`first_window_at`, `events_total`, `elapsed_minutes`, `events_per_minute`) computed from rollup-level `events_seen_total` + `first_window_at`, so feed rate reflects the full supervisor window instead of the most recent short-lived child process; `sim_failed_samples_recent` ring is now pruned to current `session_id` before each append (stale pre-fix samples can no longer contaminate fresh-soak diagnosis); new `flush_rollup_shutdown(chain)` helper wired from loop_runner. Bridge-hit sample propagates into `rollup["bridge_hit_but_not_fast_scored"]["samples"]` (bounded ring of 10). M7.B remains closed: no `submit_ready_delta>0` evidence.
+**Status**: **M7.E1.34j fresh Base 30m soak (ended 2026-04-23T07:21:17Z): BLOCKED — coverage/activity only; bridge/registry funnel UNBLOCKED.** Mixed-backend bypass (PROD=tenderly, DISC=rpc_fork — no Anvil, no `ARBY_ANVIL_*`) delivered a clean 30m: supervisor 5/5 alive throughout, `crash_restarts=0/100` on every lane (m7_hot=0, m7_cold=0, m7_hot_discovery=0, m7_cold_discovery=0), cycles_completed 28/25/41/23, 115 clean restarts total. Reviewer verdict FAIL (exit=2) because `fast_path_scored_delta=0`, but `hot_gap_debug` shows the funnel chain that starved in soak3 is now open: `bridge_cache_populated 7→12 (+71%)`, **`bridge_registry_prewarmed 0→18` (UNBLOCKED)**, `bridge_focused_pool_count 7→12`. Remaining gate is event landing: only 2 swap events reached the hot loop in the window and both landed on pools outside the seed set (`pool_address_match_count=0`, `not_in_hot_registry_count=2`). Code/data changes this cycle: `config/onboard_base_profit.yaml` widened to 15 include_pairs + `aerodrome_slipstream` DEX + `discovery_runtime_max_pairs=30`; `m7/orderflow/execution_gate.py` adds `SLIPSTREAM_FEE_TO_TICKSPACING` (9 fees → 5 tickSpacings) and promotes matched rejects to `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>`; `scripts/start_nonstop_runtime.py` cp1251-safe banner. `strict_provider_breaches_delta=0`, `BlockOutOfRange_delta=0`. M7.B remains policy-closed.
 
-Unit baseline: **4251 PASS / 6 skipped / 0 failed** (+7 new in `test_m7_e1_34h_reviewer_fixes.py`). `check_repo_safety.py`: PASS 0 warnings.
+Unit baseline: **4251 PASS / 6 skipped / 0 failed**. `check_repo_safety.py`: PASS 0 warnings.
 
-**Updated**: 2026-04-21
+**Updated**: 2026-04-23
 
 **Acceptance criterion (unchanged)**:
 `Δsim_passed > 0 AND Δroundtrip_attempted > 0 AND ΔBlockOutOfRangeError == 0
@@ -14,26 +14,35 @@ unless ARBY_REVIEWER_QUIET_OK=1)
 AND production rollup not stale (default 120s, anchor = supervisor end
 when available)` on both lanes.
 
-**Next P0 blockers (operational, not code)**:
-(a) **feed coverage fix** (reviewer step #2) — hot set widening, pair-filter
-review, WS event coverage on Base. `supervisor_window.events_per_minute`
-is now the authoritative metric; target ≥ 5 on Base before any scoring
-recalibration;
-(b) **bridge ↔ canonical pair registry join** (reviewer step #4) — route
-every `bridge_hit_not_scored_sample` with `reason=HOT_SKIP_UNKNOWN_PAIR`
-through the registry entry check; outcome must be either a scoring
-candidate or a concrete rejection reason other than UNKNOWN_PAIR;
-(c) **do NOT touch cost gate** (reviewer step #8) — `ARBY_SIM_MIN_NET_BPS`
-stays at 1.0 until at least one fresh 30m soak shows
-`fast_path_scored >= 20` with a populated net_bps histogram;
-(d) **repeat same strict 30m Anvil soak** after (a)+(b); acceptance verdict
-relies on the E1.34h supervisor-window metric + enriched bridge samples.
+**Next P0 blockers (operational; no local Anvil required)**:
+(a) **run the corrected soak** — mixed backend policy that already
+exists in code (`simulation.py`, `rpc_fork_backend`, tenderly→rpc_fork
+fallback) and in supervisor wiring
+(`scripts/start_nonstop_runtime.py`): `ARBY_SIM_BACKEND=tenderly`
+for PROD + `ARBY_SIM_BACKEND_DISC=rpc_fork` for DISC. Tenderly API
+credentials are in `.env`; `rpc_fork` reuses the premium Base archive
+RPC already used by the WS feed. No `--with-anvil`, no
+`ARBY_ANVIL_*`; the previous Alchemy monthly cap path is not used;
+(b) **raise feed coverage** to hit `supervisor_window.events_per_minute
+>= 5`; registry / pair-filter work unlocked by the enriched bridge
+samples (`bridge_hit_but_not_fast_scored.samples[]`);
+(c) **classify fresh `HOT_SKIP_UNKNOWN_PAIR`** pools listed above into
+either scoring candidates or concrete non-UNKNOWN reject reasons.
 
-**M7.B remains policy-closed** (reviewer step #10). Opening requires all six:
+**M7.B remains policy-closed** — opening requires all six of:
 `fast_path_scored >= 20`, `sim_passed > 0`, `roundtrip_attempted > 0`,
-`BlockOutOfRangeError == 0`, `strict_provider_breaches == 0`, rollup not
-stale.
+`BlockOutOfRangeError == 0`, `strict_provider_breaches == 0`, rollup
+not stale. The 2026-04-22 soak meets only the last three.
 
+**Previous (M7.E1.34h code cycle)** retained: enriched
+`bridge_hit_not_scored_sample` (raw pool_address / scoring_path /
+actual_pair / token_in / token_out / fee_tier / venue / adapter_type)
+propagated into rollup `bridge_hit_but_not_fast_scored.samples[]`
+(bounded ring of 10); `rollup.supervisor_window` (first_window_at,
+events_total, elapsed_minutes, events_per_minute) surviving child
+restarts; `flush_rollup_shutdown(chain)` stamps `shutdown_flush_at` on
+clean loop exit; `sim_failed_samples_recent` ring pruned to current
+`_SESSION_ID` before each append.
 **Previous (M7.E1.34g)** retained: feed-rate counters
 (`session.session_events_per_minute` + `session.session_elapsed_minutes`);
 bridge-drop reason classification (`HOT_SKIP_UNKNOWN_PAIR` / `NOT_SCORED`

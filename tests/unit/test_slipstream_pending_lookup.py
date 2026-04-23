@@ -39,19 +39,30 @@ def _result(
 
 class TestSlipstreamPendingLookup:
     def test_verified_config_yields_pending_lookup_bucket(self):
+        from m7.orderflow.execution_gate import SLIPSTREAM_FEE_TO_TICKSPACING
+
         r = _result(best_buy_fee=2655)
         tx, reason = _build_tx_params(r, chain="base")
         assert tx is None
         # With config/dexes.yaml Slipstream entry verified=True (E1.35
-        # step 2), the reject must surface under the new bucket.
-        assert reason == "SLIPSTREAM_PENDING_LOOKUP:2655"
+        # step 2) AND fee→tickSpacing mapping landed (M7.E1.34j), the
+        # reject surfaces under the MAPPED_PENDING_SUBMIT bucket.
+        ts = SLIPSTREAM_FEE_TO_TICKSPACING.get(2655)
+        assert ts is not None
+        assert reason == f"SLIPSTREAM_MAPPED_PENDING_SUBMIT:2655:ts{ts}"
 
     @pytest.mark.parametrize("fee", [150, 445, 600, 1000, 2105, 3024, 5000, 20000])
     def test_all_known_cl_fees_route_to_pending_lookup(self, fee):
+        from m7.orderflow.execution_gate import SLIPSTREAM_FEE_TO_TICKSPACING
+
         r = _result(best_buy_fee=fee)
         tx, reason = _build_tx_params(r, chain="base")
         assert tx is None
-        assert reason == f"SLIPSTREAM_PENDING_LOOKUP:{fee}"
+        ts = SLIPSTREAM_FEE_TO_TICKSPACING.get(fee)
+        if ts is not None:
+            assert reason == f"SLIPSTREAM_MAPPED_PENDING_SUBMIT:{fee}:ts{ts}"
+        else:
+            assert reason == f"SLIPSTREAM_PENDING_LOOKUP:{fee}"
 
     def test_unverified_config_falls_back_to_legacy_bucket(self):
         """When Slipstream config lacks router/quoter (not yet verified),

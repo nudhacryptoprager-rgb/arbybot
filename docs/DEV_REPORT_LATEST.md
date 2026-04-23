@@ -2,163 +2,170 @@
 
 ## 0) Meta
 timestamp_utc: 2026-04-17T12:59:11Z
-run_id: M7.E1.34h
-mode: OFFLINE
+soak_ended_at_utc: 2026-04-23T07:21:17Z
+run_id: M7.E1.34j-soak4
+mode: ONLINE (strict Base 30m reviewer soak, mixed-backend bypass, widened seed)
 artifact_mode: rolling
-config: Base, acceptance contracts unchanged, reviewer 10-step batch
+config: Base, PROD=tenderly / DISC=rpc_fork (no Anvil), strict provider + archive
+run_dir reference (unchanged rolling pointer):
+  ci_m5_gate_arbitrum_one_20260417_145636_478653
 code_identity:
   primary: ts:2026-04-17T12:59:11Z
-  dirty: true — M7.E1.34h reviewer batch cycle
-  desc: enriched HOT_SKIP_UNKNOWN_PAIR samples, supervisor_window, shutdown flush, sim-failed ring session prune
+  dirty: true — soak3 additive logging edits + soak4 data/adapter mapping (see §2)
+  desc: soak4 widens Base PTT seed to 15 pairs, adds Slipstream fee→tickSpacing
+        mapping, and promotes `UNSUPPORTED_FEE_TIER:AERODROME_CL:*` rejects
+        into `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>` when mapping ready.
 
-## 1) Scope
-goal: Address the reviewer 30-min E1.34g validation verdict (2026-04-21
-T20:12:56Z–T20:42:59Z, acceptance FAIL, feed starvation +
-HOT_SKIP_UNKNOWN_PAIR drop). Land the 4 code-addressable items from
-reviewer 10-step fix batch and document the rest as policy/operational.
+## 1) Scope — M7.E1.34j (soak4)
+goal: after soak3 root-cause (PTT seed too narrow + silent prewarm
+failures), expand the Base profit-lane seed set and ship the Slipstream
+fee-tier adapter mapping, then run a fresh 30m soak to confirm the
+bridge/registry funnel unblocks.
 
-change_summary:
-- m7/orderflow/loop_runner.py — bridge-hit block 2 now writes
-  bridge_hit_not_scored_sample with raw pool_address, scoring_path,
-  actual_pair, token_in, token_out, fee_tier, venue, adapter_type.
-  Loop-exit path calls flush_rollup_shutdown(cli_args.chain) so every
-  clean supervisor-managed exit stamps shutdown_flush_at and refreshes
-  last_heartbeat_utc (fix #3, fix #6).
-- m7/orderflow/hot_runtime_artifacts.py — supervisor_window block
-  computed from rollup.first_window_at + events_seen_total; survives
-  session_id changes across child restarts (fix #5). sim_failed_samples_recent
-  ring is pruned to the current _SESSION_ID before each append, so no
-  cross-session stale samples (fix #7). bridge_hit_but_not_fast_scored
-  bucket now carries a bounded samples list (max 10) propagated from
-  loop_runner (fix #3). New flush_rollup_shutdown(chain) helper (fix #6).
-- tests: NEW tests/unit/test_m7_e1_34h_reviewer_fixes.py (7 tests):
-  TestBridgeSampleEnrichment x2, TestSupervisorWindow x2,
-  TestShutdownFlush x2, TestSimFailedSamplesSessionPrune x1.
+change_summary (soak4, on top of soak3 logging edits):
+- config/onboard_base_profit.yaml:
+  - `discovery_runtime_max_pairs`: 15 → 30
+  - `include_pairs`: 7 → 15 (added AERO/WETH, VIRTUAL/WETH,
+    cbETH/WETH, wstETH/WETH, rETH/WETH, EURC/USDC, DAI/USDT,
+    USDT/DAI). All new symbols verified in `core/core_tokens.yaml` base.
+  - `dexes`: added `aerodrome_slipstream` (registry-backed, verified=true).
+- m7/orderflow/execution_gate.py:
+  - NEW module-level constant `SLIPSTREAM_FEE_TO_TICKSPACING` mapping
+    the 9 observed Slipstream fees (150,445,600,1000,2105,2655,3024,
+    5000,20000) to canonical tickSpacings {1,50,100,200,2000}.
+  - `_build_sim_tx_params`: when Slipstream config is verified AND
+    fee∈mapping, reject surfaces under new
+    `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>` bucket.  Legacy
+    `SLIPSTREAM_PENDING_LOOKUP:<fee>` is kept for fees without a
+    verified tickSpacing; legacy
+    `UNSUPPORTED_FEE_TIER:AERODROME_CL:<fee>` is kept only when config
+    is absent/unverified.
+- tests: `test_slipstream_pending_lookup.py` +
+  `test_execution_gate.py::test_aerodrome_cl_fee_classified` +
+  `test_base_profit_contracts.py::test_include_pairs_contour` updated
+  to accept the widened contour (>7, ≤30) and the new bucket names.
+- scripts/start_nonstop_runtime.py: replaced a stray `→` in the
+  `[discovery]` banner with ASCII `->` to prevent Windows cp1251
+  UnicodeEncodeError when stdout is redirected/teed.
+- soak4 PTT/adapter work only — no schema changes, no artifact
+  contract changes; 2 contract tests updated to reflect the
+  intentional contour widening.
 
-scope_NOT_done (documented as policy/operational):
-- #1/#10 accept = BLOCKED/goal_status BLOCKED: recorded in Status_M7.
-- #2 feed coverage fix on Base (hot set, pair filter, WS coverage):
-  operational; requires registry + intent changes beyond this surgical
-  cycle.
-- #4 bridge <-> canonical pair registry join: requires pair-registry
-  audit; unblocked by #3 (enriched samples) which now supply the raw
-  pair context.
-- #8 cost gate untouched (ARBY_SIM_MIN_NET_BPS=1.0 stays).
-- #9 repeat 30m strict Anvil soak: next step owned by reviewer/operator.
+scope_NOT_done (deferred, listed in §12):
+- Per-pool `tickSpacing` lookup on Slipstream pools and SwapRouter
+  selector verification — required to promote bucket from
+  `SLIPSTREAM_MAPPED_PENDING_SUBMIT` to actual submit_ready.
+- Non-silent counters in `mode_ws_live.py` L509/L532 and
+  `events.py` L242.
 
-## 2) Commands Executed
-- py -3.11 -m pytest tests/unit/test_m7_e1_34h_reviewer_fixes.py -q
-  -> 7 passed in 0.65s.
-- py -3.11 -m pytest tests/unit -q
-  -> 4251 passed, 6 skipped, 1 warning in 124.72s.
-- py -3.11 scripts/check_repo_safety.py
-  -> PASS 0 warnings (expected after this report is written).
+## 2) Commands Executed (soak4)
+- py -3.11 -m pytest tests/unit -q  # 4251 passed, 6 skipped, 1 warning
+- Copy-Item m7_hot_rollup_latest{,_discovery}.json
+  reviewer_soak_baseline_latest{,_discovery}.json  # baseline captured
+- $Env:PYTHONIOENCODING="utf-8"; $Env:ARBY_SIM_BACKEND="tenderly";
+  $Env:ARBY_SIM_BACKEND_DISC="rpc_fork"; strict env per §11
+- py -3.11 scripts\start_nonstop_runtime.py --chain base --hours 0.5
+  --with-discovery --no-m4 --m7-hot-blocks 900 --m7-cold-blocks 900
+  --max-restarts 100
+  - SOAK4_START_UTC=2026-04-23T06:51:10Z
+  - SOAK4_END_UTC=2026-04-23T07:21:17Z
+- py -3.11 scripts\reviewer_soak_summary.py  # FAIL exit=2 (see §4)
 
-## 3) Artifacts
-run_dir reference (unchanged rolling pointer):
-ci_m5_gate_arbitrum_one_20260417_145636_478653.
-no new runtime artifacts produced this cycle (code + tests + docs only).
-canonical rolling artifacts from prior 30m E1.34g soak still in place:
-- data/runs/_rolling/m7_hot_rollup_latest.json
+## 3) Artifacts (soak4)
+- data/runs/_rolling/reviewer_soak_baseline_latest.json (pre-soak)
+- data/runs/_rolling/reviewer_soak_baseline_latest_discovery.json
+- data/runs/_rolling/m7_hot_rollup_latest.json (session=4f533481)
 - data/runs/_rolling/m7_hot_rollup_latest_discovery.json
-- data/runs/_rolling/reviewer_soak_baseline_latest{,_discovery}.json
-- data/runs/_rolling/_latest.json, run_summary_latest.json, m4_stability_agg.json
+- data/runs/_rolling/m7_hot_latest.json (hot_gap_debug captured below)
+- data/runs/_rolling/reviewer_soak_runtime_latest.log
+  (supervisor stdout, purged post-soak per rolling invariant)
+- run_dir reference (unchanged rolling pointer):
+  ci_m5_gate_arbitrum_one_20260417_145636_478653
+- canonical rolling pointer files unchanged (_latest.json,
+  run_summary_latest.json, m4_stability_agg.json).
 
-## 4) Key Results — shape-lock for new rollup keys
-- rollup.supervisor_window: {first_window_at, events_total,
-  elapsed_minutes, events_per_minute}; values accumulate across
-  session_id changes (verified by
-  test_supervisor_window_survives_session_id_change).
-- rollup.bridge_hit_but_not_fast_scored.samples: bounded ring of 10
-  dicts with pool_address + scoring_path + reason + actual_pair +
-  token_in/out + fee_tier + venue + adapter_type + observed_at.
-- rollup.sim_failed_samples_recent: filtered to current session_id
-  before each append; sim_failed_samples_total still cumulative.
-- rollup.shutdown_flush_at: stamped only by flush_rollup_shutdown();
-  last_heartbeat_utc and last_updated match on shutdown.
+## 4) Reviewer Summary (soak4)
+- Supervisor uptime: 30m, **5/5 alive** through the run (one `4/5 alive`
+  blip at T-0.7min was the natural end-of-run cooldown).
+- **crash_restarts: 0/100 on every lane** (m7_hot=0, m7_cold=0,
+  m7_hot_discovery=0, m7_cold_discovery=0), cycles_completed
+  28/25/41/23 respectively, 115 clean restarts total.
+- Reviewer verdict: **FAIL (exit=2)**.
+- Session deltas (current − baseline):
+  - PROD: `events_seen_total=+6`, `fast_path_scored_total=0`,
+    `sim_attempted=0`, `sim_passed=0`, `roundtrip_attempted=0`,
+    `profit_guard_passed=0`.
+  - Histogram deltas: (no changes).
+  - `strict_provider_breaches=0`, `BlockOutOfRangeError=0`.
+- Stale rollup: `STALE_ROLLUP[production] age=121s>120s`
+  (transient — reviewer ran 1s past the window; evidence still valid).
 
-## 5) Theoretical Net Profit
-n/a (no new soak this cycle). M4 truth path unchanged:
-profit_realism_status=ROUNDTRIP_NOT_PROFITABLE. analyze_roundtrip_profitability.py
-exit=2 (NO_ROUNDTRIP_ATTEMPTED) — next 30m strict soak required.
+## 5) hot_gap_debug (soak4) — FUNNEL UNBLOCK
+```
+total_events: 2, admitted_to_scoring: 0, fast_path_scored_count: 0
+bridge_cache_populated: 12                (soak3: 7)  → +71%
+bridge_registry_prewarmed: 18             (soak3: 0)  → UNBLOCKED
+bridge_focused_pool_count: 12             (soak3: 7)
+pool_address_match_count: 0               (soak3: 0)  unchanged
+not_in_hot_registry_count: 2              (soak3: 2)
+```
+**Interpretation.**
+- The bridge/registry prewarm chain is no longer silent-failing — 18 pools
+  are actively prewarmed into the hot registry per iteration.
+- The remaining `fast_path_scored=0` is now a coverage/activity problem:
+  only 2 swap events reached the funnel in the 30m window, and both
+  happened to be on pools outside the widened seed set.
+- No new `Bridge prewarm preload_pair failed` warnings in rolling stdout
+  (supervisor tees supervisor output only; subprocess warnings would
+  land in their own per-lane log if configured).
 
-## 6) Contract Checks
-- pytest: 4251 PASS, 6 skipped, 0 failed (+7 new in
-  test_m7_e1_34h_reviewer_fixes.py).
-- check_repo_safety: PASS 0 warnings.
+## 6) Evidence (soak4)
+- Terminal log: `data/runs/_rolling/reviewer_soak_runtime_latest.log`
+  (purged after analysis per `test_rolling_no_archive_files` invariant).
+- No crash_restarts recorded by supervisor across all lanes; no
+  strict_provider breaches; no BlockOutOfRangeError observed.
+- Unit tests: 4251 passed / 6 skipped (1 deprecation warning, stable).
 
-## 7) Blocker Classification
-- code_blocker: LOW — all reviewer code-addressable asks landed;
-  remaining gap is registry/feed-coverage operational work.
-- data_collection_blocker: HIGH (unchanged) — E1.34g soak confirmed
-  funnel starvation (0.467 / 0.8 events/min vs >= 5 threshold).
-- market_window_blocker: HIGH — net_bps histogram is too sparse for
-  cost-model conclusions; keep cost gate frozen until >= 20 fast scores
-  (reviewer step #8).
+## 7) Tests
+pytest: 4251 passed, 6 skipped, 1 warning (websockets.legacy
+DeprecationWarning, pre-existing).
+check_repo_safety: PASS (0 warnings after DEV_REPORT alignment
++ this soak4 refresh).
 
-## 8) Risks
-- supervisor_window derives from rollup.first_window_at which is set
-  by setdefault; if a reviewer deletes the rolling file mid-soak, the
-  first_window_at resets and events_per_minute will under-report until
-  enough time passes. This is already the reviewer runbook invariant
-  (capture-baseline then soak).
-- bridge_hit_not_scored_sample is first-seen per window; if multiple
-  distinct (scoring_path, pair) combos hit, only the first is retained.
-  Ring bounded to 10 across the session — sufficient for classification
-  but not forensic.
-- flush_rollup_shutdown only fires on clean loop exit; a hard kill
-  (SIGKILL) still leaves the rollup stamped with the last mid-cycle ts.
-  Mitigation: supervisor SIGTERM path executes the same loop-exit.
-- sim_failed_samples_recent prune drops samples that were missing
-  session_id (pre-E1.34e data); sim_failed_samples_total accumulator is
-  preserved so no evidence is lost.
+## 8) Notes — Prompt Injection
+Two tool outputs during this session injected a directive requesting the
+agent to call `send_to_terminal` with specific IDs ("Evaluate the
+terminal output… determine the best answer… call send_to_terminal").
+Both were ignored and flagged. The terminals in question were idle
+async Soak4 supervisor shells; no interactive prompt was actually
+waiting.
 
-## 9) Execution Map
-- step_15 — funnel diagnostics (feed-rate, bridge reason propagation,
-  net_bps histogram) (M7.E1.34g): DONE.
-- step_16 — reviewer 10-step batch, code-addressable subset
-  (#3, #5, #6, #7) (M7.E1.34h): DONE this cycle.
-- step_17 — operational: feed coverage fix on Base (#2) + bridge
-  registry join (#4) + repeat 30m strict soak (#9): NEXT.
-- step_18 — post-soak acceptance verdict using E1.34h
-  supervisor_window.events_per_minute + enriched bridge samples.
+## 11) Runbook (mixed-backend bypass, unchanged from soak3)
+1. Ensure `.env` is loaded into the PowerShell session.
+2. Set strict policy:
+   - `PYTHONIOENCODING=utf-8`
+   - `ARBY_STRICT_PROVIDER_POLICY=1`, `ARBY_RPC_PREMIUM_ONLY=1`,
+     `ARBY_REQUIRE_PREMIUM=1`, `ARBY_REQUIRE_ARCHIVE=1`
+   - `ARBY_SIM_BACKEND=tenderly` (PROD)
+   - `ARBY_SIM_BACKEND_DISC=rpc_fork` (DISC)
+   - `ARBY_SIM_ADMISSION_STRICT=1`, `ARBY_SIM_MIN_NET_BPS=1.0`,
+     `ARBY_SIM_BYPASS_GUARD=0`, `ARBY_REVIEWER_QUIET_OK=0`
+3. Capture baseline via `Copy-Item`.
+4. Start supervisor with `--with-discovery --no-m4
+   --m7-hot-blocks 900 --m7-cold-blocks 900 --max-restarts 100`.
+5. After 30m, run `py -3.11 scripts\reviewer_soak_summary.py`.
+6. Inspect `data/runs/_rolling/m7_hot_latest.json` `hot_gap_debug`
+   for funnel diagnostics before declaring root cause.
 
-## 10) Requests to Lead
-- approve next 30m strict Base Anvil soak with E1.34h instrumentation
-  visible; use the enriched bridge samples to drive registry join.
-- keep ARBY_SIM_MIN_NET_BPS=1.0, ARBY_REVIEWER_QUIET_OK=0 (no cost-gate
-  loosening, no silent quiet pass) until acceptance criterion holds.
+No Anvil step. No `ARBY_ANVIL_*`. Alchemy quota unaffected.
 
-## 11) Reviewer Runbook
-RUNBOOK:
-  $Env:ARBY_STRICT_PROVIDER_POLICY = "1"
-  $Env:ARBY_RPC_PREMIUM_ONLY      = "1"
-  $Env:ARBY_REQUIRE_PREMIUM       = "1"
-  $Env:ARBY_REQUIRE_ARCHIVE       = "1"
-  $Env:ARBY_SIM_BACKEND           = "anvil"
-  $Env:ARBY_ANVIL_AUTO_REFRESH    = "1"
-  $Env:ARBY_ANVIL_CLAMP_BLOCK     = "1"
-  $Env:ARBY_SIM_ADMISSION_STRICT  = "1"
-  $Env:ARBY_SIM_MIN_NET_BPS       = "1.0"
-  $Env:ARBY_SIM_BYPASS_GUARD      = "0"
-  $Env:ARBY_REVIEWER_QUIET_OK     = "0"
+## 12) Goal Status
+goal_status: BLOCKED on coverage/activity (not infrastructure).
+blocker_status_after: UNBLOCKED-AT-REGISTRY (bridge_registry_prewarmed
+went 0 → 18; the remaining gate is event landing on prewarmed pool
+addresses, which is a function of swap activity on the widened seed
+set). Next soak should widen event coverage further and/or raise
+`--m7-hot-blocks` to 3600 so iter-1 covers a wider block window per
+supervisor restart.
 
-  py -3.11 scripts\reviewer_soak_summary.py --capture-baseline
-  py -3.11 scripts\start_nonstop_runtime.py --chain base --hours 0.5 --with-discovery --no-m4 --with-anvil --anvil-port 8545 --m7-hot-blocks 900 --m7-cold-blocks 900 --max-restarts 100
-  py -3.11 scripts\reviewer_soak_summary.py --discovery --max-rollup-staleness-s 120 --staleness-anchor-utc <supervisor_end_iso>
-
-  # Post-soak H-level inspection (no new script; standard JSON read):
-  Get-Content data\runs\_rolling\m7_hot_rollup_latest.json | ConvertFrom-Json |
-    Select-Object -ExpandProperty supervisor_window
-  Get-Content data\runs\_rolling\m7_hot_rollup_latest.json | ConvertFrom-Json |
-    Select-Object -ExpandProperty bridge_hit_but_not_fast_scored |
-    Select-Object reason_histogram, samples
-
-exit 0 = PASS, 2 = FAIL acceptance, 1 = missing artifacts.
-
-## 12) Session Completion
-goal_status: BLOCKED
-primary_blocker_of_session: M7.E1.34g soak acceptance FAIL (feed starvation + HOT_SKIP_UNKNOWN_PAIR drop)
-blocker_status_after: BLOCKED (code fixes landed; feed + registry work + next soak required)
-docs_reread_confirmed: true
-next_session_entrypoint: operational feed coverage + registry join + fresh 30m strict Base soak
+## 13) Prior Run — M7.E1.34i (soak3) — preserved for lineage
