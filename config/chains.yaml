@@ -24,13 +24,24 @@ base:
   native_symbol: "ETH"
   wrapped_native: "0x4200000000000000000000000000000000000006"  # WETH
   explorer: "https://basescan.org"
+  # M7.E1.34n-soak9: switched primary HTTP+WS from public Flashblocks/blastapi
+  # to dRPC to avoid JSON-RPC code-15 "Too many request" on eth_subscribe
+  # that observed 100% of reconnect attempts fail in soak8.
+  # Order matters: first entry = primary; others = 429-fallback.
   rpc_endpoints:
+    - "https://base.drpc.org"
+    - "https://base-rpc.publicnode.com"
     - "https://mainnet.base.org"
     - "https://base.public.blastapi.io"
   ws_endpoints:
+    - "wss://base.drpc.org"
+    - "wss://base-rpc.publicnode.com"
     - "wss://base.public.blastapi.io"
   # R39r: Flashblocks sub-block read-path (public, rate-limited — NOT for production submit)
   # R40.1: Corrected URL per https://docs.base.org/base-chain/api-reference/rpc-overview
+  # soak9: disabled as primary hot-WS by default (set
+  # ARBY_BASE_USE_FLASHBLOCKS_WS=1 to re-enable as primary; otherwise only
+  # used as optional read-path inside Flashblocks watcher).
   flashblocks_ws_endpoint: "wss://mainnet-preconf.base.org"
   flashblocks_http_endpoint: "https://mainnet-preconf.base.org"
   block_time_ms: 2000

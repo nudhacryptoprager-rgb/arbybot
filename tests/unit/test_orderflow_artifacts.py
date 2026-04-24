@@ -1416,6 +1416,367 @@ class TestM7A531ExternalRegistry:
         assert isinstance(artifact, dict)
         assert artifact["mode"] == "ws_live"
 
+    def test_run_ws_live_reconnects_after_recv_error(self, monkeypatch):
+        import json
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import m7.orderflow.mode_ws_live as mod
+
+        monkeypatch.setenv("ARBY_WS_RECV_TIMEOUT_S", "1")
+        monkeypatch.setattr(
+            mod, "resolve_rpc_http",
+            lambda **kwargs: ("http://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(
+            mod, "resolve_rpc_ws",
+            lambda **kwargs: ("ws://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(mod, "load_dexes", lambda: {"arbitrum_one": {}})
+        monkeypatch.setattr(
+            mod,
+            "get_all_token_addresses",
+            lambda chain: {
+                "WETH": "0x" + "11" * 20,
+                "USDC": "0x" + "22" * 20,
+            },
+        )
+        monkeypatch.setattr(mod, "_build_address_to_symbol", lambda _: {})
+        monkeypatch.setattr(mod, "load_chains", lambda: {"arbitrum_one": {"block_time_ms": 250}})
+        monkeypatch.setattr(
+            mod,
+            "seed_tokens_from_subgraph",
+            lambda *args, **kwargs: {
+                "tokens_discovered": 0,
+                "tokens_new": 0,
+                "tokens_verified": 0,
+                "sources_queried": [],
+                "errors": [],
+            },
+        )
+
+        class FakeRegistry:
+            preload_calls = 0
+            cache_hits = 0
+            pools_discovered = 0
+            pools_active = 0
+            _queried = set()
+
+            def preload_pair(self, *args, **kwargs):
+                self.preload_calls += 1
+                return []
+
+        monkeypatch.setattr(mod, "PoolRegistry", FakeRegistry)
+
+        class FakeEth:
+            block_number = 123
+
+            def get_logs(self, *args, **kwargs):
+                return []
+
+        class FakeWeb3:
+            class HTTPProvider:
+                def __init__(self, url, *args, **kwargs):
+                    self.url = url
+
+            def __init__(self, provider):
+                self.provider = provider
+                self.eth = FakeEth()
+
+        monkeypatch.setitem(sys.modules, "web3", types.SimpleNamespace(Web3=FakeWeb3))
+
+        class FakeWS:
+            def __init__(self, replies):
+                self._replies = list(replies)
+
+            def send(self, msg):
+                self._last = msg
+
+            def recv(self):
+                item = self._replies.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
+
+            def settimeout(self, seconds):
+                self._timeout = seconds
+
+            def close(self):
+                pass
+
+        new_head = json.dumps({
+            "params": {"result": {"number": "0x7b"}},
+        })
+        connections = [
+            FakeWS([json.dumps({"result": "sub-1"}), ConnectionResetError("peer reset")]),
+            FakeWS([json.dumps({"result": "sub-2"}), new_head]),
+        ]
+
+        import websocket as ws_mod
+
+        monkeypatch.setattr(ws_mod, "create_connection", lambda *args, **kwargs: connections.pop(0))
+
+        artifact = mod.run_ws_live(
+            SimpleNamespace(chain="arbitrum_one", ws_blocks=1, ws_timeout=5, max_events=10)
+        )
+
+        stats = artifact["ws_live_stats"]
+        assert stats["blocks_processed"] == 1
+        assert stats["exit_reason"] == "ws_blocks_exhausted"
+        assert stats["ws_reconnect_count"] == 1
+        assert stats["ws_recv_error_count"] == 1
+        assert stats["ws_subscribe_count"] == 2
+
+
+    def test_run_ws_live_retries_reconnect_before_giving_up(self, monkeypatch):
+        """M7.E1.34n (soak8): on repeated resubscribe failures the loop must
+        keep retrying within the ws_timeout budget and recover; a single
+        reconnect exception must NOT trigger a clean child exit (the
+        reviewer-blocking pattern from soak7)."""
+        import json
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import m7.orderflow.mode_ws_live as mod
+
+        monkeypatch.setenv("ARBY_WS_RECV_TIMEOUT_S", "1")
+        monkeypatch.setenv("ARBY_WS_MAX_RECONNECT_ATTEMPTS", "4")
+        monkeypatch.setattr(
+            mod, "resolve_rpc_http",
+            lambda **kwargs: ("http://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(
+            mod, "resolve_rpc_ws",
+            lambda **kwargs: ("ws://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(mod, "load_dexes", lambda: {"arbitrum_one": {}})
+        monkeypatch.setattr(
+            mod, "get_all_token_addresses",
+            lambda chain: {"WETH": "0x" + "11" * 20, "USDC": "0x" + "22" * 20},
+        )
+        monkeypatch.setattr(mod, "_build_address_to_symbol", lambda _: {})
+        monkeypatch.setattr(mod, "load_chains", lambda: {"arbitrum_one": {"block_time_ms": 250}})
+        monkeypatch.setattr(
+            mod, "seed_tokens_from_subgraph",
+            lambda *args, **kwargs: {
+                "tokens_discovered": 0, "tokens_new": 0, "tokens_verified": 0,
+                "sources_queried": [], "errors": [],
+            },
+        )
+
+        class FakeRegistry:
+            preload_calls = 0
+            cache_hits = 0
+            pools_discovered = 0
+            pools_active = 0
+            _queried = set()
+
+            def preload_pair(self, *args, **kwargs):
+                self.preload_calls += 1
+                return []
+
+        monkeypatch.setattr(mod, "PoolRegistry", FakeRegistry)
+
+        class FakeEth:
+            block_number = 123
+
+            def get_logs(self, *args, **kwargs):
+                return []
+
+        class FakeWeb3:
+            class HTTPProvider:
+                def __init__(self, url, *args, **kwargs):
+                    self.url = url
+
+            def __init__(self, provider):
+                self.provider = provider
+                self.eth = FakeEth()
+
+        monkeypatch.setitem(sys.modules, "web3", types.SimpleNamespace(Web3=FakeWeb3))
+
+        # No real sleeping while testing exponential cooldown
+        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+        class FakeWS:
+            def __init__(self, replies):
+                self._replies = list(replies)
+
+            def send(self, msg):
+                self._last = msg
+
+            def recv(self):
+                item = self._replies.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
+
+            def settimeout(self, seconds):
+                self._timeout = seconds
+
+            def close(self):
+                pass
+
+        new_head = json.dumps({"params": {"result": {"number": "0x7b"}}})
+
+        # Script: conn[0] succeeds subscribe then raises recv error.
+        # Attempts to open conn[1]+conn[2] raise during create_connection
+        # (simulating repeated resubscribe failures). conn[3] finally
+        # succeeds; the scanner must reach blocks_processed=1 and end
+        # cleanly via ws_blocks_exhausted.
+        connections = [
+            FakeWS([json.dumps({"result": "sub-1"}), ConnectionResetError("peer reset")]),
+            FakeWS([json.dumps({"result": "sub-3"}), new_head]),
+        ]
+        # Sequence: create_connection #1 -> initial (success), #2/#3 -> raise
+        # (reviewer-style resubscribe failures), #4 -> recovered success.
+        calls = {"n": 0}
+
+        import websocket as ws_mod
+
+        def _fake_create(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return connections[0]
+            if calls["n"] in (2, 3):
+                raise OSError("socket in use")
+            return connections[1]
+
+        monkeypatch.setattr(ws_mod, "create_connection", _fake_create)
+
+        artifact = mod.run_ws_live(
+            SimpleNamespace(chain="arbitrum_one", ws_blocks=1, ws_timeout=30, max_events=10)
+        )
+
+        stats = artifact["ws_live_stats"]
+        # Eventually recovered and read at least one head.
+        assert stats["blocks_processed"] == 1, stats
+        assert stats["exit_reason"] == "ws_blocks_exhausted", stats["exit_reason"]
+        # Exactly one recv-level error; resubscribe retried until success.
+        assert stats["ws_recv_error_count"] == 1
+        # Two subscribe messages succeeded: initial + the final recovered one.
+        assert stats["ws_subscribe_count"] == 2
+
+    def test_run_ws_live_records_reconnect_failure_cleanly(self, monkeypatch):
+        """M7.E1.34n (soak8): when every reconnect attempt fails within the
+        ws_timeout budget, the scan must record
+        exit_reason=recv_error_reconnect_failed and return normally — never
+        raise, which would produce the reviewer-blocked
+        `[m7_hot] Clean cycle exit rc=0` pattern driven by an outer
+        exception handler."""
+        import json
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import m7.orderflow.mode_ws_live as mod
+
+        monkeypatch.setenv("ARBY_WS_RECV_TIMEOUT_S", "1")
+        monkeypatch.setenv("ARBY_WS_MAX_RECONNECT_ATTEMPTS", "2")
+        monkeypatch.setattr(
+            mod, "resolve_rpc_http",
+            lambda **kwargs: ("http://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(
+            mod, "resolve_rpc_ws",
+            lambda **kwargs: ("ws://fake-rpc", "fake", {"source": "test"}),
+        )
+        monkeypatch.setattr(mod, "load_dexes", lambda: {"arbitrum_one": {}})
+        monkeypatch.setattr(
+            mod, "get_all_token_addresses",
+            lambda chain: {"WETH": "0x" + "11" * 20, "USDC": "0x" + "22" * 20},
+        )
+        monkeypatch.setattr(mod, "_build_address_to_symbol", lambda _: {})
+        monkeypatch.setattr(mod, "load_chains", lambda: {"arbitrum_one": {"block_time_ms": 250}})
+        monkeypatch.setattr(
+            mod, "seed_tokens_from_subgraph",
+            lambda *args, **kwargs: {
+                "tokens_discovered": 0, "tokens_new": 0, "tokens_verified": 0,
+                "sources_queried": [], "errors": [],
+            },
+        )
+
+        class FakeRegistry:
+            preload_calls = 0
+            cache_hits = 0
+            pools_discovered = 0
+            pools_active = 0
+            _queried = set()
+
+            def preload_pair(self, *args, **kwargs):
+                self.preload_calls += 1
+                return []
+
+        monkeypatch.setattr(mod, "PoolRegistry", FakeRegistry)
+
+        class FakeEth:
+            block_number = 123
+
+            def get_logs(self, *args, **kwargs):
+                return []
+
+        class FakeWeb3:
+            class HTTPProvider:
+                def __init__(self, url, *args, **kwargs):
+                    self.url = url
+
+            def __init__(self, provider):
+                self.provider = provider
+                self.eth = FakeEth()
+
+        monkeypatch.setitem(sys.modules, "web3", types.SimpleNamespace(Web3=FakeWeb3))
+        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+        class FakeWS:
+            def __init__(self, replies):
+                self._replies = list(replies)
+
+            def send(self, msg):
+                self._last = msg
+
+            def recv(self):
+                item = self._replies.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
+
+            def settimeout(self, seconds):
+                self._timeout = seconds
+
+            def close(self):
+                pass
+
+        # Initial subscribe works, then recv blows up. Every subsequent
+        # reconnect attempt fails at create_connection.
+        initial = FakeWS([json.dumps({"result": "sub-0"}), ConnectionResetError("peer reset")])
+        reopen_failures = [
+            OSError("ws down"), OSError("ws down"), OSError("ws down"),
+            OSError("ws down"), OSError("ws down"), OSError("ws down"),
+        ]
+        calls = {"n": 0}
+
+        import websocket as ws_mod
+
+        def _fake_create(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return initial
+            raise reopen_failures.pop(0)
+
+        monkeypatch.setattr(ws_mod, "create_connection", _fake_create)
+
+        artifact = mod.run_ws_live(
+            SimpleNamespace(chain="arbitrum_one", ws_blocks=1, ws_timeout=5, max_events=10)
+        )
+
+        stats = artifact["ws_live_stats"]
+        assert stats["exit_reason"] == "recv_error_reconnect_failed", stats["exit_reason"]
+        assert stats["ws_recv_error_count"] == 1
+        # Exactly one subscribe succeeded (the initial one); retries all failed.
+        assert stats["ws_subscribe_count"] == 1
+        # Reconnect counter was incremented at the first recv-failure.
+        assert stats["ws_reconnect_count"] >= 1
 
 # ============================================================================
 # M7.A.5.32: Unified nonstop runtime + rolling retention + hot-path slimming
@@ -1668,6 +2029,7 @@ class TestM7A532RollingCanonicalSet:
             "m7_cold_hot_bridge.json",
             "m7_hot_intents_latest.json",
             "m7_hot_rollup_latest.json",
+            "m7_session_state.json",
             # M7.E1.9.1: Discovery namespace files
             "m7_orderflow_latest_discovery.json",
             "m7_hot_latest_discovery.json",

@@ -1067,10 +1067,28 @@ def run_loop(cli_args) -> None:
                             # scores never overwrite a null.
                             _sp_r = getattr(_r, "scoring_path", None)
                             if _sp_r != "registry_fast" and "bridge_hit_not_scored_reason" not in _hot_bridge_diag:
-                                if _sp_r is None:
+                                # M7.E1.34n (soak8) fix #5: classify by
+                                # concrete reason buckets reviewer gates on,
+                                # not by scoring_path. Reject_reason + token
+                                # presence + registry hit give us enough
+                                # signal to attribute the drop.
+                                _rej = getattr(_r, "reject_reason", None) or ""
+                                _rej_u = str(_rej).upper()
+                                _tok_in_addr = getattr(_r, "backrun_token_in_address", None)
+                                _tok_out_addr = getattr(_r, "backrun_token_out_address", None)
+                                _pair_str = getattr(_r, "actual_pair", None)
+                                if not _tok_in_addr or not _tok_out_addr:
+                                    _reason_code = "TOKEN_ADDRESS_UNKNOWN"
+                                elif "PAIR_FILTER" in _rej_u or "FILTER_DROPPED" in _rej_u:
+                                    _reason_code = "PAIR_FILTER_DROPPED"
+                                elif "REGISTRY" in _rej_u or _sp_r == "hot_skip":
+                                    _reason_code = "REGISTRY_MISS"
+                                elif "FAMILY" in _rej_u or "UNRESOLVED" in _rej_u:
+                                    _reason_code = "FAMILY_UNRESOLVED"
+                                elif not _pair_str:
+                                    _reason_code = "NO_PAIR_MATCH"
+                                elif _sp_r is None:
                                     _reason_code = "NOT_SCORED"
-                                elif _sp_r == "hot_skip":
-                                    _reason_code = "HOT_SKIP_UNKNOWN_PAIR"
                                 else:
                                     _reason_code = f"SCORING_PATH_{str(_sp_r).upper()}"
                                 _hot_bridge_diag["bridge_hit_not_scored_reason"] = _reason_code

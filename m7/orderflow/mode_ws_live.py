@@ -154,8 +154,18 @@ def run_ws_live(
     # M7.E1: On Base, prefer Flashblocks WS for sub-block (~200ms) event delivery.
     # Flashblocks endpoint supports standard eth_subscribe newHeads but delivers
     # at sub-block granularity, giving a structural latency advantage over 2s blocks.
+    #
+    # M7.E1.34n-soak9: gate Flashblocks preconf behind
+    # ARBY_BASE_USE_FLASHBLOCKS_WS (default OFF). Soak8 observed 100% of
+    # reconnect attempts failing with JSON-RPC code 15 "Too many request"
+    # on the public preconf endpoint. Default now goes through
+    # resolve_rpc_ws which picks the first chains.yaml ws_endpoint
+    # (dRPC) — premium-friendly and not rate-limited on newHeads.
     _flashblocks_ws = None
-    if args.chain == "base":
+    _use_flashblocks_ws = (
+        os.environ.get("ARBY_BASE_USE_FLASHBLOCKS_WS", "0").strip() == "1"
+    )
+    if args.chain == "base" and _use_flashblocks_ws:
         from config import load_chains as _load_chains_fb
         from chains.flashblocks import get_flashblocks_ws_url
         _base_cfg = _load_chains_fb().get("base", {})
@@ -324,6 +334,11 @@ def run_ws_live(
     # M7.E1.10: WS connection health tracking — distinguish ws_failed from market_empty
     _ws_connection_status = "not_attempted"  # not_attempted | connected | failed_429 | failed_other
     _ws_error_detail: str | None = None
+    _ws_reconnect_count = 0
+    _ws_recv_error_count = 0
+    _ws_recv_timeout_count = 0
+    _ws_subscribe_count = 0
+    _ws_last_recv_error: str | None = None
     # M7.A.5.47: Hybrid intake diagnostics
     _broad_blocks = 0       # blocks scanned with broad (no address filter)
     _focused_blocks = 0     # blocks scanned with focused (address filter)
@@ -361,77 +376,93 @@ def run_ws_live(
                 f"ARBY_STRICT_PROVIDER_POLICY=1 forbids public_fallback as "
                 f"primary WS provider (resolved url={ws_url})"
             )
-        _ws_connected = False
-        ws_conn = None
-        for _try_ws_url, _try_ws_name in _ws_tried_urls:
-            try:
-                ws_conn = ws_mod.create_connection(_try_ws_url, timeout=10)
-                _ws_connected = True
-                if _try_ws_url != ws_url:
-                    _original_ws_provider = ws_provider
-                    logger.info(
-                        "WS fallback to %s succeeded: %s",
-                        _try_ws_name, urlparse(_try_ws_url).netloc,
-                    )
-                    ws_url = _try_ws_url
-                    ws_provider = classify_provider(_try_ws_url)
-                    ws_host = urlparse(ws_url).netloc
-                    ws_diag = {"source": "public_ws_fallback", "original_source": ws_diag.get("source", "unknown"), "original_provider": _original_ws_provider, "fallback_reason": "ws_429"}
-                break
-            except Exception as _conn_exc:
-                _conn_err = str(_conn_exc)[:200]
-                if "429" in _conn_err:
-                    logger.warning(
-                        "WS 429 rate limit on %s (%s), trying fallback...",
-                        _try_ws_name, urlparse(_try_ws_url).netloc,
-                    )
-                    # Add public WS fallback if not already tried
-                    from core.rpc_urls import _PUBLIC_WS_FALLBACKS, _normalize_network, _NETWORK_ALIASES
-                    _net_key = _NETWORK_ALIASES.get(args.chain.lower())
-                    _pub_ws = _PUBLIC_WS_FALLBACKS.get(_net_key) if _net_key else None
-                    # M7.E1.34d: under strict provider policy, refuse to
-                    # enqueue the public WS fallback. This keeps runtime
-                    # production-grade even when premium WS is throttled.
-                    if _strict_provider_policy and _pub_ws:
-                        logger.error(
-                            "WS 429 on %s and ARBY_STRICT_PROVIDER_POLICY=1 "
-                            "forbids public WS fallback (%s)",
-                            _try_ws_name, _pub_ws,
-                        )
-                        _pub_ws = None
-                    if _pub_ws and (_pub_ws, "public_fallback") not in _ws_tried_urls:
-                        _ws_tried_urls.append((_pub_ws, "public_fallback"))
-                    continue
-                else:
-                    logger.warning("WS connection failed on %s: %s", _try_ws_name, _conn_err[:100])
-                    continue
-
-        if not _ws_connected or ws_conn is None:
-            raise RuntimeError(
-                f"All WS endpoints failed. Tried: "
-                f"{', '.join(urlparse(u).netloc for u, _ in _ws_tried_urls)}"
-            )
-
-        _ws_connection_status = "connected"
         sub_msg = json.dumps({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "eth_subscribe",
             "params": ["newHeads"],
         })
-        ws_conn.send(sub_msg)
-        sub_response = ws_conn.recv()
-        sub_data = json.loads(sub_response)
-        sub_id = sub_data.get("result")
-        if not sub_id:
-            raise RuntimeError(f"WebSocket subscription failed: {sub_data}")
-        logger.info(
-            "WebSocket newHeads subscribed: sub_id=%s",
-            sub_id,
-            extra={"context": {"ws_url": ws_host, "sub_id": sub_id}},
-        )
+        try:
+            _recv_timeout_s = int(os.environ.get("ARBY_WS_RECV_TIMEOUT_S", "30") or "30")
+        except Exception:
+            _recv_timeout_s = 30
+        _recv_timeout_s = max(1, min(_recv_timeout_s, max(1, int(args.ws_timeout))))
 
-        ws_conn.settimeout(args.ws_timeout)
+        def _open_ws_subscription(connect_reason: str):
+            nonlocal ws_url, ws_provider, ws_host, ws_diag
+            nonlocal _ws_connection_status, _ws_error_detail, _ws_subscribe_count
+
+            _ws_connected = False
+            _conn = None
+            for _try_ws_url, _try_ws_name in _ws_tried_urls:
+                try:
+                    _conn = ws_mod.create_connection(_try_ws_url, timeout=10)
+                    _ws_connected = True
+                    if _try_ws_url != ws_url:
+                        _original_ws_provider = ws_provider
+                        logger.info(
+                            "WS fallback to %s succeeded: %s",
+                            _try_ws_name, urlparse(_try_ws_url).netloc,
+                        )
+                        ws_url = _try_ws_url
+                        ws_provider = classify_provider(_try_ws_url)
+                        ws_host = urlparse(ws_url).netloc
+                        ws_diag = {"source": "public_ws_fallback", "original_source": ws_diag.get("source", "unknown"), "original_provider": _original_ws_provider, "fallback_reason": "ws_429"}
+                    break
+                except Exception as _conn_exc:
+                    _conn_err = str(_conn_exc)[:200]
+                    if "429" in _conn_err:
+                        logger.warning(
+                            "WS 429 rate limit on %s (%s), trying fallback...",
+                            _try_ws_name, urlparse(_try_ws_url).netloc,
+                        )
+                        # Add public WS fallback if not already tried
+                        from core.rpc_urls import _PUBLIC_WS_FALLBACKS, _NETWORK_ALIASES
+                        _net_key = _NETWORK_ALIASES.get(args.chain.lower())
+                        _pub_ws = _PUBLIC_WS_FALLBACKS.get(_net_key) if _net_key else None
+                        # M7.E1.34d: under strict provider policy, refuse to
+                        # enqueue the public WS fallback. This keeps runtime
+                        # production-grade even when premium WS is throttled.
+                        if _strict_provider_policy and _pub_ws:
+                            logger.error(
+                                "WS 429 on %s and ARBY_STRICT_PROVIDER_POLICY=1 "
+                                "forbids public WS fallback (%s)",
+                                _try_ws_name, _pub_ws,
+                            )
+                            _pub_ws = None
+                        if _pub_ws and (_pub_ws, "public_fallback") not in _ws_tried_urls:
+                            _ws_tried_urls.append((_pub_ws, "public_fallback"))
+                        continue
+                    else:
+                        logger.warning("WS connection failed on %s: %s", _try_ws_name, _conn_err[:100])
+                        continue
+
+            if not _ws_connected or _conn is None:
+                raise RuntimeError(
+                    f"All WS endpoints failed. Tried: "
+                    f"{', '.join(urlparse(u).netloc for u, _ in _ws_tried_urls)}"
+                )
+
+            _conn.send(sub_msg)
+            sub_response = _conn.recv()
+            sub_data = json.loads(sub_response)
+            sub_id = sub_data.get("result")
+            if not sub_id:
+                raise RuntimeError(f"WebSocket subscription failed: {sub_data}")
+            _conn.settimeout(_recv_timeout_s)
+            _ws_connection_status = "connected"
+            _ws_error_detail = None
+            _ws_subscribe_count += 1
+            logger.info(
+                "WebSocket newHeads subscribed: sub_id=%s reason=%s recv_timeout=%ds",
+                sub_id,
+                connect_reason,
+                _recv_timeout_s,
+                extra={"context": {"ws_url": ws_host, "sub_id": sub_id}},
+            )
+            return _conn
+
+        ws_conn = _open_ws_subscription("initial")
 
         # M7.A.5.39: Reuse single Web3 instance for all blocks (was per-block)
         from web3 import Web3 as _W3_loop
@@ -453,15 +484,114 @@ def run_ws_live(
             try:
                 msg = ws_conn.recv()
             except Exception as _recv_exc:
-                logger.info(
-                    "WebSocket recv timeout or error after %d blocks: %s",
-                    blocks_processed, str(_recv_exc)[:120],
+                _recv_err = str(_recv_exc)[:200]
+                _recv_err_l = _recv_err.lower()
+                _ws_last_recv_error = _recv_err
+                if "timed out" in _recv_err_l or isinstance(_recv_exc, TimeoutError):
+                    _ws_recv_timeout_count += 1
+                    _exit_reason = "recv_timeout"
+                    logger.debug(
+                        "WebSocket recv timeout after %d blocks; keeping session alive",
+                        blocks_processed,
+                    )
+                    time.sleep(0.05)
+                    continue
+
+                _ws_recv_error_count += 1
+                _ws_reconnect_count += 1
+                _exit_reason = "recv_error_reconnecting"
+                _backoff_s = min(8, 2 ** min(_ws_reconnect_count - 1, 3))
+                _remaining_s = max(0.0, args.ws_timeout - (time.monotonic() - ws_start_time))
+                if _remaining_s <= 0:
+                    _exit_reason = "ws_timeout"
+                    break
+                logger.warning(
+                    "WebSocket recv error after %d blocks: %s; reconnecting in %.1fs",
+                    blocks_processed, _recv_err[:120], min(_backoff_s, _remaining_s),
                 )
-                _exit_reason = (
-                    "recv_timeout" if "timed out" in str(_recv_exc).lower()
-                    else "recv_error"
+                try:
+                    ws_conn.close()
+                except Exception:
+                    pass
+                time.sleep(min(_backoff_s, _remaining_s))
+                if time.monotonic() - ws_start_time > args.ws_timeout:
+                    _exit_reason = "ws_timeout"
+                    break
+                # M7.E1.34n (soak8): bounded reconnect-retry loop. Previously
+                # a single resubscribe failure re-raised and killed the whole
+                # child process, producing the `recv_error_reconnect_failed`
+                # clean-exit pattern the reviewer flagged. We now retry up to
+                # _MAX_RECONNECT_ATTEMPTS with exponential cooldown while the
+                # ws_timeout budget still allows; only if every attempt fails
+                # do we record `recv_error_reconnect_failed` and leave the
+                # loop — but cleanly via break, not via raise, so the outer
+                # except does not repaint exit_reason as `ws_exception`.
+                _MAX_RECONNECT_ATTEMPTS = int(
+                    os.environ.get("ARBY_WS_MAX_RECONNECT_ATTEMPTS", "4") or 4
                 )
-                break
+                _reconnect_attempt = 0
+                _reconnected = False
+                while _reconnect_attempt < _MAX_RECONNECT_ATTEMPTS:
+                    _reconnect_attempt += 1
+                    _cool_remaining = max(
+                        0.0, args.ws_timeout - (time.monotonic() - ws_start_time)
+                    )
+                    if _cool_remaining <= 0:
+                        _exit_reason = "ws_timeout"
+                        break
+                    try:
+                        ws_conn = _open_ws_subscription(
+                            f"recv_error_retry{_reconnect_attempt}"
+                        )
+                        _reconnected = True
+                        _exit_reason = "reconnected_after_recv_error"
+                        break
+                    except Exception as _reconn_exc:
+                        _reconn_err = str(_reconn_exc)[:200]
+                        _ws_last_recv_error = f"reconnect_fail:{_reconn_err}"
+                        # M7.E1.34n-soak9: rate-limit-aware cooldown. Public
+                        # Base preconf / blastapi return JSON-RPC code 15
+                        # ("Too many request") or HTTP 429 inside a wide rate
+                        # window. The default 1.5^n cap of 8s burns the whole
+                        # reconnect budget before the window clears. When we
+                        # detect a rate-limit signature we extend cooldown to
+                        # ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S (default 30s)
+                        # so exponential backoff meets the provider's actual
+                        # reset window.
+                        _rl_lower = _reconn_err.lower()
+                        _is_rate_limited = (
+                            "too many request" in _rl_lower
+                            or "'code': 15" in _rl_lower
+                            or "\"code\": 15" in _rl_lower
+                            or "429" in _rl_lower
+                            or "rate limit" in _rl_lower
+                        )
+                        if _is_rate_limited:
+                            try:
+                                _rl_cool_env = float(
+                                    os.environ.get(
+                                        "ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S",
+                                        "30",
+                                    )
+                                )
+                            except Exception:
+                                _rl_cool_env = 30.0
+                            _cool = min(_rl_cool_env, _cool_remaining)
+                        else:
+                            _cool = min(8.0, 1.5 ** _reconnect_attempt)
+                            _cool = min(_cool, _cool_remaining)
+                        logger.warning(
+                            "WS reconnect attempt %d/%d failed: %s; cooling %.1fs%s",
+                            _reconnect_attempt, _MAX_RECONNECT_ATTEMPTS,
+                            _reconn_err[:120], _cool,
+                            " (rate-limit)" if _is_rate_limited else "",
+                        )
+                        if _cool > 0:
+                            time.sleep(_cool)
+                if not _reconnected:
+                    _exit_reason = "recv_error_reconnect_failed"
+                    break
+                continue
 
             data = json.loads(msg)
             params = data.get("params", {})
@@ -750,8 +880,7 @@ def run_ws_live(
                 break
         else:
             # while-loop completed naturally: ws_blocks exhausted
-            if _exit_reason == "loop_not_entered":
-                _exit_reason = "ws_blocks_exhausted"
+            _exit_reason = "ws_blocks_exhausted"
     except Exception as exc:
         _ws_err_str = str(exc)[:200]
         if "429" in _ws_err_str:
@@ -767,7 +896,8 @@ def run_ws_live(
             if _ws_connection_status == "not_attempted":
                 _ws_connection_status = "failed_other"
             _ws_error_detail = _ws_err_str
-            _exit_reason = "ws_exception"
+            if _exit_reason != "recv_error_reconnect_failed":
+                _exit_reason = "ws_exception"
             logger.warning(
                 "WebSocket error: %s (scored %d events from %d blocks)",
                 _ws_err_str, len(all_results), blocks_processed,
@@ -822,6 +952,11 @@ def run_ws_live(
         # M7.E1.34m (soak7): why the WS scan loop ended — essential for
         # diagnosing repeated 20s-clean-exits during long soaks.
         "exit_reason": _exit_reason,
+        "ws_reconnect_count": _ws_reconnect_count,
+        "ws_recv_error_count": _ws_recv_error_count,
+        "ws_recv_timeout_count": _ws_recv_timeout_count,
+        "ws_subscribe_count": _ws_subscribe_count,
+        "ws_last_recv_error": _ws_last_recv_error,
     }
     # M7.E1.10: Surface connection status at artifact top level
     artifact["ws_connection_status"] = _ws_connection_status

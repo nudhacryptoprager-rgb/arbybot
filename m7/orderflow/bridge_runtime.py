@@ -440,11 +440,19 @@ def _prewarm_registry_from_pairs(
     N9: wall-clock budget via ARBY_HOT_PAIR_PREWARM_BUDGET_SEC (default 20s).
     Each preload_pair can take 2-4s via public RPC — without a budget the
     loop can block the entire hot-phase for 40+ seconds on 13 pairs.
+
+    M7.E1.34n (soak8) fix #6: we also surface rejection counters (pairs
+    whose symbols are not present in token_addresses, preload failures)
+    via module-global _LAST_PREWARM_STATS so the rollup writer can attribute
+    "discovery registered N pairs, rejected M (TOKEN_ADDRESS_UNKNOWN)".
     """
     import time as _time_mod
     _budget_sec = float(os.environ.get("ARBY_HOT_PAIR_PREWARM_BUDGET_SEC", "20"))
     _start = _time_mod.monotonic()
     count = 0
+    _skipped_missing_tokens = 0
+    _skipped_malformed = 0
+    _preload_failures = 0
     for pair_key, info in session_pairs.items():
         if _budget_sec > 0 and (_time_mod.monotonic() - _start) >= _budget_sec:
             logger.info(
@@ -453,17 +461,26 @@ def _prewarm_registry_from_pairs(
             )
             break
         if "/" not in pair_key:
+            _skipped_malformed += 1
             continue
         sym_a, sym_b = pair_key.split("/", 1)
         addr_a = token_addresses.get(sym_a, "")
         addr_b = token_addresses.get(sym_b, "")
         if not addr_a or not addr_b:
+            _skipped_missing_tokens += 1
             continue
         try:
             registry.preload_pair(addr_a, addr_b, dex_configs, rpc_url, block_num)
             count += 1
         except Exception:
-            pass
+            _preload_failures += 1
+    globals()["_LAST_PREWARM_STATS"] = {
+        "prewarmed": count,
+        "skipped_missing_tokens": _skipped_missing_tokens,
+        "skipped_malformed_pair": _skipped_malformed,
+        "preload_failures": _preload_failures,
+        "candidates_considered": len(session_pairs),
+    }
     return count
 
 

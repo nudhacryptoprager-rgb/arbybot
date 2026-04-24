@@ -52,6 +52,7 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m7_cold_hot_bridge.json",
             "m7_hot_intents_latest.json",
             "m7_hot_rollup_latest.json",
+            "m7_session_state.json",
             # M7.E1.9.1: Discovery namespace files
             "m7_orderflow_latest_discovery.json",
             "m7_hot_latest_discovery.json",

@@ -1042,6 +1042,23 @@ def _update_hot_rollup(
     _exit_hist[_exit_reason] = int(_exit_hist.get(_exit_reason, 0)) + 1
     _sess["session_exit_reason_histogram"] = _exit_hist
     _sess["last_exit_reason"] = _exit_reason
+    # M7.E1.34n (soak8): aggregate WS reconnect quality so reviewer gate
+    # can distinguish a single peer drop (healthy recovery) from a
+    # pathological reconnect-failure storm.
+    _wls_src = ws_live_stats or {}
+    for _k_src, _k_dst in (
+        ("ws_reconnect_count", "session_ws_reconnect_total"),
+        ("ws_recv_error_count", "session_ws_recv_error_total"),
+        ("ws_recv_timeout_count", "session_ws_recv_timeout_total"),
+        ("ws_subscribe_count", "session_ws_subscribe_total"),
+    ):
+        try:
+            _sess[_k_dst] = int(_sess.get(_k_dst, 0)) + int(_wls_src.get(_k_src, 0) or 0)
+        except (TypeError, ValueError):
+            pass
+    _last_err = _wls_src.get("ws_last_recv_error")
+    if isinstance(_last_err, str) and _last_err:
+        _sess["last_ws_recv_error"] = _last_err[:200]
     # M7.E1.34c: strict provider policy. When ARBY_STRICT_PROVIDER_POLICY=1,
     # any window served by public_fallback is counted as a policy breach and
     # surfaced in the rollup so the reviewer's production-grade guardrail
