@@ -227,10 +227,12 @@ def _rehydrate_hot_unresolved_pools(
     ``reason_if_not_hit=not_in_bridge`` in the cold_exec trace — which
     blocks scoring for any future events landing on them.
 
-    Performs two ``eth_call``s per pool (selectors ``0x0dfe1681`` = token0,
-    ``0xd21220a7`` = token1) and injects the resolved triple ``(t0, t1, 0)``
+    Uses :func:`core.multicall.batch_token_info` which fetches
+    ``(token0, token1, fee)`` in a single multicall3 aggregate3 call
+    (3 per pool -> 1 RPC), falling back to sequential ``eth_call`` only
+    when multicall fails. The resolved triple ``(t0, t1, fee)`` is injected
     into both ``_pool_token_cache`` and the bridge's ``pool_token_transport``
-    so subsequent events land on resolved families.
+    so subsequent events land on resolved families with the correct fee tier.
 
     Bounded by ``ARBY_HOT_REHYDRATE_MAX`` (default 10) and
     ``ARBY_HOT_REHYDRATE_BUDGET_SEC`` (default 5s) to avoid RPC overuse.
@@ -287,6 +289,20 @@ def _rehydrate_hot_unresolved_pools(
     except Exception:
         rpc_throttle = None
 
+    # Soak13: prefer batched multicall3 (1 RPC call for up to _limit pools
+    # × 3 reads = token0/token1/fee). Falls back to sequential eth_call
+    # when multicall3 unavailable or errors out.
+    _mc_candidates = [_pa for _pa, _ in _cands[:_limit]]
+    _mc_results: dict = {}
+    try:
+        from core.multicall import get_multicall_batcher  # type: ignore
+        _batcher = get_multicall_batcher(rpc_url, block_num)
+        _mc_results = _batcher.batch_token_info(_mc_candidates) or {}
+    except Exception as _mc_exc:
+        logger.debug("rehydrate: multicall batch_token_info failed: %s",
+                     str(_mc_exc)[:80])
+        _mc_results = {}
+
     for _pa, _seen in _cands[:_limit]:
         if _budget_sec > 0 and (_time_mod.monotonic() - _start) >= _budget_sec:
             logger.info(
@@ -294,31 +310,59 @@ def _rehydrate_hot_unresolved_pools(
                 _budget_sec, _resolved,
             )
             break
-        try:
-            _addr_cs = Web3.to_checksum_address(_pa)
-        except Exception:
-            continue
+
         _t0_hex = None
         _t1_hex = None
-        try:
-            if rpc_throttle is not None:
-                rpc_throttle.acquire()
-            _t0_raw = _w3.eth.call({"to": _addr_cs, "data": "0x0dfe1681"}, block_num)
-            if len(_t0_raw) >= 32:
-                _t0_hex = "0x" + _t0_raw[-20:].hex()
-        except Exception:
-            continue
-        try:
-            if rpc_throttle is not None:
-                rpc_throttle.acquire()
-            _t1_raw = _w3.eth.call({"to": _addr_cs, "data": "0xd21220a7"}, block_num)
-            if len(_t1_raw) >= 32:
-                _t1_hex = "0x" + _t1_raw[-20:].hex()
-        except Exception:
-            continue
+        _fee = 0
+
+        _mc_row = _mc_results.get(_pa)
+        if _mc_row is not None:
+            try:
+                _t0_hex, _t1_hex, _fee = _mc_row  # (token0, token1, fee)
+            except Exception:
+                _t0_hex = _t1_hex = None
+                _fee = 0
+
+        if not (_t0_hex and _t1_hex):
+            # Fallback: sequential eth_call for this pool only.
+            try:
+                _addr_cs = Web3.to_checksum_address(_pa)
+            except Exception:
+                continue
+            try:
+                if rpc_throttle is not None:
+                    rpc_throttle.acquire()
+                _t0_raw = _w3.eth.call({"to": _addr_cs, "data": "0x0dfe1681"}, block_num)
+                if len(_t0_raw) >= 32:
+                    _t0_hex = "0x" + _t0_raw[-20:].hex()
+            except Exception:
+                continue
+            try:
+                if rpc_throttle is not None:
+                    rpc_throttle.acquire()
+                _t1_raw = _w3.eth.call({"to": _addr_cs, "data": "0xd21220a7"}, block_num)
+                if len(_t1_raw) >= 32:
+                    _t1_hex = "0x" + _t1_raw[-20:].hex()
+            except Exception:
+                continue
+            # Best-effort fee fetch (selector 0xddca3f43). V2/ve33 pools
+            # revert; we tolerate and keep fee=0.
+            try:
+                if rpc_throttle is not None:
+                    rpc_throttle.acquire()
+                _fee_raw = _w3.eth.call({"to": _addr_cs, "data": "0xddca3f43"}, block_num)
+                if len(_fee_raw) >= 4:
+                    _fee = int.from_bytes(_fee_raw[-4:], "big")
+            except Exception:
+                _fee = 0
+
         if not (_t0_hex and _t1_hex):
             continue
-        _triple = (_t0_hex.lower(), _t1_hex.lower(), 0)
+        try:
+            _fee_int = int(_fee) if _fee else 0
+        except Exception:
+            _fee_int = 0
+        _triple = (_t0_hex.lower(), _t1_hex.lower(), _fee_int)
         _ptt[_pa] = _triple
         try:
             _pool_token_cache[_pa] = _triple

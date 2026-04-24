@@ -41,6 +41,7 @@ def test_rehydrate_populates_ptt_on_success():
     pool = "0x" + "cd" * 20
     t0 = b"\x00" * 12 + b"\x11" * 20
     t1 = b"\x00" * 12 + b"\x22" * 20
+    fee_bytes = (500).to_bytes(32, "big")
 
     bridge = {
         "hot_seen_unresolved_pools": [
@@ -50,9 +51,15 @@ def test_rehydrate_populates_ptt_on_success():
     }
 
     fake_w3 = MagicMock()
-    fake_w3.eth.call.side_effect = [t0, t1]
+    # Soak13: sequential fallback now fetches t0, t1, fee per pool.
+    fake_w3.eth.call.side_effect = [t0, t1, fee_bytes]
 
-    with patch("web3.Web3") as _W3:
+    fake_batcher = MagicMock()
+    fake_batcher.batch_token_info.return_value = {}  # force fallback
+
+    with patch("web3.Web3") as _W3, patch(
+        "core.multicall.get_multicall_batcher", return_value=fake_batcher
+    ):
         _W3.return_value = fake_w3
         _W3.to_checksum_address.side_effect = lambda a: a
         n = _rehydrate_hot_unresolved_pools(bridge, "http://rpc", 123, max_pools=5)
@@ -62,4 +69,33 @@ def test_rehydrate_populates_ptt_on_success():
     t0_hex, t1_hex, fee = bridge["pool_token_transport"][pool]
     assert t0_hex == "0x" + "11" * 20
     assert t1_hex == "0x" + "22" * 20
-    assert fee == 0
+    assert fee == 500
+
+
+def test_rehydrate_uses_multicall_fee_tier():
+    """Soak13: multicall3 batch_token_info returns (t0, t1, fee) in one RPC."""
+    from m7.orderflow.bridge_runtime import _rehydrate_hot_unresolved_pools
+
+    pool = "0x" + "ef" * 20
+    t0_hex = "0x" + "33" * 20
+    t1_hex = "0x" + "44" * 20
+
+    bridge = {
+        "hot_seen_unresolved_pools": [
+            {"pool_address": pool, "seen_count": 12, "resolved": False},
+        ],
+        "pool_token_transport": {},
+    }
+
+    fake_batcher = MagicMock()
+    fake_batcher.batch_token_info.return_value = {pool: (t0_hex, t1_hex, 3000)}
+
+    with patch("web3.Web3"), patch(
+        "core.multicall.get_multicall_batcher", return_value=fake_batcher
+    ):
+        n = _rehydrate_hot_unresolved_pools(bridge, "http://rpc", 99, max_pools=5)
+
+    assert n == 1
+    assert bridge["pool_token_transport"][pool] == (t0_hex.lower(), t1_hex.lower(), 3000)
+    # multicall was invoked exactly once with the candidate list.
+    fake_batcher.batch_token_info.assert_called_once_with([pool])

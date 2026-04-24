@@ -453,6 +453,28 @@ def _build_sim_tx_params(
         return None, "PAIR_UNRESOLVED"
 
     amount = getattr(result, "amount_in_wei", 0)
+    # Soak13 adaptive sizing: when scoring computed a best_sweep_size_wei
+    # (optimal size by sweep optimization), prefer it over the raw
+    # amount_in_wei inherited from the observed event. The mimicked
+    # event-size often catastrophically over-sizes our backrun into
+    # low-liquidity pools (soak12 roundtrip_profit_bps ≈ -9937 root cause).
+    # ARBY_ADAPTIVE_SIZING=0 disables to preserve legacy behavior.
+    if os.environ.get("ARBY_ADAPTIVE_SIZING", "1").strip() == "1":
+        _sweep_pref = getattr(result, "best_sweep_size_wei", None)
+        if isinstance(_sweep_pref, int) and _sweep_pref > 0:
+            # Use sweep size only when it actually differs and looks sane
+            # (strictly smaller than current amount, or current is zero).
+            if amount <= 0 or _sweep_pref < amount:
+                if amount > 0 and _sweep_pref != amount:
+                    logger.debug(
+                        "sim amount adaptive: pair=%s raw=%d sweep=%d (using sweep)",
+                        pair, amount, _sweep_pref,
+                    )
+                amount = _sweep_pref
+                try:
+                    result.amount_in_wei = amount  # type: ignore[attr-defined]
+                except Exception:
+                    pass
     if not amount or amount <= 0:
         # Step 6 (AMOUNT_ZERO auto-fill):
         # Some producers (PTT-direct, broad-fallback without pool-resolve,

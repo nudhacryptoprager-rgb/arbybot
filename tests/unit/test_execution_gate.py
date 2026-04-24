@@ -569,6 +569,54 @@ class TestBuildSimTxParams:
         assert tx is None
         assert err == "AMOUNT_ZERO"
 
+    def test_adaptive_sizing_prefers_smaller_sweep_over_event_amount(self, monkeypatch):
+        """Soak13: when best_sweep_size_wei < amount_in_wei, sim uses sweep size.
+
+        Roundtrip_profit_bps ≈ -9937 on soak12 came from oversized backrun
+        inherited from mimicked swap events. Adaptive sizing picks the
+        sweep-optimized size, which bounds slippage on low-liquidity pools.
+        """
+        monkeypatch.setenv("ARBY_ADAPTIVE_SIZING", "1")
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        raw_amount = 10 * 10**18  # oversized event amount
+        sweep_size = 5 * 10**16  # optimal sweep
+        br = self._make_result(
+            amount_in_wei=raw_amount, best_sweep_size_wei=sweep_size
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert tx is not None
+        assert br.amount_in_wei == sweep_size
+
+    def test_adaptive_sizing_disabled_keeps_raw_amount(self, monkeypatch):
+        """ARBY_ADAPTIVE_SIZING=0 preserves legacy behaviour."""
+        monkeypatch.setenv("ARBY_ADAPTIVE_SIZING", "0")
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        raw_amount = 10 * 10**18
+        sweep_size = 5 * 10**16
+        br = self._make_result(
+            amount_in_wei=raw_amount, best_sweep_size_wei=sweep_size
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert br.amount_in_wei == raw_amount
+
+    def test_adaptive_sizing_ignores_larger_sweep(self, monkeypatch):
+        """Sweep larger than raw amount is NOT applied (conservative)."""
+        monkeypatch.setenv("ARBY_ADAPTIVE_SIZING", "1")
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        raw_amount = 5 * 10**16
+        sweep_size = 10 * 10**18  # larger — ignored
+        br = self._make_result(
+            amount_in_wei=raw_amount, best_sweep_size_wei=sweep_size
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None
+        assert br.amount_in_wei == raw_amount
+
     def test_unsupported_adapter_returns_error(self):
         """SyncSwap is not V3-compatible for calldata."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
