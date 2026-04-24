@@ -961,6 +961,133 @@ class TestE115PaperSigning:
         assert "SIGNING_NOT_READY" in (br.submit_blocker or "")
 
 
+class TestE135SubmitEconomicsGuard:
+    """Soak13: roundtrip economics must gate submit readiness."""
+
+    def _make_br(self):
+        from m7.orderflow.contracts import BackrunResult
+
+        br = BackrunResult(
+            event_id="test_roundtrip_guard",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_buy_venue="uniswap_v3",
+            best_sell_venue="uniswap_v3",
+            best_buy_fee=500,
+            best_sell_fee=500,
+            best_backrun_net_bps=1224.5819,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            token_in_decimals=18,
+            size_usd_estimate=2500.0,
+            best_sweep_size_wei=10**17,
+            best_sweep_net_bps=30.0,
+            scoring_path="local_state",
+            pricing_path="registry_direct",
+            adapter_type_used="uniswap_v3",
+            event_block=123,
+            quote_block=124,
+            block_lag=1,
+        )
+        br.sim_router_address = "0x1111111111111111111111111111111111111111"
+        br.router_address = br.sim_router_address
+        br.sim_calldata_hex = "0x04e45aaf" + "00" * 32
+        br.sim_calldata_len = 36
+        br.sell_router_address = "0x2222222222222222222222222222222222222222"
+        br.sell_calldata_hex = "0x04e45aaf" + "11" * 32
+        br.sell_calldata_len = 36
+        return br
+
+    def _mock_gate_ready(self, monkeypatch, br, sim_result):
+        import m7.orderflow.execution_gate as gate_mod
+
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "get_simulation_backend", lambda: "anvil")
+        monkeypatch.setattr(
+            gate_mod,
+            "_run_profit_guard_on_results",
+            lambda results, chain="base": [(br, object())],
+        )
+        monkeypatch.setattr(
+            gate_mod,
+            "_attempt_simulation",
+            lambda r, g, chain="base": sim_result,
+        )
+        monkeypatch.setenv("ARBY_PAPER_SIGNING", "1")
+
+    def test_negative_roundtrip_blocks_submit_ready(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        br = self._make_br()
+        sim_result = SimulationResult(
+            success=True,
+            gas_used=150000,
+            output_amount_wei=61,
+            input_amount_wei=10**18,
+            backend="anvil",
+        )
+        sim_result.roundtrip_attempted = True
+        sim_result.roundtrip_success = True
+        sim_result.roundtrip_final_wei = 4_200_151_850_124_148
+        sim_result.roundtrip_profit_wei = sim_result.roundtrip_final_wei - 10**18
+        sim_result.roundtrip_profit_bps = -9957.9985
+        self._mock_gate_ready(monkeypatch, br, sim_result)
+
+        gate = run_execution_gate([br], chain="base")
+
+        assert gate.sim_passed == 1
+        assert gate.roundtrip_success == 1
+        assert gate.roundtrip_profitable_count == 0
+        assert gate.submit_ready == 0
+        assert br.submit_ready is False
+        assert "ROUNDTRIP_NOT_PROFITABLE" in br.submit_blocker
+        assert "ROUNDTRIP_NOT_PROFITABLE" in gate.submit_blockers_detail
+        assert any(
+            b.startswith("SCORER_SIM_DIVERGENCE")
+            for b in gate.submit_blockers_detail
+        )
+        sample = gate.sim_output_samples[0]
+        assert sample["roundtrip_profit_bps"] == -9957.9985
+        assert sample["buy_venue"] == "uniswap_v3"
+        assert sample["buy_calldata_prefix"].startswith("0x04e45aaf")
+        assert "ROUNDTRIP_NOT_PROFITABLE" in sample["submit_blockers"]
+
+    def test_profitable_roundtrip_allows_paper_submit(self, monkeypatch):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        br = self._make_br()
+        sim_result = SimulationResult(
+            success=True,
+            gas_used=150000,
+            output_amount_wei=2 * 10**18,
+            input_amount_wei=10**18,
+            backend="anvil",
+        )
+        sim_result.roundtrip_attempted = True
+        sim_result.roundtrip_success = True
+        sim_result.roundtrip_final_wei = 1_002_000_000_000_000_000
+        sim_result.roundtrip_profit_wei = 2_000_000_000_000_000
+        sim_result.roundtrip_profit_bps = 20.0
+        self._mock_gate_ready(monkeypatch, br, sim_result)
+
+        gate = run_execution_gate([br], chain="base")
+
+        assert gate.sim_passed == 1
+        assert gate.roundtrip_profitable_count == 1
+        assert gate.submit_ready == 1
+        assert br.submit_ready is True
+        assert gate.submit_blockers_detail == []
+
+
 # ---------------------------------------------------------------------------
 # E1.16 regression — TOKEN_ADDRESS_UNKNOWN and DEX_CONFIG_MISSING fixes
 # ---------------------------------------------------------------------------

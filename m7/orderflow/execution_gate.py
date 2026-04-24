@@ -192,6 +192,178 @@ def _reset_accepted_fees_cache() -> None:
     _ACCEPTED_FEES_CACHE.clear()
 
 
+def _env_float(name: str, default: float) -> float:
+    """Best-effort float env parser for diagnostic thresholds."""
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _calldata_hex(calldata: Any) -> Optional[str]:
+    """Return a 0x-prefixed calldata hex string for bounded telemetry."""
+    if isinstance(calldata, bytes):
+        return "0x" + calldata.hex()
+    if isinstance(calldata, str):
+        return calldata if calldata.startswith("0x") else "0x" + calldata
+    return None
+
+
+def _calldata_prefix(value: Any, limit: int = 160) -> Optional[str]:
+    hx = _calldata_hex(value)
+    if hx is None:
+        hx = value if isinstance(value, str) else None
+    if not hx:
+        return None
+    return hx[:limit]
+
+
+def _annotate_tx_telemetry(
+    result: Any,
+    tx_params: Dict[str, Any],
+    prefix: str,
+    *,
+    venue: Optional[str] = None,
+    fee: Optional[int] = None,
+    adapter_type: Optional[str] = None,
+    tick_spacing: Optional[int] = None,
+) -> None:
+    """Attach tx metadata to BackrunResult for failed/success samples."""
+    calldata = tx_params.get("calldata")
+    hx = _calldata_hex(calldata)
+    calldata_len = len(calldata) if isinstance(calldata, (bytes, str)) else 0
+    router = tx_params.get("to")
+    try:
+        setattr(result, f"{prefix}_router_address", router)
+        setattr(result, f"{prefix}_calldata_hex", hx)
+        setattr(result, f"{prefix}_calldata_len", calldata_len)
+        if venue is not None:
+            setattr(result, f"{prefix}_venue", venue)
+        if fee is not None:
+            setattr(result, f"{prefix}_fee", fee)
+        if adapter_type is not None:
+            setattr(result, f"{prefix}_adapter_type", adapter_type)
+        if tick_spacing is not None:
+            setattr(result, f"{prefix}_tick_spacing", tick_spacing)
+        if prefix == "sim":
+            # Existing diagnostics look for these legacy names.
+            result.router_address = router  # type: ignore[attr-defined]
+            result.sim_tx_to = router  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _scorer_sim_divergence_blocker(
+    scored_net_bps: Any,
+    roundtrip_profit_bps: Any,
+) -> Optional[str]:
+    """Classify scorer-vs-roundtrip divergence without mutating sim counters."""
+    threshold = _env_float("ARBY_SCORER_SIM_DIVERGENCE_BPS", 500.0)
+    if threshold <= 0:
+        return None
+    try:
+        scored = float(scored_net_bps)
+        roundtrip = float(roundtrip_profit_bps)
+    except (TypeError, ValueError):
+        return None
+    if scored > 0 and roundtrip <= 0 and (scored - roundtrip) >= threshold:
+        return f"SCORER_SIM_DIVERGENCE:{scored:.4f}->{roundtrip:.4f}"
+    return None
+
+
+def _build_submit_blockers(
+    sim_result: SimulationResult,
+    scored_net_bps: Any,
+    calldata_ready: Any,
+    signing_ready: Any,
+) -> List[str]:
+    """Return terminal blockers for submit readiness."""
+    blockers: List[str] = []
+    if getattr(sim_result, "freshness_violation", False):
+        blockers.append("SIM_FRESHNESS_VIOLATION")
+    if sim_result.roundtrip_attempted:
+        if not sim_result.roundtrip_success:
+            blockers.append("ROUNDTRIP_NOT_SUCCESS")
+        elif sim_result.roundtrip_profit_bps <= 0:
+            blockers.append("ROUNDTRIP_NOT_PROFITABLE")
+            divergence = _scorer_sim_divergence_blocker(
+                scored_net_bps, sim_result.roundtrip_profit_bps
+            )
+            if divergence:
+                blockers.append(divergence)
+    if not calldata_ready:
+        blockers.append("CALLDATA_NOT_READY")
+    if not signing_ready:
+        blockers.append("SIGNING_NOT_READY")
+    return blockers
+
+
+def _build_sim_output_sample(
+    result: Any,
+    sim_result: SimulationResult,
+    scored_net_bps: Any,
+    submit_blockers: List[str],
+) -> Dict[str, Any]:
+    """Bounded success sample for scorer/sim/roundtrip diagnosis."""
+    buy_calldata = getattr(result, "sim_calldata_hex", None)
+    sell_calldata = getattr(result, "sell_calldata_hex", None)
+    return {
+        "event_id": getattr(result, "event_id", None),
+        "event_tx_hash": (
+            getattr(result, "tx_hash", None)
+            or getattr(result, "event_tx_hash", None)
+        ),
+        "pair": getattr(result, "actual_pair", None),
+        "amount_in_wei": getattr(result, "amount_in_wei", 0) or 0,
+        "sim_output_wei": sim_result.output_amount_wei,
+        "sim_input_wei": sim_result.input_amount_wei,
+        "scored_net_bps": scored_net_bps,
+        "buy_venue": getattr(result, "best_buy_venue", None),
+        "sell_venue": getattr(result, "best_sell_venue", None),
+        "buy_fee": getattr(result, "best_buy_fee", None),
+        "sell_fee": getattr(result, "best_sell_fee", None),
+        "token_in": (
+            getattr(result, "backrun_token_in_address", None)
+            or getattr(result, "token_in", None)
+        ),
+        "token_out": (
+            getattr(result, "backrun_token_out_address", None)
+            or getattr(result, "token_out", None)
+        ),
+        "token_in_decimals": getattr(result, "token_in_decimals", None),
+        "size_usd_estimate": getattr(result, "size_usd_estimate", None),
+        "best_sweep_size_wei": getattr(result, "best_sweep_size_wei", None),
+        "best_sweep_net_bps": getattr(result, "best_sweep_net_bps", None),
+        "scoring_path": getattr(result, "scoring_path", None),
+        "pricing_path": getattr(result, "pricing_path", None),
+        "adapter_type_used": getattr(result, "adapter_type_used", None),
+        "event_block": getattr(result, "event_block", None),
+        "quote_block": getattr(result, "quote_block", None),
+        "block_lag": getattr(result, "block_lag", None),
+        "sim_backend": sim_result.backend,
+        "sim_block_number": sim_result.sim_block_number,
+        "event_block_number": sim_result.event_block_number,
+        "block_lag_at_sim": sim_result.block_lag_at_sim,
+        "freshness_violation": sim_result.freshness_violation,
+        "buy_router": (
+            getattr(result, "sim_router_address", None)
+            or getattr(result, "router_address", None)
+        ),
+        "buy_calldata_len": getattr(result, "sim_calldata_len", None),
+        "buy_calldata_prefix": _calldata_prefix(buy_calldata),
+        "sell_router": getattr(result, "sell_router_address", None),
+        "sell_calldata_len": getattr(result, "sell_calldata_len", None),
+        "sell_calldata_prefix": _calldata_prefix(sell_calldata),
+        "roundtrip_attempted": sim_result.roundtrip_attempted,
+        "roundtrip_success": sim_result.roundtrip_success,
+        "roundtrip_profit_wei": sim_result.roundtrip_profit_wei,
+        "roundtrip_profit_bps": sim_result.roundtrip_profit_bps,
+        "roundtrip_final_wei": sim_result.roundtrip_final_wei,
+        "roundtrip_sell_revert_reason": sim_result.roundtrip_sell_revert_reason,
+        "submit_blockers": list(submit_blockers),
+    }
+
+
 @dataclass
 class ExecutionGateResult:
     """Aggregate result of running the full execution gate pipeline."""
@@ -578,17 +750,24 @@ def _build_sim_tx_params(
                             _tin = getattr(result, "backrun_token_in_address", None)
                             _tout = getattr(result, "backrun_token_out_address", None)
                             if _tin and _tout:
-                                return (
-                                    _build_slipstream_tx_params(
-                                        _slip_cfg,
-                                        _tin,
-                                        _tout,
-                                        int(_ts),
-                                        int(getattr(result, "amount_in_wei", 0) or 0),
-                                        int(_fee_hint),
-                                    ),
-                                    None,
+                                _tx = _build_slipstream_tx_params(
+                                    _slip_cfg,
+                                    _tin,
+                                    _tout,
+                                    int(_ts),
+                                    int(getattr(result, "amount_in_wei", 0) or 0),
+                                    int(_fee_hint),
                                 )
+                                _annotate_tx_telemetry(
+                                    result,
+                                    _tx,
+                                    "sim",
+                                    venue=venue,
+                                    fee=int(_fee_hint),
+                                    adapter_type=_tx.get("adapter_type"),
+                                    tick_spacing=int(_ts),
+                                )
+                                return _tx, None
                             # No token addresses — surface a distinct bucket
                             # so the reviewer can tell it from fee mapping gaps.
                             return None, (
@@ -721,11 +900,20 @@ def _build_sim_tx_params(
     except Exception as e:
         return None, f"CALLDATA_ENCODE_FAILED:{str(e)[:100]}"
 
-    return {
+    tx_params = {
         "to": router,
         "calldata": calldata,
         "value": 0,
-    }, None
+    }
+    _annotate_tx_telemetry(
+        result,
+        tx_params,
+        "sim",
+        venue=venue,
+        fee=getattr(result, "best_buy_fee", None),
+        adapter_type=adapter_type,
+    )
+    return tx_params, None
 
 
 def _get_sim_from_address() -> str:
@@ -840,7 +1028,16 @@ def _build_sell_leg_tx_params(
     except Exception as e:
         return None, f"SELL_CALLDATA_ENCODE_FAILED:{str(e)[:100]}"
 
-    return {"to": router, "calldata": calldata, "value": 0}, None
+    tx_params = {"to": router, "calldata": calldata, "value": 0}
+    _annotate_tx_telemetry(
+        result,
+        tx_params,
+        "sell",
+        venue=sell_venue,
+        fee=sell_fee,
+        adapter_type=adapter_type,
+    )
+    return tx_params, None
 
 
 def _attempt_simulation(
@@ -1148,27 +1345,7 @@ def run_execution_gate(
 
         if sim_result.passed:
             gate.sim_passed += 1
-            # E1.27/D1: Record raw sim output vs scored amount_in for offline analysis.
-            # Bps profit cannot be computed here because token_in/token_out decimals
-            # differ. Consumers (hot_runtime_artifacts) may compare against scored
-            # expected_output or run round-trip sim.
-            _pair = getattr(r, "actual_pair", None)
-            _amt_in = getattr(r, "amount_in_wei", 0) or 0
             _net_bps_scored = getattr(r, "best_backrun_net_bps", None)
-            gate.sim_output_samples.append({
-                "pair": _pair,
-                "amount_in_wei": _amt_in,
-                "sim_output_wei": sim_result.output_amount_wei,
-                "sim_input_wei": sim_result.input_amount_wei,
-                "scored_net_bps": _net_bps_scored,
-                # E2: round-trip same-token bps (valid)
-                "roundtrip_attempted": sim_result.roundtrip_attempted,
-                "roundtrip_success": sim_result.roundtrip_success,
-                "roundtrip_profit_wei": sim_result.roundtrip_profit_wei,
-                "roundtrip_profit_bps": sim_result.roundtrip_profit_bps,
-                "roundtrip_final_wei": sim_result.roundtrip_final_wei,
-                "roundtrip_sell_revert_reason": sim_result.roundtrip_sell_revert_reason,
-            })
             # E2: Record gate-level round-trip counters
             if sim_result.roundtrip_attempted:
                 gate.roundtrip_attempted += 1
@@ -1194,21 +1371,31 @@ def run_execution_gate(
                 r.signing_ready = True
             _calldata_ready = getattr(r, "calldata_ready", None)
             _signing_ready = getattr(r, "signing_ready", None)
-            if _calldata_ready and _signing_ready:
+
+            # E1.35/soak13 economics guard: a passed calldata simulation is
+            # not submit-ready if same-token roundtrip proves negative PnL.
+            _submit_blockers = _build_submit_blockers(
+                sim_result, _net_bps_scored, _calldata_ready, _signing_ready
+            )
+
+            # E1.27/D1 + soak13: Record raw sim output and enough route/tx
+            # telemetry to diagnose scorer-vs-sim divergence post-run.
+            gate.sim_output_samples.append(
+                _build_sim_output_sample(
+                    r, sim_result, _net_bps_scored, _submit_blockers
+                )
+            )
+
+            if _calldata_ready and _signing_ready and not _submit_blockers:
                 gate.submit_ready += 1
                 if hasattr(r, "submit_ready"):
                     r.submit_ready = True
             else:
-                blockers = []
-                if not _calldata_ready:
-                    blockers.append("CALLDATA_NOT_READY")
-                if not _signing_ready:
-                    blockers.append("SIGNING_NOT_READY")
                 if hasattr(r, "submit_ready"):
                     r.submit_ready = False
-                    r.submit_blocker = ",".join(blockers)
-                gate.submit_blockers.extend(blockers)
-                gate.submit_blockers_detail.extend(blockers)
+                    r.submit_blocker = ",".join(_submit_blockers)
+                gate.submit_blockers.extend(_submit_blockers)
+                gate.submit_blockers_detail.extend(_submit_blockers)
         else:
             # E1.27/D2: Prefer decoded revert_reason over raw error for histogram
             _sim_err = sim_result.revert_reason or sim_result.error or "unknown"
@@ -1240,14 +1427,35 @@ def run_execution_gate(
                     getattr(r, "router_address", None)
                     or getattr(r, "sim_router_address", None)
                 )
+                _buy_calldata = getattr(r, "sim_calldata_hex", None)
+                _sell_calldata = getattr(r, "sell_calldata_hex", None)
                 gate.sim_failed_samples.append({
+                    "event_id": getattr(r, "event_id", None),
+                    "event_tx_hash": (
+                        getattr(r, "tx_hash", None)
+                        or getattr(r, "event_tx_hash", None)
+                    ),
                     "pair": _pair_fs,
                     "venue": _venue_fs,
                     "token_in": _token_in,
                     "token_out": _token_out,
                     "router": _router,
+                    "buy_fee": getattr(r, "best_buy_fee", None),
+                    "sell_fee": getattr(r, "best_sell_fee", None),
                     "amount_in_wei": getattr(r, "amount_in_wei", 0) or 0,
                     "backrun_direction": getattr(r, "backrun_direction", None),
+                    "event_block": getattr(r, "event_block", None),
+                    "quote_block": getattr(r, "quote_block", None),
+                    "block_lag": getattr(r, "block_lag", None),
+                    "sim_backend": sim_result.backend,
+                    "sim_block_number": sim_result.sim_block_number,
+                    "event_block_number": sim_result.event_block_number,
+                    "block_lag_at_sim": sim_result.block_lag_at_sim,
+                    "freshness_violation": sim_result.freshness_violation,
+                    "buy_calldata_len": getattr(r, "sim_calldata_len", None),
+                    "buy_calldata_prefix": _calldata_prefix(_buy_calldata),
+                    "sell_calldata_len": getattr(r, "sell_calldata_len", None),
+                    "sell_calldata_prefix": _calldata_prefix(_sell_calldata),
                     "sim_error": (sim_result.error or "")[:200],
                     "revert_reason": (sim_result.revert_reason or "")[:200],
                     "bucket": (_sim_err or "unknown")[:120],
