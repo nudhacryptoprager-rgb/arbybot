@@ -76,6 +76,10 @@ dexes:
   # `SLIPSTREAM_MAPPED_PENDING_SUBMIT:*` surfaces progress vs.
   # legacy `UNSUPPORTED_FEE_TIER:AERODROME_CL:*`.
   - aerodrome_slipstream
+  # M7.E1.34k: UniswapV2 forks on Base. Widens V2 cross-dex coverage
+  # so V3-priced pools can arb against V2 (constant-product) pools.
+  - sushiswap_v2
+  - baseswap_v2
 
 # M7.E1.34j: widen discovery seed — previous value (15) was too narrow
 # for Base. hot_gap_debug on soak3 showed `bridge_cache_populated=7` and

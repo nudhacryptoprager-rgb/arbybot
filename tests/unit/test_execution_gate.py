@@ -641,7 +641,13 @@ class TestBuildSimTxParams:
         (router + quoter_v2 + verified=True), the reject bucket is
         `SLIPSTREAM_PENDING_LOOKUP:<fee>` to surface adapter readiness.
         M7.E1.34j: if the fee is in `SLIPSTREAM_FEE_TO_TICKSPACING`, the
-        bucket is promoted to `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>`.
+        reject surfaces `SLIPSTREAM_MAPPED_PENDING_SUBMIT` — superseded in
+        M7.E1.34k.
+        M7.E1.34k: without token addresses the pipeline now reaches the
+        pre-calldata stage and emits `SLIPSTREAM_SIM_READY_TOKENS_MISSING:
+        <fee>:ts<ts>`.  With token addresses present the gate returns
+        real SwapRouter calldata (covered by
+        `test_slipstream_tokens_present_builds_tx`).
         Legacy bucket `UNSUPPORTED_FEE_TIER:AERODROME_CL:<fee>` is kept
         only when the Slipstream config is absent/unverified.
         """
@@ -659,9 +665,30 @@ class TestBuildSimTxParams:
             assert tx is None
             ts = SLIPSTREAM_FEE_TO_TICKSPACING.get(fee)
             if ts is not None:
-                assert err == f"SLIPSTREAM_MAPPED_PENDING_SUBMIT:{fee}:ts{ts}", err
+                assert err == f"SLIPSTREAM_SIM_READY_TOKENS_MISSING:{fee}:ts{ts}", err
             else:
                 assert err == f"SLIPSTREAM_PENDING_LOOKUP:{fee}", err
+
+    def test_slipstream_tokens_present_builds_tx(self):
+        """M7.E1.34k: when token addresses are carried on the result and
+        the fee maps to a tickSpacing, `_build_sim_tx_params` returns
+        real SwapRouter calldata (adapter_type=aerodrome_slipstream)
+        instead of parking the candidate in a PENDING bucket."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            best_buy_venue="0x" + "a" * 40,
+            best_buy_fee=2655,
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert err is None, err
+        assert tx is not None
+        assert tx.get("adapter_type") == "aerodrome_slipstream"
+        assert tx.get("tick_spacing") == 100  # fee 2655 → ts 100
+        # SwapRouter Slipstream selector is distinct from V3 SwapRouter02
+        assert tx["calldata"][:4] != bytes.fromhex("04e45aaf")
 
     def test_algebra_dynamic_small_fee_classified(self):
         """Small non-standard fee (<=100) → ALGEBRA_DYNAMIC sub-tag."""

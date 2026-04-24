@@ -1032,6 +1032,16 @@ def _update_hot_rollup(
     _sess["last_ws_connection_status"] = _ws_status
     _sess["last_rpc_provider"] = _rpc_prov
     _sess["last_ws_provider"] = _ws_prov
+    # M7.E1.34m (soak7): histogram of WS-scan exit reasons across the
+    # session. Lets the reviewer distinguish benign recv-timeouts (quiet
+    # market) from pathological loop-not-entered / ws_429 cases.
+    _exit_reason = (ws_live_stats or {}).get("exit_reason", "unknown")
+    _exit_hist = _sess.get("session_exit_reason_histogram") or {}
+    if not isinstance(_exit_hist, dict):
+        _exit_hist = {}
+    _exit_hist[_exit_reason] = int(_exit_hist.get(_exit_reason, 0)) + 1
+    _sess["session_exit_reason_histogram"] = _exit_hist
+    _sess["last_exit_reason"] = _exit_reason
     # M7.E1.34c: strict provider policy. When ARBY_STRICT_PROVIDER_POLICY=1,
     # any window served by public_fallback is counted as a policy breach and
     # surfaced in the rollup so the reviewer's production-grade guardrail

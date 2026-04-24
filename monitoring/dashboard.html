@@ -66,6 +66,13 @@ tr:hover{background:#1c2128}
 <div id="error-msg"></div>
 
 <div class="grid">
+  <!-- M7.E1.34k: Monitoring Summary panel — pairs/pools under monitoring,
+       top spreads + gate decisions, aggregate gate funnel, top reject buckets. -->
+  <div class="panel" id="p-monsummary" style="grid-column:1/-1">
+    <h2>&#128202; Monitoring Summary <span class="src-badge">(/api/summary — M7.E1.34k)</span></h2>
+    <div id="monsummary-body">Loading summary&hellip;</div>
+  </div>
+
   <!-- Panel 0: Hot Loop Live (R28.13 — primary fast-refresh panel) -->
   <div class="panel" id="p-hotloop" style="grid-column:1/-1">
     <h2>&#9889; Hot Loop Live <span class="src-badge">(HOT hot_loop_latest.json, 1s poll)</span></h2>
@@ -229,6 +236,131 @@ function loadData() {
   loadRollingData();
   loadHotData();
   loadDiscoveryData();
+  loadMonSummary();
+}
+
+// M7.E1.34k: Monitoring Summary panel — pairs/pools counts, top spreads
+// with per-row gate decisions, aggregate gate funnel, top reject buckets.
+function loadMonSummary() {
+  fetch('/api/summary')
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(renderMonSummary)
+    .catch(e => {
+      const el = document.getElementById('monsummary-body');
+      if (el) el.innerHTML = '<span class="neg">Failed to load: '+e.message+'</span>';
+    });
+}
+
+function renderMonSummary(s) {
+  const el = document.getElementById('monsummary-body');
+  if (!el) return;
+  if (!s) { el.textContent = 'no summary'; return; }
+  const sc = s.scope || {};
+  const f = s.gate_funnel || {};
+  const fd = s.funnel_debug || {};
+  const rej = s.reject_buckets || {};
+
+  const fmt = v => (v === null || v === undefined) ? '<span class="na">-</span>' : v;
+  const bpsColor = v => (v === null || v === undefined) ? 'na' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
+
+  const funnelOrder = [
+    ['events_seen','Events seen'],
+    ['fast_score_attempted','Fast-score attempted'],
+    ['fast_path_scored','Fast-path scored'],
+    ['fast_path_positive','Fast-path positive'],
+    ['route_viable','Route viable'],
+    ['profit_guard_passed','Profit-guard passed'],
+    ['sim_attempted','Sim attempted'],
+    ['sim_passed','Sim passed'],
+    ['submit_ready','Submit ready'],
+    ['roundtrip_attempted','Roundtrip attempted'],
+    ['roundtrip_success','Roundtrip success'],
+    ['roundtrip_profitable','Roundtrip profitable'],
+  ];
+  const peak = funnelOrder.reduce((m,[k])=>Math.max(m,Number(f[k]||0)),1) || 1;
+  const funnelRows = funnelOrder.map(([k,lbl])=>{
+    const v = Number(f[k]||0);
+    const pct = Math.max(2, Math.round(v*100/peak));
+    return `<tr><td>${lbl}</td><td class="num">${v}</td>`
+      + `<td style="width:40%"><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:#3fb950"></div>`
+      + `<span class="bar-label">${pct}%</span></div></td></tr>`;
+  }).join('');
+
+  const topRows = (s.top_spreads || []).map(t=>{
+    const bps = t.net_bps !== null && t.net_bps !== undefined ? Number(t.net_bps).toFixed(2) : '-';
+    const rt = t.roundtrip_profit_bps !== null && t.roundtrip_profit_bps !== undefined
+      ? Number(t.roundtrip_profit_bps).toFixed(2) : '-';
+    const badge = t.passed
+      ? `<span class="badge pass">PASS</span>`
+      : `<span class="badge fail">STOP</span>`;
+    return `<tr><td>${t.pair || '?'}</td><td>${t.venue || '-'}</td>`
+      + `<td class="num ${bpsColor(t.net_bps)}">${bps}</td>`
+      + `<td class="num ${bpsColor(t.roundtrip_profit_bps)}">${rt}</td>`
+      + `<td>${badge} <code>${t.gate_reached || '-'}</code></td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="na">no candidates this window</td></tr>';
+
+  const rejBlocks = Object.entries(rej).map(([cat, items])=>{
+    if (!items || !items.length) return '';
+    const rows = items.map(i=>`<tr><td><code>${i.reason}</code></td><td class="num">${i.count}</td></tr>`).join('');
+    return `<div style="flex:1;min-width:200px"><h3 style="font-size:.75rem;color:#8b949e;margin:4px 0">${cat}</h3>`
+      + `<table>${rows}</table></div>`;
+  }).join('');
+
+  const fdRows = Object.entries(fd).map(([k,v])=>
+    `<tr><td><code>${k}</code></td><td class="num">${v}</td></tr>`).join('');
+
+  // M7.E1.34m (soak7): session persistence + exit-reason histogram
+  const ss = s.session_state || null;
+  const erh = s.exit_reason_histogram || {};
+  const erhRows = Object.entries(erh).sort((a,b)=>Number(b[1])-Number(a[1]))
+    .map(([k,v])=>`<tr><td><code>${k}</code></td><td class="num">${v}</td></tr>`).join('');
+  let sessBadge = '';
+  if (ss && ss.session_id) {
+    const ageS = ss.updated_at_epoch
+      ? Math.max(0, Math.floor(Date.now()/1000 - Number(ss.updated_at_epoch)))
+      : -1;
+    const cur = s.current_session_id || '?';
+    const match = cur === ss.session_id;
+    sessBadge = `<div style="font-size:.75rem;color:#8b949e;margin:6px 0">`
+      + `<span class="badge ${match ? 'pass' : 'fail'}">${match ? 'PERSISTED' : 'ROTATED'}</span> `
+      + `session_id=<code>${ss.session_id}</code> `
+      + `current=<code>${cur}</code> `
+      + `age=${ageS}s last_exit=<code>${s.last_exit_reason||'?'}</code>`
+      + `</div>`;
+  } else {
+    sessBadge = `<div style="font-size:.75rem;color:#8b949e;margin:6px 0">`
+      + `<span class="badge fail">NO_STATE</span> session_state not found `
+      + `last_exit=<code>${s.last_exit_reason||'?'}</code></div>`;
+  }
+
+  el.innerHTML = `
+    <div class="kpi" style="margin-bottom:10px">
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.pairs_monitored)}</div><div class="kpi-lbl">pairs monitored</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.pools_monitored)}</div><div class="kpi-lbl">pools monitored</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.bridge_focused_pool_count_last)}</div><div class="kpi-lbl">bridge focused</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.bridge_loaded_candidate_count_total)}</div><div class="kpi-lbl">bridge loaded</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(s.chain)||'-'}</div><div class="kpi-lbl">chain</div></div>
+      <div class="kpi-item"><div class="kpi-val">${s.sim_disabled ? 'OFF' : (s.simulation_backend||'?')}</div><div class="kpi-lbl">sim backend</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px">
+      <div>
+        <h3 style="font-size:.8rem;color:#8b949e;margin:6px 0">Top spreads &mdash; gate decision</h3>
+        <table>
+          <thead><tr><th>Pair</th><th>Venue</th><th class="num">Net bps</th><th class="num">RT bps</th><th>Gate reached</th></tr></thead>
+          <tbody>${topRows}</tbody>
+        </table>
+      </div>
+      <div>
+        <h3 style="font-size:.8rem;color:#8b949e;margin:6px 0">Gate funnel</h3>
+        <table>${funnelRows}</table>
+      </div>
+    </div>
+    <h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">Top reject buckets (where candidates stop)</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:14px">${rejBlocks || '<span class="na">no reject data</span>'}</div>
+    ${fdRows ? `<h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">Funnel debug (M7.E1.34k silent-drop counters)</h3><table>${fdRows}</table>` : ''}
+    ${sessBadge}
+    ${erhRows ? `<h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">WS exit reason histogram (M7.E1.34m)</h3><table>${erhRows}</table>` : ''}
+  `;
 }
 
 function loadRollingData() {

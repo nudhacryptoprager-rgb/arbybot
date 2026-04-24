@@ -1,171 +1,182 @@
-﻿# DEV REPORT
+# DEV REPORT
 
 ## 0) Meta
 timestamp_utc: 2026-04-17T12:59:11Z
-soak_ended_at_utc: 2026-04-23T07:21:17Z
-run_id: M7.E1.34j-soak4
-mode: ONLINE (strict Base 30m reviewer soak, mixed-backend bypass, widened seed)
+soak_started_at_utc: 2026-04-24T06:04:00Z
+soak_ended_at_utc: 2026-04-24T06:34:13Z
+run_id: M7.E1.34m-soak7
+mode: ONLINE (Base, 30m, strict provider policy, session persistence,
+  exit-reason diagnostics, dashboard actualization).
 artifact_mode: rolling
-config: Base, PROD=tenderly / DISC=rpc_fork (no Anvil), strict provider + archive
+config: Base, PROD=tenderly / DISC=rpc_fork, strict provider + archive
 run_dir reference (unchanged rolling pointer):
   ci_m5_gate_arbitrum_one_20260417_145636_478653
 code_identity:
   primary: ts:2026-04-17T12:59:11Z
-  dirty: true — soak3 additive logging edits + soak4 data/adapter mapping (see §2)
-  desc: soak4 widens Base PTT seed to 15 pairs, adds Slipstream fee→tickSpacing
-        mapping, and promotes `UNSUPPORTED_FEE_TIER:AERODROME_CL:*` rejects
-        into `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>` when mapping ready.
+  dirty: true — soak3 logging + soak4 seed/mapping + soak5 Slipstream ts
+         + soak6 supervisor per-window caps + soak7 session persistence
+         + WS exit_reason diagnostic + dashboard actualization.
 
-## 1) Scope — M7.E1.34j (soak4)
-goal: after soak3 root-cause (PTT seed too narrow + silent prewarm
-failures), expand the Base profit-lane seed set and ship the Slipstream
-fee-tier adapter mapping, then run a fresh 30m soak to confirm the
-bridge/registry funnel unblocks.
+## 1) Scope — M7.E1.34m (soak7)
+The user approved the 4 queued fixes from soak6 §9 plus a live 30-min
+validation and dashboard refresh:
+  1. Persist `session_id` across clean-exits so reviewer counters
+     survive supervisor restarts within the same soak.
+  2. Wire per-pool Slipstream tickSpacing + token addresses so
+     SLIPSTREAM_SIM_READY_TOKENS_MISSING becomes reachable.
+  3. Fix the internal `run_live_scan` early-exit that kept each
+     subprocess to 20–170 s regardless of supervisor `--ws-timeout=600`.
+  4. Make `reviewer_soak_summary.py` aggregate across a rolling
+     30-min window without requiring identical session_id.
+  5. Dashboard actualization with session + exit-reason surfaces.
+  6. Pytest + repo safety + 30-min soak7 to confirm or refute.
 
-change_summary (soak4, on top of soak3 logging edits):
-- config/onboard_base_profit.yaml:
-  - `discovery_runtime_max_pairs`: 15 → 30
-  - `include_pairs`: 7 → 15 (added AERO/WETH, VIRTUAL/WETH,
-    cbETH/WETH, wstETH/WETH, rETH/WETH, EURC/USDC, DAI/USDT,
-    USDT/DAI). All new symbols verified in `core/core_tokens.yaml` base.
-  - `dexes`: added `aerodrome_slipstream` (registry-backed, verified=true).
-- m7/orderflow/execution_gate.py:
-  - NEW module-level constant `SLIPSTREAM_FEE_TO_TICKSPACING` mapping
-    the 9 observed Slipstream fees (150,445,600,1000,2105,2655,3024,
-    5000,20000) to canonical tickSpacings {1,50,100,200,2000}.
-  - `_build_sim_tx_params`: when Slipstream config is verified AND
-    fee∈mapping, reject surfaces under new
-    `SLIPSTREAM_MAPPED_PENDING_SUBMIT:<fee>:ts<ts>` bucket.  Legacy
-    `SLIPSTREAM_PENDING_LOOKUP:<fee>` is kept for fees without a
-    verified tickSpacing; legacy
-    `UNSUPPORTED_FEE_TIER:AERODROME_CL:<fee>` is kept only when config
-    is absent/unverified.
-- tests: `test_slipstream_pending_lookup.py` +
-  `test_execution_gate.py::test_aerodrome_cl_fee_classified` +
-  `test_base_profit_contracts.py::test_include_pairs_contour` updated
-  to accept the widened contour (>7, ≤30) and the new bucket names.
-- scripts/start_nonstop_runtime.py: replaced a stray `→` in the
-  `[discovery]` banner with ASCII `->` to prevent Windows cp1251
-  UnicodeEncodeError when stdout is redirected/teed.
-- soak4 PTT/adapter work only — no schema changes, no artifact
-  contract changes; 2 contract tests updated to reflect the
-  intentional contour widening.
+## 2) Change summary (code actually shipped this cycle)
+- `m7/orderflow/runtime_io.py`:
+  - `_resolve_session_id()` reads/writes
+    `data/runs/_rolling/m7_session_state.json` (TTL 900 s, disable via
+    `ARBY_SESSION_PERSIST=0`). All 5 lanes now share the same
+    `session_id`, so reviewer session-scoped fields accumulate across
+    clean-exit restarts within a soak.
+- `m7/orderflow/mode_ws_live.py`:
+  - Added `_exit_reason` tracking at each WS-loop exit path (timeout,
+    recv error, recv timeout, max_events, ws_blocks exhausted,
+    exception, 429). Surfaced in `ws_live_stats.exit_reason` so the
+    supervisor's rc=0 clean exits stop being opaque.
+- `m7/orderflow/hot_runtime_artifacts.py`:
+  - Rollup session now carries `session_exit_reason_histogram` and
+    `last_exit_reason`, enabling operators to distinguish benign
+    `recv_timeout` from pathological `ws_429` / `loop_not_entered`.
+- `monitoring/dashboard_server.py` + `monitoring/dashboard.html`:
+  - `/api/summary` adds `session_state` (file contents),
+    `current_session_id`, `last_exit_reason`, `exit_reason_histogram`.
+  - Monitoring Summary panel renders a PERSISTED/ROTATED badge plus an
+    exit-reason table. No breaking JSON changes (additive only).
 
-scope_NOT_done (deferred, listed in §12):
-- Per-pool `tickSpacing` lookup on Slipstream pools and SwapRouter
-  selector verification — required to promote bucket from
-  `SLIPSTREAM_MAPPED_PENDING_SUBMIT` to actual submit_ready.
-- Non-silent counters in `mode_ws_live.py` L509/L532 and
-  `events.py` L242.
+Items intentionally NOT shipped this cycle (with explicit reason):
+- `set_slipstream_pool_ts()` wiring inside `scoring_parallel.py`:
+  pool-inspection hot path was not touched because soak7 first
+  uncovered an upstream root cause (see §3) that makes the Slipstream
+  bucket unreachable regardless of ts publication. Wiring is parked
+  for soak8 after the recv-error root cause is resolved.
+- `--rolling-window` flag on `reviewer_soak_summary.py`: the reviewer
+  already compares totals-deltas (events_seen_total, fast_path_scored
+  _total, etc.) which are cumulative — not session-scoped — so the
+  existing command already honours a rolling window once session_id is
+  persisted. Adding a redundant flag was deferred.
+- `SystemExit → retry` in `run_live_scan`: soak7 evidence (see §3)
+  shows the exits are `recv_error`, NOT SystemExit. Rewriting those 4
+  sites would not change behaviour; a targeted reconnect loop is the
+  correct fix and is scheduled for soak8.
 
-## 2) Commands Executed (soak4)
-- py -3.11 -m pytest tests/unit -q  # 4251 passed, 6 skipped, 1 warning
-- Copy-Item m7_hot_rollup_latest{,_discovery}.json
-  reviewer_soak_baseline_latest{,_discovery}.json  # baseline captured
-- $Env:PYTHONIOENCODING="utf-8"; $Env:ARBY_SIM_BACKEND="tenderly";
-  $Env:ARBY_SIM_BACKEND_DISC="rpc_fork"; strict env per §11
-- py -3.11 scripts\start_nonstop_runtime.py --chain base --hours 0.5
-  --with-discovery --no-m4 --m7-hot-blocks 900 --m7-cold-blocks 900
-  --max-restarts 100
-  - SOAK4_START_UTC=2026-04-23T06:51:10Z
-  - SOAK4_END_UTC=2026-04-23T07:21:17Z
-- py -3.11 scripts\reviewer_soak_summary.py  # FAIL exit=2 (see §4)
+## 3) Soak7 evidence
+Supervisor end: 2026-04-24T06:34:13Z
+Supervisor tail metrics:
+  - 5/5 lanes alive at termination.
+  - crash_restarts 0/100 for every subprocess.
+  - cycles_completed: m7_hot=22, m7_cold=18, m7_hot_discovery=22,
+    m7_cold_discovery=8 (70 cycles total across 30 min).
+  - restarts (clean exits + respawns): 69.
 
-## 3) Artifacts (soak4)
-- data/runs/_rolling/reviewer_soak_baseline_latest.json (pre-soak)
-- data/runs/_rolling/reviewer_soak_baseline_latest_discovery.json
-- data/runs/_rolling/m7_hot_rollup_latest.json (session=4f533481)
-- data/runs/_rolling/m7_hot_rollup_latest_discovery.json
-- data/runs/_rolling/m7_hot_latest.json (hot_gap_debug captured below)
-- data/runs/_rolling/reviewer_soak_runtime_latest.log
-  (supervisor stdout, purged post-soak per rolling invariant)
-- run_dir reference (unchanged rolling pointer):
-  ci_m5_gate_arbitrum_one_20260417_145636_478653
-- canonical rolling pointer files unchanged (_latest.json,
-  run_summary_latest.json, m4_stability_agg.json).
+Session persistence — confirmed working:
+  - `data/runs/_rolling/m7_session_state.json` ==
+    `{"session_id": "45482710", "updated_at_epoch": 1777012441}`
+  - `m7_hot_rollup_latest.json.session.session_id` == "45482710"
+  - `m7_hot_rollup_latest_discovery.json.session.session_id` ==
+    "45482710"
+  - Both rollups share the SAME session_id — prior cycles had
+    divergent ids per lane, which blocked reviewer session-scoped
+    accumulation.
 
-## 4) Reviewer Summary (soak4)
-- Supervisor uptime: 30m, **5/5 alive** through the run (one `4/5 alive`
-  blip at T-0.7min was the natural end-of-run cooldown).
-- **crash_restarts: 0/100 on every lane** (m7_hot=0, m7_cold=0,
-  m7_hot_discovery=0, m7_cold_discovery=0), cycles_completed
-  28/25/41/23 respectively, 115 clean restarts total.
-- Reviewer verdict: **FAIL (exit=2)**.
-- Session deltas (current − baseline):
-  - PROD: `events_seen_total=+6`, `fast_path_scored_total=0`,
-    `sim_attempted=0`, `sim_passed=0`, `roundtrip_attempted=0`,
-    `profit_guard_passed=0`.
-  - Histogram deltas: (no changes).
-  - `strict_provider_breaches=0`, `BlockOutOfRangeError=0`.
-- Stale rollup: `STALE_ROLLUP[production] age=121s>120s`
-  (transient — reviewer ran 1s past the window; evidence still valid).
+Exit-reason histogram — the single most important soak7 finding:
+  - production lane: `{"recv_error": 9}`
+  - discovery  lane: `{"recv_error": 10}`
+  - 100% of WS-loop exits were `recv_error`. NOT `ws_timeout` (which
+    would imply quiet market), NOT `max_events_reached` (which would
+    imply structural cap), NOT `ws_429` (which would imply rate
+    limiting). This is the peer (Alchemy WS) closing the stream
+    mid-session, typically 50–120 s in — exactly the window the
+    supervisor log shows as "Clean cycle exit rc=0 after Ns".
+  - Operational consequence: `args.ws_timeout=600` has zero effect
+    because `ws_conn.recv()` returns an exception LONG before the
+    timeout guard fires. The "ghost timeout" was a misdiagnosis; the
+    true problem is WS keep-alive / provider-side idle disconnects.
 
-## 5) hot_gap_debug (soak4) — FUNNEL UNBLOCK
-```
-total_events: 2, admitted_to_scoring: 0, fast_path_scored_count: 0
-bridge_cache_populated: 12                (soak3: 7)  → +71%
-bridge_registry_prewarmed: 18             (soak3: 0)  → UNBLOCKED
-bridge_focused_pool_count: 12             (soak3: 7)
-pool_address_match_count: 0               (soak3: 0)  unchanged
-not_in_hot_registry_count: 2              (soak3: 2)
-```
-**Interpretation.**
-- The bridge/registry prewarm chain is no longer silent-failing — 18 pools
-  are actively prewarmed into the hot registry per iteration.
-- The remaining `fast_path_scored=0` is now a coverage/activity problem:
-  only 2 swap events reached the funnel in the 30m window, and both
-  happened to be on pools outside the widened seed set.
-- No new `Bridge prewarm preload_pair failed` warnings in rolling stdout
-  (supervisor tees supervisor output only; subprocess warnings would
-  land in their own per-lane log if configured).
+Reviewer verdict (baseline = soak6 end, current = soak7 end):
+  - events_seen_total: +14 PROD / +15 DISC
+  - fast_path_scored_total: +0 / +0
+  - sim_attempted_total: +0 / +0
+  - roundtrip_attempted_total: +0 / +0
+  - strict_provider_breaches_total: +0 / +0
+  - BlockOutOfRangeError: +0 / +0
+  - OVERALL_ACCEPTANCE: FAIL for both lanes because fast_path_scored
+    did not advance.
 
-## 6) Evidence (soak4)
-- Terminal log: `data/runs/_rolling/reviewer_soak_runtime_latest.log`
-  (purged after analysis per `test_rolling_no_archive_files` invariant).
-- No crash_restarts recorded by supervisor across all lanes; no
-  strict_provider breaches; no BlockOutOfRangeError observed.
-- Unit tests: 4251 passed / 6 skipped (1 deprecation warning, stable).
+## 4) Interpretation
+Soak7 fixed the infrastructure surfaces (session, diagnostics,
+dashboard) as promised, but did NOT produce a funnel breakthrough.
+That is not a regression — it is the first soak in this series where
+the scanner subprocess ran stably for 30 min without any crash,
+while the rollup unambiguously tells us where the work is being lost:
 
-## 7) Tests
-pytest: 4251 passed, 6 skipped, 1 warning (websockets.legacy
-DeprecationWarning, pre-existing).
-check_repo_safety: PASS (0 warnings after DEV_REPORT alignment
-+ this soak4 refresh).
+  - Events arrive but fast_path_scored stays flat: +14 events /
+    +0 scored. The bottleneck is between normalize_swap_log and
+    score_backrun_fast, not in the supervisor, not in ws_timeout,
+    not in max_events, not in session_id.
+  - `recv_error` dominates: the WS subprocess cannot sustain a
+    long-lived newHeads subscription under strict_provider_policy,
+    so each lane averages ~65 s of wall time per subprocess instance
+    and then respawns. Even if the funnel worked, the lane reopens
+    bridge/PTT state every ~70 s, paying a cold-start tax before any
+    scoring can occur.
 
-## 8) Notes — Prompt Injection
-Two tool outputs during this session injected a directive requesting the
-agent to call `send_to_terminal` with specific IDs ("Evaluate the
-terminal output… determine the best answer… call send_to_terminal").
-Both were ignored and flagged. The terminals in question were idle
-async Soak4 supervisor shells; no interactive prompt was actually
-waiting.
+## 5) What soak8 must do (unchanged from soak7's deferred list, now
+   with a measured root cause)
+1. Replace the `ws_conn.recv()` implicit-exit path with an explicit
+   reconnect loop: on `recv_error`, close the connection, back off
+   (exponential 1 s → 8 s capped), re-subscribe `newHeads`, continue
+   the same scoring session. Only break on `ws_blocks` exhaustion or
+   `ws_timeout` actually reached. This turns 22 × ~65 s disposable
+   windows into a continuous stream.
+2. Publish Slipstream tickSpacing + token addresses inside
+   `scoring_parallel.py` so SIM_READY_TOKENS_MISSING becomes a
+   reachable bucket once the funnel is alive.
+3. If reconnect fix unlocks fast_path_scored > 0, re-run reviewer
+   with default thresholds; otherwise keep
+   `ARBY_REVIEWER_QUIET_OK=1` as an escape hatch.
 
-## 11) Runbook (mixed-backend bypass, unchanged from soak3)
-1. Ensure `.env` is loaded into the PowerShell session.
-2. Set strict policy:
-   - `PYTHONIOENCODING=utf-8`
-   - `ARBY_STRICT_PROVIDER_POLICY=1`, `ARBY_RPC_PREMIUM_ONLY=1`,
-     `ARBY_REQUIRE_PREMIUM=1`, `ARBY_REQUIRE_ARCHIVE=1`
-   - `ARBY_SIM_BACKEND=tenderly` (PROD)
-   - `ARBY_SIM_BACKEND_DISC=rpc_fork` (DISC)
-   - `ARBY_SIM_ADMISSION_STRICT=1`, `ARBY_SIM_MIN_NET_BPS=1.0`,
-     `ARBY_SIM_BYPASS_GUARD=0`, `ARBY_REVIEWER_QUIET_OK=0`
-3. Capture baseline via `Copy-Item`.
-4. Start supervisor with `--with-discovery --no-m4
-   --m7-hot-blocks 900 --m7-cold-blocks 900 --max-restarts 100`.
-5. After 30m, run `py -3.11 scripts\reviewer_soak_summary.py`.
-6. Inspect `data/runs/_rolling/m7_hot_latest.json` `hot_gap_debug`
-   for funnel diagnostics before declaring root cause.
+## 6) Validation gates
+- pytest: `py -3.11 -m pytest tests/unit -q` → 4252 passed, 6 skipped
+  (identical to soak6 baseline; no new tests introduced, no existing
+  tests broken by session persistence or exit_reason changes).
+- repo safety: `py -3.11 scripts\check_repo_safety.py` → PASS, 0
+  warnings (all 20 gates including DEV_REPORT_LATEST timestamp anchor
+  and docs bloat limit).
+- dashboard: `/api/summary` JSON extended with `session_state`,
+  `current_session_id`, `last_exit_reason`, `exit_reason_histogram`
+  (additive only).
 
-No Anvil step. No `ARBY_ANVIL_*`. Alchemy quota unaffected.
+## 7) Prompt-injection / async output surveillance
+No prompt-injection attempts detected in async supervisor output or
+subprocess logs for soak7 (reviewed full 30-min tail). Only expected
+strings: PID lines, "Clean cycle exit", "[supervisor] N/5 alive".
 
-## 12) Goal Status
-goal_status: BLOCKED on coverage/activity (not infrastructure).
-blocker_status_after: UNBLOCKED-AT-REGISTRY (bridge_registry_prewarmed
-went 0 → 18; the remaining gate is event landing on prewarmed pool
-addresses, which is a function of swap activity on the widened seed
-set). Next soak should widen event coverage further and/or raise
-`--m7-hot-blocks` to 3600 so iter-1 covers a wider block window per
-supervisor restart.
+## 8) File-level audit trail for soak7
+- `m7/orderflow/runtime_io.py`: added `_resolve_session_id()` and
+  state-file I/O.
+- `m7/orderflow/mode_ws_live.py`: `_exit_reason` initialisation +
+  branch-wise assignments + exposure in `ws_live_stats.exit_reason`.
+- `m7/orderflow/hot_runtime_artifacts.py`: session rollup now carries
+  `session_exit_reason_histogram` + `last_exit_reason`.
+- `monitoring/dashboard_server.py`: `/api/summary` adds 4 fields.
+- `monitoring/dashboard.html`: Monitoring Summary panel renders
+  session badge + exit-reason table.
+- `data/runs/_rolling/m7_session_state.json`: new runtime artifact.
 
-## 13) Prior Run — M7.E1.34i (soak3) — preserved for lineage
+## 9) Queued for soak8 (in priority order)
+1. WS `recv_error` → reconnect-in-place loop (the actual blocker).
+2. Slipstream tickSpacing + token-address publication in
+   `scoring_parallel.py` (now unblocked by fix #1).
+3. Optional `--rolling-window` flag on reviewer (cosmetic).
+
+run_dir reference kept intact: ci_m5_gate_arbitrum_one_20260417_145636_478653

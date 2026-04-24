@@ -47,9 +47,28 @@ def parse_args():
     # 30m STF soak (2026-04-21) where the previous default of 20 caused
     # bounded workers to clean-exit every ~30s and exhaust restart budget
     # before useful funnel activity occurred.
-    ap.add_argument("--m7-hot-blocks", type=int, default=900)
+    ap.add_argument("--m7-hot-blocks", type=int, default=3600)
     # M7.E1.34e: bumped from 300 to 900 in line with --m7-hot-blocks.
-    ap.add_argument("--m7-cold-blocks", type=int, default=900)
+    # M7.E1.34k: bumped both hot and cold to 3600 — soak4 showed cycles
+    # clean-exiting every ~55s and losing prewarm work on each restart.
+    ap.add_argument("--m7-cold-blocks", type=int, default=3600)
+    # M7.E1.34l: per-window caps that the inner worker honours.
+    # loop_runner._LANE_DEFAULTS['hot'] sets max_events=5 / ws_timeout=30
+    # which caused the supervised 3600-block soak to clean-exit every
+    # 30-120s (after 5 events OR 30s idle), rotating session_id and
+    # collapsing reviewer session-scoped totals. The supervisor now
+    # passes generous soak-sized caps so one window really lasts
+    # --m7-hot-blocks, not the first lane-default cap that trips.
+    ap.add_argument("--m7-hot-max-events", type=int, default=500,
+                    help="Max events per hot window (soak default 500; "
+                         "loop-runner hot default is 5).")
+    ap.add_argument("--m7-hot-ws-timeout", type=int, default=600,
+                    help="Idle-window timeout in seconds for hot lane "
+                         "(soak default 600; loop-runner hot default is 30).")
+    ap.add_argument("--m7-cold-max-events", type=int, default=500,
+                    help="Max events per cold window (soak default 500).")
+    ap.add_argument("--m7-cold-ws-timeout", type=int, default=900,
+                    help="Idle-window timeout in seconds for cold lane.")
     ap.add_argument("--no-m4", action="store_true", help="Skip M4/M5 scan orchestrator")
     ap.add_argument("--no-m7-cold", action="store_true", help="Skip M7 cold lane")
     ap.add_argument("--chain", type=str, default="arbitrum_one",
@@ -276,6 +295,8 @@ def main():
             "--chain", args.chain,
             "--profile", args.m7_profile,
             "--ws-blocks", str(args.m7_hot_blocks),
+            "--ws-timeout", str(args.m7_hot_ws_timeout),
+            "--max-events", str(args.m7_hot_max_events),
             "--pause", str(args.m7_hot_pause),
         ],
         restart_delay=args.restart_delay,
@@ -292,6 +313,8 @@ def main():
                 "--chain", args.chain,
                 "--profile", args.m7_profile,
                 "--ws-blocks", str(args.m7_cold_blocks),
+                "--ws-timeout", str(args.m7_cold_ws_timeout),
+                "--max-events", str(args.m7_cold_max_events),
                 "--pause", str(args.m7_cold_pause),
             ],
             restart_delay=args.restart_delay,
@@ -322,6 +345,8 @@ def main():
                 "--chain", args.chain,
                 "--profile", "discovery",
                 "--ws-blocks", str(args.m7_hot_blocks),
+                "--ws-timeout", str(args.m7_hot_ws_timeout),
+                "--max-events", str(args.m7_hot_max_events),
                 "--pause", str(args.m7_hot_pause),
             ],
             restart_delay=args.restart_delay,
@@ -337,6 +362,8 @@ def main():
                     "--chain", args.chain,
                     "--profile", "discovery",
                     "--ws-blocks", str(args.m7_cold_blocks),
+                    "--ws-timeout", str(args.m7_cold_ws_timeout),
+                    "--max-events", str(args.m7_cold_max_events),
                     "--pause", str(args.m7_cold_pause),
                 ],
                 restart_delay=args.restart_delay,

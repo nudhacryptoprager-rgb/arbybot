@@ -66,7 +66,53 @@ def _init_artifact_paths(profile: str) -> None:
 
 
 # M7.A.5.47k: Session ID — unique per process lifetime
-_SESSION_ID = str(_uuid.uuid4())[:8]
+# M7.E1.34m (soak7): Persist across clean-exit so reviewer session-scoped
+# metrics can accumulate across supervisor restarts. A shared JSON file
+# under data/runs/_rolling/ holds {session_id, updated_at_epoch}; if the
+# file exists and is fresh (age < ARBY_SESSION_PERSIST_TTL_SEC,
+# default 900s), the existing session_id is reused. Otherwise a new one
+# is minted and written. Discovery + production lanes share the file
+# intentionally: reviewer compares rollup-total deltas, not per-lane.
+# Disable by setting ARBY_SESSION_PERSIST=0.
+def _resolve_session_id() -> str:
+    persist = os.environ.get("ARBY_SESSION_PERSIST", "1") != "0"
+    if not persist:
+        return str(_uuid.uuid4())[:8]
+    path = os.environ.get(
+        "ARBY_SESSION_STATE_FILE",
+        os.path.join("data", "runs", "_rolling", "m7_session_state.json"),
+    )
+    ttl = int(os.environ.get("ARBY_SESSION_PERSIST_TTL_SEC", "900") or 900)
+    now = int(datetime.now(timezone.utc).timestamp())
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            sid = str(state.get("session_id") or "").strip()
+            updated_at = int(state.get("updated_at_epoch") or 0)
+            if sid and (now - updated_at) <= ttl:
+                # Refresh the timestamp so concurrent lanes see the file as fresh
+                try:
+                    state["updated_at_epoch"] = now
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(state, f)
+                except OSError:
+                    pass
+                return sid
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    sid = str(_uuid.uuid4())[:8]
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"session_id": sid, "updated_at_epoch": now}, f)
+    except OSError:
+        pass
+    return sid
+
+
+_SESSION_ID = _resolve_session_id()
 
 
 def _atomic_json_write(path: str, data: dict, **kwargs) -> None:

@@ -99,6 +99,26 @@ base:
     fee_tiers: [100, 500, 2500, 10000]
     note: "PancakeSwap V3 - uses 2500 fee tier instead of 3000"
 
+  # M7.E1.34k: SushiSwap V2 on Base — UniswapV2 fork.
+  # Factory verified via sushi.com docs + BaseScan:
+  #   https://basescan.org/address/0x71524B4f93c58fcbF659783284E38825f0622859
+  # Router V2: 0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891
+  sushiswap_v2:
+    adapter_type: "uniswap_v2"
+    factory: "0x71524B4f93c58fcbF659783284E38825f0622859"
+    router: "0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891"
+    note: "M7.E1.34k: SushiSwap V2 on Base — UniswapV2 fork, adapter_type=uniswap_v2"
+
+  # M7.E1.34k: BaseSwap V2 — native Base UniswapV2 fork.
+  # Factory verified via basescan.org + baseswap.fi docs:
+  #   https://basescan.org/address/0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB
+  # Router: 0x327Df1E6de05895d2ab08513aaDD9313Fe505d86
+  baseswap_v2:
+    adapter_type: "uniswap_v2"
+    factory: "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB"
+    router: "0x327Df1E6de05895d2ab08513aaDD9313Fe505d86"
+    note: "M7.E1.34k: BaseSwap V2 — Base-native UniswapV2 fork"
+
 linea:
   lynex_v3:
     adapter_type: "algebra"

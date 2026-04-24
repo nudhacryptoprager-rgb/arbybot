@@ -78,6 +78,73 @@ SLIPSTREAM_FEE_TO_TICKSPACING: Dict[int, int] = {
     20000: 2000, # extreme-volatility / long-tail
 }
 
+# M7.E1.34k: per-pool tickSpacing cache (populated by scanner-side
+# pool inspection — e.g. discovery calling pool.tickSpacing() and
+# publishing via set_slipstream_pool_ts()). The cache is process-local
+# and best-effort: when absent, _build_sim_tx_params falls back to
+# the fee-family mapping above.
+_slipstream_ts_cache: Dict[str, int] = {}
+
+
+def _slipstream_ts_cache_get(pool_address: Optional[str]) -> Optional[int]:
+    if not pool_address:
+        return None
+    return _slipstream_ts_cache.get(pool_address.lower())
+
+
+def set_slipstream_pool_ts(pool_address: str, tick_spacing: int) -> None:
+    """Publish a discovered pool tickSpacing into the local cache.
+
+    Called by the discovery/bridge layer when a Slipstream pool's
+    ``tickSpacing()`` has been read on-chain. ``tick_spacing`` must be
+    a positive int24; non-positive values are ignored.
+    """
+    if not pool_address or not isinstance(tick_spacing, int):
+        return
+    if tick_spacing <= 0 or tick_spacing >= (1 << 23):
+        return
+    _slipstream_ts_cache[pool_address.lower()] = tick_spacing
+
+
+def _reset_slipstream_ts_cache() -> None:
+    """Test helper — drops the Slipstream ts cache."""
+    _slipstream_ts_cache.clear()
+
+
+def _build_slipstream_tx_params(
+    slip_cfg: Dict[str, Any],
+    token_in: str,
+    token_out: str,
+    tick_spacing: int,
+    amount_in_wei: int,
+    fee_hint: int,
+) -> Dict[str, Any]:
+    """Build Slipstream SwapRouter exactInputSingle tx params.
+
+    Uses `execution.gas_estimate.build_slipstream_exact_input_single_calldata`
+    which encodes the same-shape struct as Uniswap V3 but with
+    int24 tickSpacing replacing uint24 fee.
+    """
+    from execution.gas_estimate import build_slipstream_exact_input_single_calldata
+
+    calldata = build_slipstream_exact_input_single_calldata(
+        token_in=token_in,
+        token_out=token_out,
+        tick_spacing=tick_spacing,
+        recipient="0x0000000000000000000000000000000000000001",
+        amount_in=amount_in_wei,
+    )
+    return {
+        "to": slip_cfg.get("router"),
+        "calldata": calldata,
+        "value": 0,
+        # Diagnostic marker — surfaces in sim samples so reviewer can
+        # confirm Slipstream lane is actually attempting simulation.
+        "adapter_type": "aerodrome_slipstream",
+        "tick_spacing": tick_spacing,
+        "fee_hint": fee_hint,
+    }
+
 
 def _compute_accepted_fees(chain: str) -> frozenset:
     """Collect accepted fee tiers for *chain* from the DEX registry.
@@ -469,14 +536,41 @@ def _build_sim_tx_params(
                         and _slip_cfg.get("router")
                         and _slip_cfg.get("quoter_v2")
                     ):
-                        # M7.E1.34j: fee→tickSpacing mapping resolved →
-                        # surface progress. Swap calldata still pending
-                        # per-pool verification (SwapRouter selector + TS
-                        # lookup from pool contract).
-                        _ts = SLIPSTREAM_FEE_TO_TICKSPACING.get(int(_fee_hint))
+                        # M7.E1.34k: per-pool tickSpacing lookup lands.
+                        # Resolution order:
+                        #   1. `result.best_buy_tick_spacing`   (scanner-injected)
+                        #   2. cached pool→ts lookup            (_slipstream_ts_cache)
+                        #   3. SLIPSTREAM_FEE_TO_TICKSPACING    (fee-family fallback)
+                        # When resolved, build Slipstream SwapRouter calldata
+                        # so the candidate enters sim_attempted instead of
+                        # being parked in PRE_SIM_SKIP. submit remains
+                        # kill-switched by execution policy — this change
+                        # only unlocks simulation for the CL lane.
+                        _ts = (
+                            getattr(result, "best_buy_tick_spacing", None)
+                            or _slipstream_ts_cache_get(venue)
+                            or SLIPSTREAM_FEE_TO_TICKSPACING.get(int(_fee_hint))
+                        )
                         if _ts is not None:
+                            # Resolve token addresses before building calldata
+                            _tin = getattr(result, "backrun_token_in_address", None)
+                            _tout = getattr(result, "backrun_token_out_address", None)
+                            if _tin and _tout:
+                                return (
+                                    _build_slipstream_tx_params(
+                                        _slip_cfg,
+                                        _tin,
+                                        _tout,
+                                        int(_ts),
+                                        int(getattr(result, "amount_in_wei", 0) or 0),
+                                        int(_fee_hint),
+                                    ),
+                                    None,
+                                )
+                            # No token addresses — surface a distinct bucket
+                            # so the reviewer can tell it from fee mapping gaps.
                             return None, (
-                                f"SLIPSTREAM_MAPPED_PENDING_SUBMIT:"
+                                f"SLIPSTREAM_SIM_READY_TOKENS_MISSING:"
                                 f"{_fee_hint}:ts{_ts}"
                             )
                         return None, f"SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"

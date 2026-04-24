@@ -331,7 +331,22 @@ def run_ws_live(
     _focused_logs = 0       # raw logs from focused blocks
     # M7.A.5.47c: Track pool addresses seen in hot events (for bridge miss diagnosis)
     _hot_event_pool_counts: Dict[str, int] = {}  # pool_address_lower -> count
+    # M7.E1.34k: funnel_debug — count silent drops that previously hid
+    # funnel starvation causes (normalize_swap_log returning None, empty
+    # block_events, broad-floor filter eating every event, etc.).
+    _funnel_debug: Dict[str, int] = {
+        "normalize_drops_malformed_data": 0,
+        "normalize_drops_same_sign_amounts": 0,
+        "normalize_drops_size_floor": 0,
+        "normalize_drops_decode_exception": 0,
+        "blocks_dropped_all_normalized_none": 0,
+        "blocks_dropped_all_below_broad_floor": 0,
+        "events_dropped_broad_floor": 0,
+    }
     ws_start_time = time.monotonic()
+    # M7.E1.34m (soak7): default exit_reason so artifact always carries it
+    # even if an early strict-policy SystemExit fires before the while loop.
+    _exit_reason: str = "unknown"
 
     # M7.A.5.23: Session-persistent low-lag tracking across blocks
     _session_low_lag_pairs: Dict[str, Dict] = {}  # pair -> tracking info
@@ -422,16 +437,30 @@ def run_ws_live(
         from web3 import Web3 as _W3_loop
         _w3_loop = _W3_loop(_W3_loop.HTTPProvider(rpc_url))
 
+        # M7.E1.34m (soak7): capture the precise reason the WS loop exited
+        # so reviewer diagnostics can distinguish timeout, recv-error, and
+        # structural-cap exits. Previously supervisor saw a bare rc=0 with
+        # no hint at why each lane kept ending after ~20s.
+        _exit_reason = "loop_not_entered"
+
         while blocks_processed < args.ws_blocks:
             elapsed = time.monotonic() - ws_start_time
             if elapsed > args.ws_timeout:
                 logger.info("ws-live timeout reached (%ds)", args.ws_timeout)
+                _exit_reason = "ws_timeout"
                 break
 
             try:
                 msg = ws_conn.recv()
-            except Exception:
-                logger.info("WebSocket recv timeout or error after %d blocks", blocks_processed)
+            except Exception as _recv_exc:
+                logger.info(
+                    "WebSocket recv timeout or error after %d blocks: %s",
+                    blocks_processed, str(_recv_exc)[:120],
+                )
+                _exit_reason = (
+                    "recv_timeout" if "timed out" in str(_recv_exc).lower()
+                    else "recv_error"
+                )
                 break
 
             data = json.loads(msg)
@@ -517,6 +546,7 @@ def run_ws_live(
 
             # Normalize logs
             block_events = []
+            _normalize_drops: Dict[str, int] = {}
             for i, log_entry in enumerate(logs):
                 ev = normalize_swap_log(
                     log=log_entry,
@@ -524,11 +554,18 @@ def run_ws_live(
                     token_addresses=token_addresses,
                     dex_configs=dex_configs,
                     event_index=i,
+                    drop_counter=_normalize_drops,
                 )
                 if ev is not None:
                     block_events.append(ev)
+            # Merge per-block drops into session counter
+            for _b, _n in _normalize_drops.items():
+                _key = f"normalize_drops_{_b}"
+                _funnel_debug[_key] = _funnel_debug.get(_key, 0) + _n
 
             if not block_events:
+                if len(logs) > 0:
+                    _funnel_debug["blocks_dropped_all_normalized_none"] += 1
                 continue
 
             # P6 (2026-04-20): raise floor for broad_fallback blocks to cut
@@ -542,11 +579,16 @@ def run_ws_live(
                 except Exception:
                     _broad_floor = 500.0
                 if _broad_floor > 0:
+                    _pre_floor_count = len(block_events)
                     block_events = [
                         e for e in block_events
                         if getattr(e, "estimated_size_usd", 0) >= _broad_floor
                     ]
+                    _dropped = _pre_floor_count - len(block_events)
+                    if _dropped > 0:
+                        _funnel_debug["events_dropped_broad_floor"] += _dropped
                 if not block_events:
+                    _funnel_debug["blocks_dropped_all_below_broad_floor"] += 1
                     continue
 
             # Sort by size, take up to max_events per block
@@ -704,13 +746,18 @@ def run_ws_live(
 
             if len(all_results) >= args.max_events:
                 logger.info("max_events reached (%d), stopping", args.max_events)
+                _exit_reason = "max_events_reached"
                 break
-
+        else:
+            # while-loop completed naturally: ws_blocks exhausted
+            if _exit_reason == "loop_not_entered":
+                _exit_reason = "ws_blocks_exhausted"
     except Exception as exc:
         _ws_err_str = str(exc)[:200]
         if "429" in _ws_err_str:
             _ws_connection_status = "failed_429"
             _ws_error_detail = "Alchemy WS rate limit (429 Too Many Requests)"
+            _exit_reason = "ws_429"
             logger.error(
                 "WebSocket 429 rate limit: %s (scored %d events from %d blocks). "
                 "This makes events_count=0 UNRELIABLE — it's a connection failure, not market state.",
@@ -720,6 +767,7 @@ def run_ws_live(
             if _ws_connection_status == "not_attempted":
                 _ws_connection_status = "failed_other"
             _ws_error_detail = _ws_err_str
+            _exit_reason = "ws_exception"
             logger.warning(
                 "WebSocket error: %s (scored %d events from %d blocks)",
                 _ws_err_str, len(all_results), blocks_processed,
@@ -769,6 +817,11 @@ def run_ws_live(
             [{"pool": pa, "count": ct} for pa, ct in _hot_event_pool_counts.items()],
             key=lambda x: x["count"], reverse=True,
         )[:20],
+        # M7.E1.34k: funnel_debug — non-silent counters for every drop path
+        "funnel_debug": dict(_funnel_debug),
+        # M7.E1.34m (soak7): why the WS scan loop ended — essential for
+        # diagnosing repeated 20s-clean-exits during long soaks.
+        "exit_reason": _exit_reason,
     }
     # M7.E1.10: Surface connection status at artifact top level
     artifact["ws_connection_status"] = _ws_connection_status

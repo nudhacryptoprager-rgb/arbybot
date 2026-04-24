@@ -175,6 +175,7 @@ def normalize_swap_log(
     token_addresses: Dict[str, str],
     dex_configs: Dict[str, Any],
     event_index: int = 0,
+    drop_counter: Optional[Dict[str, int]] = None,
 ) -> Optional[OrderflowEvent]:
     """Normalize a raw V3 Swap log into an OrderflowEvent.
 
@@ -182,7 +183,20 @@ def normalize_swap_log(
     Attempts to identify the pool's token pair and originating DEX.
 
     Returns None if the log cannot be fully normalized (unknown tokens etc).
+
+    M7.E1.34k: if ``drop_counter`` is provided, every ``return None`` path
+    bumps a named bucket so callers can surface silent drops via
+    ``funnel_debug``. Buckets:
+      - ``malformed_data``        : len(data_hex) < 320
+      - ``same_sign_amounts``     : amount0/amount1 signs not opposite
+      - ``size_floor``            : estimated_size_usd below micro floor
+      - ``decode_exception``      : any decoder exception
     """
+    def _bump(bucket: str) -> None:
+        if drop_counter is None:
+            return
+        drop_counter[bucket] = drop_counter.get(bucket, 0) + 1
+
     try:
         pool_address = log["address"].lower() if hasattr(log["address"], "lower") else log["address"]
         tx_hash = log["transactionHash"].hex() if hasattr(log["transactionHash"], "hex") else str(log["transactionHash"])
@@ -199,6 +213,7 @@ def normalize_swap_log(
 
         # Each field is 32 bytes (64 hex chars)
         if len(data_hex) < 320:  # Need at least 5 x 64 = 320 hex chars
+            _bump("malformed_data")
             return None
 
         def _decode_int256(hex_str: str) -> int:
@@ -235,6 +250,7 @@ def normalize_swap_log(
             direction = "token1_in"
         else:
             # Both same sign — unusual, skip
+            _bump("same_sign_amounts")
             return None
 
         # Estimate USD size (rough: assume ~1 USD per 1e6 for stables, ~3500 per 1e18 for ETH)
@@ -243,6 +259,7 @@ def normalize_swap_log(
 
         # Skip tiny events
         if estimated_size_usd < MIN_EVENT_SIZE_USD * 0.1:
+            _bump("size_floor")
             return None
 
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -273,6 +290,7 @@ def normalize_swap_log(
         )
     except Exception as exc:
         logger.debug("Failed to normalize swap log: %s", str(exc)[:120])
+        _bump("decode_exception")
         return None
 
 
