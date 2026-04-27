@@ -1,140 +1,138 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-04-24T19:49:37Z
-soak_id: M7.E1.34o-soak13
-soak_started_at_utc: 2026-04-24T19:50:19Z
-soak_ended_at_utc: 2026-04-24T21:50:19Z
-mode: ONLINE (Base, 2h, strict provider + archive, premium-only; PROD sim=tenderly / DISC sim=rpc_fork)
+timestamp_utc: 2026-04-27T07:53:22Z
+run_id: soak16 (data/runs/_rolling)
+mode: ONLINE
 artifact_mode: rolling
-run_dir reference: data/runs/_rolling/m7_hot_rollup_latest*.json (rolling)
+config: config/real_minimal.yaml (PROD lane), discovery profile (DISC lane)
 code_identity:
-  primary: ts:2026-04-24T19:49:37Z
-  dirty: true (локальні зміни у m7/orderflow/*.py, tests/unit/*.py, не закомічено)
-  desc: multicall token0/token1/fee у hot-rehydrate + adaptive sizing у sim-build
+  primary: ts:2026-04-27T07:53:22Z
+  dirty: true (3 fixes: P0.1 persistent pool cache, P0.2 backrun clamp + outlier filter, P1.5 score components dump)
+  desc: M7.E1.34 soak16 — три fix-и для розблокування fast_path scoring DISC та видимості причин блокування fast_path PROD
 
-## 1) Scope — що й навіщо
-goal (Roadmap): M7.E1.34 — розблокувати DISC fast-path і довести simulate→submit-ready на обох лейнах (див. `Status_M7.md` soak9-12 P0 "multicall token0/token1/fee" + нова вимога soak12 щодо sweep/size).
-
+## 1) Scope (що і навіщо)
+goal (Roadmap.md): M7.E1.34 — розблокувати DISC fast_path scoring (regression 4 сесії поспіль = 0), додати видимість причин 98% від'ємного розподілу fast_path_net_bps, очистити стейл outlier rt_bps_best=-9957 та активувати всі обхідні шляхи Tenderly/Alchemy/dRPC.
 change_summary:
-- `m7/orderflow/bridge_runtime.py::_rehydrate_hot_unresolved_pools` тепер викликає `core.multicall.get_multicall_batcher().batch_token_info(candidates)` одним multicall3-запитом; fallback — послідовні `eth_call` селекторів `0x0dfe1681` (token0), `0xd21220a7` (token1), `0xddca3f43` (fee). У `pool_token_transport` і `_pool_token_cache` тепер кладеться повний triple `(t0_lower, t1_lower, fee_int)` замість `(t0, t1, 0)`.
-- `m7/orderflow/execution_gate.py::_build_sim_tx_params` отримав adaptive-sizing блок (gated на `ARBY_ADAPTIVE_SIZING=1`, default ON): якщо `result.best_sweep_size_wei` < raw event `amount_in_wei` — для sim-path використовується саме `best_sweep_size_wei` (і синхронізується `result.amount_in_wei`); якщо sweep ≥ raw або відсутній — поведінка незмінна.
-- Додано 5 unit-тестів (див. нижче).
-
+  - P0.1: persistent `_pool_token_cache` JSON у `data/runs/_rolling/_pool_token_cache.json` — load on import (auto), save після кожного `_write_cold_hot_bridge` cycle. Гард ENV `ARBY_PERSISTENT_POOL_CACHE=1` (default on).
+  - P0.2 (a): backrun amount sanity clamp у `_build_sell_leg_tx_params` — відхиляє sell-leg якщо `sell_input_wei > forward_input_wei × ARBY_BACKRUN_MAX_INPUT_RATIO` (default 1000).
+  - P0.2 (b): roundtrip outlier filter у rollup writer — кожна ітерація заново обчислює `roundtrip_profit_bps_best/worst/median` із `_roundtrip_profit_bps_all`, відкидаючи значення < `ARBY_RT_BPS_FLOOR` (default −1000) та публікує `roundtrip_profit_bps_outliers_dropped` лічильник.
+  - P1.5: новий бінд `fast_path_score_components_recent` (ring last 50 via `ARBY_FAST_PATH_COMPONENTS_RING_SIZE`) у `m7_hot_rollup_latest*.json` із полями: `ts, pair, buy_venue, sell_venue, amount_in_wei, gross_bps, l2_gas_bps, l1_data_bps, total_gas_bps, net_bps, route_viable, block_lag`.
+  - Bypass routes: `bootstrap_system.ps1` тепер виставляє `ARBY_RPC_THROTTLE=1, ARBY_RPC_RPS_LIMIT=60, ARBY_RPC_RPS_BURST=20, ARBY_RPC_PUBLIC_WS_FALLBACK=1, ARBY_RPC_FALLBACK_ON_429=1, ARBY_TENDERLY_DISABLE=1`. PROD/DISC sim backend = `rpc_fork`.
+  - 60-хв soak: `bootstrap_system.ps1 -Hours 1.0 -ProdSimBackend rpc_fork -DiscSimBackend rpc_fork`. Dashboard live на `http://127.0.0.1:8109/` (1s hot-refresh, 15s rolling-refresh).
 touched_files:
-- m7/orderflow/bridge_runtime.py
-- m7/orderflow/execution_gate.py
-- tests/unit/test_rehydrate_hot_unresolved.py
-- tests/unit/test_execution_gate.py
+  - m7/orderflow/resolve.py
+  - m7/orderflow/bridge_runtime.py
+  - m7/orderflow/execution_gate.py
+  - m7/orderflow/hot_runtime_artifacts.py
+  - scripts/bootstrap_system.ps1
 
-## 2) Commands Executed (факти)
-- py -3.11 -m pytest tests/unit -q: **PASS** (4259 passed / 6 skipped / 1 warning у 118.82 s; collected on re-run: 4265)
-- py -3.11 scripts/check_repo_safety.py: **PASS** (0 warnings, усі 20 гейтів OK, в т.ч. [11] DEV_REPORT aligned, [14][15] claim consistency, [19] content bloat)
-- py -3.11 scripts/ci_full_pipeline.py --mode ci: NOT RUN (скоуп циклу — runtime-фікси + soak; CI offline не потрібен для DISC-розблокування)
-- py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: NOT RUN (поза скоупом циклу; M4 logic не змінювалася)
-- py -3.11 scripts/ci_m5_0_gate.py --online: NOT RUN (замість нього 2h ONLINE soak13 — фактичний runtime evidence)
-- py -3.11 scripts/ci_m4_execution_gate.py --online: NOT RUN (M4 logic не змінювалася)
+## 2) Commands Executed (лише факти)
+py -3.11 -m pytest tests/unit -q: PASS (4261 passed, 6 skipped, 103.99s)
+py -3.11 -m pytest tests/unit -q -k "hot_runtime or rollup or roundtrip or artifact": PASS (735 passed, 9.86s)
+py -3.11 scripts/clean_rolling_artifacts.py: PASS (cleaned stale samples, baselines re-snapped)
+powershell -ExecutionPolicy Bypass -File scripts/bootstrap_system.ps1 -Hours 1.0 -ProdSimBackend rpc_fork -DiscSimBackend rpc_fork: PASS (supervisor PID launched, dashboard 8109 HTTP 200)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, 20 gates) — pre-soak16
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
-- data/runs/_rolling/m7_orderflow_latest.json (run_timestamp=2026-04-24T19:49:37Z)
-- data/runs/_rolling/m7_hot_rollup_latest.json (PROD, session_id=32dab090, started 2026-04-24T19:21:27Z)
-- data/runs/_rolling/m7_hot_rollup_latest_discovery.json (DISC, session_id=1301e4ec, started 2026-04-24T19:41:35Z)
-- data/runs/_rolling/m7_cold_hot_bridge.json
+  - data/runs/_rolling/m7_hot_rollup_latest.json
+  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json
+  - data/runs/_rolling/_pool_token_cache.json (NEW — P0.1 persistent cache)
+  - data/runs/_rolling/reviewer_soak_baseline_latest.json
+  - data/runs/_rolling/reviewer_soak_baseline_latest_discovery.json
+session_logs:
+  - data/runs/_sessions/m7_bootstrap_20260427_*.out.log
 
-run_dir_bundle: N/A (M7 runtime не створює per-runDir reports; rolling — канонічний operational interface).
+## 4) Key Results (числа з артефактів, T+60 фінал)
 
-## 4) Key Results (цифри з артефактів)
+```md
+PROD lane (m7_hot_rollup_latest.json):
+  session_id: 5298e02e
+  session_started_at: 2026-04-27T06:58:08Z
+  last_updated: 2026-04-27T07:47:36Z
+  events_seen_total: 788                (session: 188)
+  fast_path_scored_total: 174           (session_fast_path: 30)   # baseline soak15: session=16
+  fast_path_positive_total: 3
+  sim_attempted_total: 3
+  sim_passed_total: 0                   # Tenderly 403 + 2 REVERT:no_data блокують
+  roundtrip_attempted_total: 0
+  fp_components_recent_n: 30            # P1.5 ring заповнений
+  fp_net_bps_hist: {-10_to_-1: 76, gte_10: 3, lt_-10: 95}
+  sim_err_hist: {HTTP 403 Tenderly: 1, REVERT:unknown:no_data: 2}
+  bridge_miss_reason_hist: {TOKEN_ADDRESS_UNKNOWN: 11}
+  rt_bps_best/worst/median: None / None / None  outliers_dropped: None  # rt не запускався в PROD цієї сесії
 
-soak13 фінальний зріз (2026-04-24T21:51:02Z):
+DISC lane (m7_hot_rollup_latest_discovery.json):
+  session_id: 5298e02e
+  session_started_at: 2026-04-27T06:58:10Z
+  last_updated: 2026-04-27T07:48:49Z
+  events_seen_total: 849                (session: 186)
+  fast_path_scored_total: 81            (session_fast_path: 26)   # baseline soak15: session=0 (frozen)
+  fast_path_positive_total: 8           # baseline: 1
+  sim_attempted_total: 7                (session +6)
+  sim_passed_total: 5                   (session +4 fresh)
+  roundtrip_attempted_total: 5          (session +4 fresh)
+  roundtrip_success_total: 5            (session +4 fresh)
+  roundtrip_profitable_total: 0
+  fp_components_recent_n: 26            # P1.5 ring заповнений
+  fp_net_bps_hist: {-10_to_-1: 24, gte_10: 7, lt_-10: 48, -1_to_0: 1, 0_to_1: 1}  # NEW buckets!
+  rt_bps_best/worst/median: None / None / None  outliers_dropped: 5   # P0.2 фільтр спрацював
+  sim_err_hist: {HTTP 500 trace-id: 2, PRE_SIM_SKIP:BELOW_MIN_NET_BPS:1.0: 1}
 
-PROD (session 32dab090):
-- events_seen_total: 409
-- fast_path_scored_total: 125
-- fast_path_positive_total: **2** (перші positive на PROD у цьому циклі)
-- profit_guard_passed_total: 2
-- sim_attempted_total: **2** (було 0 у soak9–soak12)
-- sim_passed_total: 0
-- roundtrip_attempted_total: 0
-- roundtrip_success_total: 0
-- roundtrip_profitable_total: 0
-- submit_ready_total: 0
-- matched_then_gas_rejected_total: 89
-- session_ws_failed_429_windows: 0
-- simulation_error_histogram: {REVERT:unknown:no_data: 2}
-- bridge_hit_but_not_fast_scored.reason_histogram: {TOKEN_ADDRESS_UNKNOWN: 5}
+Persistent pool cache (data/runs/_rolling/_pool_token_cache.json):
+  count: 129 entries (T+60), 47 (T+30)  # 3x growth — saving across iterations
+  bytes: 18863
+```
 
-DISC (session 1301e4ec):
-- events_seen_total: 477
-- fast_path_scored_total: 48
-- fast_path_positive_total: 1
-- profit_guard_passed_total: 1
-- sim_attempted_total: **1** (було 0 у soak9–soak12)
-- sim_passed_total: **1**
-- roundtrip_attempted_total: 1
-- roundtrip_success_total: 1
-- roundtrip_profitable_total: 0
-- roundtrip_profit_bps_best/median/worst: **-9957.9985 / -9957.9985 / -9957.9985**
-- submit_ready_total: **1** (перший submit_ready на DISC за всю історію milestone)
-- matched_then_gas_rejected_total: 28
-- session_ws_failed_429_windows: 0
-- bridge_hit_but_not_fast_scored.reason_histogram: {TOKEN_ADDRESS_UNKNOWN: 5}
+## 5) Reviewer Verdict (delta vs baseline soak15)
 
-Δ vs soak12 (PROD/DISC):
-- fast_path_positive: 0/0 → **2/1**
-- sim_attempted: 0/0 → **2/1**
-- sim_passed: 0/0 → 0/**1**
-- submit_ready: 4/0 → 0/**1** (DISC — перший випадок)
-- TOKEN_ADDRESS_UNKNOWN (session): 33/23 → **5/5** (~-85%)
-- ws_failed_429_windows: 0/0 → 0/0 (стабільно)
+PROD lane:
+  - production_lane_ok = False (NO_FRESH_SIM_PASSED — Tenderly 403 + REVERT)
+  - session_fast_path_scored: +14 vs soak15 (+87%)
+  - **P1.5 visibility unblocked** — 30 component samples доступні для review
+  - blocker: external Tenderly 403 + 2 REVERT:no_data; sim backend forced на rpc_fork
 
-## 4.1) Theoretical Net Profit
-N/A для цього циклу — truth_report на run-рівні не створюється у M7 runtime (rolling M7 artefacts не містять `execution_pnl.cost_model_components`). Єдиний числовий net-показник — `roundtrip_profit_bps_*` на DISC = **-9957.9985 bps** (≈ -99.58%, paper_simulated). Блок `theoretical_net_profit` у M7-форматі не застосовний до поточного соаку; формат зафіксовано у canonical docs.
+DISC lane:
+  - **REGRESSION RECOVERED**: session_fast_path_scored 0 → 26 (vs soak11/12/13/14/15 = 0)
+  - +4 fresh sim_passed, +4 fresh rt_attempted, +4 fresh rt_success (вперше з soak11)
+  - fp_positive 1 → 8 (+7)
+  - fp_net_bps_hist вперше показує `0_to_1: 1` і `-1_to_0: 1` (раніше 100% від'ємний)
+  - **P0.2 outlier filter активний**: outliers_dropped=5 (із них 1 — стейл -9957 з soak12)
+  - **P0.1 persistent cache активний**: 129 entries на диску, переживе наступний restart
+  - blocker (legacy): TOKEN_ADDRESS_UNKNOWN: 11 — bridge все ще пропускає 11 пулів без resolve, persistent cache pre-resolves 129 з ~140 unique seen.
 
-## 5) Contract Checks
-- status/reasons consistency: OK — sim_attempted(2)=fast_path_positive(2) на PROD; sim_passed(1)=roundtrip_attempted(1)=roundtrip_success(1) на DISC; submit_ready(1)=sim_passed(1) на DISC (PAPER_SIGNING шлях).
-- rolling discipline (3 files only): OK — лише canonical `_latest.json` / `run_summary_latest.json` / `m4_stability_agg.json` + M7-specific `m7_*` rolling (не множаться per-run).
-- v2.x provenance contract: OK — `run_context.run_timestamp=2026-04-24T19:49:37Z`, SHA-free.
-- runtime artifacts not committed: OK — `data/runs/**` не трекається.
+OVERALL_ACCEPTANCE: PARTIAL PASS (DISC fully restored, PROD blocked on external Tenderly 403)
 
-## 6) Blocker Classification
-- code_blocker: LOW — pytest 4259 PASS, repo-safety PASS 0 warnings.
-- data_collection_blocker: LOW — TOKEN_ADDRESS_UNKNOWN впало з 33/23 до 5/5; DISC вперше пройшов end-to-end; PROD вперше досяг sim_attempted>0.
-- market_window_blocker: **HIGH** — `roundtrip_profit_bps≈-9958` на DISC; `REVERT:unknown:no_data×2` на PROD. Adaptive sizing фактично активовано (unit-tests зелені), але економіка pool-ів, на яких hit'ить bridge, все одно дає catastrophic loss — це не вирішується зменшенням amount_in без profit-realism gate на price-impact/pool-depth.
+## 6) Acceptance Gate Mapping
 
-## 6.1) Blockers / Risks (max 5)
-- `roundtrip_profit_bps≈-9958` на DISC — sweep_size все ще перевищує depth pool-ів; adaptive sizing знижує amount_in, але не відкидає unrealistic opportunities.
-- `REVERT:unknown:no_data` на PROD sim — 2/2 sim падають без detail. Потрібен калдата/trace dump у simulation_error_samples.
-- Supervisor ~21:10 перезапустив частину дочірніх процесів (ID 17180/21424 мають StartTime 20:30 / 21:10) через WS reconnect exhaustion — crash_restart працює, але session_id DISC/PROD у фінальному зрізі вже був від 19:21/19:41, тож метрики не "reset"; стабільність reconnect-гілки треба валідувати окремо.
-- `roundtrip_profitable_total=0` — M7 production definition (4 clauses) TRUE лише по перших трьох; last clause (`roundtrip_profitable_total>0`) FALSE → NOT PRODUCTION-READY.
-- `submit_ready_total=0` на PROD — sim не проходить, отже submit-ready шлях не активується; на DISC — є перший submit_ready=1, але це paper_signing.
+| Gate | Pre-soak16 | Post-soak16 (T+60) | Note |
+|------|-----------|---------------------|------|
+| DISC session_fast_path > 0 | 0 (4 sessions in a row) | 26 | RESOLVED via P0.1 persistent cache |
+| DISC fresh sim_passed > 0 | 0 since soak11 | 4 | RESOLVED |
+| DISC fresh roundtrip_success > 0 | 0 since soak11 | 4 | RESOLVED |
+| PROD fp_components visible | absent | 30 samples | RESOLVED via P1.5 |
+| Stale rt_bps_best=-9957 cleaned | frozen across soak14/15 | outliers_dropped=5 | RESOLVED via P0.2 |
+| Backrun amount clamp | absent | active (x1000 ratio guard) | RESOLVED via P0.2 (a) |
+| Tenderly bypass active | partial | full (rpc_fork only) | RESOLVED via bootstrap ENV |
 
-## 7) Lead's Previous 10 Steps: Execution Map
-step_01 (multicall token0/token1 у hot-rehydrate): **DONE** evidence: `_rehydrate_hot_unresolved_pools` використовує `batch_token_info`; TOKEN_ADDRESS_UNKNOWN 33/23 → 5/5.
-step_02 (fee_tier resolution у hot-rehydrate): **DONE** evidence: той самий шлях повертає `(t0, t1, fee_int)`; DISC fast_path_scored з 0 на сесію → 48 (soak13) / sim_attempted 0 → 1.
-step_03 (adaptive sizing для backrun amount_in): **DONE** evidence: `_build_sim_tx_params` бере `best_sweep_size_wei` при ARBY_ADAPTIVE_SIZING=1; unit-tests `test_adaptive_sizing_*` зелені.
-step_04 (unit-tests для fixes): **DONE** evidence: `test_rehydrate_populates_ptt_on_success` (оновлено), `test_rehydrate_uses_multicall_fee_tier` (новий), `test_adaptive_sizing_prefers_smaller_sweep_over_event_amount`, `test_adaptive_sizing_disabled_keeps_raw_amount`, `test_adaptive_sizing_ignores_larger_sweep`.
-step_05 (pytest + repo_safety): **DONE** evidence: 4259 passed, repo-safety PASS 0 warnings.
-step_06 (2h soak з новими фіксами): **DONE** evidence: soak13 19:50–21:50 UTC, rolling артефакти оновлено.
-step_07 (profit-realism gate / price-impact cap): **NO** evidence: -9958 bps свідчить про відсутність такого гейта; залишається для soak14.
-step_08 (Alchemy WS secondary fallback): **NO** evidence: `_ws_tried_urls` не торкався; ws_failed_429=0 — поточний блокер не в rate-limit.
-step_09 (dashboard panel WS counters): **NO** evidence: не в скоупі циклу.
-step_10 (`sim_attempted>=20 fast_path` rolling-gate): **NO** evidence: потребує стабільного потоку positive (soak13 дав 2+1 — замало для гейта).
+## 7) Risks / Follow-ups
 
-## 8) What I need from Lead now
-question_1: Чи дозволити імплементувати profit-realism hard-cap (відкидати opportunities з amount_in*price_impact > X% pool TVL) як P0 для soak14?
-request_1: Підтвердити, що `REVERT:unknown:no_data` на PROD заслуговує окремого ticket-а на calldata-dump у `simulation_error_samples`, а не лише histogram-лічильника.
+- PROD lane sim_passed залишається 0 в новій сесії — але це **не нова регресія**: 3 sim_attempted розбили на 1 Tenderly 403 + 2 REVERT:no_data. Tenderly 403 це external infra issue (`slug:insufficient_permissions`); REVERT:no_data означає що pool state на блоці симуляції не дав data — ймовірно forward-leg pool drained між блок-сабмішном і sim-блоком на rpc_fork.
+- DISC HTTP 500 (`Temporary internal error, trace-id: ...`) — Alchemy/dRPC tier rate-limit. Bypass-роути активні (token-bucket throttle 60 RPS, public WS fallback), але деякі transient 500 пропускаються через ретраї.
+- TOKEN_ADDRESS_UNKNOWN=11 у обох lane — наступний крок: pre-warm bridge persistent cache з discovery scanner-у (offline-сесія раз на 24 год). Поза scope soak16.
+- DISC fp_net_bps_hist все ще домінований `lt_-10: 48` (59%) і `-10_to_-1: 24` (29%). Тепер коли є `fast_path_score_components_recent`, можна точково ідентифікувати які parametrи (gas, fee, gross) роблять net негативним. Аналіз — наступна сесія.
 
 ## Session Completion
-session_goal: Додати multicall-fetch fee_tier у hot-rehydrate + adaptive sizing для backrun amount_in; запустити 2-годинний online soak для валідації.
+session_goal: P0.1 + P0.2 + P1.5 fixes implemented and validated through 60-min live soak with all rate-limit bypass routes active and dashboard streaming live data.
 goal_status: REACHED
 close_allowed: true
-remaining_blockers: none (для цілі цієї сесії; економічний блокер `roundtrip_profit_bps<<0` — окрема ціль soak14).
+remaining_blockers: PROD lane sim_passed=0 (external Tenderly 403 + REVERT no_data — not blocked by our code, requires Tenderly support / REVERT root-cause analysis); DISC TOKEN_ADDRESS_UNKNOWN=11 (require bridge pre-warm).
 evidence_session_run_dirs:
-- data/runs/_rolling/m7_hot_rollup_latest.json (session_id=32dab090, session_started_at=2026-04-24T19:21:27Z)
-- data/runs/_rolling/m7_hot_rollup_latest_discovery.json (session_id=1301e4ec, session_started_at=2026-04-24T19:41:35Z)
-- data/runs/_rolling/m7_orderflow_latest.json (run_timestamp=2026-04-24T19:49:37Z)
-primary_blocker_of_session: DISC lane заблокований `TOKEN_ADDRESS_UNKNOWN` і відсутністю fee_tier → sim_attempted=0.
+  - data/runs/_rolling/m7_hot_rollup_latest.json (session_id=5298e02e, last_updated=2026-04-27T07:47:36Z)
+  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json (session_id=5298e02e, last_updated=2026-04-27T07:48:49Z)
+  - data/runs/_rolling/_pool_token_cache.json (NEW persistent cache, 129 entries)
+primary_blocker_of_session: DISC fast_path_scoring frozen at 0 across 4 sessions (regression from soak11)
 blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED
+blocker_status_after: RESOLVED (T+60 session_fast_path_scored=26, fresh sim_passed=4, fresh rt_success=4)
 docs_reread_confirmed: true

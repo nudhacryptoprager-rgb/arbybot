@@ -943,6 +943,25 @@ def _build_sell_leg_tx_params(
     if sell_input_wei <= 0:
         return None, "SELL_INPUT_ZERO"
 
+    # soak16 P0.2: Backrun amount sanity clamp.
+    # Forward leg input was result.amount_in_wei (USDC-side). The sell leg
+    # input is the forward leg output (TKN-side). When pool liquidity is
+    # extremely low the forward leg returns a token amount whose USDC value
+    # is far smaller than the original input, producing the catastrophic
+    # `roundtrip_profit_bps ≈ -9957` we saw in soak12/13 historical samples.
+    # We can't compare USDC↔TKN directly without a price oracle, but we can
+    # bound the absolute magnitude — if the sell input is more than
+    # ARBY_BACKRUN_MAX_INPUT_RATIO × forward input it is almost certainly a
+    # decimals mismatch or a pool-state corruption; skip.
+    try:
+        _max_ratio = float(os.environ.get("ARBY_BACKRUN_MAX_INPUT_RATIO", "1000.0"))
+    except (TypeError, ValueError):
+        _max_ratio = 1000.0
+    _fwd_in = int(getattr(result, "amount_in_wei", 0) or 0)
+    if _fwd_in > 0 and _max_ratio > 0:
+        if sell_input_wei > _fwd_in * _max_ratio:
+            return None, f"SELL_INPUT_DISPROPORTIONATE:ratio>{_max_ratio:g}x"
+
     # E1.35 P1.3: registry-driven accepted fee set
     _ACCEPTED = get_accepted_fees(chain)
 

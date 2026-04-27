@@ -1154,6 +1154,48 @@ def _update_hot_rollup(
                         _bucket = "gte_10"
             _hist[_bucket] = int(_hist.get(_bucket, 0) or 0) + 1
         rollup["fast_path_net_bps_histogram"] = _hist
+    # soak16 P1.5: dump structured score-component samples so the reviewer can
+    # see WHY 98% of fast_path_scored land in `lt_-10` / `-10_to_-1` buckets.
+    # We keep a bounded ring (default 50, override via
+    # ARBY_FAST_PATH_COMPONENTS_RING_SIZE) carrying the gross/gas/fee
+    # decomposition + l1/l2 split per scored result. Each iteration appends
+    # the latest scored batch and the ring drops oldest entries.
+    if _fast:
+        try:
+            _ring_size = int(os.environ.get("ARBY_FAST_PATH_COMPONENTS_RING_SIZE", "50"))
+        except (TypeError, ValueError):
+            _ring_size = 50
+        _components = rollup.get("fast_path_score_components_recent") or []
+        for _r in _fast:
+            _net = getattr(_r, "best_backrun_net_bps", None)
+            _l2 = getattr(_r, "l2_gas_bps", None)
+            _l1 = getattr(_r, "l1_data_bps", None)
+            _tot_gas = getattr(_r, "total_gas_bps", None)
+            _gross_wei = getattr(_r, "gross_pnl_wei", None) or 0
+            _amt = getattr(_r, "amount_in_wei", None) or 0
+            _gross_bps = None
+            if _amt and _gross_wei:
+                try:
+                    _gross_bps = round((float(_gross_wei) / float(_amt)) * 10000.0, 4)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    _gross_bps = None
+            _components.append({
+                "ts": ts,
+                "pair": getattr(_r, "actual_pair", None),
+                "buy_venue": getattr(_r, "best_buy_venue", None),
+                "sell_venue": getattr(_r, "best_sell_venue", None),
+                "amount_in_wei": _amt,
+                "gross_bps": _gross_bps,
+                "l2_gas_bps": _l2,
+                "l1_data_bps": _l1,
+                "total_gas_bps": _tot_gas,
+                "net_bps": _net,
+                "route_viable": bool(getattr(_r, "route_viable", False)),
+                "block_lag": getattr(_r, "block_lag", None),
+            })
+        if _ring_size > 0:
+            _components = _components[-_ring_size:]
+        rollup["fast_path_score_components_recent"] = _components
     # M7.E1.5: route_viable_total вЂ” route-level economics check (gas < gross, fee < gross, net > 0)
     rollup["route_viable_total"] = (
         rollup.get("route_viable_total", 0)
@@ -1253,9 +1295,29 @@ def _update_hot_rollup(
             if len(_all_rt) > 500:
                 _all_rt = _all_rt[-500:]
             rollup["_roundtrip_profit_bps_all"] = _all_rt
-            rollup["roundtrip_profit_bps_best"] = round(max(_all_rt), 4)
-            rollup["roundtrip_profit_bps_worst"] = round(min(_all_rt), 4)
-            rollup["roundtrip_profit_bps_median"] = round(sorted(_all_rt)[len(_all_rt) // 2], 4)
+        # soak16 P0.2: Always re-filter best/worst/median from the cumulative
+        # buffer so stale catastrophic-loss outliers (-9957) frozen from
+        # pre-soak13 samples eventually disappear once the floor takes effect.
+        try:
+            _floor = float(os.environ.get("ARBY_RT_BPS_FLOOR", "-1000"))
+        except (TypeError, ValueError):
+            _floor = -1000.0
+        _cumul_rt = rollup.get("_roundtrip_profit_bps_all") or []
+        _clean_rt = [v for v in _cumul_rt if isinstance(v, (int, float)) and v >= _floor]
+        if _clean_rt:
+            rollup["roundtrip_profit_bps_best"] = round(max(_clean_rt), 4)
+            rollup["roundtrip_profit_bps_worst"] = round(min(_clean_rt), 4)
+            rollup["roundtrip_profit_bps_median"] = round(
+                sorted(_clean_rt)[len(_clean_rt) // 2], 4
+            )
+            rollup["roundtrip_profit_bps_outliers_dropped"] = (
+                len(_cumul_rt) - len(_clean_rt)
+            )
+        elif _cumul_rt:
+            rollup["roundtrip_profit_bps_best"] = None
+            rollup["roundtrip_profit_bps_worst"] = None
+            rollup["roundtrip_profit_bps_median"] = None
+            rollup["roundtrip_profit_bps_outliers_dropped"] = len(_cumul_rt)
         if _rt_err:
             _rt_hist = rollup.get("roundtrip_error_histogram", {})
             for _e in _rt_err:

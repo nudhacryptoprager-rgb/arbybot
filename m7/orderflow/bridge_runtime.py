@@ -57,6 +57,15 @@ def _write_cold_hot_bridge(
         except Exception:
             pass
 
+        # soak16 P0.1: persist pool-token cache to disk so the next supervisor
+        # restart picks up resolved pools immediately (avoids
+        # `session_fast_path_scored=0` regressions).
+        try:
+            from m7.orderflow.resolve import save_persistent_pool_token_cache
+            save_persistent_pool_token_cache()
+        except Exception:
+            pass
+
         os.makedirs(os.path.dirname(_COLD_HOT_BRIDGE_PATH), exist_ok=True)
         _rap_top = []
         if cold_active_pools:

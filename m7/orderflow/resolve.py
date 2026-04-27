@@ -4,7 +4,11 @@ and pool-state extraction.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from m7.shared.constants import _DEFAULT_FEE_TIERS
@@ -19,6 +23,100 @@ _pool_token_cache: Dict[str, tuple] = {}
 # M7.A.5.38: Module-level cache for ERC-20 enrichment (symbol + decimals).
 # ERC-20 symbol/decimals are immutable contract properties — safe to cache forever.
 _enrichment_cache: Dict[str, dict] = {}  # addr_lower → {enriched, symbol, decimals, source}
+
+# soak16 P0.1: Persistent disk-backed cache so resolved pool-token mapping
+# survives supervisor restarts (root cause of DISC `session_fast_path_scored=0`
+# regressions seen in soak14/soak15). The cache file is opt-out via
+# ARBY_PERSISTENT_POOL_CACHE=0 and stored in the rolling artifacts directory.
+_PERSISTENT_CACHE_PATH = Path("data/runs/_rolling/_pool_token_cache.json")
+_PERSISTENT_CACHE_LOCK = threading.Lock()
+_PERSISTENT_CACHE_LOADED = False
+
+
+def _persistent_cache_enabled() -> bool:
+    return os.environ.get("ARBY_PERSISTENT_POOL_CACHE", "1").strip() == "1"
+
+
+def load_persistent_pool_token_cache() -> int:
+    """Load `_pool_token_cache` from disk on process start.
+
+    Returns the number of entries loaded. Idempotent: subsequent calls are
+    no-ops once loaded.
+    """
+    global _PERSISTENT_CACHE_LOADED
+    if _PERSISTENT_CACHE_LOADED:
+        return len(_pool_token_cache)
+    if not _persistent_cache_enabled():
+        _PERSISTENT_CACHE_LOADED = True
+        return 0
+    try:
+        if not _PERSISTENT_CACHE_PATH.exists():
+            _PERSISTENT_CACHE_LOADED = True
+            return 0
+        with _PERSISTENT_CACHE_LOCK:
+            data = json.loads(_PERSISTENT_CACHE_PATH.read_text(encoding="utf-8"))
+            entries = data.get("entries") or {}
+            loaded = 0
+            for pa, triple in entries.items():
+                if not isinstance(triple, (list, tuple)) or len(triple) != 3:
+                    continue
+                t0, t1, fee = triple
+                try:
+                    fee_int = int(fee) if fee is not None else 0
+                except (TypeError, ValueError):
+                    continue
+                if not (isinstance(t0, str) and isinstance(t1, str)):
+                    continue
+                _pool_token_cache.setdefault(pa.lower(), (t0.lower(), t1.lower(), fee_int))
+                loaded += 1
+            _PERSISTENT_CACHE_LOADED = True
+            logger.info(
+                "persistent pool-token cache loaded: %d entries from %s",
+                loaded, _PERSISTENT_CACHE_PATH,
+            )
+            return loaded
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("persistent pool-token cache load failed: %s", exc)
+        _PERSISTENT_CACHE_LOADED = True
+        return 0
+
+
+def save_persistent_pool_token_cache() -> int:
+    """Persist current `_pool_token_cache` to disk atomically.
+
+    Returns the number of entries written. Bounded to the in-memory cache.
+    """
+    if not _persistent_cache_enabled():
+        return 0
+    try:
+        with _PERSISTENT_CACHE_LOCK:
+            entries = {}
+            for k, v in _pool_token_cache.items():
+                if not isinstance(v, (list, tuple)) or len(v) != 3:
+                    continue
+                t0, t1, fee = v
+                try:
+                    fee_int = int(fee) if fee is not None else 0
+                except (TypeError, ValueError):
+                    continue
+                entries[str(k).lower()] = [str(t0).lower(), str(t1).lower(), fee_int]
+            payload = {"version": 1, "entries": entries, "count": len(entries)}
+            _PERSISTENT_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _PERSISTENT_CACHE_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, _PERSISTENT_CACHE_PATH)
+            return len(entries)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("persistent pool-token cache save failed: %s", exc)
+        return 0
+
+
+# Auto-load at import time so consumers (loop_runner, scoring) see cached
+# entries before the first event arrives.
+try:
+    load_persistent_pool_token_cache()
+except Exception:  # pragma: no cover
+    pass
 
 def _build_address_to_symbol(token_addresses: Dict[str, str]) -> Dict[str, str]:
     """Build reverse lookup: checksummed address → symbol."""
