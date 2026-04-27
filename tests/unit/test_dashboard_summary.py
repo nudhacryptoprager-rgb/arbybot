@@ -1,0 +1,498 @@
+"""Unit tests for monitoring/dashboard_server.build_summary_payload (soak17).
+
+Reviewer contract: /api/summary primary view must come from the *current*
+supervisor session only — derived from rollup.session.session_*_total
+when available, or from delta vs reviewer_soak_baseline_latest.json.
+Lifetime *_total counters belong in a separate ``historical_cumulative``
+block and MUST NOT pollute the primary funnel.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from monitoring.dashboard_server import build_summary_payload
+
+
+NOW = datetime(2026, 4, 27, 8, 0, 0, tzinfo=timezone.utc)
+
+
+def _make_rollup(
+    *,
+    session_id: str = "sess_a",
+    last_updated_offset_s: int = 5,
+    events_total: int = 1000,
+    submit_ready_total: int = 7,
+    sim_attempted_total: int = 50,
+    sim_passed_total: int = 20,
+    session_events: int = 30,
+    session_fast_path_scored: int = 12,
+):
+    last_updated = (NOW - timedelta(seconds=last_updated_offset_s)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    return {
+        "chain": "base",
+        "last_updated": last_updated,
+        "simulation_backend": "rpc_fork",
+        "events_seen_total": events_total,
+        "fast_score_attempted_total": events_total,
+        "fast_path_scored_total": 200,
+        "fast_path_positive_total": 8,
+        "route_viable_total": 8,
+        "profit_guard_passed_total": 8,
+        "sim_attempted_total": sim_attempted_total,
+        "sim_passed_total": sim_passed_total,
+        "submit_ready_total": submit_ready_total,
+        "roundtrip_attempted_total": 5,
+        "roundtrip_success_total": 5,
+        "roundtrip_profitable_total": 0,
+        "session": {
+            "session_id": session_id,
+            "session_started_at": "2026-04-27T07:55:00Z",
+            "session_events_seen_total": session_events,
+            "session_fast_path_scored_total": session_fast_path_scored,
+            "session_ws_recv_error_total": 1,
+            "session_ws_reconnect_total": 1,
+            "last_exit_reason": "ok",
+        },
+    }
+
+
+def _make_baseline(
+    *,
+    session_id: str = "sess_a",
+    events_total: int = 950,
+    submit_ready_total: int = 7,  # equal to current → delta=0
+    sim_attempted_total: int = 45,
+    sim_passed_total: int = 18,
+):
+    return {
+        "events_seen_total": events_total,
+        "fast_score_attempted_total": events_total,
+        "fast_path_scored_total": 190,
+        "fast_path_positive_total": 7,
+        "route_viable_total": 7,
+        "profit_guard_passed_total": 7,
+        "sim_attempted_total": sim_attempted_total,
+        "sim_passed_total": sim_passed_total,
+        "submit_ready_total": submit_ready_total,
+        "roundtrip_attempted_total": 5,
+        "roundtrip_success_total": 5,
+        "roundtrip_profitable_total": 0,
+        "session": {"session_id": session_id},
+    }
+
+
+def test_summary_has_two_block_contract():
+    payload = build_summary_payload(
+        rollup=_make_rollup(),
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    assert payload["schema_version"] == "summary_v2"
+    assert "current_scan" in payload
+    assert "historical_cumulative" in payload
+    assert "gate_funnel" in payload["current_scan"]
+
+
+def test_current_funnel_uses_session_not_lifetime_for_events():
+    rollup = _make_rollup(events_total=1000, session_events=30)
+    baseline = _make_baseline(events_total=950)
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=baseline,
+        profile="production",
+        now_utc=NOW,
+    )
+    cs_funnel = payload["current_scan"]["gate_funnel"]
+    # session_events_seen_total takes precedence (30, not 1000 nor delta 50)
+    assert cs_funnel["events_seen"] == 30
+    # historical block still exposes the raw lifetime total
+    assert payload["historical_cumulative"]["events_seen_total"] == 1000
+
+
+def test_current_submit_ready_is_baseline_delta_not_lifetime():
+    """submit_ready has no session_*_total counterpart — must be a delta."""
+    rollup = _make_rollup(submit_ready_total=7)
+    baseline = _make_baseline(submit_ready_total=7)  # delta = 0
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=baseline,
+        profile="production",
+        now_utc=NOW,
+    )
+    cs_funnel = payload["current_scan"]["gate_funnel"]
+    # CRITICAL: must be 0 (delta), not 7 (lifetime). This is the exact
+    # bug the reviewer flagged: historical submit_ready=1 was bleeding
+    # into the "current" funnel.
+    assert cs_funnel["submit_ready"] == 0
+    # But historical block still shows 7
+    assert payload["historical_cumulative"]["submit_ready_total"] == 7
+
+
+def test_current_sim_passed_is_delta():
+    rollup = _make_rollup(sim_passed_total=20)
+    baseline = _make_baseline(sim_passed_total=18)
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=baseline,
+        profile="production",
+        now_utc=NOW,
+    )
+    assert payload["current_scan"]["gate_funnel"]["sim_passed"] == 2
+    assert payload["historical_cumulative"]["sim_passed_total"] == 20
+
+
+def test_freshness_marks_stale_when_age_exceeds_threshold():
+    rollup = _make_rollup(last_updated_offset_s=300)  # 5 min old > 120s
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["is_fresh"] is False
+    assert cs["staleness_reason"] is not None
+    assert "STALE" in cs["staleness_reason"]
+    assert cs["age_seconds"] >= 300
+
+
+def test_freshness_marks_fresh_when_recent():
+    rollup = _make_rollup(last_updated_offset_s=5)
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["is_fresh"] is True
+    assert cs["staleness_reason"] is None
+    assert cs["age_seconds"] <= 10
+
+
+def test_session_id_mismatch_baseline_flagged():
+    rollup = _make_rollup(session_id="sess_NEW")
+    baseline = _make_baseline(session_id="sess_OLD")
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=baseline,
+        profile="production",
+        now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["session_id"] == "sess_NEW"
+    assert cs["baseline_session_id"] == "sess_OLD"
+    assert cs["session_id_match_baseline"] is False
+
+
+def test_session_id_match_baseline_true_when_equal():
+    payload = build_summary_payload(
+        rollup=_make_rollup(session_id="sess_a"),
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(session_id="sess_a"),
+        profile="production",
+        now_utc=NOW,
+    )
+    assert payload["current_scan"]["session_id_match_baseline"] is True
+
+
+def test_no_baseline_yields_delta_equal_to_current_total():
+    """When baseline is missing, deltas degrade to current totals — but
+    the block separation MUST still hold (no leakage into 'session' fields)."""
+    rollup = _make_rollup(submit_ready_total=7)
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=None,
+        profile="production",
+        now_utc=NOW,
+    )
+    cs_funnel = payload["current_scan"]["gate_funnel"]
+    # Without baseline, delta = current_total - 0 = 7. Still flows through
+    # the delta path, not from cumulative_total directly. This is the
+    # acceptable degenerate case at first-ever supervisor start.
+    assert cs_funnel["submit_ready"] == 7
+
+
+def test_missing_last_updated_marks_stale():
+    rollup = _make_rollup()
+    rollup.pop("last_updated", None)
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["is_fresh"] is False
+    assert cs["staleness_reason"] == "MISSING_LAST_UPDATED"
+
+
+def test_profile_propagated_into_payload():
+    payload = build_summary_payload(
+        rollup=_make_rollup(),
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="discovery",
+        now_utc=NOW,
+    )
+    assert payload["profile"] == "discovery"
+    assert payload["current_scan"]["profile"] == "discovery"
+
+
+def test_legacy_gate_funnel_marked_deprecated():
+    """Backward-compat: legacy top-level gate_funnel still present but
+    flagged so any old client knows to migrate."""
+    payload = build_summary_payload(
+        rollup=_make_rollup(),
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    assert payload["gate_funnel"].get("_deprecated") is True
+
+
+def test_historical_block_contains_all_total_fields():
+    payload = build_summary_payload(
+        rollup=_make_rollup(),
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    hc = payload["historical_cumulative"]
+    required = {
+        "events_seen_total",
+        "fast_path_scored_total",
+        "sim_attempted_total",
+        "sim_passed_total",
+        "submit_ready_total",
+        "roundtrip_attempted_total",
+        "roundtrip_success_total",
+        "roundtrip_profitable_total",
+    }
+    assert required.issubset(hc.keys())
+    assert "roundtrip_profit_bps" in hc
+
+
+# soak18 step 1: BASELINE_NOT_REFRESHED
+def test_baseline_not_refreshed_marks_stale():
+    """When the supervisor restarts and snapshots a baseline whose
+    last_updated equals the current rollup, the lane has NOT yet
+    written a fresh rollup. Primary view must mark stale even though
+    age_seconds is below the freshness threshold."""
+    rollup = _make_rollup(last_updated_offset_s=5)
+    baseline = _make_baseline()
+    baseline["last_updated"] = rollup["last_updated"]  # exact match
+    payload = build_summary_payload(
+        rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+        profile="production", now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["is_fresh"] is False
+    assert cs["staleness_reason"] == "BASELINE_NOT_REFRESHED"
+
+
+def test_baseline_refreshed_after_first_write_marks_fresh():
+    """As soon as the lane writes one rollup past baseline, the primary
+    view becomes fresh."""
+    rollup = _make_rollup(last_updated_offset_s=5)
+    baseline = _make_baseline()
+    # Baseline snapped 30s before current rollup.
+    baseline["last_updated"] = (
+        NOW - timedelta(seconds=35)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = build_summary_payload(
+        rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+        profile="production", now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["is_fresh"] is True
+    assert cs["staleness_reason"] is None
+
+
+# soak18 step 2: submit_ready never negative even with snapshot drift
+def test_current_submit_ready_never_negative_when_baseline_above_current():
+    """Snapshot drift can produce baseline_total > current_total. The
+    primary funnel must clamp to 0, never expose a negative count."""
+    rollup = _make_rollup(submit_ready_total=3)
+    baseline = _make_baseline(submit_ready_total=10)  # baseline higher
+    payload = build_summary_payload(
+        rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+        profile="production", now_utc=NOW,
+    )
+    cs_funnel = payload["current_scan"]["gate_funnel"]
+    assert cs_funnel["submit_ready"] == 0  # clamped
+    assert cs_funnel["sim_passed"] >= 0
+    assert cs_funnel["roundtrip_attempted"] >= 0
+
+
+# soak18 step 3: empty / missing baseline session_id
+def test_baseline_with_empty_session_id_yields_match_false():
+    rollup = _make_rollup(session_id="sess_a")
+    baseline = _make_baseline()
+    baseline["session"] = {"session_id": ""}  # empty string
+    payload = build_summary_payload(
+        rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+        profile="production", now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["session_id_match_baseline"] is False
+    assert cs["baseline_session_id"] == ""
+
+
+def test_baseline_without_session_block_yields_match_false():
+    rollup = _make_rollup(session_id="sess_a")
+    baseline = _make_baseline()
+    baseline.pop("session", None)
+    payload = build_summary_payload(
+        rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+        profile="production", now_utc=NOW,
+    )
+    cs = payload["current_scan"]
+    assert cs["session_id_match_baseline"] is False
+    assert cs["baseline_session_id"] is None
+
+
+# soak18 step 6: ARBY_DASHBOARD_FRESHNESS_S env tunable
+def test_freshness_threshold_env_overrides_default(monkeypatch):
+    """Reload the module with a custom env so FRESHNESS_THRESHOLD_S
+    rebinds. Verify build_summary_payload picks up the new threshold."""
+    import importlib
+
+    import monitoring.dashboard_server as ds
+
+    monkeypatch.setenv("ARBY_DASHBOARD_FRESHNESS_S", "30")
+    importlib.reload(ds)
+    try:
+        assert ds.FRESHNESS_THRESHOLD_S == 30
+        rollup = _make_rollup(last_updated_offset_s=60)  # > 30
+        payload = ds.build_summary_payload(
+            rollup=rollup, hot={}, orderflow={}, baseline=_make_baseline(),
+            profile="production", now_utc=NOW,
+        )
+        cs = payload["current_scan"]
+        assert cs["is_fresh"] is False
+        assert "STALE" in (cs["staleness_reason"] or "")
+    finally:
+        # Restore default for downstream tests.
+        monkeypatch.delenv("ARBY_DASHBOARD_FRESHNESS_S", raising=False)
+        importlib.reload(ds)
+
+
+def test_freshness_threshold_env_invalid_falls_back(monkeypatch):
+    import importlib
+
+    import monitoring.dashboard_server as ds
+
+    monkeypatch.setenv("ARBY_DASHBOARD_FRESHNESS_S", "notanumber")
+    importlib.reload(ds)
+    try:
+        assert ds.FRESHNESS_THRESHOLD_S == 120
+    finally:
+        monkeypatch.delenv("ARBY_DASHBOARD_FRESHNESS_S", raising=False)
+        importlib.reload(ds)
+
+
+# soak18 step 7: integration test through real HTTPServer
+def test_api_summary_via_http_server(monkeypatch, tmp_path):
+    """Spin a real HTTPServer with DashboardHandler against fixture
+    rolling artifacts. Verifies the JSON-shape contract end-to-end."""
+    import json as _json
+    import threading
+    import urllib.request
+    from http.server import HTTPServer
+
+    import monitoring.dashboard_server as ds
+
+    rolling = tmp_path / "_rolling"
+    rolling.mkdir()
+    rollup = _make_rollup(last_updated_offset_s=5)
+    # Anchor freshness vs wall-clock now so test stays stable.
+    rollup["last_updated"] = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    baseline = _make_baseline()
+    baseline["last_updated"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=120)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (rolling / "m7_hot_rollup_latest.json").write_text(_json.dumps(rollup))
+    (rolling / "reviewer_soak_baseline_latest.json").write_text(
+        _json.dumps(baseline)
+    )
+
+    monkeypatch.setattr(ds, "ROLLING_DIR", rolling)
+    monkeypatch.setattr(ds, "ARTIFACT_FILES", {
+        k: rolling / v.name for k, v in ds.ARTIFACT_FILES.items()
+    })
+    monkeypatch.setattr(ds, "DISCOVERY_ARTIFACT_FILES", {
+        k: rolling / v.name for k, v in ds.DISCOVERY_ARTIFACT_FILES.items()
+    })
+    monkeypatch.setattr(ds, "BASELINE_FILES", {
+        "production": rolling / "reviewer_soak_baseline_latest.json",
+        "discovery": rolling / "reviewer_soak_baseline_latest_discovery.json",
+    })
+
+    server = HTTPServer(("127.0.0.1", 0), ds.DashboardHandler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/summary", timeout=5
+        ) as resp:
+            assert resp.status == 200
+            payload = _json.loads(resp.read().decode("utf-8"))
+        assert payload["schema_version"] == "summary_v2"
+        assert "current_scan" in payload
+        assert "historical_cumulative" in payload
+        assert payload["current_scan"]["is_fresh"] is True
+        assert payload["current_scan"]["session_id_match_baseline"] is True
+
+        # Profile selector
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/summary?profile=discovery", timeout=5
+        ) as resp:
+            disc = _json.loads(resp.read().decode("utf-8"))
+        assert disc["profile"] == "discovery"
+
+        # Unknown route is 404
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/nonexistent", timeout=5
+            )
+            assert False, "expected 404"
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        t.join(timeout=2)

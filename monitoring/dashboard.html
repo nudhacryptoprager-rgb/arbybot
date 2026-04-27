@@ -195,6 +195,9 @@ function switchM7Profile(profile) {
   }
   $('m7-session-source').textContent = `(${profile})`;
   renderActiveM7();
+  // soak17: reload monitoring summary so primary CURRENT view tracks
+  // the active profile (production vs discovery) immediately.
+  loadMonSummary();
 }
 
 function renderActiveM7() {
@@ -239,10 +242,15 @@ function loadData() {
   loadMonSummary();
 }
 
-// M7.E1.34k: Monitoring Summary panel — pairs/pools counts, top spreads
-// with per-row gate decisions, aggregate gate funnel, top reject buckets.
+// M7.E1.34k + soak17: Monitoring Summary — strict separation between
+// CURRENT streaming scan (fresh delta vs supervisor-start baseline) and
+// HISTORICAL cumulative lifetime totals. The primary verdict (top KPI
+// row, gate funnel, top spreads) MUST come from current_scan only.
+// Polled at 1s cadence so operators see fresh per-scan numbers.
 function loadMonSummary() {
-  fetch('/api/summary')
+  const profile = (typeof m7Profile !== 'undefined' && m7Profile === 'discovery')
+    ? 'discovery' : 'production';
+  fetch('/api/summary?profile=' + profile)
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(renderMonSummary)
     .catch(e => {
@@ -255,14 +263,39 @@ function renderMonSummary(s) {
   const el = document.getElementById('monsummary-body');
   if (!el) return;
   if (!s) { el.textContent = 'no summary'; return; }
-  const sc = s.scope || {};
-  const f = s.gate_funnel || {};
+  const cs = s.current_scan || {};
+  const hc = s.historical_cumulative || {};
+  const sc = cs.scope || {};
+  const f = cs.gate_funnel || {};
   const fd = s.funnel_debug || {};
-  const rej = s.reject_buckets || {};
+  const rej = cs.reject_buckets || {};
 
   const fmt = v => (v === null || v === undefined) ? '<span class="na">-</span>' : v;
   const bpsColor = v => (v === null || v === undefined) ? 'na' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
 
+  // ---- Staleness / freshness banner -------------------------------------
+  const isFresh = !!cs.is_fresh;
+  const ageS = (cs.age_seconds === null || cs.age_seconds === undefined)
+    ? '?' : Math.round(Number(cs.age_seconds));
+  const stalenessReason = cs.staleness_reason || '';
+  const sessMatchBaseline = !!cs.session_id_match_baseline;
+  const freshnessBadge = isFresh
+    ? `<span class="badge pass">FRESH</span>`
+    : `<span class="badge fail">STALE</span>`;
+  const sessMatchBadge = sessMatchBaseline
+    ? `<span class="badge pass">SESSION_OK</span>`
+    : `<span class="badge fail">SESSION_MISMATCH</span>`;
+  const freshLine = `<div style="font-size:.78rem;color:#8b949e;margin:6px 0">`
+    + `${freshnessBadge} ${sessMatchBadge} `
+    + `profile=<code>${cs.profile||'?'}</code> `
+    + `session=<code>${cs.session_id||'?'}</code> `
+    + `baseline=<code>${cs.baseline_session_id||'?'}</code> `
+    + `age=<code>${ageS}s</code> `
+    + `last_updated=<code>${cs.last_updated||'?'}</code>`
+    + (stalenessReason ? ` <span class="neg">[${stalenessReason}]</span>` : '')
+    + `</div>`;
+
+  // ---- Funnel rendering helper ------------------------------------------
   const funnelOrder = [
     ['events_seen','Events seen'],
     ['fast_score_attempted','Fast-score attempted'],
@@ -277,16 +310,37 @@ function renderMonSummary(s) {
     ['roundtrip_success','Roundtrip success'],
     ['roundtrip_profitable','Roundtrip profitable'],
   ];
-  const peak = funnelOrder.reduce((m,[k])=>Math.max(m,Number(f[k]||0)),1) || 1;
-  const funnelRows = funnelOrder.map(([k,lbl])=>{
-    const v = Number(f[k]||0);
-    const pct = Math.max(2, Math.round(v*100/peak));
-    return `<tr><td>${lbl}</td><td class="num">${v}</td>`
-      + `<td style="width:40%"><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:#3fb950"></div>`
-      + `<span class="bar-label">${pct}%</span></div></td></tr>`;
-  }).join('');
+  function buildFunnel(src, color) {
+    const peak = funnelOrder.reduce((m,[k])=>Math.max(m,Number(src[k]||0)),1) || 1;
+    return funnelOrder.map(([k,lbl])=>{
+      const v = Number(src[k]||0);
+      const pct = Math.max(2, Math.round(v*100/peak));
+      return `<tr><td>${lbl}</td><td class="num">${v}</td>`
+        + `<td style="width:40%"><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${color}"></div>`
+        + `<span class="bar-label">${pct}%</span></div></td></tr>`;
+    }).join('');
+  }
+  // CURRENT funnel (primary): green
+  const currentFunnel = buildFunnel(f, '#3fb950');
+  // HISTORICAL funnel (secondary): grey
+  const histFunnelSrc = {
+    events_seen: hc.events_seen_total,
+    fast_score_attempted: hc.fast_score_attempted_total,
+    fast_path_scored: hc.fast_path_scored_total,
+    fast_path_positive: hc.fast_path_positive_total,
+    route_viable: hc.route_viable_total,
+    profit_guard_passed: hc.profit_guard_passed_total,
+    sim_attempted: hc.sim_attempted_total,
+    sim_passed: hc.sim_passed_total,
+    submit_ready: hc.submit_ready_total,
+    roundtrip_attempted: hc.roundtrip_attempted_total,
+    roundtrip_success: hc.roundtrip_success_total,
+    roundtrip_profitable: hc.roundtrip_profitable_total,
+  };
+  const historicalFunnel = buildFunnel(histFunnelSrc, '#6e7681');
 
-  const topRows = (s.top_spreads || []).map(t=>{
+  // ---- Top spreads (already session-scoped) -----------------------------
+  const topRows = (cs.top_spreads || []).map(t=>{
     const bps = t.net_bps !== null && t.net_bps !== undefined ? Number(t.net_bps).toFixed(2) : '-';
     const rt = t.roundtrip_profit_bps !== null && t.roundtrip_profit_bps !== undefined
       ? Number(t.roundtrip_profit_bps).toFixed(2) : '-';
@@ -299,6 +353,7 @@ function renderMonSummary(s) {
       + `<td>${badge} <code>${t.gate_reached || '-'}</code></td></tr>`;
   }).join('') || '<tr><td colspan="5" class="na">no candidates this window</td></tr>';
 
+  // ---- Reject buckets (current) -----------------------------------------
   const rejBlocks = Object.entries(rej).map(([cat, items])=>{
     if (!items || !items.length) return '';
     const rows = items.map(i=>`<tr><td><code>${i.reason}</code></td><td class="num">${i.count}</td></tr>`).join('');
@@ -309,57 +364,78 @@ function renderMonSummary(s) {
   const fdRows = Object.entries(fd).map(([k,v])=>
     `<tr><td><code>${k}</code></td><td class="num">${v}</td></tr>`).join('');
 
-  // M7.E1.34m (soak7): session persistence + exit-reason histogram
+  // ---- Session persistence + exit reasons -------------------------------
   const ss = s.session_state || null;
   const erh = s.exit_reason_histogram || {};
   const erhRows = Object.entries(erh).sort((a,b)=>Number(b[1])-Number(a[1]))
     .map(([k,v])=>`<tr><td><code>${k}</code></td><td class="num">${v}</td></tr>`).join('');
   let sessBadge = '';
   if (ss && ss.session_id) {
-    const ageS = ss.updated_at_epoch
+    const ssAge = ss.updated_at_epoch
       ? Math.max(0, Math.floor(Date.now()/1000 - Number(ss.updated_at_epoch)))
       : -1;
-    const cur = s.current_session_id || '?';
+    const cur = cs.session_id || '?';
     const match = cur === ss.session_id;
     sessBadge = `<div style="font-size:.75rem;color:#8b949e;margin:6px 0">`
       + `<span class="badge ${match ? 'pass' : 'fail'}">${match ? 'PERSISTED' : 'ROTATED'}</span> `
-      + `session_id=<code>${ss.session_id}</code> `
+      + `m7_session_state.session_id=<code>${ss.session_id}</code> `
       + `current=<code>${cur}</code> `
-      + `age=${ageS}s last_exit=<code>${s.last_exit_reason||'?'}</code>`
+      + `age=${ssAge}s last_exit=<code>${cs.last_exit_reason||'?'}</code>`
       + `</div>`;
   } else {
     sessBadge = `<div style="font-size:.75rem;color:#8b949e;margin:6px 0">`
       + `<span class="badge fail">NO_STATE</span> session_state not found `
-      + `last_exit=<code>${s.last_exit_reason||'?'}</code></div>`;
+      + `last_exit=<code>${cs.last_exit_reason||'?'}</code></div>`;
   }
 
+  // ---- Historical roundtrip bps -----------------------------------------
+  const rtH = hc.roundtrip_profit_bps || {};
+  const rtHline = `best=<code>${rtH.best ?? '-'}</code> `
+    + `worst=<code>${rtH.worst ?? '-'}</code> `
+    + `median=<code>${rtH.median ?? '-'}</code> `
+    + `outliers_dropped=<code>${rtH.outliers_dropped ?? '-'}</code>`;
+
+  // ---- Render -----------------------------------------------------------
   el.innerHTML = `
+    ${freshLine}
+    <h3 style="font-size:.85rem;color:#3fb950;margin:8px 0 4px 0">[CURRENT] Streaming scan &mdash; this supervisor session only</h3>
     <div class="kpi" style="margin-bottom:10px">
-      <div class="kpi-item"><div class="kpi-val">${fmt(sc.pairs_monitored)}</div><div class="kpi-lbl">pairs monitored</div></div>
-      <div class="kpi-item"><div class="kpi-val">${fmt(sc.pools_monitored)}</div><div class="kpi-lbl">pools monitored</div></div>
-      <div class="kpi-item"><div class="kpi-val">${fmt(sc.bridge_focused_pool_count_last)}</div><div class="kpi-lbl">bridge focused</div></div>
-      <div class="kpi-item"><div class="kpi-val">${fmt(sc.bridge_loaded_candidate_count_total)}</div><div class="kpi-lbl">bridge loaded</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.pairs_monitored)}</div><div class="kpi-lbl">[CURRENT] pairs</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.pools_monitored)}</div><div class="kpi-lbl">[CURRENT] pools</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(sc.bridge_focused_pool_count_last)}</div><div class="kpi-lbl">[CURRENT] bridge focused</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(f.events_seen)}</div><div class="kpi-lbl">[CURRENT] events</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(f.fast_path_scored)}</div><div class="kpi-lbl">[CURRENT] fast scored</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(f.sim_passed)}</div><div class="kpi-lbl">[CURRENT] sim passed</div></div>
+      <div class="kpi-item"><div class="kpi-val">${fmt(f.submit_ready)}</div><div class="kpi-lbl">[CURRENT] submit ready</div></div>
       <div class="kpi-item"><div class="kpi-val">${fmt(s.chain)||'-'}</div><div class="kpi-lbl">chain</div></div>
       <div class="kpi-item"><div class="kpi-val">${s.sim_disabled ? 'OFF' : (s.simulation_backend||'?')}</div><div class="kpi-lbl">sim backend</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px">
       <div>
-        <h3 style="font-size:.8rem;color:#8b949e;margin:6px 0">Top spreads &mdash; gate decision</h3>
+        <h3 style="font-size:.8rem;color:#8b949e;margin:6px 0">[CURRENT] Top spreads &mdash; gate decision</h3>
         <table>
           <thead><tr><th>Pair</th><th>Venue</th><th class="num">Net bps</th><th class="num">RT bps</th><th>Gate reached</th></tr></thead>
           <tbody>${topRows}</tbody>
         </table>
       </div>
       <div>
-        <h3 style="font-size:.8rem;color:#8b949e;margin:6px 0">Gate funnel</h3>
-        <table>${funnelRows}</table>
+        <h3 style="font-size:.8rem;color:#3fb950;margin:6px 0">[CURRENT] Gate funnel</h3>
+        <table>${currentFunnel}</table>
       </div>
     </div>
-    <h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">Top reject buckets (where candidates stop)</h3>
+    <h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">[CURRENT] Top reject buckets</h3>
     <div style="display:flex;flex-wrap:wrap;gap:14px">${rejBlocks || '<span class="na">no reject data</span>'}</div>
-    ${fdRows ? `<h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">Funnel debug (M7.E1.34k silent-drop counters)</h3><table>${fdRows}</table>` : ''}
+    ${fdRows ? `<h3 style="font-size:.8rem;color:#3fb950;margin:14px 0 4px 0">[CURRENT] Funnel debug (silent-drop counters)</h3><table>${fdRows}</table>` : ''}
     ${sessBadge}
-    ${erhRows ? `<h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">WS exit reason histogram (M7.E1.34m)</h3><table>${erhRows}</table>` : ''}
+
+    <details style="margin-top:18px;border-top:1px solid #30363d;padding-top:10px">
+      <summary style="cursor:pointer;color:#8b949e;font-size:.85rem">[HISTORICAL] Lifetime cumulative totals (across all supervisor sessions) &mdash; reference only, NOT current verdict</summary>
+      <div style="margin-top:8px">
+        <table>${historicalFunnel}</table>
+        <div style="font-size:.75rem;color:#8b949e;margin-top:6px">[HISTORICAL] roundtrip_profit_bps: ${rtHline}</div>
+      </div>
+    </details>
+    ${erhRows ? `<h3 style="font-size:.8rem;color:#8b949e;margin:14px 0 4px 0">[HISTORICAL] WS exit reason histogram (lifetime)</h3><table>${erhRows}</table>` : ''}
   `;
 }
 
@@ -1581,6 +1657,9 @@ function renderProbeTargets(ls) {
 loadData();
 // Fast hot-loop stream
 setInterval(loadHotData, 1000);
+// soak17: monitoring summary refreshes at 1s so primary CURRENT view
+// reflects every fresh scan. Heavy /api/rolling stays at 15s.
+setInterval(loadMonSummary, 1000);
 // Slower full rolling refresh for heavy panels
 setInterval(loadRollingData, 15000);
 // E1.9.3: Discovery namespace refresh (same cadence as rolling)

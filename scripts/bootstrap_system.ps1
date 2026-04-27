@@ -28,7 +28,14 @@ param(
     [ValidateSet('tenderly','rpc_fork')]
     [string]$DiscSimBackend = 'rpc_fork',
     [switch]$StartAnvil,
-    [switch]$SkipBaseline
+    [switch]$SkipBaseline,
+    # soak18 step 4: fail-fast probe. After supervisor starts we wait
+    # this many seconds for the hot rollup to advance past its baseline
+    # snapshot. If the lane never writes a fresh rollup in that window
+    # the supervisor is killed so the operator does not waste a full
+    # soak on a stuck WS connection. Set to 0 to disable.
+    [int]$RollupProbeSeconds = 90,
+    [switch]$NoRollupProbe
 )
 
 $ErrorActionPreference = 'Stop'
@@ -162,3 +169,43 @@ Write-Step ("supervisor PID=" + $proc.Id + ", log=" + $logFile + ", hours=" + $H
 Write-Host ("supervisor PID: " + $proc.Id)
 Write-Host ("log: " + $logFile)
 Write-Host ("started: " + (Get-Date -Format 'HH:mm:ss'))
+
+# --- 8) rollup-progress probe (soak18 step 4) -----------------------------
+# Verify the hot lane actually advanced the rollup past its baseline
+# snapshot within $RollupProbeSeconds. If not, kill the supervisor so
+# we don't burn a full soak window on a dead WS subscription.
+if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
+    $rollupPath = Join-Path $repoRoot 'data\runs\_rolling\m7_hot_rollup_latest.json'
+    $baselinePath = Join-Path $repoRoot 'data\runs\_rolling\reviewer_soak_baseline_latest.json'
+    $baselineLU = $null
+    if (Test-Path $baselinePath) {
+        try { $baselineLU = (Get-Content $baselinePath -Raw | ConvertFrom-Json).last_updated } catch {}
+    }
+    Write-Step ("rollup probe: waiting up to " + $RollupProbeSeconds + "s for fresh write past baseline.last_updated=" + $baselineLU)
+    $probeElapsed = 0
+    $progressed = $false
+    while ($probeElapsed -lt $RollupProbeSeconds) {
+        Start-Sleep -Seconds 5
+        $probeElapsed += 5
+        if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) {
+            Write-Step "rollup probe: supervisor exited early — aborting probe"
+            break
+        }
+        if (Test-Path $rollupPath) {
+            try {
+                $curLU = (Get-Content $rollupPath -Raw | ConvertFrom-Json).last_updated
+                if ($curLU -and ($curLU -ne $baselineLU)) {
+                    Write-Step ("rollup probe: PASS — last_updated advanced to " + $curLU + " after " + $probeElapsed + "s")
+                    $progressed = $true
+                    break
+                }
+            } catch {}
+        }
+    }
+    if (-not $progressed) {
+        Write-Step ("rollup probe: FAIL — no fresh rollup write in " + $RollupProbeSeconds + "s; killing supervisor PID " + $proc.Id)
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch {}
+        Write-Host ("BOOTSTRAP_ABORTED: rollup probe timed out (set -NoRollupProbe to skip).")
+        exit 2
+    }
+}

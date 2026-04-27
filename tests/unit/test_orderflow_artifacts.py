@@ -2046,6 +2046,10 @@ class TestM7A532RollingCanonicalSet:
             "reviewer_soak_baseline_latest.json",
             "reviewer_soak_baseline_latest_discovery.json",
             "reviewer_soak_delta_latest.json",
+            # soak16: persistent pool→token cache survives supervisor
+            # restart so DISC fast_path doesn't hit cold registry on
+            # session restart.
+            "_pool_token_cache.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):

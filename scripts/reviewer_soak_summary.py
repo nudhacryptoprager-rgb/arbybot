@@ -244,6 +244,17 @@ def main() -> int:
             "2026-04-21T18:28:21Z). When omitted, falls back to now."
         ),
     )
+    parser.add_argument(
+        "--summary-url", type=str, default=None,
+        help=(
+            "soak18 step 8: optional dashboard URL "
+            "(e.g. http://127.0.0.1:8109/api/summary). When provided, "
+            "the script ALSO fetches the live /api/summary current_scan "
+            "block and cross-validates that the dashboard's freshness "
+            "verdict matches the file-based reviewer verdict. Catches "
+            "drift between API contract and reviewer logic."
+        ),
+    )
     args = parser.parse_args()
 
     base = _load(args.baseline)
@@ -324,6 +335,45 @@ def main() -> int:
     print(f"\n  OVERALL_ACCEPTANCE : {'PASS' if overall else 'FAIL'}")
     if stale_reasons:
         print("  Stale rollup(s): " + "; ".join(stale_reasons))
+
+    # soak18 step 8: live cross-check vs dashboard /api/summary. Reads
+    # the same primary verdict the operator sees in the UI. If the API
+    # says is_fresh while the file-based reviewer says STALE_ROLLUP
+    # (or vice versa) we surface DASHBOARD_DRIFT — that means the API
+    # contract drifted from the reviewer logic and must be fixed.
+    if isinstance(args.summary_url, str) and args.summary_url.strip():
+        _print_header("DASHBOARD CROSS-CHECK")
+        try:
+            import urllib.request
+            import json as _json
+            with urllib.request.urlopen(
+                args.summary_url.strip(), timeout=5
+            ) as resp:
+                api_payload = _json.loads(resp.read().decode("utf-8"))
+            cs = api_payload.get("current_scan") or {}
+            api_fresh = bool(cs.get("is_fresh"))
+            api_age = cs.get("age_seconds")
+            api_session = cs.get("session_id")
+            api_match = bool(cs.get("session_id_match_baseline"))
+            api_reason = cs.get("staleness_reason")
+            print(f"  api.current_scan.is_fresh           = {api_fresh}")
+            print(f"  api.current_scan.age_seconds        = {api_age}")
+            print(f"  api.current_scan.session_id         = {api_session}")
+            print(f"  api.session_id_match_baseline       = {api_match}")
+            print(f"  api.current_scan.staleness_reason   = {api_reason}")
+            file_stale = bool(stale_reasons)
+            api_stale = not api_fresh
+            if file_stale != api_stale:
+                print(
+                    "  ! DASHBOARD_DRIFT: file verdict and API verdict disagree "
+                    f"(file_stale={file_stale} vs api_stale={api_stale}). "
+                    "Reconcile build_summary_payload with reviewer thresholds."
+                )
+                # Drift counts as soft FAIL even if individual blocks pass.
+                overall = False
+        except Exception as e:  # noqa: BLE001 - cross-check is best-effort
+            print(f"  ! could not fetch {args.summary_url}: {e}")
+
     if not overall:
         print(
             "  Reason: session delta does not meet acceptance "

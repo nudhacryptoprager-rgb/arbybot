@@ -69,6 +69,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "reviewer_soak_baseline_latest.json",
             "reviewer_soak_baseline_latest_discovery.json",
             "reviewer_soak_delta_latest.json",
+            # M7.A.5.4.0 batch pre-resolve cache (rolling, overwritten)
+            "_pool_token_cache.json",
         }
         
         # Archive files are allowed (created on reset)
