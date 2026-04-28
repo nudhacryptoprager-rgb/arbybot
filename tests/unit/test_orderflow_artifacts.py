@@ -3124,6 +3124,7 @@ class TestM7A541TopCandidatePersistence:
             "scoring_path", "profit_guard_passed", "pipeline_latency_ms",
             "reject_reason", "pool_address",
             "verified_profitable", "verified_net_bps",
+            "local_quote_passed",
             "stale_sub_reason",
             # M7.E1.1: Gas breakdown fields
             "l1_data_gas_bps", "l2_exec_gas_bps", "total_gas_bps", "gap_to_zero_bps",
@@ -4502,3 +4503,213 @@ class TestM7A545DashboardIntentsEndpoint:
         import pathlib
         src = pathlib.Path("monitoring/dashboard_server.py").read_text(encoding="utf-8")
         assert "m7_hot_intents" in src
+
+
+
+# ===========================================================================
+# Reviewer (post-soak19): same_block must not coerce None -> 0
+# ===========================================================================
+
+
+class TestSameBlockGateTrace:
+    """gate_trace.same_block must be False when block_lag is None.
+
+    Bug fix: previous logic was ``(r.block_lag or 99) == 0`` which made
+    ``block_lag=0`` evaluate to ``99 -> False`` (wrong). The fix uses an
+    explicit None-check: ``r.block_lag is not None and r.block_lag == 0``.
+    """
+
+    def _build(self, block_lag, *, eid):
+        return _make_result(
+            event_id=eid,
+            best_backrun_net_bps=10.0,
+            block_lag=block_lag,
+            same_state_class="next_block" if block_lag in (0, 1) else "stale",
+            route_viable=True,
+            size_valid_for_token=True,
+            reject_reason=None,
+            event_block=100,
+            event_detected_at_block=100 + (block_lag or 0),
+        )
+
+    def _gate_trace_for(self, eid, block_lag):
+        events = [_make_event(eid=eid)]
+        results = [self._build(block_lag, eid=eid)]
+        art = build_replay_summary(events, results, mode="offline")
+        cands = (
+            art.get("top_executable_candidates")
+            or art.get("top_route_viable_candidates")
+            or []
+        )
+        assert cands, "expected at least one candidate"
+        cand = next((c for c in cands if c["event_id"] == eid), cands[0])
+        return cand["gate_trace"]
+
+    def test_block_lag_zero_yields_same_block_true(self):
+        gt = self._gate_trace_for("eid_zero", 0)
+        assert gt["same_block"] is True
+
+    def test_block_lag_none_yields_same_block_false(self):
+        gt = self._gate_trace_for("eid_none", None)
+        assert gt["same_block"] is False
+
+    def test_block_lag_one_yields_same_block_false(self):
+        gt = self._gate_trace_for("eid_one", 1)
+        assert gt["same_block"] is False
+
+
+
+# ===========================================================================
+# Reviewer (post-soak19) step 3: PRE_SIM_SKIP:MISSING_SIZE_METADATA
+# ===========================================================================
+
+
+class TestPreSimMissingSizeMetadata:
+    """A candidate with no size metadata at all must not consume sim budget.
+
+    Reviewer rule: if token_in_decimals, best_sweep_size_wei AND
+    size_usd_estimate are all missing/None/<=0, the gate must skip with
+    ``PRE_SIM_SKIP:MISSING_SIZE_METADATA``. Controlled by
+    ``ARBY_SIM_REQUIRE_SIZE_METADATA`` (default "1").
+    """
+
+    def _make_br(self, **overrides):
+        from m7.orderflow.contracts import BackrunResult
+        defaults = dict(
+            event_id="test_meta",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
+        )
+        defaults.update(overrides)
+        return BackrunResult(**defaults)
+
+    def _run(self, br, monkeypatch, *, env="1"):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        def _mock_sim(*a, **kw):
+            return SimulationResult(success=True, gas_used=150000, backend="anvil")
+
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+        )
+        monkeypatch.setenv("ARBY_SIM_REQUIRE_SIZE_METADATA", env)
+        return run_execution_gate([br], chain="base")
+
+    def test_all_metadata_missing_triggers_skip(self, monkeypatch):
+        br = self._make_br()  # all metadata None
+        gate = self._run(br, monkeypatch, env="1")
+        assert gate.sim_attempted == 0
+        assert any(
+            e.startswith("PRE_SIM_SKIP:MISSING_SIZE_METADATA")
+            for e in gate.sim_errors
+        )
+        assert br.submit_ready is False
+        assert br.submit_blocker == "PRE_SIM_SKIP:MISSING_SIZE_METADATA"
+
+    def test_decimals_present_admits_candidate(self, monkeypatch):
+        br = self._make_br(token_in_decimals=18)
+        gate = self._run(br, monkeypatch, env="1")
+        assert gate.sim_attempted == 1
+
+    def test_sweep_size_present_admits_candidate(self, monkeypatch):
+        br = self._make_br(best_sweep_size_wei=10**17)
+        gate = self._run(br, monkeypatch, env="1")
+        assert gate.sim_attempted == 1
+
+    def test_usd_estimate_present_admits_candidate(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=500.0)
+        gate = self._run(br, monkeypatch, env="1")
+        assert gate.sim_attempted == 1
+
+    def test_env_off_disables_rule(self, monkeypatch):
+        br = self._make_br()
+        gate = self._run(br, monkeypatch, env="0")
+        assert gate.sim_attempted == 1
+
+
+# ===========================================================================
+# Reviewer (post-soak19) steps 4+5: verified_profitable demoted on divergence
+# ===========================================================================
+
+
+class TestVerifiedProfitableDivergenceOverride:
+    """``verified_profitable`` must be False when sim signals divergence.
+
+    Even if local profit_guard says "profitable", a candidate cannot be
+    reported as ``verified_profitable=True`` if the same row carries:
+        - ``submit_blocker`` containing ``SCORER_SIM_DIVERGENCE``, OR
+        - ``submit_blocker`` containing ``ROUNDTRIP_NOT_PROFITABLE``, OR
+        - ``sim_passed=False`` (sim attempted and failed).
+
+    The legacy local-only check is preserved as ``local_quote_passed``.
+    """
+
+    def _build_artifact(self, *, sim_passed, submit_blocker):
+        from m7.orderflow.events import build_fixture_events
+        events = build_fixture_events()
+        results = []
+        for ev in events:
+            r = score_backrun_offline(ev)
+            # Force a viable, positive scoring path that triggers local
+            # profit_guard evaluation.
+            r.route_viable = True
+            r.size_valid_for_token = True
+            r.best_backrun_net_bps = 50.0
+            r.amount_in_wei = 10**18
+            r.gross_pnl_wei = 10**17  # +10% gross
+            r.sim_passed = sim_passed
+            r.submit_blocker = submit_blocker
+            results.append(r)
+        return build_replay_summary(events, results, mode="offline")
+
+    def _candidates(self, art):
+        return (
+            art.get("top_executable_candidates")
+            or art.get("top_route_viable_candidates")
+            or []
+        )
+
+    def test_no_sim_yet_keeps_local_quote_value(self):
+        art = self._build_artifact(sim_passed=None, submit_blocker=None)
+        cands = self._candidates(art)
+        assert cands
+        for c in cands:
+            assert c["local_quote_passed"] is True
+            assert c["verified_profitable"] is True
+
+    def test_scorer_sim_divergence_forces_false(self):
+        art = self._build_artifact(
+            sim_passed=True,
+            submit_blocker="ROUNDTRIP_NOT_PROFITABLE,SCORER_SIM_DIVERGENCE:50.0->-9900.0",
+        )
+        for c in self._candidates(art):
+            assert c["local_quote_passed"] is True
+            assert c["verified_profitable"] is False
+
+    def test_roundtrip_not_profitable_forces_false(self):
+        art = self._build_artifact(
+            sim_passed=True, submit_blocker="ROUNDTRIP_NOT_PROFITABLE"
+        )
+        for c in self._candidates(art):
+            assert c["verified_profitable"] is False
+
+    def test_sim_failed_forces_false(self):
+        art = self._build_artifact(sim_passed=False, submit_blocker="SIM_FAILED:revert")
+        for c in self._candidates(art):
+            assert c["verified_profitable"] is False

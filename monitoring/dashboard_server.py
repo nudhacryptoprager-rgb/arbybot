@@ -229,6 +229,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         rollup = _load("m7_hot_rollup") or {}
         hot = _load("m7_hot") or {}
         orderflow = _load("m7_orderflow") or {}
+        bridge = _load("m7_cold_hot_bridge") or {}
         baseline = None
         if baseline_path.is_file():
             try:
@@ -244,6 +245,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             baseline=baseline,
             profile=profile,
             now_utc=datetime.now(timezone.utc),
+            bridge=bridge,
         )
 
         payload = json.dumps(summary, default=str).encode("utf-8")
@@ -300,6 +302,7 @@ def build_summary_payload(
     baseline: dict | None,
     profile: str,
     now_utc: datetime,
+    bridge: dict | None = None,
 ) -> dict:
     """Pure builder for /api/summary — unit-testable.
 
@@ -311,6 +314,7 @@ def build_summary_payload(
     hot = hot or {}
     orderflow = orderflow or {}
     baseline = baseline or {}
+    bridge = bridge or {}
 
     session = rollup.get("session") if isinstance(rollup.get("session"), dict) else {}
     baseline_session = (
@@ -458,6 +462,36 @@ def build_summary_payload(
         or 0
     )
 
+    # ---- universe_breadth (reviewer post-soak19 step 6) -------------------
+    # Single-glance view of how wide the scanner is searching. Production
+    # readiness requires growing the active pool count from ~50 (smoke) to
+    # 200+ (warm) to 1000+ (cold) — see docs/m4/DASHBOARD_API_CONTRACT.md.
+    _bridge_breakdown = (
+        bridge.get("candidate_source_breakdown") if isinstance(bridge, dict) else None
+    ) or {}
+    universe_breadth = {
+        "intent_pairs": _safe_int(reg.get("unique_pairs_queried")),
+        "pools_discovered_total": _safe_int(reg.get("pools_discovered")),
+        "pools_active_total": _safe_int(reg.get("pools_active")),
+        "ptt_total": _safe_int(_bridge_breakdown.get("ptt_total")),
+        "bridge_focused_pool_count": _safe_int(
+            rollup.get("bridge_focused_pool_count_last")
+            or hot.get("bridge_focused_pool_count")
+        ),
+        "bridge_pool_hit_total": _safe_int(rollup.get("bridge_pool_hit_total")),
+        "registry_hit_for_event_pool_total": _safe_int(
+            rollup.get("registry_hit_for_event_pool_total")
+        ),
+        "hot_seen_unresolved_pool_count": _safe_int(
+            rollup.get("hot_seen_unresolved_pool_count")
+        ),
+        "candidate_source_breakdown": {
+            k: _safe_int(v)
+            for k, v in _bridge_breakdown.items()
+            if k != "ptt_total"
+        } if _bridge_breakdown else {},
+    }
+
     # ---- reject buckets (window-recent, not lifetime) ---------------------
     reject_buckets = {
         "guard": _top_hist(rollup.get("guard_reject_reason_histogram")),
@@ -507,6 +541,7 @@ def build_summary_payload(
                 "bridge_focused_pool_count_last", 0
             ),
         },
+        "universe_breadth": universe_breadth,
         "gate_funnel": current_funnel,
         "top_spreads": top_spreads,
         "reject_buckets": reject_buckets,

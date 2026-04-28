@@ -881,7 +881,16 @@ def build_replay_summary(
         _evt = getattr(r, '_source_event', None)
         # M7.A.5.44: Execution-time local verification — run profit_guard
         # on each compact candidate to verify ending > starting after costs.
-        _verified = None
+        # Reviewer post-soak19 step 5: this local check is renamed
+        # ``local_quote_passed``. The legacy field ``verified_profitable``
+        # remains for back-compat but now carries the stricter contract:
+        # it requires both local_quote_passed AND the absence of any known
+        # scorer-vs-sim divergence signal (submit_blocker contains
+        # SCORER_SIM_DIVERGENCE, OR sim ran and roundtrip turned out
+        # non-profitable). This prevents the previously misleading state
+        # where local profit_guard reported +2441bps while the actual
+        # roundtrip lost ~99% of size.
+        _local_quote_passed = None
         _verified_net_bps = None
         if r.route_viable and (r.best_backrun_net_bps or 0) > 0 and r.size_valid_for_token:
             _size = getattr(r, 'amount_in_wei', 0) or 0
@@ -897,10 +906,23 @@ def build_replay_summary(
                         pipeline_latency_ms=r.quote_pipeline_latency_ms,
                         chain=chain or "arbitrum_one",
                     )
-                    _verified = _pg.passed
+                    _local_quote_passed = _pg.passed
                     _verified_net_bps = round(_pg.net_bps, 4)
                 except Exception:
                     pass
+        # Reviewer post-soak19 step 4: hard-reject SCORER_SIM_DIVERGENCE.
+        # If sim has run and contradicted scorer, downgrade verified_profitable.
+        _verified = _local_quote_passed
+        _submit_blocker = getattr(r, "submit_blocker", None) or ""
+        _sim_passed = getattr(r, "sim_passed", None)
+        if _verified is True:
+            if "SCORER_SIM_DIVERGENCE" in _submit_blocker:
+                _verified = False
+            elif _sim_passed is False:
+                # Sim attempted and failed: cannot claim profitable.
+                _verified = False
+            elif "ROUNDTRIP_NOT_PROFITABLE" in _submit_blocker:
+                _verified = False
         # M7.A.5.47k: Stale sub-reason classification.
         # Distinguishes WHY a candidate is stale:
         #   "pipeline_abort" — mid-pipeline wall-clock budget exceeded
@@ -943,6 +965,12 @@ def build_replay_summary(
             # M7.A.5.44: Execution-time local verification
             "verified_profitable": _verified,
             "verified_net_bps": _verified_net_bps,
+            # Reviewer post-soak19 step 5: explicit local-quote field.
+            # ``local_quote_passed`` reflects ONLY the local profit_guard
+            # check (no sim/roundtrip awareness). Use this when you need
+            # the legacy "verified_profitable" semantics; use
+            # ``verified_profitable`` (above) for the stricter contract.
+            "local_quote_passed": _local_quote_passed,
             # M7.E1.1: Per-candidate gas breakdown
             "l1_data_gas_bps": round(_l1_data, 4) if _l1_data is not None else None,
             "l2_exec_gas_bps": round(_l2_gas, 4) if _l2_gas is not None else None,
@@ -952,7 +980,7 @@ def build_replay_summary(
             "gate_trace": {
                 "pair_resolved": bool(getattr(r, "pair_resolved", False)),
                 "size_valid_for_token": bool(getattr(r, "size_valid_for_token", False)),
-                "same_block": (r.block_lag or 99) == 0,
+                "same_block": (r.block_lag is not None and r.block_lag == 0),
                 "positive": (_net > 0),
                 "route_viable": bool(r.route_viable),
                 "profit_guard_passed": bool(getattr(r, "profit_guard_passed", False)),

@@ -866,6 +866,7 @@ class TestE115SimExceptionCapture:
             size_valid_for_token=True,
             actual_pair="WETH/USDC",
             best_buy_fee=500,
+            token_in_decimals=18,
         )
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_attempted == 1
@@ -912,6 +913,7 @@ class TestE115PaperSigning:
             size_valid_for_token=True,
             actual_pair="WETH/USDC",
             best_buy_fee=500,
+            token_in_decimals=18,
         )
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_passed == 1
@@ -953,6 +955,7 @@ class TestE115PaperSigning:
             size_valid_for_token=True,
             actual_pair="WETH/USDC",
             best_buy_fee=500,
+            token_in_decimals=18,
         )
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_passed == 1

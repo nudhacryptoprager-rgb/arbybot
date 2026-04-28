@@ -565,3 +565,84 @@ def test_legacy_top_level_keys_marked_deprecated():
     assert payload["current_scan"].get("_deprecated") is None
     assert payload["historical_cumulative"].get("_deprecated") is None
 
+
+
+
+# ===========================================================================
+# Reviewer (post-soak19) step 6: universe_breadth in /api/summary
+# ===========================================================================
+
+
+def test_universe_breadth_default_zero_when_artifacts_empty():
+    payload = build_summary_payload(
+        rollup=_make_rollup(),
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    breadth = payload["current_scan"]["universe_breadth"]
+    expected_keys = {
+        "intent_pairs",
+        "pools_discovered_total",
+        "pools_active_total",
+        "ptt_total",
+        "bridge_focused_pool_count",
+        "bridge_pool_hit_total",
+        "registry_hit_for_event_pool_total",
+        "hot_seen_unresolved_pool_count",
+        "candidate_source_breakdown",
+    }
+    assert expected_keys.issubset(set(breadth.keys()))
+    assert breadth["intent_pairs"] == 0
+    assert breadth["pools_active_total"] == 0
+    assert breadth["ptt_total"] == 0
+
+
+def test_universe_breadth_populated_from_orderflow_and_bridge():
+    rollup = _make_rollup()
+    rollup["bridge_focused_pool_count_last"] = 48
+    rollup["bridge_pool_hit_total"] = 3210
+    rollup["hot_seen_unresolved_pool_count"] = 7
+    rollup["registry_hit_for_event_pool_total"] = 4500
+    orderflow = {
+        "registry_session_stats": {
+            "unique_pairs_queried": 15,
+            "pools_discovered": 429,
+            "pools_active": 280,
+        }
+    }
+    bridge = {
+        "candidate_source_breakdown": {
+            "cold_exec": 12,
+            "near_exec": 4,
+            "stale_positive": 5,
+            "recent_active": 3,
+            "hot_seen_backfill": 0,
+            "ptt_total": 133,
+        }
+    }
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow=orderflow,
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+        bridge=bridge,
+    )
+    breadth = payload["current_scan"]["universe_breadth"]
+    assert breadth["intent_pairs"] == 15
+    assert breadth["pools_discovered_total"] == 429
+    assert breadth["pools_active_total"] == 280
+    assert breadth["ptt_total"] == 133
+    assert breadth["bridge_focused_pool_count"] == 48
+    assert breadth["bridge_pool_hit_total"] == 3210
+    assert breadth["registry_hit_for_event_pool_total"] == 4500
+    assert breadth["hot_seen_unresolved_pool_count"] == 7
+    csb = breadth["candidate_source_breakdown"]
+    assert csb["cold_exec"] == 12
+    assert csb["stale_positive"] == 5
+    # ptt_total is promoted to a top-level field, not duplicated here.
+    assert "ptt_total" not in csb

@@ -1292,6 +1292,25 @@ def run_execution_gate(
                 if not getattr(r, "best_sweep_size_wei", 0):
                     _skip_reason = "PRE_SIM_SKIP:NO_FEE_HINT"
 
+            # Reviewer post-soak19 step 3: refuse to spend RPC budget on a
+            # candidate when adaptive sizing produced no usable size metadata
+            # at all (decimals + sweep + usd estimate all unknown). Such
+            # candidates are the dominant source of scorer-vs-sim divergence
+            # because the scorer ran on a synthetic 1e18 amount that the sim
+            # cannot reproduce. Controlled by ARBY_SIM_REQUIRE_SIZE_METADATA
+            # (default "1"); set to "0" to keep legacy permissive behaviour.
+            if _skip_reason is None and os.getenv(
+                "ARBY_SIM_REQUIRE_SIZE_METADATA", "1"
+            ) == "1":
+                _decimals = getattr(r, "token_in_decimals", None)
+                _sweep_meta = getattr(r, "best_sweep_size_wei", None)
+                _usd_est = getattr(r, "size_usd_estimate", None)
+                _has_decimals = _decimals is not None
+                _has_sweep = _sweep_meta is not None and _sweep_meta > 0
+                _has_usd = _usd_est is not None
+                if not (_has_decimals or _has_sweep or _has_usd):
+                    _skip_reason = "PRE_SIM_SKIP:MISSING_SIZE_METADATA"
+
             if _skip_reason is not None:
                 gate.sim_errors.append(_skip_reason)
                 if hasattr(r, "sim_attempted"):
