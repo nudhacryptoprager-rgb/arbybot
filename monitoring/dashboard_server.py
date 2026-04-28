@@ -52,12 +52,22 @@ SESSION_TOTAL_FIELDS = (
 # soak18: tunable via ARBY_DASHBOARD_FRESHNESS_S env (operator-side knob
 # so production vs discovery can use different cadences without code
 # changes). Default 120s.
-try:
-    FRESHNESS_THRESHOLD_S = int(os.environ.get("ARBY_DASHBOARD_FRESHNESS_S", "120"))
-    if FRESHNESS_THRESHOLD_S <= 0:
-        FRESHNESS_THRESHOLD_S = 120
-except (TypeError, ValueError):
-    FRESHNESS_THRESHOLD_S = 120
+# soak18 step 5: discovery profile may legitimately publish slower than
+# production (longer scan, fewer events). ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY
+# overrides the threshold for the discovery profile only; production
+# keeps the default 120s knob.
+def _read_threshold_env(name: str, default: int = 120) -> int:
+    try:
+        v = int(os.environ.get(name, str(default)))
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+FRESHNESS_THRESHOLD_S = _read_threshold_env("ARBY_DASHBOARD_FRESHNESS_S", 120)
+FRESHNESS_THRESHOLD_S_DISCOVERY = _read_threshold_env(
+    "ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY", FRESHNESS_THRESHOLD_S
+)
 
 ARTIFACT_FILES = {
     "run_summary": ROLLING_DIR / "run_summary_latest.json",
@@ -322,6 +332,12 @@ def build_summary_payload(
     age_seconds = None
     is_fresh = False
     staleness_reason = None
+    # soak18 step 5: discovery profile gets its own threshold knob.
+    threshold = (
+        FRESHNESS_THRESHOLD_S_DISCOVERY
+        if profile == "discovery"
+        else FRESHNESS_THRESHOLD_S
+    )
     if last_updated_dt is None:
         staleness_reason = "MISSING_LAST_UPDATED"
     else:
@@ -329,11 +345,11 @@ def build_summary_payload(
         if age_seconds < 0:
             # Future timestamp (clock skew) — treat as fresh.
             age_seconds = 0.0
-        if age_seconds <= FRESHNESS_THRESHOLD_S:
+        if age_seconds <= threshold:
             is_fresh = True
         else:
             staleness_reason = (
-                f"STALE: age={int(age_seconds)}s>{FRESHNESS_THRESHOLD_S}s"
+                f"STALE: age={int(age_seconds)}s>{threshold}s"
             )
         # soak18 step 1: BASELINE_NOT_REFRESHED — supervisor restarted
         # and snapshotted a baseline whose last_updated equals the
@@ -519,11 +535,25 @@ def build_summary_payload(
         "exit_reason_histogram": exit_reason_hist,
         # ----- Backward-compat: pre-soak17 keys retained so any older
         # client gets the same shape it used to. NEW clients MUST read
-        # current_scan / historical_cumulative instead. -----
+        # current_scan / historical_cumulative instead.
+        # soak18 step 6: every legacy top-level block carries
+        # `_deprecated:true` (when shape allows) and is also listed in
+        # `_deprecated_top_level_keys` so any client can detect it
+        # programmatically. List/array blocks (top_spreads) cannot carry
+        # an inline flag and are tracked only by the meta key. -----
+        "_deprecated_top_level_keys": [
+            "scope",
+            "top_spreads",
+            "gate_funnel",
+            "reject_buckets",
+            "current_session_id",
+            "last_exit_reason",
+        ],
         "scope": current_scan["scope"] | {
             "bridge_loaded_candidate_count_total": _safe_int(
                 rollup.get("bridge_loaded_candidate_count_total")
             ),
+            "_deprecated": True,
         },
         "top_spreads": top_spreads,
         "gate_funnel": {  # legacy: lifetime totals (deprecated)
@@ -551,7 +581,11 @@ def build_summary_payload(
             ],
             "_deprecated": True,
         },
-        "reject_buckets": reject_buckets,
+        "reject_buckets": (
+            reject_buckets | {"_deprecated": True}
+            if isinstance(reject_buckets, dict)
+            else reject_buckets
+        ),
         "current_session_id": current_session_id,
         "last_exit_reason": last_exit_reason,
     }

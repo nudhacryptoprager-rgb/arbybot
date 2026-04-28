@@ -496,3 +496,72 @@ def test_api_summary_via_http_server(monkeypatch, tmp_path):
         server.shutdown()
         server.server_close()
         t.join(timeout=2)
+
+
+# soak19 step 5: discovery-specific freshness threshold
+def test_freshness_threshold_discovery_env_independent(monkeypatch):
+    """ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY must override only the
+    discovery profile; production keeps its own threshold."""
+    import importlib
+
+    import monitoring.dashboard_server as ds
+
+    monkeypatch.setenv("ARBY_DASHBOARD_FRESHNESS_S", "120")
+    monkeypatch.setenv("ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY", "300")
+    importlib.reload(ds)
+    try:
+        assert ds.FRESHNESS_THRESHOLD_S == 120
+        assert ds.FRESHNESS_THRESHOLD_S_DISCOVERY == 300
+        # Rollup 200s old: stale for production (>120), fresh for
+        # discovery (<300).
+        rollup = _make_rollup(last_updated_offset_s=200)
+        baseline = _make_baseline()
+        # Distinct baseline.last_updated to avoid BASELINE_NOT_REFRESHED.
+        baseline["last_updated"] = (
+            NOW - timedelta(seconds=400)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        prod = ds.build_summary_payload(
+            rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+            profile="production", now_utc=NOW,
+        )
+        disc = ds.build_summary_payload(
+            rollup=rollup, hot={}, orderflow={}, baseline=baseline,
+            profile="discovery", now_utc=NOW,
+        )
+        assert prod["current_scan"]["is_fresh"] is False
+        assert "STALE" in (prod["current_scan"]["staleness_reason"] or "")
+        assert disc["current_scan"]["is_fresh"] is True
+        assert disc["current_scan"]["staleness_reason"] is None
+    finally:
+        monkeypatch.delenv("ARBY_DASHBOARD_FRESHNESS_S", raising=False)
+        monkeypatch.delenv("ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY", raising=False)
+        importlib.reload(ds)
+
+
+# soak19 step 6: legacy top-level keys carry _deprecated markers
+def test_legacy_top_level_keys_marked_deprecated():
+    payload = build_summary_payload(
+        rollup=_make_rollup(),
+        hot={"reject_buckets": {"GUARD_X": 5}},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    # Meta key advertises every deprecated top-level field.
+    deprecated = payload.get("_deprecated_top_level_keys")
+    assert isinstance(deprecated, list)
+    expected = {
+        "scope", "top_spreads", "gate_funnel",
+        "reject_buckets", "current_session_id", "last_exit_reason",
+    }
+    assert expected.issubset(set(deprecated))
+    # Dict-shaped legacy blocks carry inline _deprecated:true.
+    assert payload["scope"].get("_deprecated") is True
+    assert payload["gate_funnel"].get("_deprecated") is True
+    assert payload["reject_buckets"].get("_deprecated") is True
+    # current_scan / historical_cumulative MUST NOT carry the marker.
+    assert payload["current_scan"].get("_deprecated") is None
+    assert payload["historical_cumulative"].get("_deprecated") is None
+

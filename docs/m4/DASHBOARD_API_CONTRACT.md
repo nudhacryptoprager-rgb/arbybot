@@ -141,9 +141,10 @@ drift never produces a negative count.
 
 ## Environment overrides
 
-| env var                          | default | effect                                  |
-|----------------------------------|---------|-----------------------------------------|
-| `ARBY_DASHBOARD_FRESHNESS_S`     | `120`   | freshness threshold for `current_scan`  |
+| env var                                     | default | effect                                           |
+|---------------------------------------------|---------|--------------------------------------------------|
+| `ARBY_DASHBOARD_FRESHNESS_S`                | `120`   | freshness threshold for production `current_scan`|
+| `ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY`      | mirrors `ARBY_DASHBOARD_FRESHNESS_S` | freshness threshold for discovery profile only |
 
 ## Test coverage
 
@@ -170,7 +171,10 @@ thresholds — never by relaxing tests.
 
 Top-level keys `scope`, `top_spreads`, `gate_funnel`, `reject_buckets`,
 `current_session_id`, `last_exit_reason` are retained for clients
-written before `summary_v2`. The legacy `gate_funnel` carries
-`_deprecated: true` and serves lifetime totals — new clients **must
-not** depend on those values. They will be removed once the
+written before `summary_v2`. All dict-shaped legacy blocks carry an
+inline `_deprecated: true` marker, and the meta key
+`_deprecated_top_level_keys` enumerates every deprecated top-level
+field so any client can detect them programmatically. The legacy
+`gate_funnel` continues to serve **lifetime** totals — new clients
+**must not** depend on those values. They will be removed once the
 `schema_version` bumps to `summary_v3`.

@@ -164,7 +164,12 @@ $argsList = @(
     '--m7-hot-pause', '1',
     '--m7-cold-pause', '5'
 )
+# Force unbuffered Python stdout so log lines are visible even when the
+# supervisor is killed early by the rollup probe (Windows blocks stdout
+# until process exit when using Start-Process -RedirectStandardOutput).
+$env:PYTHONUNBUFFERED = '1'
 $proc = Start-Process -FilePath py -ArgumentList $argsList -RedirectStandardOutput $logFile -RedirectStandardError $errFile -PassThru -WindowStyle Hidden
+$env:PYTHONUNBUFFERED = $null   # restore; child already inherited it
 Write-Step ("supervisor PID=" + $proc.Id + ", log=" + $logFile + ", hours=" + $Hours)
 Write-Host ("supervisor PID: " + $proc.Id)
 Write-Host ("log: " + $logFile)
@@ -203,8 +208,29 @@ if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
         }
     }
     if (-not $progressed) {
-        Write-Step ("rollup probe: FAIL — no fresh rollup write in " + $RollupProbeSeconds + "s; killing supervisor PID " + $proc.Id)
-        try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch {}
+        Write-Step ("rollup probe: FAIL — no fresh rollup write in " + $RollupProbeSeconds + "s; stopping supervisor PID " + $proc.Id)
+        # soak18 step 7: graceful stop first (CloseMainWindow + 10s
+        # wait so supervisor can flush m7_session_state.json and close
+        # WS cleanly), then -Force only if it ignores the request.
+        $gracefulStopped = $false
+        try {
+            $closed = $proc.CloseMainWindow()
+            if ($closed) {
+                if ($proc.WaitForExit(10000)) {
+                    $gracefulStopped = $true
+                }
+            }
+        } catch {}
+        if (-not $gracefulStopped) {
+            try {
+                Stop-Process -Id $proc.Id -ErrorAction Stop
+                if ($proc.WaitForExit(10000)) { $gracefulStopped = $true }
+            } catch {}
+        }
+        if (-not $gracefulStopped) {
+            Write-Step ("rollup probe: graceful stop ignored; escalating to -Force")
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch {}
+        }
         Write-Host ("BOOTSTRAP_ABORTED: rollup probe timed out (set -NoRollupProbe to skip).")
         exit 2
     }

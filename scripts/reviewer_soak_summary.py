@@ -356,11 +356,39 @@ def main() -> int:
             api_session = cs.get("session_id")
             api_match = bool(cs.get("session_id_match_baseline"))
             api_reason = cs.get("staleness_reason")
+            api_schema = api_payload.get("schema_version")
+            api_chain = api_payload.get("chain")
+            api_profile = api_payload.get("profile")
+            print(f"  api.schema_version                  = {api_schema}")
+            print(f"  api.chain                           = {api_chain}")
+            print(f"  api.profile                         = {api_profile}")
             print(f"  api.current_scan.is_fresh           = {api_fresh}")
             print(f"  api.current_scan.age_seconds        = {api_age}")
             print(f"  api.current_scan.session_id         = {api_session}")
             print(f"  api.session_id_match_baseline       = {api_match}")
             print(f"  api.current_scan.staleness_reason   = {api_reason}")
+            # soak18 step 3: hard-fail if API contract drifted (wrong
+            # schema/chain/profile means we are reading a foreign API or
+            # a build that no longer matches the reviewer logic).
+            contract_mismatch: list[str] = []
+            if api_schema != "summary_v2":
+                contract_mismatch.append(
+                    f"schema_version={api_schema!r} (expected 'summary_v2')"
+                )
+            if api_chain not in (None, "base"):
+                contract_mismatch.append(
+                    f"chain={api_chain!r} (expected 'base')"
+                )
+            if api_profile not in (None, "production"):
+                contract_mismatch.append(
+                    f"profile={api_profile!r} (expected 'production')"
+                )
+            if contract_mismatch:
+                print(
+                    "  ! DASHBOARD_DRIFT: API contract mismatch -> "
+                    + "; ".join(contract_mismatch)
+                )
+                overall = False
             file_stale = bool(stale_reasons)
             api_stale = not api_fresh
             if file_stale != api_stale:
