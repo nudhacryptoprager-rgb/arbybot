@@ -387,6 +387,12 @@ class ExecutionGateResult:
     # for calldata-level visibility (token/venue/router/amount + decoded
     # revert tag) beyond the aggregate simulation_error_histogram.
     sim_failed_samples: List[Dict[str, Any]] = field(default_factory=list)
+    # M7.E1.34f post-soak19 reviewer fix #6: bounded ring of samples for
+    # PRE_SIM_SKIP:MISSING_SIZE_METADATA so reviewer can see WHICH
+    # pair/pool/token combinations are still arriving without sizing
+    # metadata. Each entry: {pair, pool, token_in, decimals_src,
+    # missing_fields, fee_hint, venue}.
+    pre_sim_skip_samples: List[Dict[str, Any]] = field(default_factory=list)
     # E2: Round-trip (buy+sell) same-token bps metrics. These are VALID bps
     # because initial and final amounts are the same token.
     roundtrip_attempted: int = 0
@@ -1310,6 +1316,25 @@ def run_execution_gate(
                 _has_usd = _usd_est is not None
                 if not (_has_decimals or _has_sweep or _has_usd):
                     _skip_reason = "PRE_SIM_SKIP:MISSING_SIZE_METADATA"
+                    # Reviewer fix #6: capture top samples (bounded ring of 50)
+                    # so reviewer can see WHICH pairs/pools still arrive without
+                    # decimals/sweep/usd estimate. Helps target upstream sizing.
+                    if len(gate.pre_sim_skip_samples) < 50:
+                        gate.pre_sim_skip_samples.append({
+                            "reason": "MISSING_SIZE_METADATA",
+                            "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None),
+                            "pool": getattr(r, "pool_address", None) or getattr(r, "best_pool", None),
+                            "token_in": getattr(r, "token_in", None) or getattr(r, "token_in_address", None),
+                            "missing_fields": [
+                                _f for _f, _present in (
+                                    ("token_in_decimals", _has_decimals),
+                                    ("best_sweep_size_wei", _has_sweep),
+                                    ("size_usd_estimate", _has_usd),
+                                ) if not _present
+                            ],
+                            "fee_hint": getattr(r, "fee_hint", None) or getattr(r, "best_fee_tier", None),
+                            "venue": getattr(r, "venue", None) or getattr(r, "best_venue", None),
+                        })
 
             if _skip_reason is not None:
                 gate.sim_errors.append(_skip_reason)

@@ -543,6 +543,29 @@ def build_summary_payload(
         },
         "universe_breadth": universe_breadth,
         "gate_funnel": current_funnel,
+        # M7.E1.34f post-soak19 reviewer fix #4: explicit guard to prevent
+        # UI/reader from conflating local-quote profitability checks with
+        # production profit truth. Production profit is recognised ONLY
+        # when roundtrip_profitable_total > 0; verified_profitable in
+        # compact rows reflects local quote + sim agreement, not real PnL.
+        "production_profit_guard": {
+            "production_profit_truth_metric": "roundtrip_profitable_total",
+            "production_profit_truth_value": _safe_int(
+                rollup.get("roundtrip_profitable_total")
+            ),
+            "verified_profitable_meaning": (
+                "local_quote_passed AND sim_passed AND scorer_sim_divergence_ok"
+            ),
+            "is_production_profit_observed": (
+                _safe_int(rollup.get("roundtrip_profitable_total")) > 0
+            ),
+            "disclaimer": (
+                "verified_profitable in compact candidate rows is NOT a "
+                "production profit signal. It only attests local-quote "
+                "agreement with sim. Real production truth requires "
+                "roundtrip_profitable_total > 0 in m7_hot_rollup."
+            ),
+        },
         "top_spreads": top_spreads,
         "reject_buckets": reject_buckets,
         "session_ws_recv_error_total": _safe_int(

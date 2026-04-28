@@ -406,10 +406,17 @@ def main():
             if now - last_status >= status_interval:
                 remaining = max(0, deadline - now)
                 alive = sum(1 for p in processes if p.proc and p.proc.poll() is None)
+                # M7.E1.34f (post-soak19, reviewer fix #7): split restart wording
+                # so reviewer/log readers cannot conflate clean cycle exits
+                # (rc==0 from bounded workers) with actual crashes.
+                _cycles = sum(p.cycles_completed for p in processes)
+                _crashes = sum(p.crash_restarts for p in processes)
                 print(
                     f"  [supervisor] {alive}/{len(processes)} alive, "
                     f"{remaining / 60:.1f}min remaining, "
-                    f"restarts: {sum(p.restarts for p in processes)}"
+                    f"cycles_completed={_cycles}, "
+                    f"clean_restarts={_cycles}, "
+                    f"crash_restarts={_crashes}"
                 )
                 last_status = now
 

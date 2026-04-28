@@ -321,6 +321,29 @@ def main() -> int:
     if args.discovery:
         print(f"  discovery_lane_ok  = {disc_ok}  ({disc_reason})")
 
+    # M7.E1.34f post-soak19 reviewer fix #3: explicitly emit which
+    # simulation_backend produced this evidence so closure claims cannot
+    # silently rely on Tenderly while reviewer thresholds were tuned for
+    # rpc_fork. If both lanes agree, print one line; otherwise print both.
+    _prod_backend = cur.get("simulation_backend") if isinstance(cur, dict) else None
+    _disc_backend = None
+    if args.discovery:
+        try:
+            _disc_cur_obj = _load(ROLL / "m7_hot_rollup_latest_discovery.json") or {}
+            _disc_backend = _disc_cur_obj.get("simulation_backend")
+        except Exception:
+            pass
+    _ext_total = (cur.get("external_provider_blocker_total") or 0) if isinstance(cur, dict) else 0
+    _ext_hist = (cur.get("external_provider_blocker_histogram") or {}) if isinstance(cur, dict) else {}
+    if args.discovery and _disc_backend and _disc_backend != _prod_backend:
+        print(f"  simulation_backend = PROD:{_prod_backend} / DISC:{_disc_backend}")
+    else:
+        print(f"  simulation_backend = {_prod_backend or 'UNKNOWN'}")
+    print(
+        f"  external_provider_blocker_total = {_ext_total}"
+        + (f"  hist={dict(list(_ext_hist.items())[:3])}" if _ext_hist else "")
+    )
+
     # M7.E1.34f fix #7: only cite sim_failed_samples whose session_id
     # matches the current session. Everything else is historical noise.
     _sess = (cur.get("session") or {}) if isinstance(cur, dict) else {}

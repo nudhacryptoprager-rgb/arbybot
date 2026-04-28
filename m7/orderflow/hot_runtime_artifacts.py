@@ -1335,6 +1335,33 @@ def _update_hot_rollup(
             _se_key = (_se or "unknown")[:256]
             _sim_hist[_se_key] = _sim_hist.get(_se_key, 0) + 1
         rollup["simulation_error_histogram"] = _sim_hist
+        # M7.E1.34f post-soak19 reviewer fix #2: classify Tenderly /
+        # external sim-provider failures (HTTP 403, 429,
+        # insufficient_permissions, credit/quota) into a dedicated
+        # bucket so reviewer can immediately see whether sim emptiness
+        # is caused by external provider limits rather than code/market.
+        _ext_hist = rollup.get("external_provider_blocker_histogram") or {}
+        _ext_total_delta = 0
+        for _se in getattr(gate_result, "sim_errors", []):
+            _txt = (_se or "")
+            _low = _txt.lower()
+            _tag = None
+            if "http 403" in _low or "insufficient_permissions" in _low:
+                _tag = "TENDERLY:HTTP_403_INSUFFICIENT_PERMISSIONS"
+            elif "http 429" in _low or "rate limit" in _low or "rate_limit" in _low:
+                _tag = "PROVIDER:HTTP_429_RATE_LIMIT"
+            elif "credit" in _low and ("limit" in _low or "exhaust" in _low or "quota" in _low):
+                _tag = "TENDERLY:CREDIT_QUOTA"
+            elif "insufficient_funds" in _low and "tenderly" in _low:
+                _tag = "TENDERLY:INSUFFICIENT_FUNDS"
+            if _tag is not None:
+                _ext_hist[_tag] = _ext_hist.get(_tag, 0) + 1
+                _ext_total_delta += 1
+        if _ext_hist:
+            rollup["external_provider_blocker_histogram"] = _ext_hist
+        rollup["external_provider_blocker_total"] = (
+            rollup.get("external_provider_blocker_total", 0) + _ext_total_delta
+        )
         # M7.E1.34c: Terminal-stage failed-sim samples (bounded ring of 50) so
         # reviewer can see token/venue/amount behind each histogram bucket
         # (answers fix step #5 from 30m control soak).
@@ -1367,6 +1394,26 @@ def _update_hot_rollup(
             _sb_key = (_sb or "unknown")[:256]
             _sub_hist[_sb_key] = _sub_hist.get(_sb_key, 0) + 1
         rollup["submit_blocker_histogram"] = _sub_hist
+        # M7.E1.34f post-soak19 reviewer fix #6: ring-buffer
+        # PRE_SIM_SKIP samples (currently MISSING_SIZE_METADATA only) so
+        # reviewer can target upstream sizing for specific pools/pairs.
+        _pre_skip_samples = list(getattr(gate_result, "pre_sim_skip_samples", []) or [])
+        if _pre_skip_samples:
+            _sid_now = getattr(_rio, "_SESSION_ID", None)
+            _now_iso = ts
+            for _s in _pre_skip_samples:
+                if isinstance(_s, dict):
+                    _s.setdefault("session_id", _sid_now)
+                    _s["sample_updated_at"] = _now_iso
+            _existing_p = rollup.get("pre_sim_skip_samples_recent", [])
+            _existing_p = [
+                _x for _x in _existing_p
+                if isinstance(_x, dict) and _x.get("session_id") == _sid_now
+            ]
+            rollup["pre_sim_skip_samples_recent"] = (_existing_p + _pre_skip_samples)[-50:]
+            rollup["pre_sim_skip_samples_total"] = (
+                rollup.get("pre_sim_skip_samples_total", 0) + len(_pre_skip_samples)
+            )
     else:
         rollup.setdefault("sim_attempted_total", 0)
         rollup.setdefault("sim_passed_total", 0)
