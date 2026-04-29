@@ -1,140 +1,128 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-04-28T08:46:41Z
-run_id: post-soak19 reviewer fix-list 1–10 (data/runs/_rolling, soak window 2026-04-28T08:16:58Z–08:46:41Z, session_id=3d48b072)
-mode: ONLINE (rpc_fork PROD + DISC, base mainnet)
+timestamp_utc: 2026-04-29T06:52:13Z
+run_id: post-soak21 reviewer semantic fix + control10 (data/runs/_rolling, 4h soak window 2026-04-28T09:25:53Z–13:25:55Z + 10-min control 2026-04-29T06:42:07Z–06:52:25Z, sessions c12124ff → b4e231a0)
+mode: ONLINE
 artifact_mode: rolling
-config: config/real_minimal.yaml (PROD), discovery profile (DISC)
+config: bootstrap -Hours 0.17 -ProdSimBackend rpc_fork -DiscSimBackend rpc_fork -NoRollupProbe; ENV: ARBY_HOT_SWEEP_ENABLE=1, ARBY_LATENCY_TARGET_MS=200, ARBY_MAX_TRADE_USD=50
 code_identity:
-  primary: ts:2026-04-28T08:46:41Z
-  dirty: true (reviewer fix-list 1–10 applied; steps 7–9 still deferred per CLAUDE.md)
-  desc: M7.E1.34 — rpc_fork pinned as canonical M7 sim backend; Tenderly external-provider classifier; reviewer simulation_backend echo; verified_profitable production-truth guard; pre_sim_skip_samples ring; supervisor status wording split (cycles_completed / clean_restarts / crash_restarts).
+  primary: ts:2026-04-29T06:52:13Z
+  dirty: false
+  desc: reviewer semantic fix (BLOCKED+BLOCKED), Fix #4 lifted to rollup surface, control10 with cap=50
 
-## 1) Scope (що і навіщо)
-goal (Roadmap.md): M7.E1.34 — закрити всі 10 reviewer issues post-soak19, формалізувати rpc_fork як canonical M7 backend, провести 30-хв контрольний soak із RPC health gate, оновити Status_M7.md.
+## 1) Scope
+goal (Roadmap): M7.E1.36 — address reviewer post-soak21 critique: (a) DEV_REPORT semantic inconsistency BLOCKED+RESOLVED → BLOCKED+BLOCKED; (b) Fix #4 PARTIAL → FULL by lifting latency_budget to rollup surface; (c) verify Fix #9 runtime path with control10 cap=50 run; (d) name SCORER_SIM_DIVERGENCE as primary blocker.
 change_summary:
-  - **Fix #1 (rpc_fork pinned):** `scripts/bootstrap_system.ps1` уже мав `[ValidateSet('tenderly','rpc_fork')] $ProdSimBackend = 'rpc_fork'` і `$DiscSimBackend = 'rpc_fork'` за замовчуванням. Soak пройшов із `simulation_backend=rpc_fork` у rollup; Tenderly не використовувався для closure evidence.
-  - **Fix #2 (external provider classifier):** `m7/orderflow/hot_runtime_artifacts.py` — нові поля `external_provider_blocker_histogram` та `external_provider_blocker_total`. Класифікує Tenderly/HTTP errors у бакети: `TENDERLY:HTTP_403_INSUFFICIENT_PERMISSIONS`, `PROVIDER:HTTP_429_RATE_LIMIT`, `TENDERLY:CREDIT_QUOTA`, `TENDERLY:INSUFFICIENT_FUNDS`. У цьому soak fresh delta = 0 (rpc_fork backend).
-  - **Fix #3 (reviewer prints simulation_backend):** `scripts/reviewer_soak_summary.py` — у блоці REVIEWER VERDICT тепер друкуються `simulation_backend = rpc_fork` (або PROD/DISC split при розбіжності) + `external_provider_blocker_total`. Soak підтвердив: вивід містить `simulation_backend = rpc_fork`, `external_provider_blocker_total = 0`.
-  - **Fix #4 (production_profit_guard):** `monitoring/dashboard_server.py` — у `/api/summary.current_scan` доданий блок `production_profit_guard` з полями `production_profit_truth_metric=roundtrip_profitable_total`, `production_profit_truth_value`, `verified_profitable_meaning`, `is_production_profit_observed`, `disclaimer`. Захищає reader-а від плутанини між local-quote `verified_profitable` та production profit.
-  - **Fix #5 (gated soak):** `check_rpc_endpoints.py` запущено перед soak — PASS (chain_id, archive, newHeads OK; flashblocks WARN — non-blocking 405 від base.org Cloudflare). Soak стартував лише після PASS.
-  - **Fix #6 (PRE_SIM_SKIP samples ring):** `m7/orderflow/execution_gate.py` — `ExecutionGateResult.pre_sim_skip_samples` (bounded 50) + sample capture для MISSING_SIZE_METADATA з полями `pair`, `pool`, `token_in`, `missing_fields`, `fee_hint`, `venue`. `m7/orderflow/hot_runtime_artifacts.py` — surfaces у rollup як `pre_sim_skip_samples_recent` (session-scoped, prune at session boundary) + `pre_sim_skip_samples_total`. Soak результат: `pre_sim_skip_samples_total=5`, `MISSING_SIZE_METADATA` у sim_err_hist =6.
-  - **Fix #7 (supervisor status wording):** `scripts/start_nonstop_runtime.py` — періодичний status замість `restarts: N` друкує `cycles_completed=K, clean_restarts=K, crash_restarts=M`. Розрізняє bounded-worker clean cycles від крешів.
-  - **Fix #8/9 (factory enum + tiered topology):** DEFERRED — окремі ітерації, не змішуються з fix iteration.
-  - **Fix #10 (Status_M7.md):** Оновлено `docs/status/Status_M7.md` (один абзац-Status + дата), включає `simulation_backend=rpc_fork`, `crash_restarts=0`, fix-list summary, MARKET_QUIET classification, PRODUCTION_READINESS_BLOCKED rationale.
+  - Fix #4 lifted to rollup: _update_hot_rollup in m7/orderflow/hot_runtime_artifacts.py now maintains a bounded 500-sample session ring of quote_pipeline_latency_ms; emits latency_budget block (samples_total / p50/p90/p99 / max_ms / target_ms / within_target_pct / per-window stage_breakdown) on every flush.
+  - 2 new unit tests TestRollupLatencyBudgetContract (empty + with-results percentiles) — pass.
+  - DEV_REPORT semantic fixed: goal_status=BLOCKED, primary_blocker_of_session=SCORER_SIM_DIVERGENCE, blocker_status_before=UNRESOLVED, blocker_status_after=BLOCKED, close_allowed=true.
+  - Fix #4 marked FULL in change log; Fix #9 marked IMPLEMENTED but runtime-trigger UNVERIFIED in control10 (quiet 10-min window: 0 fresh fast scores → cap path not exercised).
+  - Status_M7.md status paragraph updated: BLOCKED BY ECONOMICS — SCORER_SIM_DIVERGENCE.
+  - 10-min control run with ARBY_MAX_TRADE_USD=50: clean shutdown 06:52:25Z, 5/5 children alive cumulative, crash_restarts=0; rollup latency_budget keys present (samples=0 in this quiet window).
 touched_files:
-  - m7/orderflow/execution_gate.py
   - m7/orderflow/hot_runtime_artifacts.py
-  - monitoring/dashboard_server.py
-  - scripts/reviewer_soak_summary.py
-  - scripts/start_nonstop_runtime.py
+  - tests/unit/test_orderflow_artifacts.py
   - docs/status/Status_M7.md
+  - docs/DEV_REPORT_LATEST.md
 
-## 2) Commands Executed (лише факти)
+## 2) Commands Executed
+py -3.11 -m pytest tests/unit/test_orderflow_artifacts.py::TestRollupLatencyBudgetContract -q: PASS (2 passed in 0.54s)
+py -3.11 -m pytest tests/unit -q: PASS (4305 passed, 6 skipped, 0 failed; 109.11s)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, 20 gates)
+py -3.11 scripts/check_rpc_endpoints.py --chain base --ws-timeout 15: PASS (chain_id=8453, archive head=45327780, newHeads 0.55s, flashblocks WARN-tolerated)
+py -3.11 scripts/clean_rolling_artifacts.py: PASS
+powershell scripts/bootstrap_system.ps1 -Hours 0.17 -ProdSimBackend rpc_fork -DiscSimBackend rpc_fork -NoRollupProbe: PASS (supervisor PID 16932, 2026-04-29T06:42:07Z → 06:52:25Z, clean shutdown)
+py -3.11 scripts/reviewer_soak_summary.py --baseline ... --current ... --staleness-anchor-utc 2026-04-29T06:52:25Z: FAIL (NO_FRESH_SIM_PASSED, NO_FRESH_ROUNDTRIP_ATTEMPTED; simulation_backend=rpc_fork; external_provider_blocker_total=0; events_delta=+16, fast_path_scored_delta=0; quiet 10-min control window)
+py -3.11 scripts/analyze_roundtrip_profitability.py --baseline ...: NO_ROUNDTRIP_ATTEMPTED [DELTA_VS_BASELINE]
 
-py -3.11 -m pytest tests/unit -q: PASS (4298 passed, 6 skipped, 1 warning, 108.08s)
-py -3.11 scripts/check_rpc_endpoints.py --chain base --ws-timeout 15: PASS (chain_id 8453, archive head=45287427, newHeads 2.27s, flashblocks WARN-only)
-py -3.11 scripts/clean_rolling_artifacts.py: PASS (baselines re-snapped)
-powershell scripts/bootstrap_system.ps1 -Hours 0.5 -ProdSimBackend rpc_fork -DiscSimBackend rpc_fork -NoRollupProbe: STARTED 2026-04-28T08:16:58Z, last_updated=2026-04-28T08:46:41Z (~30 min runtime), session_id=3d48b072, exit clean (0 procs alive after deadline)
-py -3.11 scripts/reviewer_soak_summary.py --baseline …reviewer_soak_baseline_latest.json --current …m7_hot_rollup_latest.json --staleness-anchor-utc 2026-04-28T08:46:41Z (with `ARBY_REVIEWER_QUIET_OK=1`): FAIL (production_lane_ok=False; reason: NO_FRESH_SIM_PASSED, NO_FRESH_ROUNDTRIP_ATTEMPTED — **MARKET_QUIET**); printed `simulation_backend = rpc_fork`, `external_provider_blocker_total = 0`
-py -3.11 scripts/analyze_roundtrip_profitability.py --baseline …reviewer_soak_baseline_latest.json: NO_ROUNDTRIP_ATTEMPTED [DELTA_VS_BASELINE] (window quiet)
-py -3.11 scripts/check_repo_safety.py: <executed at end of session — see results>
-
-## 3) Artifacts Attached (шляхи)
+## 3) Artifacts Attached
 rolling:
-  - data/runs/_rolling/m7_hot_rollup_latest.json
-  - data/runs/_rolling/m7_orderflow_latest.json
-  - data/runs/_rolling/m7_cold_hot_bridge.json
+  - data/runs/_rolling/m7_hot_rollup_latest.json (last_updated=2026-04-29T06:52:13Z, session_id=b4e231a0; latency_budget block now present at rollup level)
+  - data/runs/_rolling/m7_hot_latest.json
   - data/runs/_rolling/reviewer_soak_baseline_latest.json
 session_log:
-  - data/runs/_sessions/m7_bootstrap_20260428_101659.out.log
+  - data/runs/_sessions/m7_bootstrap_20260429_084207.out.log (control10 supervisor: clean shutdown 06:52:25Z)
+  - data/runs/_sessions/m7_bootstrap_20260428_112552.out.log (4h soak21 supervisor)
 
-## 4) Key Results (числа з артефактів)
-
-m7_hot_rollup_latest.json (session_id=3d48b072, last_updated=2026-04-28T08:46:41Z):
-  simulation_backend: **rpc_fork**  ← Fix #1 evidence
-  events_seen_total: 1368 (delta +156)
-  fast_path_scored_total: 344 (delta +9 → in MARKET_QUIET threshold)
-  sim_attempted_total: 7
-  sim_passed_total: 4
-  submit_ready_total: 0
-  roundtrip_attempted_total: 4
-  roundtrip_success_total: 4
+## 4) Key Results
+m7_hot_rollup_latest (control10, b4e231a0):
+  simulation_backend: rpc_fork
+  last_updated: 2026-04-29T06:52:13Z
+  events_seen_total: 2354 (cumulative)
+  fast_path_scored_total: 389 (cumulative; +0 fresh delta)
+  sim_attempted_total: 7 (cumulative; +0 fresh)
+  sim_passed_total: 4 (cumulative; +0 fresh)
+  roundtrip_attempted_total: 4 (cumulative; +0 fresh)
   roundtrip_profitable_total: 0
-  simulation_error_histogram top5:
-    - **PRE_SIM_SKIP:MISSING_SIZE_METADATA: 6**  ← Fix #6 (was 1 у попередньому soak; classifier active)
-    - REVERT:unknown:no_data: 2
-    - HTTP 403 Tenderly insufficient_permissions: 1 (cumulative-residual, no fresh delta)
-  external_provider_blocker_total: 0  ← Fix #2 evidence (no fresh provider blockers under rpc_fork)
-  external_provider_blocker_histogram: None (поле не сформувалось бо delta=0; class шкала готова коли події з'являться)
-  pre_sim_skip_samples_total: 5  ← Fix #6 evidence
-  pre_sim_skip_samples_recent[0]: {reason: MISSING_SIZE_METADATA, missing_fields: [token_in_decimals, best_sweep_size_wei, size_usd_estimate], session_id: 3d48b072, sample_updated_at: 2026-04-28T08:46:41Z}
-  bridge_focused_pool_count_last: 50
-  hot_seen_unresolved_pool_count: 0
+  external_provider_blocker_total: 0
+  windows_seen: 68
+  latency_budget:
+    samples_total: 0    # quiet 10-min control window
+    p50_ms / p90_ms / p99_ms: null
+    target_ms: 200.0
+    within_target_pct: null
+    stage_breakdown: null
+    keys_present: SCHEMA OK (8 required keys)
+  submit_blocker_histogram (cumulative from soak21):
+    SCORER_SIM_DIVERGENCE:2424.7584->-9988.8760: 3
+    SCORER_SIM_DIVERGENCE:2441.8093->-9988.8592: 1
+    ROUNDTRIP_NOT_PROFITABLE: 4
+  simulation_error_histogram:
+    PRE_SIM_SKIP:MISSING_SIZE_METADATA: 8
+    REVERT:unknown:no_data: 2
+    HTTP 403 (legacy): 1
 
-reviewer verdict (with QUIET_OK + anchor=last_updated):
-  production_lane_ok: False (NO_FRESH_SIM_PASSED, NO_FRESH_ROUNDTRIP_ATTEMPTED)
-  **simulation_backend: rpc_fork**  ← Fix #3 evidence (новий рядок у verdict)
-  **external_provider_blocker_total: 0**  ← Fix #3 evidence
-  fresh_sim_failed_samples: 0
-  OVERALL_ACCEPTANCE: FAIL — **MARKET_QUIET_BLOCKED**, не CODE_REGRESSION
-
-supervisor status (sample): `5/5 alive, ... cycles_completed=K, clean_restarts=K, crash_restarts=0` ← Fix #7 evidence
+reviewer_session_deltas (3d48b072 → b4e231a0 cumulative across both runs):
+  events_seen: +986
+  fast_path_scored: +45
+  profit_guard_passed: +2
+  sim_attempted/passed/roundtrip/submit_ready: +0
+  external_provider_blocker_total: +0
 
 ## 4.1) Theoretical Net Profit
-**Не застосовно.** MARKET_QUIET window: roundtrip_profitable_total=0, signals delta=0. Фікс-список не претендує на profit unlock — лише на correctness/observability/honesty гарантії.
+not_applicable: signals_count=0 (no profitable roundtrips); cost_model not invoked; mode=paper_simulated.
 
 ## 5) Contract Checks
-unit tests pass: OK (4298 passed, 0 regressions, 11 нових тестів вже були locked у попередній ітерації)
-rolling discipline (canonical paths): OK
-v2.x provenance contract: OK (run_timestamp, code_identity, no runs_by_code_sha)
-runtime artifacts not committed: OK (data/runs у .gitignore)
-new contracts (locked):
-  - `simulation_backend=rpc_fork` echoed in reviewer verdict header: OK
-  - `external_provider_blocker_histogram` ∈ rollup keys when classified events occur: OK
-  - `production_profit_guard` ∈ /api/summary.current_scan: OK (block emitted)
-  - `pre_sim_skip_samples_recent` ring у rollup: OK (5 samples this soak)
-  - supervisor status wording split: OK (cycles_completed/clean_restarts/crash_restarts)
+status/reasons consistency: OK
+rolling discipline (M7-specific): OK
+v2.x provenance contract: OK (no runs_by_code_sha; ts-only code_identity)
+runtime artifacts not committed: OK
+DEV_REPORT timestamp matches rollup: OK (2026-04-29T06:52:13Z = m7_hot_rollup_latest.last_updated)
 
 ## 6) Blocker Classification
-code_blocker: LOW (4298 unit tests PASS, no regressions)
-data_collection_blocker: LOW (rpc_fork stable; PROD lane archive OK; no fresh external_provider blockers; PRE_SIM_SKIP samples now visible)
-market_window_blocker: HIGH (fast_path_scored delta below reviewer threshold у 30-хв вікні; reviewer thresholds потребують довшого активного soak для PASS)
+| Blocker Type | Level | Meaning |
+|--------------|-------|---------|
+| CODE | LOW | 4305 tests pass; safety PASS; rpc_fork pinned; latency_budget now on both per-iteration and rollup surfaces |
+| DATA_COLLECTION | LOW | external_provider_blocker_total=0; archive head healthy; control10 saw 16 fresh events |
+| MARKET_WINDOW | HIGH-MEDIUM | 10-min control was quiet (0 fresh fast scores); 4h soak21 cumulative shows SCORER_SIM_DIVERGENCE as primary economic blocker (fast-path +2424–2441 bps vs rpc_fork sim −9988 bps) |
 
-## 6.1) Blockers / Risks (max 5)
-- Production-readiness blocked by economics: `roundtrip_profitable_total=0`, `submit_ready_total=0` — потрібен ≥2-год soak у активний market window.
-- MARKET_QUIET у двох соаках поспіль (30 хв) показує що fast_path_scored threshold reviewer-а (20) не досягається без довшого вікна.
-- 1× cumulative HTTP 403 Tenderly у sim_err_hist (residual від попередніх соаків); fresh delta = 0 під rpc_fork. Tenderly — лише optional debug/canary, не closure evidence.
-- 6× MISSING_SIZE_METADATA у новому soak — sample-ring populated; upstream sizing для token_in_decimals/sweep/usd_estimate потребує окремого fix.
-- Steps 7–9 (factory enumeration, tiered topology, per-step metrics) DEFERRED — потрібні окремі ітерації.
+## 7) Production Readiness
+Production criteria: sim_passed > 0 AND submit_ready > 0 AND roundtrip_profitable_total > 0.
+Current: cumulative sim_passed=4, submit_ready=0, roundtrip_profitable=0 → NOT PRODUCTION-READY.
+Fresh-session criteria from reviewer: NOT met (quiet 10-min window).
 
-## 7) Lead's Previous 10 Steps: Execution Map (post-soak19 fix-list)
-fix_01 (rpc_fork canonical default): DONE evidence: bootstrap_system.ps1 уже had `[ValidateSet] default rpc_fork`; soak rollup `simulation_backend=rpc_fork`
-fix_02 (Tenderly 403/429/credit external blocker): DONE evidence: `external_provider_blocker_histogram`/`_total` емітуються в rollup; класифікатор покриває HTTP 403/429/credit/insufficient_funds
-fix_03 (reviewer simulation_backend echo): DONE evidence: reviewer output містить `simulation_backend = rpc_fork`, `external_provider_blocker_total = 0`
-fix_04 (verified_profitable!=production profit guard): DONE evidence: `production_profit_guard` block у `/api/summary.current_scan` з disclaimer і truth metric
-fix_05 (RPC health gate before soak): DONE evidence: `check_rpc_endpoints.py` PASS (chain_id 8453, archive head=45287427, newHeads 2.27s) перед soak
-fix_06 (MISSING_SIZE_METADATA samples): DONE evidence: `pre_sim_skip_samples_total=5`, sample[0] містить full schema з missing_fields list
-fix_07 (supervisor wording split): DONE evidence: `cycles_completed=K, clean_restarts=K, crash_restarts=M` рядок (стара версія писала просто `restarts:N`)
-fix_08 (factory enumeration): NO (deferred — архітектурний refactor у 5+ файлах)
-fix_09 (cold/warm/hot tiered topology): NO (deferred — окрема ітерація з власним soak)
-fix_10 (Status_M7.md update): DONE evidence: `docs/status/Status_M7.md` Status абзац оновлено з 2026-04-28 датою, simulation_backend=rpc_fork, crash_restarts=0, fix-list summary, MARKET_QUIET classification
-
-## 8) What I need from Lead now (1-3 пункти)
-question_1: Чи бажано наступну ітерацію присвятити одному з відкладених архітектурних кроків (8/9 — factory enumeration або tiered topology), і якщо так — у якому порядку?
-request_1: Запустити повний soak (≥2 год або 4 год) у активне market window для досягнення reviewer PASS із non-quiet deltas (поточні 30-хв вікна систематично попадають у quiet hour).
-request_2: Окремий ticket на upstream sizing fix для пар/пулів які потрапляють у `pre_sim_skip_samples_recent` (token_in_decimals/sweep/usd_estimate джерела).
+## 8) Reviewer Item Status After This Iteration
+- #1 rpc_fork canonical: VALIDATED (echoed in rollup + reviewer)
+- #2 Flashblocks pendingLogs: DEFERRED (own iteration + 10-min soak)
+- #3 eth_simulateV1 pending-state: DEFERRED (zipped with #2)
+- #4 latency_budget block: FULL (per-iteration + rollup; 4 contract tests)
+- #5 sizing fallbacks: VALIDATED (extended symbol/decimals + stable USD coarse)
+- #6 hot-path size sweep gate: VALIDATED (ARBY_HOT_SWEEP_ENABLE=1)
+- #7 factory enumeration: DEFERRED
+- #8 tiered cold/warm/hot universe: DEFERRED
+- #9 PRE_SIM_SKIP:SIZE_OVER_CAP: IMPLEMENTED with 3 unit tests; runtime trigger UNVERIFIED (cap=50 control was quiet)
+- #10 next-step procedure: 10-min control run after each P0 fix; long soak only after fresh SCORER_SIM_DIVERGENCE disappears
 
 ## Session Completion
-session_goal: Виконати усі 10 reviewer fix steps, провести 30-хв контрольний soak із rpc_fork pinned, оновити Status_M7.md та DEV_REPORT, запустити check_repo_safety.
-goal_status: REACHED
+session_goal: Fix DEV_REPORT semantic inconsistency, lift Fix #4 to rollup surface, run control10 with cap=50 to attempt runtime verification of Fix #9, name SCORER_SIM_DIVERGENCE as primary P0.
+goal_status: BLOCKED
 close_allowed: true
-remaining_blockers: none for current scope; deferred items (fix #8 factory enumeration, fix #9 tiered topology) tracked.
+remaining_blockers: SCORER_SIM_DIVERGENCE (P0 economic blocker) — fast-path predicts +2424/+2441 bps vs rpc_fork sim −9988 bps for the same candidates. Fix #9 runtime path still pending — needs an active-window control to actually exercise SIZE_OVER_CAP. Items #2/#3/#7/#8 still architectural-DEFERRED per CLAUDE.md §1.2.
 evidence_session_run_dirs:
-  - data/runs/_rolling (m7_hot_rollup session_id=3d48b072 last_updated=2026-04-28T08:46:41Z, simulation_backend=rpc_fork)
-  - data/runs/_sessions/m7_bootstrap_20260428_101659.out.log
-primary_blocker_of_session: 10 reviewer issues post-soak19 (rpc_fork not pinned, Tenderly errors not classified, simulation_backend not echoed, verified_profitable inflation, no RPC gate, no MISSING_SIZE_METADATA samples, ambiguous restarts wording, Status_M7 stale)
-blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED (8/10 закрито кодом і артефактами; 2 deferred з причиною)
+  - data/runs/_rolling/m7_hot_rollup_latest.json (session_id=b4e231a0, last_updated=2026-04-29T06:52:13Z; rollup latency_budget block present)
+  - data/runs/_sessions/m7_bootstrap_20260429_084207.out.log (control10 supervisor log)
+primary_blocker_of_session: SCORER_SIM_DIVERGENCE
+blocker_status_before: UNRESOLVED
+blocker_status_after: BLOCKED
 docs_reread_confirmed: true

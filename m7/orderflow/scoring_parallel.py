@@ -610,14 +610,27 @@ def score_backrun_live_parallel(
         # being false when per-event enrichment was skipped due to cache hit.
         _token_in_dec = get_cached_decimals(token_in_addr)
     if _token_in_dec is None:
-        # Well-known stablecoin heuristic (symbol-based)
+        # Well-known stablecoin/wrapped-asset heuristic (symbol-based).
+        # Reviewer post-soak19 fix #5: extended symbol list (DAI/WETH/cbBTC/
+        # cbETH/wstETH/PYUSD/USDbC) so MISSING_SIZE_METADATA upstream coverage
+        # improves before reaching execution_gate.
         _in_sym = _ats.get(token_in_addr.lower(), "")
-        if _in_sym.upper() in ("USDC", "USDT", "USDC.e", "USDT.e"):
+        _sym_upper = _in_sym.upper()
+        if _sym_upper in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "PYUSD"):
             _token_in_dec = 6
-        elif _in_sym.upper() in ("WBTC",):
+        elif _sym_upper in ("WBTC", "CBBTC", "TBTC"):
             _token_in_dec = 8
-    _norm_source = "decimal_only" if _token_in_dec is not None else "fallback_18"
-    _effective_dec = _token_in_dec if _token_in_dec is not None else 18
+        elif _sym_upper in ("WETH", "ETH", "DAI", "CBETH", "WSTETH", "RETH", "FRAX"):
+            _token_in_dec = 18
+    # Reviewer post-soak19 fix #5: final EVM-default fallback so
+    # ``token_in_decimals`` is always populated downstream. Recorded with an
+    # explicit source so observability stays honest about inference quality.
+    if _token_in_dec is not None:
+        _norm_source = "decimal_only"
+    else:
+        _token_in_dec = 18
+        _norm_source = "default_18_inferred"
+    _effective_dec = _token_in_dec
     MIN_BACKRUN_WEI, MAX_BACKRUN_WEI = _normalized_bounds(_effective_dec)
     MIN_BACKRUN_WEI = max(MIN_BACKRUN_WEI, get_min_profitable_size_wei(chain, _effective_dec))
 
@@ -631,6 +644,16 @@ def score_backrun_live_parallel(
     if oracle_result and oracle_result.get("token_in_oracle_usd"):
         _price = oracle_result["token_in_oracle_usd"]
         _size_usd = round(backrun_size_wei / (10 ** _effective_dec) * _price, 2)
+    # Reviewer post-soak19 fix #5: stablecoin USD coarse fallback so candidates
+    # with a recognised stable token still arrive at the gate with a non-null
+    # ``size_usd_estimate`` even when oracle is silent. Non-stables stay None.
+    if _size_usd is None:
+        _in_sym_us = _ats.get(token_in_addr.lower(), "").upper()
+        if _in_sym_us in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUSD", "FRAX"):
+            try:
+                _size_usd = round(backrun_size_wei / (10 ** _effective_dec) * 1.0, 2)
+            except Exception:
+                _size_usd = None
 
     # ── M7.A.5.21: Gas-floor prefilter ──────────────────────────────────
     _gas_floor_exceeded = False
@@ -1149,10 +1172,16 @@ def score_backrun_live_parallel(
         # ── M7.A.5.6: Bounded size sweep ───────────────────────────────
         # M7.A.5.24: Skip size sweep for registry_direct fast path
         # (minimal scoring: registry → local pricing → economics → done)
+        # Reviewer post-soak19 fix #6: ARBY_HOT_SWEEP_ENABLE=1 lifts the gate
+        # so registry_direct events also run a bounded sweep, populating
+        # ``size_sweep_metrics.events_with_sweep > 0`` for acceptance evidence.
+        # Default off keeps legacy hot-path latency budget intact.
         sweep_results = None
         best_sweep_net = None
         best_sweep_size = None
-        if _scoring_path != "registry_direct":
+        _hot_sweep_enable = os.getenv("ARBY_HOT_SWEEP_ENABLE", "0") == "1"
+        _sweep_allowed = (_scoring_path != "registry_direct") or _hot_sweep_enable
+        if _sweep_allowed:
             try:
                 sweep_results = _run_size_sweep(
                     event, rpc_url, token_in_addr, token_out_addr,

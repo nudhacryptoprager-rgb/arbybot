@@ -609,6 +609,59 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
             "stage_timings": None,
         }
 
+    # Reviewer post-soak19 fix #4: top-level latency budget block.
+    # Aggregates ``quote_pipeline_latency_ms`` across all scored fast-path
+    # events with p50/p90/p99 + within-target ratio. Target defaults to 200ms
+    # (Base Flashblocks block time) and is overridable via
+    # ``ARBY_LATENCY_TARGET_MS``. Stage breakdown reuses ``_stage_agg`` when
+    # available so the dashboard/reviewer can see WHERE time goes.
+    try:
+        _lb_samples_raw = [
+            r.quote_pipeline_latency_ms
+            for r in (fast_results or [])
+            if getattr(r, "quote_pipeline_latency_ms", None) is not None
+        ]
+        _lb_samples = sorted(_lb_samples_raw)
+        try:
+            _lb_target = float(os.getenv("ARBY_LATENCY_TARGET_MS", "200"))
+        except Exception:
+            _lb_target = 200.0
+
+        def _lb_pct(seq, p):
+            if not seq:
+                return None
+            idx = min(len(seq) - 1, int(len(seq) * p))
+            return round(seq[idx], 2)
+
+        _lb_within_pct = None
+        if _lb_samples:
+            _lb_within_count = sum(1 for v in _lb_samples if v <= _lb_target)
+            _lb_within_pct = round(_lb_within_count / len(_lb_samples) * 100.0, 2)
+
+        _lb_stage_ref = locals().get("_stage_agg") or None
+        hot["latency_budget"] = {
+            "samples_total": len(_lb_samples),
+            "p50_ms": _lb_pct(_lb_samples, 0.50),
+            "p90_ms": _lb_pct(_lb_samples, 0.90),
+            "p99_ms": _lb_pct(_lb_samples, 0.99),
+            "max_ms": round(_lb_samples[-1], 2) if _lb_samples else None,
+            "target_ms": _lb_target,
+            "within_target_pct": _lb_within_pct,
+            "stage_breakdown": _lb_stage_ref if _lb_stage_ref else None,
+        }
+    except Exception:
+        # Latency budget is observability-only; never block rollup emission.
+        hot["latency_budget"] = {
+            "samples_total": 0,
+            "p50_ms": None,
+            "p90_ms": None,
+            "p99_ms": None,
+            "max_ms": None,
+            "target_ms": 200.0,
+            "within_target_pct": None,
+            "stage_breakdown": None,
+        }
+
     # M7.A.5.41: Compact top-hot-candidate rows for auditability
     _TOP_HOT_N = 5
     if fast_results:
@@ -1769,6 +1822,89 @@ def _update_hot_rollup(
     else:
         _abt["blocker_class"] = "gas_economics_only"
     rollup["architecture_blocker_trace"] = _abt
+
+    # Reviewer post-soak21 fix #4 (PARTIAL → FULL): rollup-level latency_budget.
+    # Maintain a bounded session ring of ``quote_pipeline_latency_ms`` samples
+    # (capped at 500) so percentiles reflect cumulative hot-path behaviour
+    # rather than only the last window. Reset on session change.
+    try:
+        _RING_CAP = 500
+        _lb_ring_key = "_latency_budget_samples_ring"
+        if _prev_sid != _rio._SESSION_ID:
+            rollup[_lb_ring_key] = []
+        _ring = rollup.get(_lb_ring_key) or []
+        for _r in _fast:
+            _v = getattr(_r, "quote_pipeline_latency_ms", None)
+            if _v is not None:
+                try:
+                    _ring.append(float(_v))
+                except Exception:
+                    continue
+        if len(_ring) > _RING_CAP:
+            _ring = _ring[-_RING_CAP:]
+        rollup[_lb_ring_key] = _ring
+
+        try:
+            _lb_target_r = float(os.getenv("ARBY_LATENCY_TARGET_MS", "200"))
+        except Exception:
+            _lb_target_r = 200.0
+
+        def _pct_r(seq, p):
+            if not seq:
+                return None
+            idx = min(len(seq) - 1, int(len(seq) * p))
+            return round(seq[idx], 2)
+
+        _sorted = sorted(_ring)
+        _within_pct = None
+        if _sorted:
+            _within = sum(1 for v in _sorted if v <= _lb_target_r)
+            _within_pct = round(_within / len(_sorted) * 100.0, 2)
+
+        # Inline per-window stage breakdown for rollup (mean/max per stage),
+        # mirrors the per-iteration ``_stage_agg`` calculation in
+        # ``_write_hot_artifact``. Reflects this window only; cumulative
+        # ring is intentionally limited to total latency for memory budget.
+        _stage_keys_r = [
+            "registry_lookup_ms", "pool_state_ms", "local_math_ms",
+            "profit_guard_ms", "tx_build_ms", "calldata_ms",
+            "sign_or_bundle_prep_ms",
+        ]
+        _stage_breakdown_r: dict = {}
+        for _sk in _stage_keys_r:
+            _vals = []
+            for _r in _fast:
+                _stages = getattr(_r, "pipeline_stage_latency_ms", None)
+                if _stages and _sk in _stages:
+                    try:
+                        _vals.append(float(_stages.get(_sk, 0)))
+                    except Exception:
+                        continue
+            if _vals:
+                _stage_breakdown_r[f"mean_{_sk}"] = round(sum(_vals) / len(_vals), 2)
+                _stage_breakdown_r[f"max_{_sk}"] = round(max(_vals), 2)
+
+        rollup["latency_budget"] = {
+            "samples_total": len(_sorted),
+            "p50_ms": _pct_r(_sorted, 0.50),
+            "p90_ms": _pct_r(_sorted, 0.90),
+            "p99_ms": _pct_r(_sorted, 0.99),
+            "max_ms": round(_sorted[-1], 2) if _sorted else None,
+            "target_ms": _lb_target_r,
+            "within_target_pct": _within_pct,
+            "stage_breakdown": _stage_breakdown_r if _stage_breakdown_r else None,
+        }
+    except Exception:
+        rollup["latency_budget"] = {
+            "samples_total": 0,
+            "p50_ms": None,
+            "p90_ms": None,
+            "p99_ms": None,
+            "max_ms": None,
+            "target_ms": 200.0,
+            "within_target_pct": None,
+            "stage_breakdown": None,
+        }
 
     try:
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)

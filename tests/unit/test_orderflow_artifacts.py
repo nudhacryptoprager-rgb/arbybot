@@ -3896,7 +3896,7 @@ class TestM7A540SizeValidCacheFallback:
         from m7.orderflow.scoring_parallel import score_backrun_live_parallel
         source = inspect.getsource(score_backrun_live_parallel)
         cache_idx = source.find("get_cached_decimals")
-        heuristic_idx = source.find("Well-known stablecoin heuristic")
+        heuristic_idx = source.find("Well-known stablecoin")
         assert cache_idx > 0
         assert heuristic_idx > 0
         assert cache_idx < heuristic_idx, "cached decimals must be tried before heuristic"
@@ -4713,3 +4713,205 @@ class TestVerifiedProfitableDivergenceOverride:
         art = self._build_artifact(sim_passed=False, submit_blocker="SIM_FAILED:revert")
         for c in self._candidates(art):
             assert c["verified_profitable"] is False
+
+
+# ===========================================================================
+# Reviewer post-soak19 fix #4: latency_budget rollup contract
+# ===========================================================================
+
+
+class TestLatencyBudgetRolloutContract:
+    """`latency_budget` block must exist in m7_hot_latest with required keys.
+
+    Reviewer rule: aggregator surfaces p50/p90/p99 of pipeline latency and
+    a within-target ratio so dashboard/reviewer can detect when the hot path
+    falls outside the Base 200ms Flashblock window.
+    """
+
+    REQUIRED_KEYS = {
+        "samples_total", "p50_ms", "p90_ms", "p99_ms",
+        "max_ms", "target_ms", "within_target_pct", "stage_breakdown",
+    }
+
+    def _write(self, fast_results=None):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from scripts.m7a_orderflow_loop import _write_hot_artifact
+
+        artifact = {"results": [], "events_count": 0, "_raw_results": []}
+        with tempfile.TemporaryDirectory() as td:
+            hot_path = Path(td) / "m7_hot_latest.json"
+            with patch("scripts.m7a_orderflow_loop._HOT_ARTIFACT_PATH", str(hot_path)), \
+                 patch("m7.orderflow.runtime_io._HOT_ARTIFACT_PATH", str(hot_path)):
+                _write_hot_artifact(artifact, iteration=1, fast_results=fast_results)
+            return json.loads(hot_path.read_text(encoding="utf-8"))
+
+    def test_latency_budget_block_present_when_no_fast_results(self):
+        hot = self._write(fast_results=None)
+        assert "latency_budget" in hot
+        lb = hot["latency_budget"]
+        assert self.REQUIRED_KEYS <= set(lb.keys())
+        assert lb["samples_total"] == 0
+        assert lb["p50_ms"] is None
+        assert lb["target_ms"] == 200.0
+
+    def test_latency_budget_percentiles_with_results(self):
+        fast = [
+            _make_result(
+                event_id=f"e{i}",
+                best_backrun_net_bps=1.0,
+                route_viable=True,
+                profit_guard_passed=True,
+                quote_pipeline_latency_ms=float(50 + i * 10),
+                scoring_path="hot_fast",
+            )
+            for i in range(10)
+        ]
+        hot = self._write(fast_results=fast)
+        lb = hot["latency_budget"]
+        assert lb["samples_total"] == 10
+        assert lb["p50_ms"] is not None
+        assert lb["p90_ms"] is not None
+        assert lb["p99_ms"] is not None
+        # Sorted samples 50..140; p50 idx=5 -> 100, p90 idx=9 -> 140
+        assert lb["p50_ms"] == 100.0
+        assert lb["p99_ms"] == 140.0
+        # All samples <= 200ms target
+        assert lb["within_target_pct"] == 100.0
+
+
+# ===========================================================================
+# Reviewer post-soak19 fix #9: SIZE_OVER_CAP price-impact proxy
+# ===========================================================================
+
+
+class TestPreSimSizeOverCap:
+    """ARBY_MAX_TRADE_USD>0 caps trades whose size_usd_estimate exceeds it.
+
+    Default off (cap=0) is backward-compatible. When set, candidates skip
+    with ``PRE_SIM_SKIP:SIZE_OVER_CAP`` and a sample is captured in the
+    bounded ring for observability.
+    """
+
+    def _make_br(self, **overrides):
+        from m7.orderflow.contracts import BackrunResult
+        defaults = dict(
+            event_id="test_cap",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=150.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
+            token_in_decimals=18,
+        )
+        defaults.update(overrides)
+        return BackrunResult(**defaults)
+
+    def _run(self, br, monkeypatch, *, cap="0"):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        def _mock_sim(*a, **kw):
+            return SimulationResult(success=True, gas_used=150000, backend="anvil")
+
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+        )
+        monkeypatch.setenv("ARBY_MAX_TRADE_USD", cap)
+        return run_execution_gate([br], chain="base")
+
+    def test_cap_zero_admits_large_size(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=1_000_000.0)
+        gate = self._run(br, monkeypatch, cap="0")
+        assert gate.sim_attempted == 1
+
+    def test_cap_blocks_oversized_candidate(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=10_000.0)
+        gate = self._run(br, monkeypatch, cap="500")
+        assert gate.sim_attempted == 0
+        assert any(
+            e == "PRE_SIM_SKIP:SIZE_OVER_CAP" for e in gate.sim_errors
+        )
+        assert br.submit_blocker == "PRE_SIM_SKIP:SIZE_OVER_CAP"
+        assert any(
+            s.get("reason") == "SIZE_OVER_CAP" for s in gate.pre_sim_skip_samples
+        )
+
+    def test_cap_admits_within_size(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=100.0)
+        gate = self._run(br, monkeypatch, cap="500")
+        assert gate.sim_attempted == 1
+
+# ===========================================================================
+# Reviewer post-soak21 fix #4 (PARTIAL → FULL): rollup-level latency_budget
+# ===========================================================================
+
+
+class TestRollupLatencyBudgetContract:
+    """`latency_budget` block must exist in m7_hot_rollup_latest with
+    cumulative percentiles, target_ms, within_target_pct, and stage breakdown.
+    """
+
+    REQUIRED_KEYS = {
+        "samples_total", "p50_ms", "p90_ms", "p99_ms",
+        "max_ms", "target_ms", "within_target_pct", "stage_breakdown",
+    }
+
+    def _run(self, fast_results, tmp_path, monkeypatch):
+        import json
+        from unittest.mock import patch
+
+        from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        with patch("m7.orderflow.runtime_io._HOT_ROLLUP_PATH", str(rollup_path)):
+            _update_hot_rollup(
+                events_count=len(fast_results or []),
+                fast_results=fast_results,
+                guard_results=None,
+                bridge_diagnostics=None,
+                chain="base",
+            )
+        return json.loads(rollup_path.read_text(encoding="utf-8"))
+
+    def test_rollup_latency_budget_present_empty(self, tmp_path, monkeypatch):
+        rollup = self._run(fast_results=[], tmp_path=tmp_path, monkeypatch=monkeypatch)
+        assert "latency_budget" in rollup
+        lb = rollup["latency_budget"]
+        assert self.REQUIRED_KEYS <= set(lb.keys())
+        assert lb["samples_total"] == 0
+        assert lb["target_ms"] == 200.0
+
+    def test_rollup_latency_budget_percentiles(self, tmp_path, monkeypatch):
+        fast = [
+            _make_result(
+                event_id=f"e{i}",
+                best_backrun_net_bps=1.0,
+                route_viable=True,
+                profit_guard_passed=True,
+                quote_pipeline_latency_ms=float(50 + i * 10),
+                scoring_path="hot_fast",
+            )
+            for i in range(10)
+        ]
+        rollup = self._run(fast_results=fast, tmp_path=tmp_path, monkeypatch=monkeypatch)
+        lb = rollup["latency_budget"]
+        assert lb["samples_total"] == 10
+        assert lb["p50_ms"] == 100.0
+        assert lb["p99_ms"] == 140.0
+        assert lb["within_target_pct"] == 100.0

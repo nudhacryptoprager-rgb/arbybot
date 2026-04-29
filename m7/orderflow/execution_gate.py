@@ -1336,6 +1336,30 @@ def run_execution_gate(
                             "venue": getattr(r, "venue", None) or getattr(r, "best_venue", None),
                         })
 
+            # Reviewer post-soak19 fix #9: optional hard cap on trade size in
+            # USD. Default OFF (cap=0). When ARBY_MAX_TRADE_USD>0, candidates
+            # whose ``size_usd_estimate`` exceeds the cap skip with
+            # ``PRE_SIM_SKIP:SIZE_OVER_CAP``; this acts as a price-impact /
+            # TVL-aware proxy until per-pool depth is wired in. Strictly
+            # additive to existing rejects and never blocks when cap<=0.
+            if _skip_reason is None:
+                try:
+                    _max_trade_usd = float(os.getenv("ARBY_MAX_TRADE_USD", "0"))
+                except (TypeError, ValueError):
+                    _max_trade_usd = 0.0
+                if _max_trade_usd > 0:
+                    _size_usd_chk = getattr(r, "size_usd_estimate", None)
+                    if _size_usd_chk is not None and _size_usd_chk > _max_trade_usd:
+                        _skip_reason = "PRE_SIM_SKIP:SIZE_OVER_CAP"
+                        if len(gate.pre_sim_skip_samples) < 50:
+                            gate.pre_sim_skip_samples.append({
+                                "reason": "SIZE_OVER_CAP",
+                                "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None),
+                                "pool": getattr(r, "pool_address", None) or getattr(r, "best_pool", None),
+                                "size_usd_estimate": _size_usd_chk,
+                                "cap_usd": _max_trade_usd,
+                            })
+
             if _skip_reason is not None:
                 gate.sim_errors.append(_skip_reason)
                 if hasattr(r, "sim_attempted"):

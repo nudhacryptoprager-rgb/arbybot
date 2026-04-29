@@ -566,6 +566,24 @@ def build_summary_payload(
                 "roundtrip_profitable_total > 0 in m7_hot_rollup."
             ),
         },
+        # Reviewer post-soak19 fix #4: surface event-pipeline latency budget
+        # so dashboard readers see whether the hot path stays inside the Base
+        # 200ms Flashblock window. Sourced verbatim from
+        # ``m7_hot_rollup.latency_budget`` to keep one source of truth.
+        "latency_budget": (
+            rollup.get("latency_budget")
+            if isinstance(rollup.get("latency_budget"), dict)
+            else {
+                "samples_total": 0,
+                "p50_ms": None,
+                "p90_ms": None,
+                "p99_ms": None,
+                "max_ms": None,
+                "target_ms": 200.0,
+                "within_target_pct": None,
+                "stage_breakdown": None,
+            }
+        ),
         "top_spreads": top_spreads,
         "reject_buckets": reject_buckets,
         "session_ws_recv_error_total": _safe_int(
