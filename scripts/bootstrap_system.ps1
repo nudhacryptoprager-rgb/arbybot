@@ -34,14 +34,22 @@ param(
     # snapshot. If the lane never writes a fresh rollup in that window
     # the supervisor is killed so the operator does not waste a full
     # soak on a stuck WS connection. Set to 0 to disable.
-    [int]$RollupProbeSeconds = 90,
+    # Reviewer post-1h-soak fix: bumped default from 90s -> 180s. Cold
+    # warmup of the bridge/registry can take 120-150s on Base before
+    # the first hot-rollup advance, and the previous 90s default
+    # frequently false-aborted healthy supervisors.
+    [int]$RollupProbeSeconds = 180,
     # post-2h-soak step #5: heartbeat-aware probe. When set (>0), if the
     # rollup has not advanced by $RollupProbeSeconds but the supervisor
     # log file has been written-to within the last $HeartbeatWindowSeconds,
     # extend the probe up to $RollupProbeSeconds * 2 instead of hard
     # aborting. This avoids killing healthy long-warmup runs on idle
     # markets while still catching truly stuck WS subscriptions.
-    [int]$RollupProbeHeartbeatSeconds = 30,
+    # Reviewer post-1h-soak fix: bumped 30s -> 60s. Hot rollup writes on
+    # event windows; on cold-warmup the bridge can stay quiet for 45-60s
+    # before the first PTT event, which previously false-failed dual
+    # liveness even when the supervisor was healthy.
+    [int]$RollupProbeHeartbeatSeconds = 60,
     [switch]$NoRollupProbe)
 
 $ErrorActionPreference = 'Stop'
@@ -213,33 +221,72 @@ if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
                 }
             } catch {}
         }
-        # post-2h-soak step #5: heartbeat extension. If at the original
-        # deadline we still haven't seen a rollup advance, but the log
-        # file has been written to within $RollupProbeHeartbeatSeconds,
-        # treat the run as healthy-but-warming-up and double the probe
-        # window once.
+        # post-2h-soak step #5 + post-20m-control step #1: heartbeat
+        # extension. If at the original deadline we still haven't seen a
+        # rollup advance, the probe extends ONCE only when BOTH proxies
+        # of liveness agree:
+        #   (a) supervisor log has been written within $RollupProbeHeartbeatSeconds
+        #       (proves the supervisor process is alive), AND
+        #   (b) the hot rollup file mtime has advanced within the same
+        #       window (proves the hot-lane writer is alive even if
+        #       last_updated has not yet crossed the baseline value —
+        #       e.g., heartbeat-on-error windows on a quiet feed).
+        # The reviewer flagged log-only heartbeat as insufficient because
+        # a dead hot-lane writer can still leave the supervisor logging.
         if ($probeElapsed -ge $RollupProbeSeconds -and $maxProbe -eq $RollupProbeSeconds -and $RollupProbeHeartbeatSeconds -gt 0) {
             $logHealthy = $false
+            $rollupHealthy = $false
             try {
                 if (Test-Path $logFile) {
                     $logLastWrite = (Get-Item $logFile).LastWriteTimeUtc
-                    $ageSec = ((Get-Date).ToUniversalTime() - $logLastWrite).TotalSeconds
-                    if ($ageSec -le $RollupProbeHeartbeatSeconds) {
+                    $logAgeSec = ((Get-Date).ToUniversalTime() - $logLastWrite).TotalSeconds
+                    if ($logAgeSec -le $RollupProbeHeartbeatSeconds) {
                         $logHealthy = $true
                     }
                 }
             } catch {}
-            if ($logHealthy) {
+            try {
+                if (Test-Path $rollupPath) {
+                    $rollupLastWrite = (Get-Item $rollupPath).LastWriteTimeUtc
+                    $rollupAgeSec = ((Get-Date).ToUniversalTime() - $rollupLastWrite).TotalSeconds
+                    if ($rollupAgeSec -le $RollupProbeHeartbeatSeconds) {
+                        $rollupHealthy = $true
+                    }
+                }
+            } catch {}
+            if ($logHealthy -and $rollupHealthy) {
                 $maxProbe = $RollupProbeSeconds * 2
-                Write-Step ("rollup probe: heartbeat OK (log written within " + $RollupProbeHeartbeatSeconds + "s); extending probe to " + $maxProbe + "s")
+                Write-Step ("rollup probe: dual heartbeat OK (log+rollup written within " + $RollupProbeHeartbeatSeconds + "s); extending probe to " + $maxProbe + "s")
+            } elseif ($logHealthy -and -not $rollupHealthy) {
+                Write-Step ("rollup probe: log heartbeat OK but rollup writer silent for >" + $RollupProbeHeartbeatSeconds + "s; NOT extending probe (hot lane suspected dead)")
             }
         }
     }
     if (-not $progressed) {
         Write-Step ("rollup probe: FAIL — no fresh rollup write in " + $RollupProbeSeconds + "s; stopping supervisor PID " + $proc.Id)
-        # soak18 step 7: graceful stop first (CloseMainWindow + 10s
-        # wait so supervisor can flush m7_session_state.json and close
-        # WS cleanly), then -Force only if it ignores the request.
+        # post-1h-soak fix: enumerate descendant PIDs BEFORE stopping the
+        # supervisor; otherwise children orphan and keep writing to the
+        # shared rollup, masking the next session's writes (root cause of
+        # iter5 false-stalled session_id). Walk Win32_Process tree.
+        $descendantPids = @()
+        try {
+            $allProcs = Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue |
+                Select-Object ProcessId, ParentProcessId
+            $queue = [System.Collections.Queue]::new()
+            $queue.Enqueue([int]$proc.Id)
+            while ($queue.Count -gt 0) {
+                $parent = [int]$queue.Dequeue()
+                foreach ($p in $allProcs) {
+                    if ([int]$p.ParentProcessId -eq $parent) {
+                        $descendantPids += [int]$p.ProcessId
+                        $queue.Enqueue([int]$p.ProcessId)
+                    }
+                }
+            }
+        } catch {}
+        # soak18 step 7: graceful stop supervisor first (CloseMainWindow
+        # + 10s wait so it can flush m7_session_state.json and close WS
+        # cleanly), then -Force only if it ignores the request.
         $gracefulStopped = $false
         try {
             $closed = $proc.CloseMainWindow()
@@ -258,6 +305,23 @@ if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
         if (-not $gracefulStopped) {
             Write-Step ("rollup probe: graceful stop ignored; escalating to -Force")
             try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch {}
+        }
+        # Now reap descendants — supervisor's graceful stop should have
+        # ended them, but anything still alive must be force-killed to
+        # prevent orphan writers polluting the next run's rollup.
+        if ($descendantPids.Count -gt 0) {
+            $stillAlive = @()
+            foreach ($cpid in ($descendantPids | Sort-Object -Unique)) {
+                try {
+                    if (Get-Process -Id $cpid -ErrorAction SilentlyContinue) {
+                        Stop-Process -Id $cpid -Force -ErrorAction SilentlyContinue
+                        $stillAlive += $cpid
+                    }
+                } catch {}
+            }
+            if ($stillAlive.Count -gt 0) {
+                Write-Step ("rollup probe: force-killed " + $stillAlive.Count + " orphan child PIDs: " + ($stillAlive -join ','))
+            }
         }
         Write-Host ("BOOTSTRAP_ABORTED: rollup probe timed out (set -NoRollupProbe to skip).")
         exit 2

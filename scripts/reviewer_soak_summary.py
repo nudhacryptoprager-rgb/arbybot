@@ -203,6 +203,17 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
             f"FAST_PATH_SCORED_TOO_LOW={_fps_delta}<{_min_fps}"
             " (set ARBY_REVIEWER_QUIET_OK=1 to classify as MARKET_QUIET_BLOCKED)"
         )
+    # Reviewer post-20m-control fix #2: SCORING_BLACKHOLE detector.
+    # When the feed produced events but NONE of them reached fast-path
+    # scoring, the issue is in the bridge/admission funnel — distinct from
+    # quiet market. Surfaced as an explicit reason so operators do not
+    # confuse a scoring-funnel regression with low liquidity.
+    _events_delta = deltas.get("events_seen_total", 0)
+    if _events_delta > 0 and _fps_delta == 0:
+        reasons.append(
+            f"SCORING_BLACKHOLE events_seen_delta={_events_delta} "
+            f"fast_path_scored_delta=0 (bridge/admission funnel dropped all)"
+        )
     reasons.append(f"pre_sim_skip_total={pre_sim_hits}")
     return ok, ",".join(reasons)
 

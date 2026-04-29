@@ -998,6 +998,15 @@ def _update_hot_rollup(
     if _prev_sid != _rio._SESSION_ID:
         rollup["session"] = {"session_id": _rio._SESSION_ID, "session_started_at": ts}
     _sess = rollup["session"]
+    # Reviewer post-20m-control fix #7: surface session_started_at at the
+    # top level too so reviewer staleness logic does not need to dig into
+    # the nested ``session`` block. ``supervisor_end_utc`` is reset to
+    # None at session boundary; it is stamped by ``flush_rollup_shutdown``
+    # on clean exit. With both fields present, reviewers can compute
+    # staleness against the supervisor-end anchor instead of last_updated.
+    rollup["current_session_started_at"] = _sess.get("session_started_at")
+    if _prev_sid != _rio._SESSION_ID:
+        rollup["supervisor_end_utc"] = None
     _sess["session_windows_seen"] = _sess.get("session_windows_seen", 0) + 1
     _sess["session_events_seen_total"] = (
         _sess.get("session_events_seen_total", 0) + events_count
@@ -1143,6 +1152,21 @@ def _update_hot_rollup(
     # record it so reviewer can distinguish "no bridge coverage" from
     # "bridge hit but scoring dropped the candidate".
     _bridge_hits_win = int(_bd.get("bridge_pool_address_hit_count", 0) or 0)
+    # Reviewer post-20m-control fix #3: SCORING_BLACKHOLE artifact-level
+    # accounting. The post-20m soak showed events_seen +100 with
+    # fast_path_scored +0; without per-window classification it is
+    # impossible to tell whether the bridge dropped events because the
+    # pool universe was too narrow (NO_BRIDGE_HIT) or because the bridge
+    # hit but scoring rejected the candidate (BRIDGE_HIT_NOT_SCORED).
+    # These two top-level counters answer that question without a soak.
+    if events_count > 0 and len(_fast) == 0:
+        rollup["windows_events_without_fast_score_total"] = (
+            rollup.get("windows_events_without_fast_score_total", 0) + 1
+        )
+        if _bridge_hits_win == 0:
+            rollup["windows_events_without_bridge_hit_total"] = (
+                rollup.get("windows_events_without_bridge_hit_total", 0) + 1
+            )
     if _bridge_hits_win > 0 and len(_fast) == 0:
         _diag = rollup.get("bridge_hit_but_not_fast_scored") or {}
         _diag["windows"] = int(_diag.get("windows", 0) or 0) + 1
@@ -1940,14 +1964,24 @@ def _update_hot_rollup(
         logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
 
 
-def flush_rollup_shutdown(chain: str = "arbitrum_one") -> None:
+def flush_rollup_shutdown(
+    chain: str = "arbitrum_one",
+    is_supervisor_exit: bool = False,
+) -> None:
     """M7.E1.34h fix #6: stamp rollup with shutdown-flush timestamps.
 
     Called by loop_runner when the supervisor-managed child process
-    exits cleanly. Writes ``last_heartbeat_utc`` / ``last_updated`` /
-    ``shutdown_flush_at`` = now() so the reviewer staleness gate sees a
-    fresh rollup at supervisor end instead of the last mid-cycle stamp.
-    No counters are mutated.
+    exits cleanly (per-cycle clean exit). Writes ``last_heartbeat_utc``
+    / ``last_updated`` / ``shutdown_flush_at`` = now() so the reviewer
+    staleness gate sees a fresh rollup at supervisor end instead of
+    the last mid-cycle stamp. No counters are mutated.
+
+    Reviewer post-1h-soak fix: ``supervisor_end_utc`` is no longer
+    stamped here by default \u2014 child clean-exits happen every cycle
+    (~50s), and stamping ``supervisor_end_utc`` then mis-anchors the
+    reviewer's staleness window early in the run. Pass
+    ``is_supervisor_exit=True`` from the actual supervisor exit hook
+    (``mark_supervisor_end``) when the runtime is truly shutting down.
     """
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rollup: dict = {}
@@ -1962,9 +1996,26 @@ def flush_rollup_shutdown(chain: str = "arbitrum_one") -> None:
     rollup["last_heartbeat_utc"] = ts
     rollup["last_updated"] = ts
     rollup["shutdown_flush_at"] = ts
+    if is_supervisor_exit:
+        # Only the real supervisor exit hook may stamp this; child
+        # cycle clean-exits must NOT, otherwise the reviewer's stale
+        # anchor jumps to T+50s and FALSE-fails an entire long soak.
+        rollup["supervisor_end_utc"] = ts
     rollup.setdefault("chain", chain)
     try:
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:
         logger.debug("Failed to flush hot rollup at shutdown: %s", str(exc)[:80])
+
+
+def mark_supervisor_end(chain: str = "arbitrum_one") -> None:
+    """Reviewer post-1h-soak fix: explicit supervisor-exit hook.
+
+    Called from ``scripts/start_nonstop_runtime.py`` finally block on
+    the actual nonstop-runtime supervisor termination. Stamps
+    ``supervisor_end_utc`` and refreshes ``last_updated`` so the
+    reviewer staleness gate has a true supervisor-end anchor instead
+    of the last child cycle clean-exit timestamp.
+    """
+    flush_rollup_shutdown(chain=chain, is_supervisor_exit=True)
 

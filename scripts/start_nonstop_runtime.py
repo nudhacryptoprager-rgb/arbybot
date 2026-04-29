@@ -438,6 +438,14 @@ def main():
             f"  Supervisor finished at "
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
         )
+        # Reviewer post-1h-soak fix: stamp supervisor_end_utc on the
+        # rollup ONLY at the real nonstop-runtime supervisor exit, not
+        # on per-cycle child clean-exits.
+        try:
+            from m7.orderflow.hot_runtime_artifacts import mark_supervisor_end
+            mark_supervisor_end(chain=args.chain)
+        except Exception as _exc_se:
+            print(f"  [supervisor] mark_supervisor_end failed: {str(_exc_se)[:120]}")
 
     return 0
 

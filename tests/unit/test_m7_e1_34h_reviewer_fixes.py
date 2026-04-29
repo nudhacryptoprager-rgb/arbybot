@@ -247,3 +247,149 @@ class TestSimFailedSamplesSessionPrune:
         assert ring[0]["error"] == "OUT_OF_GAS"
         # sim_failed_samples_total still accumulates across sessions.
         assert rollup["sim_failed_samples_total"] == 3
+
+
+class TestSupervisorEndAndSessionStartedAtTopLevel:
+    """Reviewer post-20m-control fix #7: surface session_started_at and
+    supervisor_end_utc at the top level of the rollup so reviewer
+    staleness logic does not need to compute against last_updated alone.
+    """
+
+    def test_current_session_started_at_mirrors_session_block(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-X", raising=False)
+
+        hra._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=None,
+            bridge_diagnostics=None, chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup["current_session_started_at"] == rollup["session"]["session_started_at"]
+
+    def test_supervisor_end_utc_starts_none_and_stamped_on_flush(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-Y", raising=False)
+
+        hra._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=None,
+            bridge_diagnostics=None, chain="base",
+        )
+        rollup_before = json.loads(rollup_path.read_text(encoding="utf-8"))
+        # supervisor_end_utc explicitly initialised to None at session start.
+        assert rollup_before["supervisor_end_utc"] is None
+
+        # Per-cycle child clean-exit MUST NOT stamp supervisor_end_utc.
+        hra.flush_rollup_shutdown(chain="base")
+        rollup_after_child = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup_after_child["supervisor_end_utc"] is None
+        assert rollup_after_child["shutdown_flush_at"] is not None
+
+        # Real supervisor exit hook stamps supervisor_end_utc.
+        hra.mark_supervisor_end(chain="base")
+        rollup_after_sv = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup_after_sv["supervisor_end_utc"] is not None
+        assert rollup_after_sv["supervisor_end_utc"] == rollup_after_sv["shutdown_flush_at"]
+
+    def test_supervisor_end_utc_resets_to_none_on_new_session(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+
+        # Session A: real supervisor exit (not per-cycle flush).
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-A", raising=False)
+        hra._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=None,
+            bridge_diagnostics=None, chain="base",
+        )
+        hra.mark_supervisor_end(chain="base")
+        rollup_after_a = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup_after_a["supervisor_end_utc"] is not None
+
+        # Session B starts: supervisor_end_utc must reset to None.
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-B", raising=False)
+        hra._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=None,
+            bridge_diagnostics=None, chain="base",
+        )
+        rollup_b = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup_b["supervisor_end_utc"] is None
+        assert rollup_b["session"]["session_id"] == "sid-B"
+
+
+class TestScoringBlackholeCounters:
+    """Reviewer post-20m-control fix #3: top-level counters for windows
+    with events but no fast scoring, classified by whether the bridge
+    even matched a pool. Lets reviewer differentiate NO_BRIDGE_HIT (pool
+    universe too narrow) from BRIDGE_HIT_NOT_SCORED (admission filter
+    rejected) without per-window log archaeology.
+    """
+
+    def test_no_bridge_hit_increments_both_counters(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-bh-1", raising=False)
+
+        hra._update_hot_rollup(
+            events_count=5, fast_results=[], guard_results=None,
+            bridge_diagnostics={"bridge_pool_address_hit_count": 0},
+            chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup["windows_events_without_fast_score_total"] == 1
+        assert rollup["windows_events_without_bridge_hit_total"] == 1
+
+    def test_bridge_hit_but_not_scored_only_increments_outer(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-bh-2", raising=False)
+
+        hra._update_hot_rollup(
+            events_count=5, fast_results=[], guard_results=None,
+            bridge_diagnostics={"bridge_pool_address_hit_count": 2},
+            chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        # Outer counter increments (no fast score) but the bridge-hit
+        # subcounter MUST NOT increment (we DID get a bridge hit).
+        assert rollup["windows_events_without_fast_score_total"] == 1
+        assert rollup.get("windows_events_without_bridge_hit_total", 0) == 0
+
+    def test_zero_events_does_not_count(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-bh-3", raising=False)
+
+        hra._update_hot_rollup(
+            events_count=0, fast_results=[], guard_results=None,
+            bridge_diagnostics={"bridge_pool_address_hit_count": 0},
+            chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        # No events => neither counter must increment.
+        assert rollup.get("windows_events_without_fast_score_total", 0) == 0
+        assert rollup.get("windows_events_without_bridge_hit_total", 0) == 0
