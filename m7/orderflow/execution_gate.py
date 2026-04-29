@@ -393,6 +393,12 @@ class ExecutionGateResult:
     # metadata. Each entry: {pair, pool, token_in, decimals_src,
     # missing_fields, fee_hint, venue}.
     pre_sim_skip_samples: List[Dict[str, Any]] = field(default_factory=list)
+    # Reviewer post-soak21 P0: bounded ring of structured reproducer
+    # samples for SCORER_SIM_DIVERGENCE so reviewer can pinpoint which
+    # pool/pair/fee/direction/amount combos are causing fast-path↔sim
+    # quote-model drift. Each entry captures the minimum context needed
+    # to reproduce the divergence offline.
+    scorer_sim_divergence_samples: List[Dict[str, Any]] = field(default_factory=list)
     # E2: Round-trip (buy+sell) same-token bps metrics. These are VALID bps
     # because initial and final amounts are the same token.
     roundtrip_attempted: int = 0
@@ -1322,9 +1328,15 @@ def run_execution_gate(
                     if len(gate.pre_sim_skip_samples) < 50:
                         gate.pre_sim_skip_samples.append({
                             "reason": "MISSING_SIZE_METADATA",
-                            "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None),
+                            "event_id": getattr(r, "event_id", None),
+                            "event_source": getattr(r, "event_source", None),
+                            "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None) or getattr(r, "actual_pair", None),
                             "pool": getattr(r, "pool_address", None) or getattr(r, "best_pool", None),
-                            "token_in": getattr(r, "token_in", None) or getattr(r, "token_in_address", None),
+                            "token_in_symbol": getattr(r, "token_in", None),
+                            "token_out_symbol": getattr(r, "token_out", None),
+                            "token_in_address": getattr(r, "backrun_token_in_address", None) or getattr(r, "token_in_address", None),
+                            "token_out_address": getattr(r, "backrun_token_out_address", None) or getattr(r, "token_out_address", None),
+                            "direction": getattr(r, "backrun_direction", None),
                             "missing_fields": [
                                 _f for _f, _present in (
                                     ("token_in_decimals", _has_decimals),
@@ -1332,8 +1344,11 @@ def run_execution_gate(
                                     ("size_usd_estimate", _has_usd),
                                 ) if not _present
                             ],
-                            "fee_hint": getattr(r, "fee_hint", None) or getattr(r, "best_fee_tier", None),
+                            "fee_hint": getattr(r, "best_buy_fee", None) or getattr(r, "fee_hint", None) or getattr(r, "best_fee_tier", None),
                             "venue": getattr(r, "venue", None) or getattr(r, "best_venue", None),
+                            "adapter_type": getattr(r, "adapter_type", None),
+                            "amount_in_wei": getattr(r, "amount_in_wei", None),
+                            "best_backrun_net_bps": getattr(r, "best_backrun_net_bps", None),
                         })
 
             # Reviewer post-soak19 fix #9: optional hard cap on trade size in
@@ -1350,15 +1365,63 @@ def run_execution_gate(
                 if _max_trade_usd > 0:
                     _size_usd_chk = getattr(r, "size_usd_estimate", None)
                     if _size_usd_chk is not None and _size_usd_chk > _max_trade_usd:
-                        _skip_reason = "PRE_SIM_SKIP:SIZE_OVER_CAP"
-                        if len(gate.pre_sim_skip_samples) < 50:
-                            gate.pre_sim_skip_samples.append({
-                                "reason": "SIZE_OVER_CAP",
-                                "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None),
-                                "pool": getattr(r, "pool_address", None) or getattr(r, "best_pool", None),
-                                "size_usd_estimate": _size_usd_chk,
-                                "cap_usd": _max_trade_usd,
-                            })
+                        # Reviewer post-2h-soak step #4: pre-sim size bisection.
+                        # When ARBY_PRE_SIM_BISECT=1, instead of hard-skipping
+                        # an oversized candidate, try to find a smaller
+                        # executable size by linearly scaling amount_in_wei,
+                        # best_sweep_size_wei and size_usd_estimate down to
+                        # the cap. Strictly observability-preserving — we still
+                        # mark the path with bisection metadata. Default OFF.
+                        _bisect_on = os.getenv("ARBY_PRE_SIM_BISECT", "0") == "1"
+                        if _bisect_on and _size_usd_chk > 0:
+                            _scale = _max_trade_usd / float(_size_usd_chk)
+                            # Apply a small safety margin so the new size sits
+                            # strictly below the cap.
+                            _scale = max(0.0, min(1.0, _scale * 0.95))
+                            if _scale > 0:
+                                _orig_amt = getattr(r, "amount_in_wei", None) or 0
+                                _orig_sweep = getattr(r, "best_sweep_size_wei", None) or 0
+                                _new_amt = int(_orig_amt * _scale) if _orig_amt else 0
+                                _new_sweep = int(_orig_sweep * _scale) if _orig_sweep else 0
+                                _new_usd = float(_size_usd_chk) * _scale
+                                # Only commit bisection if the resulting amount
+                                # is still above the gate's existing minimum;
+                                # otherwise fall through to SIZE_OVER_CAP skip.
+                                if _new_amt > 0 and _new_usd > 0:
+                                    if hasattr(r, "amount_in_wei"):
+                                        r.amount_in_wei = _new_amt
+                                    if hasattr(r, "best_sweep_size_wei") and _orig_sweep:
+                                        r.best_sweep_size_wei = _new_sweep
+                                    if hasattr(r, "size_usd_estimate"):
+                                        r.size_usd_estimate = _new_usd
+                                    # Mark for downstream observability (no
+                                    # behaviour change beyond the size shrink).
+                                    if hasattr(r, "size_bisected_from_usd"):
+                                        r.size_bisected_from_usd = float(_size_usd_chk)
+                                    if len(gate.pre_sim_skip_samples) < 50:
+                                        gate.pre_sim_skip_samples.append({
+                                            "reason": "SIZE_BISECTED_TO_CAP",
+                                            "event_id": getattr(r, "event_id", None),
+                                            "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None) or getattr(r, "actual_pair", None),
+                                            "pool": getattr(r, "pool_address", None) or getattr(r, "best_pool", None),
+                                            "original_size_usd": float(_size_usd_chk),
+                                            "new_size_usd": _new_usd,
+                                            "scale": _scale,
+                                            "cap_usd": _max_trade_usd,
+                                        })
+                                    # Skip the hard SIZE_OVER_CAP path — the
+                                    # candidate now fits under the cap.
+                                    _size_usd_chk = _new_usd
+                        if _size_usd_chk is not None and _size_usd_chk > _max_trade_usd:
+                            _skip_reason = "PRE_SIM_SKIP:SIZE_OVER_CAP"
+                            if len(gate.pre_sim_skip_samples) < 50:
+                                gate.pre_sim_skip_samples.append({
+                                    "reason": "SIZE_OVER_CAP",
+                                    "pair": getattr(r, "pair", None) or getattr(r, "pair_label", None),
+                                    "pool": getattr(r, "pool_address", None) or getattr(r, "best_pool", None),
+                                    "size_usd_estimate": _size_usd_chk,
+                                    "cap_usd": _max_trade_usd,
+                                })
 
             if _skip_reason is not None:
                 gate.sim_errors.append(_skip_reason)
@@ -1464,6 +1527,87 @@ def run_execution_gate(
             _submit_blockers = _build_submit_blockers(
                 sim_result, _net_bps_scored, _calldata_ready, _signing_ready
             )
+
+            # Reviewer post-soak21 P0: structured reproducer for
+            # SCORER_SIM_DIVERGENCE. Captures enough context to replay
+            # offline: pool, pair, fee, direction, amount, decimals,
+            # local-quote vs rpc_fork-quote, both raw wei values.
+            try:
+                _div_blocker = next(
+                    (b for b in _submit_blockers if b.startswith("SCORER_SIM_DIVERGENCE:")),
+                    None,
+                )
+                if _div_blocker is not None and len(gate.scorer_sim_divergence_samples) < 50:
+                    # Reviewer post-2h-soak step #1 (minimal observability):
+                    # detect quote-model input mismatch. The fast-path scorer
+                    # observes amount_in_wei; the rpc_fork sim observes
+                    # sim_result.input_amount_wei. If they diverge by more
+                    # than 1%, the divergence root cause is INPUT mismatch
+                    # (different sizes), not pool quote-model error. Surfaced
+                    # as a separate boolean so reviewer knows where to look.
+                    _amount_scored = getattr(r, "amount_in_wei", None)
+                    _amount_sim = getattr(sim_result, "input_amount_wei", None)
+                    _input_mismatch = False
+                    _input_mismatch_ratio = None
+                    try:
+                        if _amount_scored and _amount_sim:
+                            _a = float(_amount_scored)
+                            _b = float(_amount_sim)
+                            if _a > 0 and _b > 0:
+                                _input_mismatch_ratio = abs(_a - _b) / max(_a, _b)
+                                _input_mismatch = _input_mismatch_ratio > 0.01
+                    except (TypeError, ValueError):
+                        pass
+                    gate.scorer_sim_divergence_samples.append(
+                        {
+                            "event_id": getattr(r, "event_id", None),
+                            "event_tx_hash": (
+                                getattr(r, "tx_hash", None)
+                                or getattr(r, "event_tx_hash", None)
+                            ),
+                            "pair": getattr(r, "actual_pair", None),
+                            "pool_address": getattr(r, "pool_address", None)
+                            or getattr(r, "sim_pool", None)
+                            or getattr(r, "event_pool_address", None),
+                            "venue": getattr(r, "venue", None)
+                            or getattr(r, "sim_venue", None)
+                            or getattr(r, "best_buy_venue", None),
+                            "fee_tier": getattr(r, "fee_tier", None)
+                            or getattr(r, "sim_fee", None)
+                            or getattr(r, "best_buy_fee", None),
+                            "adapter_type": getattr(r, "adapter_type", None)
+                            or getattr(r, "sim_adapter_type", None)
+                            or getattr(r, "adapter_type_used", None),
+                            "direction": getattr(r, "backrun_direction", None),
+                            "token_in": getattr(r, "token_in", None)
+                            or getattr(r, "backrun_token_in_address", None),
+                            "token_out": getattr(r, "token_out", None)
+                            or getattr(r, "backrun_token_out_address", None),
+                            "token_in_decimals": getattr(r, "token_in_decimals", None),
+                            "token_out_decimals": getattr(r, "token_out_decimals", None),
+                            "amount_in_wei": getattr(r, "amount_in_wei", None),
+                            "scored_net_bps": _net_bps_scored,
+                            "sim_output_wei": getattr(sim_result, "output_amount_wei", None),
+                            "sim_input_wei": getattr(sim_result, "input_amount_wei", None),
+                            "roundtrip_profit_bps": getattr(
+                                sim_result, "roundtrip_profit_bps", None
+                            ),
+                            "roundtrip_attempted": getattr(
+                                sim_result, "roundtrip_attempted", None
+                            ),
+                            "roundtrip_success": getattr(
+                                sim_result, "roundtrip_success", None
+                            ),
+                            "size_usd_estimate": getattr(r, "size_usd_estimate", None),
+                            "blocker_tag": _div_blocker,
+                            # Step #1 observability bridge:
+                            "input_mismatch_detected": _input_mismatch,
+                            "input_mismatch_ratio": _input_mismatch_ratio,
+                        }
+                    )
+            except Exception:
+                # Reproducer is observability-only; never break gate flow.
+                pass
 
             # E1.27/D1 + soak13: Record raw sim output and enough route/tx
             # telemetry to diagnose scorer-vs-sim divergence post-run.

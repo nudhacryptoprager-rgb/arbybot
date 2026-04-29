@@ -1467,6 +1467,34 @@ def _update_hot_rollup(
             rollup["pre_sim_skip_samples_total"] = (
                 rollup.get("pre_sim_skip_samples_total", 0) + len(_pre_skip_samples)
             )
+
+        # Reviewer post-soak21 P0: ring-buffer SCORER_SIM_DIVERGENCE
+        # reproducer samples so reviewer can replay each divergence
+        # offline (pool/pair/fee/direction/amount/decimals + raw wei).
+        _sid_now2 = getattr(_rio, "_SESSION_ID", None)
+        _existing_d = rollup.get("scorer_sim_divergence_samples_recent", [])
+        _existing_d = [
+            _x for _x in _existing_d
+            if isinstance(_x, dict) and _x.get("session_id") == _sid_now2
+        ]
+        rollup["scorer_sim_divergence_samples_recent"] = _existing_d[-50:]
+        rollup["scorer_sim_divergence_samples_total"] = int(
+            rollup.get("scorer_sim_divergence_samples_total", 0) or 0
+        )
+
+        _div_samples = list(getattr(gate_result, "scorer_sim_divergence_samples", []) or [])
+        if _div_samples:
+            _now_iso2 = ts
+            for _s in _div_samples:
+                if isinstance(_s, dict):
+                    _s.setdefault("session_id", _sid_now2)
+                    _s["sample_updated_at"] = _now_iso2
+            rollup["scorer_sim_divergence_samples_recent"] = (
+                _existing_d + _div_samples
+            )[-50:]
+            rollup["scorer_sim_divergence_samples_total"] = (
+                rollup.get("scorer_sim_divergence_samples_total", 0) + len(_div_samples)
+            )
     else:
         rollup.setdefault("sim_attempted_total", 0)
         rollup.setdefault("sim_passed_total", 0)

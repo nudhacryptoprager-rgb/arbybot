@@ -35,8 +35,14 @@ param(
     # the supervisor is killed so the operator does not waste a full
     # soak on a stuck WS connection. Set to 0 to disable.
     [int]$RollupProbeSeconds = 90,
-    [switch]$NoRollupProbe
-)
+    # post-2h-soak step #5: heartbeat-aware probe. When set (>0), if the
+    # rollup has not advanced by $RollupProbeSeconds but the supervisor
+    # log file has been written-to within the last $HeartbeatWindowSeconds,
+    # extend the probe up to $RollupProbeSeconds * 2 instead of hard
+    # aborting. This avoids killing healthy long-warmup runs on idle
+    # markets while still catching truly stuck WS subscriptions.
+    [int]$RollupProbeHeartbeatSeconds = 30,
+    [switch]$NoRollupProbe)
 
 $ErrorActionPreference = 'Stop'
 
@@ -189,7 +195,8 @@ if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
     Write-Step ("rollup probe: waiting up to " + $RollupProbeSeconds + "s for fresh write past baseline.last_updated=" + $baselineLU)
     $probeElapsed = 0
     $progressed = $false
-    while ($probeElapsed -lt $RollupProbeSeconds) {
+    $maxProbe = $RollupProbeSeconds
+    while ($probeElapsed -lt $maxProbe) {
         Start-Sleep -Seconds 5
         $probeElapsed += 5
         if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) {
@@ -205,6 +212,27 @@ if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
                     break
                 }
             } catch {}
+        }
+        # post-2h-soak step #5: heartbeat extension. If at the original
+        # deadline we still haven't seen a rollup advance, but the log
+        # file has been written to within $RollupProbeHeartbeatSeconds,
+        # treat the run as healthy-but-warming-up and double the probe
+        # window once.
+        if ($probeElapsed -ge $RollupProbeSeconds -and $maxProbe -eq $RollupProbeSeconds -and $RollupProbeHeartbeatSeconds -gt 0) {
+            $logHealthy = $false
+            try {
+                if (Test-Path $logFile) {
+                    $logLastWrite = (Get-Item $logFile).LastWriteTimeUtc
+                    $ageSec = ((Get-Date).ToUniversalTime() - $logLastWrite).TotalSeconds
+                    if ($ageSec -le $RollupProbeHeartbeatSeconds) {
+                        $logHealthy = $true
+                    }
+                }
+            } catch {}
+            if ($logHealthy) {
+                $maxProbe = $RollupProbeSeconds * 2
+                Write-Step ("rollup probe: heartbeat OK (log written within " + $RollupProbeHeartbeatSeconds + "s); extending probe to " + $maxProbe + "s")
+            }
         }
     }
     if (-not $progressed) {

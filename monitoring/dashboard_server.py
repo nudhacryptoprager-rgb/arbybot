@@ -584,6 +584,37 @@ def build_summary_payload(
                 "stage_breakdown": None,
             }
         ),
+        # Reviewer post-2h-soak step #8: live-delta panels — one block
+        # that surfaces the very fields a reviewer/operator looks at
+        # first when a soak fails (fresh deltas, blocker histogram delta,
+        # divergence sample count, metadata skips). All values are
+        # derived from the SAME rollup snapshot so they are internally
+        # consistent.
+        "live_deltas": {
+            "session_id": current_session_id,
+            "baseline_session_id": baseline_session_id,
+            "age_seconds": age_seconds,
+            "is_fresh": is_fresh,
+            "staleness_reason": staleness_reason,
+            "fresh_funnel": current_funnel,
+            "scorer_sim_divergence_samples_total": _safe_int(
+                rollup.get("scorer_sim_divergence_samples_total")
+            ),
+            "scorer_sim_divergence_samples_recent_count": len(
+                rollup.get("scorer_sim_divergence_samples_recent") or []
+            ),
+            "pre_sim_skip_samples_total": _safe_int(
+                rollup.get("pre_sim_skip_samples_total")
+            ),
+            "pre_sim_skip_samples_recent_count": len(
+                rollup.get("pre_sim_skip_samples_recent") or []
+            ),
+            "submit_blocker_histogram": rollup.get("submit_blocker_histogram") or {},
+            "simulation_error_histogram": rollup.get("simulation_error_histogram") or {},
+            "external_provider_blocker_total": _safe_int(
+                rollup.get("external_provider_blocker_total")
+            ),
+        },
         "top_spreads": top_spreads,
         "reject_buckets": reject_buckets,
         "session_ws_recv_error_total": _safe_int(

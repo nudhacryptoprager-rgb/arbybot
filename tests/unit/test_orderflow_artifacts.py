@@ -4622,6 +4622,34 @@ class TestPreSimMissingSizeMetadata:
         assert br.submit_ready is False
         assert br.submit_blocker == "PRE_SIM_SKIP:MISSING_SIZE_METADATA"
 
+    def test_skip_sample_has_structured_detail(self, monkeypatch):
+        # Reviewer post-2h-soak step #3: each MISSING_SIZE_METADATA sample
+        # must carry token/pool/pair source AND specific missing resolver
+        # so reviewer can target upstream sizing without log archaeology.
+        br = self._make_br(
+            event_id="meta_detail",
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        )
+        gate = self._run(br, monkeypatch, env="1")
+        samples = [s for s in gate.pre_sim_skip_samples if s.get("reason") == "MISSING_SIZE_METADATA"]
+        assert len(samples) == 1
+        s = samples[0]
+        for key in (
+            "event_id", "event_source", "pair", "direction",
+            "token_in_address", "token_out_address",
+            "missing_fields", "fee_hint", "amount_in_wei",
+            "best_backrun_net_bps",
+        ):
+            assert key in s, f"missing diagnostic key: {key}"
+        assert s["event_id"] == "meta_detail"
+        assert s["direction"] == "buy"
+        assert "token_in_decimals" in s["missing_fields"]
+        assert "best_sweep_size_wei" in s["missing_fields"]
+        assert "size_usd_estimate" in s["missing_fields"]
+        assert s["fee_hint"] == 500  # best_buy_fee passthrough
+        assert s["token_in_address"] == "0x4200000000000000000000000000000000000006"
+
     def test_decimals_present_admits_candidate(self, monkeypatch):
         br = self._make_br(token_in_decimals=18)
         gate = self._run(br, monkeypatch, env="1")
@@ -4915,3 +4943,325 @@ class TestRollupLatencyBudgetContract:
         assert lb["p50_ms"] == 100.0
         assert lb["p99_ms"] == 140.0
         assert lb["within_target_pct"] == 100.0
+
+# ===========================================================================
+# Reviewer post-soak21 P0: SCORER_SIM_DIVERGENCE regression guard
+# ===========================================================================
+
+
+class TestScorerSimDivergenceGuard:
+    """Fast-positive + sim-negative MUST route to SCORER_SIM_DIVERGENCE.
+
+    Reviewer post-soak21 acceptance: when fast-path scorer predicts a
+    profitable trade (>0 bps) but the rpc_fork roundtrip simulation
+    returns negative bps with magnitude ≥ ARBY_SCORER_SIM_DIVERGENCE_BPS
+    (default 500), the candidate must be classified as
+    SCORER_SIM_DIVERGENCE (NOT verified_profitable, NOT submit_ready),
+    AND a structured reproducer sample must be captured.
+    """
+
+    def _make_br(self):
+        from m7.orderflow.contracts import BackrunResult
+        return BackrunResult(
+            event_id="div_test",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=2424.7584,  # fast-path POSITIVE
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_venue="uniswap_v3",
+            best_buy_fee=500,
+            adapter_type_used="uniswap_v3",
+            token_in_decimals=18,
+            backrun_token_in_address="0x4200000000000000000000000000000000000006",
+            backrun_token_out_address="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        )
+
+    def _run(self, monkeypatch, *, sim_bps: float):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        def _mock_sim(*a, **kw):
+            # Roundtrip simulated: buy + sell same token, profit_bps negative.
+            return SimulationResult(
+                success=True,
+                gas_used=150000,
+                backend="rpc_fork",
+                output_amount_wei=10**18,
+                input_amount_wei=10**18,
+                roundtrip_attempted=True,
+                roundtrip_success=True,
+                roundtrip_profit_bps=sim_bps,
+            )
+
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+        )
+        monkeypatch.setattr(
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "rpc_fork"
+        )
+        # Hot sweep + cap OFF so test exercises only the divergence path.
+        monkeypatch.setenv("ARBY_HOT_SWEEP_ENABLE", "1")
+        monkeypatch.setenv("ARBY_MAX_TRADE_USD", "0")
+        return run_execution_gate([self._make_br()], chain="base")
+
+    def test_fast_positive_sim_negative_routes_to_divergence(self, monkeypatch):
+        gate = self._run(monkeypatch, sim_bps=-9988.876)
+        # Must NOT increment submit_ready
+        assert gate.submit_ready == 0
+        # Must classify as SCORER_SIM_DIVERGENCE (not just ROUNDTRIP_NOT_PROFITABLE)
+        assert any(
+            "SCORER_SIM_DIVERGENCE" in b for b in gate.submit_blockers
+        ), f"expected SCORER_SIM_DIVERGENCE in {gate.submit_blockers}"
+        # Reproducer sample must be captured
+        assert len(gate.scorer_sim_divergence_samples) == 1
+        sample = gate.scorer_sim_divergence_samples[0]
+        # Required reproducer fields
+        for key in (
+            "event_id", "pair", "direction", "amount_in_wei",
+            "scored_net_bps", "roundtrip_profit_bps", "blocker_tag",
+            "token_in_decimals", "token_in", "token_out", "venue",
+            "fee_tier", "adapter_type",
+        ):
+            assert key in sample, f"missing reproducer key: {key}"
+        assert sample["scored_net_bps"] > 0
+        assert sample["roundtrip_profit_bps"] < 0
+        assert sample["token_in"] == "0x4200000000000000000000000000000000000006"
+        assert sample["token_out"] == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        assert sample["fee_tier"] == 500
+        assert sample["venue"] == "uniswap_v3"
+        assert sample["adapter_type"] == "uniswap_v3"
+        assert "SCORER_SIM_DIVERGENCE" in sample["blocker_tag"]
+
+    def test_fast_positive_sim_slightly_negative_below_threshold(self, monkeypatch):
+        # Fast bps small + sim slightly negative => gap below threshold (500 bps).
+        # Should NOT classify as DIVERGENCE — only ROUNDTRIP_NOT_PROFITABLE.
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        br = self._make_br()
+        br.best_backrun_net_bps = 50.0  # small positive
+        br.event_id = "small_div"
+
+        def _mock_sim(*a, **kw):
+            return SimulationResult(
+                success=True, gas_used=150000, backend="rpc_fork",
+                output_amount_wei=10**18, input_amount_wei=10**18,
+                roundtrip_attempted=True, roundtrip_success=True,
+                roundtrip_profit_bps=-100.0,  # gap = 50 - (-100) = 150 < 500
+            )
+
+        monkeypatch.setattr("m7.orderflow.execution_gate._attempt_simulation", _mock_sim)
+        monkeypatch.setattr("m7.orderflow.execution_gate.is_simulation_configured", lambda: True)
+        monkeypatch.setattr("m7.orderflow.execution_gate.get_simulation_backend", lambda: "rpc_fork")
+        monkeypatch.setenv("ARBY_HOT_SWEEP_ENABLE", "1")
+        monkeypatch.setenv("ARBY_MAX_TRADE_USD", "0")
+        gate = run_execution_gate([br], chain="base")
+
+        assert gate.submit_ready == 0
+        assert any("ROUNDTRIP_NOT_PROFITABLE" in b for b in gate.submit_blockers)
+        assert not any(
+            "SCORER_SIM_DIVERGENCE" in b for b in gate.submit_blockers
+        )
+        assert len(gate.scorer_sim_divergence_samples) == 0
+
+
+class TestScorerSimDivergenceRollupContract:
+    """Rollup must expose divergence sample fields even before first hit."""
+
+    def _run(self, tmp_path, samples):
+        import json
+        from unittest.mock import patch
+
+        from m7.orderflow.execution_gate import ExecutionGateResult
+        from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        gate = ExecutionGateResult()
+        gate.scorer_sim_divergence_samples = samples
+        with patch("m7.orderflow.runtime_io._HOT_ROLLUP_PATH", str(rollup_path)):
+            _update_hot_rollup(
+                events_count=0,
+                fast_results=[],
+                guard_results=None,
+                bridge_diagnostics=None,
+                chain="base",
+                gate_result=gate,
+            )
+        return json.loads(rollup_path.read_text(encoding="utf-8"))
+
+    def test_rollup_divergence_fields_present_without_samples(self, tmp_path):
+        rollup = self._run(tmp_path, samples=[])
+        assert rollup["scorer_sim_divergence_samples_recent"] == []
+        assert rollup["scorer_sim_divergence_samples_total"] == 0
+
+    def test_rollup_divergence_sample_ring_appends(self, tmp_path):
+        sample = {
+            "event_id": "div1",
+            "pair": "WETH/USDC",
+            "blocker_tag": "SCORER_SIM_DIVERGENCE:1.0000->-999.0000",
+        }
+        rollup = self._run(tmp_path, samples=[sample])
+        assert rollup["scorer_sim_divergence_samples_total"] == 1
+        recent = rollup["scorer_sim_divergence_samples_recent"]
+        assert len(recent) == 1
+        assert recent[0]["event_id"] == "div1"
+        assert recent[0]["session_id"]
+        assert recent[0]["sample_updated_at"]
+
+
+# ===========================================================================
+# Reviewer post-2h-soak step #4: pre-sim size bisection
+# ===========================================================================
+
+
+class TestPreSimSizeBisection:
+    """When ARBY_PRE_SIM_BISECT=1, oversized candidates shrink to fit cap.
+
+    Default OFF (env unset / "0") preserves the legacy SIZE_OVER_CAP skip.
+    When ON, the gate scales amount_in_wei, best_sweep_size_wei and
+    size_usd_estimate down by ``cap/usd * 0.95``, admits the candidate,
+    and emits a SIZE_BISECTED_TO_CAP sample. If the bisection cannot
+    produce a viable size (zero amount), the legacy SIZE_OVER_CAP skip
+    still fires.
+    """
+
+    def _make_br(self, **overrides):
+        from m7.orderflow.contracts import BackrunResult
+        defaults = dict(
+            event_id="bisect",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=200.0,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
+            token_in_decimals=18,
+            best_sweep_size_wei=10**17,
+        )
+        defaults.update(overrides)
+        return BackrunResult(**defaults)
+
+    def _run(self, br, monkeypatch, *, cap="0", bisect="0"):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        def _mock_sim(*a, **kw):
+            return SimulationResult(success=True, gas_used=150000, backend="anvil")
+
+        monkeypatch.setattr("m7.orderflow.execution_gate._attempt_simulation", _mock_sim)
+        monkeypatch.setattr("m7.orderflow.execution_gate.is_simulation_configured", lambda: True)
+        monkeypatch.setattr("m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil")
+        monkeypatch.setenv("ARBY_MAX_TRADE_USD", cap)
+        monkeypatch.setenv("ARBY_PRE_SIM_BISECT", bisect)
+        return run_execution_gate([br], chain="base")
+
+    def test_bisect_off_default_keeps_legacy_skip(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=10000.0)
+        gate = self._run(br, monkeypatch, cap="500", bisect="0")
+        assert gate.sim_attempted == 0
+        assert any(e == "PRE_SIM_SKIP:SIZE_OVER_CAP" for e in gate.sim_errors)
+
+    def test_bisect_on_scales_oversized_candidate_under_cap(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=10000.0)
+        gate = self._run(br, monkeypatch, cap="500", bisect="1")
+        # Candidate must NOT skip; should be admitted to sim.
+        assert gate.sim_attempted == 1
+        # Size fields scaled
+        assert br.size_usd_estimate < 500.0
+        assert br.amount_in_wei < 10**18
+        # Sample of bisection captured for observability
+        bisected = [s for s in gate.pre_sim_skip_samples if s.get("reason") == "SIZE_BISECTED_TO_CAP"]
+        assert len(bisected) == 1
+        s = bisected[0]
+        assert s["original_size_usd"] == 10000.0
+        assert 0.0 < s["scale"] < 1.0
+        assert s["cap_usd"] == 500.0
+
+    def test_bisect_admits_within_cap_unchanged(self, monkeypatch):
+        br = self._make_br(size_usd_estimate=100.0)
+        gate = self._run(br, monkeypatch, cap="500", bisect="1")
+        assert gate.sim_attempted == 1
+        assert br.size_usd_estimate == 100.0
+        # No bisection sample because size already under cap.
+        assert not any(s.get("reason") == "SIZE_BISECTED_TO_CAP" for s in gate.pre_sim_skip_samples)
+
+
+# ===========================================================================
+# Reviewer post-2h-soak step #1 (minimal): SCORER input-mismatch detector
+# ===========================================================================
+
+
+class TestScorerSimInputMismatchDetector:
+    """Surface whether divergence is caused by amount_in_wei != sim input.
+
+    If the fast-path scorer used amount_in_wei=A but rpc_fork sim ran on
+    amount_in_wei=B, the resulting divergence is an INPUT mismatch, not
+    a pool-quote-model error. The divergence sample must record this
+    classification so reviewers/operators know which subsystem to fix.
+    """
+
+    def _make_br(self):
+        from m7.orderflow.contracts import BackrunResult
+        return BackrunResult(
+            event_id="ds_mm",
+            event_source="fixture",
+            event_type="swap",
+            post_trade_state_used="estimated",
+            backrun_direction="buy",
+            best_backrun_net_bps=2424.7584,
+            amount_in_wei=10**18,
+            gross_pnl_wei=10**16,
+            route_viable=True,
+            size_valid_for_token=True,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
+            token_in_decimals=18,
+        )
+
+    def _run(self, monkeypatch, *, sim_input_wei: int):
+        from m7.orderflow.execution_gate import run_execution_gate
+        from m7.orderflow.simulation import SimulationResult
+
+        def _mock_sim(*a, **kw):
+            return SimulationResult(
+                success=True, gas_used=150000, backend="rpc_fork",
+                output_amount_wei=sim_input_wei,
+                input_amount_wei=sim_input_wei,
+                roundtrip_attempted=True, roundtrip_success=True,
+                roundtrip_profit_bps=-9988.876,
+            )
+
+        monkeypatch.setattr("m7.orderflow.execution_gate._attempt_simulation", _mock_sim)
+        monkeypatch.setattr("m7.orderflow.execution_gate.is_simulation_configured", lambda: True)
+        monkeypatch.setattr("m7.orderflow.execution_gate.get_simulation_backend", lambda: "rpc_fork")
+        return run_execution_gate([self._make_br()], chain="base")
+
+    def test_matching_inputs_no_mismatch(self, monkeypatch):
+        gate = self._run(monkeypatch, sim_input_wei=10**18)
+        assert len(gate.scorer_sim_divergence_samples) == 1
+        s = gate.scorer_sim_divergence_samples[0]
+        assert "input_mismatch_detected" in s
+        assert s["input_mismatch_detected"] is False
+        assert s["input_mismatch_ratio"] is not None
+        assert s["input_mismatch_ratio"] < 0.01
+
+    def test_diverging_inputs_flagged(self, monkeypatch):
+        # Sim observed half the size scorer used.
+        gate = self._run(monkeypatch, sim_input_wei=5 * 10**17)
+        s = gate.scorer_sim_divergence_samples[0]
+        assert s["input_mismatch_detected"] is True
+        assert s["input_mismatch_ratio"] > 0.4

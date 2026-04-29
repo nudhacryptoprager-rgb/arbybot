@@ -646,3 +646,33 @@ def test_universe_breadth_populated_from_orderflow_and_bridge():
     assert csb["stale_positive"] == 5
     # ptt_total is promoted to a top-level field, not duplicated here.
     assert "ptt_total" not in csb
+
+
+def test_live_deltas_block_present():
+    """Reviewer post-2h-soak step #8: live_deltas must surface fresh facts."""
+    rollup = _make_rollup()
+    rollup["scorer_sim_divergence_samples_total"] = 4
+    rollup["scorer_sim_divergence_samples_recent"] = [{"event_id": "x"}]
+    rollup["pre_sim_skip_samples_total"] = 8
+    rollup["pre_sim_skip_samples_recent"] = [{"reason": "MISSING_SIZE_METADATA"}]
+    rollup["submit_blocker_histogram"] = {"SCORER_SIM_DIVERGENCE": 4}
+    rollup["simulation_error_histogram"] = {"PRE_SIM_SKIP:MISSING_SIZE_METADATA": 8}
+    rollup["external_provider_blocker_total"] = 0
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=_make_baseline(),
+        profile="production",
+        now_utc=NOW,
+    )
+    ld = payload["current_scan"]["live_deltas"]
+    assert ld["scorer_sim_divergence_samples_total"] == 4
+    assert ld["scorer_sim_divergence_samples_recent_count"] == 1
+    assert ld["pre_sim_skip_samples_total"] == 8
+    assert ld["pre_sim_skip_samples_recent_count"] == 1
+    assert ld["submit_blocker_histogram"]["SCORER_SIM_DIVERGENCE"] == 4
+    assert ld["simulation_error_histogram"]["PRE_SIM_SKIP:MISSING_SIZE_METADATA"] == 8
+    assert ld["external_provider_blocker_total"] == 0
+    assert "fresh_funnel" in ld
+    assert "is_fresh" in ld
