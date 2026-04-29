@@ -384,6 +384,16 @@ def build_summary_payload(
             return _safe_int(session.get(session_field))
         return _delta(total_field)
 
+    def _hist_delta(field: str) -> dict:
+        cur_hist = rollup.get(field) if isinstance(rollup.get(field), dict) else {}
+        base_hist = baseline.get(field) if isinstance(baseline.get(field), dict) else {}
+        out = {}
+        for key in sorted(set(cur_hist.keys()) | set(base_hist.keys())):
+            diff = _safe_int(cur_hist.get(key)) - _safe_int(base_hist.get(key))
+            if diff:
+                out[key] = diff
+        return out
+
     current_funnel = {
         "events_seen": _session_or_delta(
             "session_events_seen_total", "events_seen_total"
@@ -406,6 +416,8 @@ def build_summary_payload(
         "roundtrip_success": _delta("roundtrip_success_total"),
         "roundtrip_profitable": _delta("roundtrip_profitable_total"),
     }
+    submit_blocker_hist_delta = _hist_delta("submit_blocker_histogram")
+    simulation_error_hist_delta = _hist_delta("simulation_error_histogram")
 
     # ---- top_spreads (already session-scoped in source artifacts) ---------
     top_source = (
@@ -609,6 +621,20 @@ def build_summary_payload(
             "pre_sim_skip_samples_recent_count": len(
                 rollup.get("pre_sim_skip_samples_recent") or []
             ),
+            "submit_blocker_histogram_delta": submit_blocker_hist_delta,
+            "simulation_error_histogram_delta": simulation_error_hist_delta,
+            "scorer_sim_divergence_submit_blocker_delta": sum(
+                _safe_int(v)
+                for k, v in submit_blocker_hist_delta.items()
+                if str(k).startswith("SCORER_SIM_DIVERGENCE")
+            ),
+            "pre_sim_skip_delta_total": sum(
+                _safe_int(v)
+                for k, v in simulation_error_hist_delta.items()
+                if str(k).startswith("PRE_SIM_SKIP")
+            ),
+            # Backward-compatible cumulative fields. New clients should
+            # prefer *_delta fields above for current-scan decisions.
             "submit_blocker_histogram": rollup.get("submit_blocker_histogram") or {},
             "simulation_error_histogram": rollup.get("simulation_error_histogram") or {},
             "external_provider_blocker_total": _safe_int(

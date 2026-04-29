@@ -658,11 +658,14 @@ def test_live_deltas_block_present():
     rollup["submit_blocker_histogram"] = {"SCORER_SIM_DIVERGENCE": 4}
     rollup["simulation_error_histogram"] = {"PRE_SIM_SKIP:MISSING_SIZE_METADATA": 8}
     rollup["external_provider_blocker_total"] = 0
+    baseline = _make_baseline()
+    baseline["submit_blocker_histogram"] = {"SCORER_SIM_DIVERGENCE": 1}
+    baseline["simulation_error_histogram"] = {"PRE_SIM_SKIP:MISSING_SIZE_METADATA": 3}
     payload = build_summary_payload(
         rollup=rollup,
         hot={},
         orderflow={},
-        baseline=_make_baseline(),
+        baseline=baseline,
         profile="production",
         now_utc=NOW,
     )
@@ -671,8 +674,41 @@ def test_live_deltas_block_present():
     assert ld["scorer_sim_divergence_samples_recent_count"] == 1
     assert ld["pre_sim_skip_samples_total"] == 8
     assert ld["pre_sim_skip_samples_recent_count"] == 1
+    assert ld["submit_blocker_histogram_delta"]["SCORER_SIM_DIVERGENCE"] == 3
+    assert ld["simulation_error_histogram_delta"]["PRE_SIM_SKIP:MISSING_SIZE_METADATA"] == 5
+    assert ld["scorer_sim_divergence_submit_blocker_delta"] == 3
+    assert ld["pre_sim_skip_delta_total"] == 5
+    # Backward-compatible fields remain cumulative for older clients.
     assert ld["submit_blocker_histogram"]["SCORER_SIM_DIVERGENCE"] == 4
     assert ld["simulation_error_histogram"]["PRE_SIM_SKIP:MISSING_SIZE_METADATA"] == 8
     assert ld["external_provider_blocker_total"] == 0
     assert "fresh_funnel" in ld
     assert "is_fresh" in ld
+
+
+def test_live_deltas_histogram_delta_filters_stale_cumulative_blockers():
+    """Cumulative blocker histograms must not masquerade as fresh deltas."""
+    rollup = _make_rollup()
+    baseline = _make_baseline()
+    stale_submit = {"SCORER_SIM_DIVERGENCE:2424.7584->-9988.8760": 3}
+    stale_sim = {"PRE_SIM_SKIP:MISSING_SIZE_METADATA": 9}
+    rollup["submit_blocker_histogram"] = dict(stale_submit)
+    baseline["submit_blocker_histogram"] = dict(stale_submit)
+    rollup["simulation_error_histogram"] = dict(stale_sim)
+    baseline["simulation_error_histogram"] = dict(stale_sim)
+
+    payload = build_summary_payload(
+        rollup=rollup,
+        hot={},
+        orderflow={},
+        baseline=baseline,
+        profile="production",
+        now_utc=NOW,
+    )
+    ld = payload["current_scan"]["live_deltas"]
+
+    assert ld["submit_blocker_histogram"]["SCORER_SIM_DIVERGENCE:2424.7584->-9988.8760"] == 3
+    assert ld["submit_blocker_histogram_delta"] == {}
+    assert ld["simulation_error_histogram_delta"] == {}
+    assert ld["scorer_sim_divergence_submit_blocker_delta"] == 0
+    assert ld["pre_sim_skip_delta_total"] == 0

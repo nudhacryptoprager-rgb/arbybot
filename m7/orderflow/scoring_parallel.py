@@ -1423,12 +1423,19 @@ def score_backrun_fast(
     # Backrun size from event — decimal-aware bounded size
     # M7.A.5.41: Resolve actual symbol from addr_to_symbol for decimal detection
     _in_sym = _ats.get(token_in_addr.lower(), "").upper()
-    if _in_sym in ("USDC", "USDT", "USDC.E", "USDT.E"):
+    # post-1h-soak P0 fix: expanded heuristic list mirrors scoring_parallel slow
+    # path; CBBTC/TBTC/USDBC/PYUSD were missing causing 6/8-dec tokens to use
+    # 18-dec bounds. Also try enrichment cache for completely unknown addresses.
+    if _in_sym in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "PYUSD"):
         _effective_dec = 6
-    elif _in_sym in ("WBTC",):
+    elif _in_sym in ("WBTC", "CBBTC", "TBTC"):
         _effective_dec = 8
-    else:
+    elif _in_sym in ("WETH", "ETH", "DAI", "CBETH", "WSTETH", "RETH", "FRAX"):
         _effective_dec = 18
+    else:
+        # Try enrichment cache populated by cold lane; fall back to EVM default.
+        _cached_dec_fast = get_cached_decimals(token_in_addr)
+        _effective_dec = _cached_dec_fast if _cached_dec_fast is not None else 18
     low, high = _normalized_bounds(_effective_dec)
     # Dynamic min: ensure trade can cover gas at >= 1 bps net
     _dyn_min = get_min_profitable_size_wei(chain, _effective_dec)
@@ -1605,6 +1612,16 @@ def score_backrun_fast(
     tout_sym = _ats.get(token_out_addr.lower(), token_out_addr[:10] if token_out_addr else "??")
     actual_pair = f"{tin_sym}/{tout_sym}"
 
+    # post-1h-soak P0: compute size_usd_estimate for stablecoin inputs so the
+    # gate's MISSING_SIZE_METADATA check sees at least one non-None field.
+    _size_usd_fast: Optional[float] = None
+    _in_sym_upper_fast = tin_sym.upper()
+    if _in_sym_upper_fast in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUSD", "FRAX"):
+        try:
+            _size_usd_fast = round(backrun_size_wei / (10 ** _effective_dec) * 1.0, 2)
+        except Exception:
+            _size_usd_fast = None
+
     return BackrunResult(
         event_id=event.event_id,
         event_source="live",
@@ -1646,6 +1663,12 @@ def score_backrun_fast(
         backrun_token_out_address=token_out_addr,
         size_source="dynamic_bounded",
         size_valid_for_token=True,
+        # post-1h-soak P0 fix: propagate decimal and USD estimate so
+        # execution_gate MISSING_SIZE_METADATA check passes for fast-path
+        # candidates (previously token_in_decimals was not set here).
+        token_in_decimals=_effective_dec,
+        size_normalization_source=("heuristic" if _in_sym else "default_18_inferred"),
+        size_usd_estimate=_size_usd_fast,
         local_pricing_attempted=True,
         local_pricing_used=True,
         registry_pools_found=len(entries),

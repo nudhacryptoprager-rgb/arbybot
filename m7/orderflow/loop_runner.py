@@ -180,6 +180,8 @@ def run_loop(cli_args) -> None:
     # arriving after cold lane runs (chicken-and-egg: hot iter 1 has empty bridge,
     # cold writes bridge after iter 1, hot iter 2+ needs re-prewarm).
     _bridge_prewarmed_ptt_count = 0
+    # E1.26b: Cache RPC URL from prewarm for periodic zero-liq refresh
+    _hot_rpc: str = ""
 
     iteration = 0
     logger.info(
@@ -289,6 +291,7 @@ def run_loop(cli_args) -> None:
                                 _rpc, request_kwargs={"timeout": 10},
                             )).eth.block_number
                             logger.info("hot-phase: block=%d", _block)
+                            _hot_rpc = _rpc  # E1.26b: cache for zero-liq refresh
                             _all_dexes = load_dexes()
                             _dex_cfg = _all_dexes.get(cli_args.chain, {})
                             _token_addr = get_all_token_addresses(cli_args.chain)
@@ -359,6 +362,33 @@ def run_loop(cli_args) -> None:
                         "bridge_cache=%d)",
                         iteration, _bridge_cache_count,
                     )
+
+                # E1.26b: Periodic refresh of zero-liquidity CL pools.
+                # V3/CL pools can have 0 in-range liquidity at prewarm time
+                # (concentrated positions out of range temporarily) but real
+                # liquidity later.  Re-query them before each hot window.
+                if _hot_registry is not None and _hot_rpc:
+                    try:
+                        from web3 import Web3 as _W3_zlr
+                        _zlr_block = _W3_zlr(_W3_zlr.HTTPProvider(
+                            _hot_rpc, request_kwargs={"timeout": 10},
+                        )).eth.block_number
+                        from m7.orderflow.bridge_runtime import (
+                            _refresh_zero_liquidity_entries,
+                        )
+                        _zlr_count = _refresh_zero_liquidity_entries(
+                            _hot_registry, _hot_rpc, _zlr_block,
+                        )
+                        if _zlr_count > 0:
+                            logger.info(
+                                "hot-phase: refreshed %d zero-liq CL pools (iter %d)",
+                                _zlr_count, iteration,
+                            )
+                    except Exception as _zlr_exc:
+                        logger.debug(
+                            "hot-phase: zero-liq refresh error: %s",
+                            str(_zlr_exc)[:80],
+                        )
             elif lane == "cold":
                 # M7.A.5.38: Lazy-init persistent cold registry with wide stale
                 # threshold (5000 blocks ≈ 20 min). Cold lane is diagnostic, not

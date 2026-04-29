@@ -1052,10 +1052,116 @@ class TestE1_6_BridgeFamilyUnresolved:
         assert "chain" in sig.parameters
         assert sig.parameters["chain"].default == "arbitrum_one"
 
+    def test_score_backrun_fast_propagates_token_in_decimals(self):
+        """post-1h-soak P0: score_backrun_fast must always set token_in_decimals.
 
-# ---------------------------------------------------------------------------
-# 22. M7.E1.6.1 — Runtime invariant: exec ⊂ route_viable, gate_trace non-null
-# ---------------------------------------------------------------------------
+        Previously the field was computed (_effective_dec) but never passed to
+        BackrunResult, causing MISSING_SIZE_METADATA on every fast-path candidate
+        regardless of how well the decimal was resolved.
+        """
+        from tests.unit.conftest import _make_event
+        from m7.orderflow.scoring_parallel import score_backrun_fast, _pool_token_cache
+        from m7.orderflow.pool_registry import PoolRegistry, PoolRegistryEntry, _pair_key
+        from m7.orderflow.contracts import BackrunResult
+
+        WETH = "0x4200000000000000000000000000000000000006"
+        UNKNOWN = "0xd968196fa6977c4e58f2af5ac01c655ea8332d22"
+
+        _pool_token_cache["0xfakepool01"] = (UNKNOWN, WETH, 10000)
+
+        registry = PoolRegistry()
+        entry = PoolRegistryEntry(
+            address="0xfakepool01",
+            dex="uniswap_v3",
+            adapter_type="uniswap_v3",
+            fee=10000,
+            token_a=UNKNOWN,
+            token_b=WETH,
+            liquidity=10 ** 20,
+            sqrt_price_x96=2 ** 96,
+            tick=0,
+        )
+        key = _pair_key(UNKNOWN, WETH)
+        registry._pools[key] = [entry]
+        registry._queried.add(key)
+
+        event = _make_event(
+            event_id="test_fast_dec",
+            chain="base",
+            pool_address="0xfakepool01",
+            token_in=UNKNOWN,
+            token_out=WETH,
+            amount_in_wei=10 ** 18,
+            block=100,
+        )
+
+        result = score_backrun_fast(
+            event,
+            pool_registry=registry,
+            token_addresses={},
+            current_block=100,
+            addr_to_symbol={UNKNOWN.lower(): "", WETH.lower(): "WETH"},
+            chain="base",
+        )
+
+        if result is not None:
+            assert isinstance(result, BackrunResult)
+            assert result.token_in_decimals is not None, (
+                "score_backrun_fast must propagate token_in_decimals to BackrunResult"
+            )
+
+    def test_score_backrun_fast_known_symbol_decimals(self):
+        """post-1h-soak P0: expanded heuristic list covers CBBTC/USDBC/PYUSD."""
+        from tests.unit.conftest import _make_event
+        from m7.orderflow.scoring_parallel import score_backrun_fast, _pool_token_cache
+        from m7.orderflow.pool_registry import PoolRegistry, PoolRegistryEntry, _pair_key
+        from m7.orderflow.contracts import BackrunResult
+
+        USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        PYUSD = "0x6c3ea9036406852006290770bedfcaba0e23a0e8"
+
+        _pool_token_cache["0xfakepool02"] = (PYUSD, USDC, 500)
+
+        registry = PoolRegistry()
+        entry = PoolRegistryEntry(
+            address="0xfakepool02",
+            dex="uniswap_v3",
+            adapter_type="uniswap_v3",
+            fee=500,
+            token_a=PYUSD,
+            token_b=USDC,
+            liquidity=10 ** 20,
+            sqrt_price_x96=2 ** 96,
+            tick=0,
+        )
+        key = _pair_key(PYUSD, USDC)
+        registry._pools[key] = [entry]
+        registry._queried.add(key)
+
+        event = _make_event(
+            event_id="test_fast_pyusd",
+            chain="base",
+            pool_address="0xfakepool02",
+            token_in=PYUSD,
+            token_out=USDC,
+            amount_in_wei=100 * 10**6,
+            block=100,
+        )
+
+        result = score_backrun_fast(
+            event,
+            pool_registry=registry,
+            token_addresses={},
+            current_block=100,
+            addr_to_symbol={PYUSD.lower(): "PYUSD", USDC.lower(): "USDC"},
+            chain="base",
+        )
+        if result is not None:
+            assert result.token_in_decimals == 6, (
+                f"PYUSD should be 6 decimals, got {result.token_in_decimals}"
+            )
+
+
 
 class TestE1_6_1_RuntimeInvariants:
     """M7.E1.6.1: If top_executable_candidates is non-empty, then:

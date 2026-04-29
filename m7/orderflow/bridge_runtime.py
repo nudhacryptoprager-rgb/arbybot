@@ -482,6 +482,50 @@ def _prewarm_registry_from_bridge(
     return count + _ptt_registered
 
 
+def _refresh_zero_liquidity_entries(registry, rpc_url: str, block_num: int) -> int:
+    """E1.26b: Refresh registry entries that have sqrt_price_x96>0 but liquidity=0.
+
+    V3/CL pools can have 0 in-range liquidity at prewarm time (concentrated
+    positions temporarily out of range) but non-zero liquidity later as price
+    moves back into active tick ranges.  This function batch-refreshes those
+    entries so the hot lane can score events from them.
+
+    Returns the number of entries updated to non-zero liquidity.
+    """
+    zero_liq_addrs: list = []
+    addr_to_entry: dict = {}
+    for entries_list in registry._pools.values():
+        for e in entries_list:
+            if (
+                e.sqrt_price_x96 and e.sqrt_price_x96 > 0
+                and (e.liquidity is None or e.liquidity == 0)
+            ):
+                zero_liq_addrs.append(e.address)
+                addr_to_entry[e.address] = e
+
+    if not zero_liq_addrs:
+        return 0
+
+    try:
+        from core.multicall import get_multicall_batcher
+        batcher = get_multicall_batcher(rpc_url, block_num)
+        fresh_states = batcher.batch_full_pool_data(zero_liq_addrs)
+        refreshed = 0
+        for addr, state in fresh_states.items():
+            if state and state.get("liquidity", 0) > 0:
+                entry = addr_to_entry.get(addr)
+                if entry:
+                    entry.liquidity = state["liquidity"]
+                    entry.sqrt_price_x96 = state["sqrt_price_x96"]
+                    entry.tick = state["tick"]
+                    entry.last_block = block_num
+                    refreshed += 1
+        return refreshed
+    except Exception as exc:
+        logger.debug("zero-liq refresh failed: %s", str(exc)[:80])
+        return 0
+
+
 def _prewarm_registry_from_pairs(
     registry, session_pairs: dict, token_addresses: dict,
     dex_configs: dict, rpc_url: str, block_num: int,
