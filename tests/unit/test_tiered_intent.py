@@ -100,11 +100,12 @@ class TestArbitrumP0:
         assert required.issubset(pair_set), f"Missing: {required - pair_set}"
 
     def test_arb_demoted_absent(self):
-        """Demoted tokens (DPX, GRAIL, GNS, JOE, MAGIC, RDNT, TBTC, LUSD, USDE) not in productive."""
+        """Demoted tokens (DPX, GRAIL, GNS, JOE, RDNT, TBTC) not in productive.
+        E1.48: MAGIC promoted to productive (multi-DEX coverage on Arbitrum)."""
         data = load_core_tokens()
         pairs = generate_pairs_for_chain("arbitrum_one", data["arbitrum_one"], "productive")
         pair_text = " ".join(pairs)
-        for demoted in ["DPX", "GRAIL", "GNS", "JOE", "MAGIC", "RDNT", "TBTC"]:
+        for demoted in ["DPX", "GRAIL", "GNS", "JOE", "RDNT", "TBTC"]:
             assert demoted not in pair_text, f"{demoted} should not be in productive"
 
     def test_arb_lst_absent(self):
@@ -144,11 +145,11 @@ class TestBaseP0:
         assert required.issubset(pair_set), f"Missing: {required - pair_set}"
 
     def test_base_exploratory_absent(self):
-        """BRETT/DEGEN/TOSHI/WELL not in productive."""
+        """WELL not in productive. E1.48: BRETT/DEGEN/TOSHI promoted to productive."""
         data = load_core_tokens()
         pairs = generate_pairs_for_chain("base", data["base"], "productive")
         pair_text = " ".join(pairs)
-        for explo in ["BRETT", "DEGEN", "TOSHI", "WELL"]:
+        for explo in ["WELL"]:
             assert explo not in pair_text, f"{explo} should not be in productive"
 
 
@@ -335,10 +336,11 @@ class TestProductiveSanity:
     """Sanity checks on productive contour size."""
 
     def test_total_productive_pairs_reasonable(self):
-        """Productive contour should have 25-40 pairs (focused, not bloated)."""
+        """Productive contour should have 30-55 pairs (focused, not bloated).
+        E1.48: bumped 25-40 -> 30-55 to accommodate promoted memes/L2 tokens."""
         generated = generate_intent("productive")
         lines = [l for l in generated.split("\n") if l and not l.startswith("#")]
-        assert 25 <= len(lines) <= 40, f"Expected 25-40 productive pairs, got {len(lines)}"
+        assert 30 <= len(lines) <= 55, f"Expected 30-55 productive pairs, got {len(lines)}"
 
     def test_each_chain_has_weth_usdc(self):
         """Every chain must have WETH/USDC anchor in productive."""
@@ -371,8 +373,9 @@ class TestCalibrationTier:
         assert "arbitrum_one:USDC/USDT" in cal
 
     def test_calibration_count_reasonable(self):
-        """Calibration should be productive + a few benchmark pairs per chain."""
+        """Calibration should be productive + a few benchmark pairs per chain.
+        E1.48: bumped 31-50 -> 40-65 with productive expansion."""
         generated = generate_intent("calibration")
         lines = [l for l in generated.split("\n") if l and not l.startswith("#")]
-        # 31 productive + up to 2 benchmark per chain (max ~12 extra)
-        assert 31 <= len(lines) <= 50, f"Expected 31-50 calibration pairs, got {len(lines)}"
+        # productive + up to 2 benchmark per chain (max ~12 extra)
+        assert 40 <= len(lines) <= 65, f"Expected 40-65 calibration pairs, got {len(lines)}"

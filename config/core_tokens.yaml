@@ -135,11 +135,11 @@ arbitrum_one:
     address: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
     decimals: 18
     name: "GMX"
-    note: "GMX governance token"
+    note: "E1.48: GMX governance token, Uniswap V3 + Camelot V3 multi-DEX coverage"
     volatility_tier: high
     liquidity_tier: medium
     cross_dex_expected: 2
-    productive_default: false
+    productive_default: true
   
   UNI:
     address: "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0"
@@ -198,11 +198,11 @@ arbitrum_one:
     address: "0x539bdE0d7Dbd336b79148AA742883198BBF60342"
     decimals: 18
     name: "MAGIC"
-    note: "Treasure ecosystem token — thin vol, -421 bps slippage loss"
+    note: "E1.48: Treasure ecosystem token, Uniswap V3 + Camelot V3 multi-DEX"
     volatility_tier: medium
-    liquidity_tier: low
-    cross_dex_expected: 1
-    productive_default: false
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
 
   FRAX:
     address: "0x17FC002b466eEc40DaE837Fc4bE5c67993ddBd6F"
@@ -369,31 +369,31 @@ base:
     address: "0x532f27101965dd16442E59d40670FaF5eBB142E4"
     decimals: 18
     name: "Brett"
-    note: "Meme token — exploratory only"
+    note: "E1.48: Top Base meme, Aerodrome CL + Uniswap V3 multi-DEX, $5M+ TVL"
     volatility_tier: high
-    liquidity_tier: low
-    cross_dex_expected: 1
-    productive_default: false
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
   
   DEGEN:
     address: "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed"
     decimals: 18
     name: "Degen"
-    note: "Meme token — exploratory only"
+    note: "E1.48: Farcaster-native, Aerodrome + Uniswap V3 multi-DEX coverage"
     volatility_tier: high
-    liquidity_tier: low
-    cross_dex_expected: 1
-    productive_default: false
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
   
   TOSHI:
     address: "0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4"
     decimals: 18
     name: "Toshi"
-    note: "Meme token — exploratory only"
+    note: "E1.48: Coinbase-themed Base meme, Aerodrome + Uniswap V3 multi-DEX"
     volatility_tier: high
-    liquidity_tier: low
-    cross_dex_expected: 1
-    productive_default: false
+    liquidity_tier: medium
+    cross_dex_expected: 2
+    productive_default: true
   
   VIRTUAL:
     address: "0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b"

@@ -1617,13 +1617,13 @@ class TestCheckIntentTierLimits(unittest.TestCase):
     """Tests for check_intent_tier_limits function (v1.15.0)."""
 
     def test_within_limits_passes(self):
-        """Intent file with 51 pairs (calibration baseline) should pass."""
+        """Intent file with 64 pairs (calibration baseline) should pass."""
         from scripts.check_repo_safety import check_intent_tier_limits
         import tempfile
 
-        # Create intent.txt with exactly 51 pairs (E1.30/E1.31 approved baseline)
-        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(51)]
-        content = "# intent.txt v3.5.0\n" + "\n".join(pairs)
+        # Create intent.txt with exactly 64 pairs (E1.48 approved baseline)
+        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(64)]
+        content = "# intent.txt v3.6.0\n" + "\n".join(pairs)
 
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config"
@@ -1635,13 +1635,13 @@ class TestCheckIntentTierLimits(unittest.TestCase):
         self.assertEqual(len(issues), 0, f"Expected no issues at baseline, got: {issues}")
 
     def test_exceeds_limits_fails(self):
-        """Intent file with 60 pairs (>51) should fail without --allow-intent-edit."""
+        """Intent file with 80 pairs (>64) should fail without --allow-intent-edit."""
         from scripts.check_repo_safety import check_intent_tier_limits
         import tempfile
 
-        # Create intent.txt with 60 pairs (exceeds baseline 51)
-        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(60)]
-        content = "# intent.txt v3.5.0\n" + "\n".join(pairs)
+        # Create intent.txt with 80 pairs (exceeds baseline 64)
+        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(80)]
+        content = "# intent.txt v3.6.0\n" + "\n".join(pairs)
 
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config"
@@ -1652,16 +1652,16 @@ class TestCheckIntentTierLimits(unittest.TestCase):
 
         tier_issues = [i for i in issues if "INTENT_TIER_LIMIT" in i]
         self.assertEqual(len(tier_issues), 1, f"Expected tier limit issue, got: {issues}")
-        self.assertIn("60 pairs", tier_issues[0])
-        self.assertIn("baseline: 51", tier_issues[0])
+        self.assertIn("80 pairs", tier_issues[0])
+        self.assertIn("baseline: 64", tier_issues[0])
 
     def test_exceeds_limits_allowed_with_flag(self):
-        """Intent file with >51 pairs should pass with --allow-intent-edit."""
+        """Intent file with >64 pairs should pass with --allow-intent-edit."""
         from scripts.check_repo_safety import check_intent_tier_limits
         import tempfile
 
-        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(60)]
-        content = "# intent.txt v3.5.0\n" + "\n".join(pairs)
+        pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(80)]
+        content = "# intent.txt v3.6.0\n" + "\n".join(pairs)
 
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config"

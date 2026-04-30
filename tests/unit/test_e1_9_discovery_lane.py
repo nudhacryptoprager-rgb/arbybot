@@ -51,7 +51,8 @@ class TestDiscoveryPrewarmPairs:
         assert "AMONGUS" not in symbols
 
     def test_discovery_wider_than_production(self):
-        assert len(PREWARM_PAIRS_BASE_DISCOVERY) > len(PREWARM_PAIRS_BASE)
+        # E1.48: meme families promoted productive, so discovery may equal production.
+        assert len(PREWARM_PAIRS_BASE_DISCOVERY) >= len(PREWARM_PAIRS_BASE)
 
     def test_discovery_pairs_are_tuples_of_two(self):
         for pair in PREWARM_PAIRS_BASE_DISCOVERY:
@@ -108,11 +109,13 @@ class TestProfileDispatch:
 
 class TestProductionBackwardCompat:
     def test_production_base_pairs_unchanged(self):
+        # E1.48: BRETT/DEGEN/TOSHI promoted to productive (governance approved).
         assert PREWARM_PAIRS_BASE == [
             ("USDC", "DAI"), ("USDC", "USDT"), ("WETH", "USDC"),
             ("AERO", "USDC"), ("AERO", "WETH"),
             ("cbBTC", "USDC"), ("cbBTC", "WETH"),
             ("VIRTUAL", "USDC"), ("WETH", "VIRTUAL"),
+            ("BRETT", "WETH"), ("DEGEN", "WETH"), ("TOSHI", "WETH"),
         ]
 
     def test_production_arbitrum_pairs_unchanged(self):
@@ -549,8 +552,10 @@ class TestE110CrossDexPolicy:
                 cde = info.get("cross_dex_expected", 0)
                 if cde < 2 and sym not in ("WETH", "USDC", "USDT", "DAI"):
                     low_cross_dex_pairs.append((pair_str, sym, cde))
-        # These should exist (meme families) but should be documented
-        assert len(low_cross_dex_pairs) > 0, "Expected some low cross_dex pairs for diagnostic coverage"
+        # E1.48: meme families (BRETT/DEGEN/TOSHI) promoted to cross_dex=2.
+        # If no low cross_dex pairs remain, the diagnostic_only invariant is moot.
+        if not low_cross_dex_pairs:
+            return  # post-E1.48 valid state: all pairs are productive
         # Verify the config file contains 'diagnostic_only' comment
         from pathlib import Path
         config_text = Path("config/onboard_base_discovery.yaml").read_text(encoding="utf-8")
