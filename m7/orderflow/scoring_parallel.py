@@ -1390,6 +1390,45 @@ def score_backrun_fast(
     _reg_start = time.monotonic()
     entries = pool_registry.lookup_pair(token_in_addr, token_out_addr)
     if not entries:
+        # M7.E1.47/P0: Direct (in, out) miss. Probe for triangular candidates
+        # via intent-token graph. If at least one X exists s.t. registry has
+        # active (in, X) AND (X, out), surface the count + first sample as a
+        # detection signal (real triangle scoring is a follow-up iteration).
+        _tri_intermediates: list = []
+        try:
+            _tri_intermediates = pool_registry.find_triangular_intermediates(
+                token_in_addr, token_out_addr, max_results=4
+            )
+        except Exception:
+            _tri_intermediates = []
+        if _tri_intermediates:
+            _tri_count = len(_tri_intermediates)
+            _tri_first = _tri_intermediates[0]
+            _lag_t = current_block - event.block_number
+            if _lag_t == 0:
+                _ssc_t = "same_block"
+            elif _lag_t <= 2:
+                _ssc_t = "next_block"
+            else:
+                _ssc_t = "stale"
+            return BackrunResult(
+                event_id=event.event_id,
+                event_source="live",
+                event_type=event.event_type,
+                post_trade_state_used="live",
+                backrun_direction="skip",
+                reject_reason=f"TRIANGULAR_CANDIDATE_DEFERRED:{_tri_count}",
+                event_block=event.block_number,
+                quote_block=current_block,
+                block_lag=_lag_t,
+                same_state_class=_ssc_t,
+                event_detected_at_block=event_detected_at_block,
+                actual_pair=f"{token_in_addr[:10]}/{token_out_addr[:10]}",
+                scoring_path="triangular_pending",
+                backrun_token_in_address=token_in_addr,
+                backrun_token_out_address=token_out_addr,
+                size_normalization_source=f"triangular_via:{_tri_first}",
+            )
         return None
 
     active_entries = [e for e in entries if e.is_active()]

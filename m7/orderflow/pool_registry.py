@@ -117,6 +117,59 @@ class PoolRegistry:
         """Return True if this pair has already been queried."""
         return _pair_key(token_a, token_b) in self._queried
 
+    def find_triangular_intermediates(
+        self, token_a: str, token_b: str, *, max_results: int = 8
+    ) -> List[str]:
+        """M7.E1.47/P0: Find token X such that registry has BOTH (a, X) and (X, b)
+        with at least one active entry per leg. Used by hot path when direct
+        (a, b) lookup returns empty — enables triangular arb detection on
+        bridge events whose direct pair is not in the registry.
+
+        Conservative + cheap: linear scan over `_pools.keys()` with string
+        splits. With 15-300 intent pairs the keyspace is < 600 entries so the
+        scan is sub-millisecond. Caller is responsible for actual triangle
+        scoring; this method only detects candidate intermediates.
+
+        Returns up to ``max_results`` lowercase intermediate token addresses
+        (no duplicates). Skips X == token_a / token_b. Returns [] when no
+        intermediate is found.
+        """
+        a = (token_a or "").lower()
+        b = (token_b or "").lower()
+        if not a or not b or a == b:
+            return []
+        # Collect tokens that share a registry pair with both `a` and `b`.
+        # Step 1: tokens X with at least one active entry on (a, X)
+        a_neighbors: Set[str] = set()
+        for key in self._pools.keys():
+            if "/" not in key:
+                continue
+            t0, t1 = key.split("/", 1)
+            if t0 == a:
+                other = t1
+            elif t1 == a:
+                other = t0
+            else:
+                continue
+            if other == b:
+                # Direct (a, b) edge — caller would have hit it already.
+                continue
+            entries = self._pools.get(key) or []
+            if any(e.is_active() for e in entries):
+                a_neighbors.add(other)
+        if not a_neighbors:
+            return []
+        # Step 2: keep only those with an active (X, b) edge as well.
+        out: List[str] = []
+        for x in a_neighbors:
+            key_xb = _pair_key(x, b)
+            entries_xb = self._pools.get(key_xb) or []
+            if any(e.is_active() for e in entries_xb):
+                out.append(x)
+                if len(out) >= max_results:
+                    break
+        return out
+
     def lookup_pair(self, token_a: str, token_b: str) -> List[PoolRegistryEntry]:
         """Return cached entries for a pair (empty list if not queried or no pools)."""
         key = _pair_key(token_a, token_b)

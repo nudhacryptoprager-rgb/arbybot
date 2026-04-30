@@ -71,6 +71,16 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "reviewer_soak_delta_latest.json",
             # M7.A.5.4.0 batch pre-resolve cache (rolling, overwritten)
             "_pool_token_cache.json",
+            # M7.E1.47/P1a tier_map artifacts (per-chain, rolling, overwritten)
+            "m7_tier_map_base.json",
+            "m7_tier_map_arbitrum.json",
+            "m7_tier_map_arbitrum_one.json",
+            "m7_tier_map_optimism.json",
+            "m7_tier_map_polygon.json",
+            "m7_tier_map_zksync.json",
+            "m7_tier_map_linea.json",
+            "m7_tier_map_scroll.json",
+            "m7_tier_map_mantle.json",
         }
         
         # Archive files are allowed (created on reset)

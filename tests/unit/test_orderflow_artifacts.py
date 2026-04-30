@@ -2050,6 +2050,16 @@ class TestM7A532RollingCanonicalSet:
             # restart so DISC fast_path doesn't hit cold registry on
             # session restart.
             "_pool_token_cache.json",
+            # M7.E1.47/P1a tier_map artifacts (per-chain, rolling, overwritten)
+            "m7_tier_map_base.json",
+            "m7_tier_map_arbitrum.json",
+            "m7_tier_map_arbitrum_one.json",
+            "m7_tier_map_optimism.json",
+            "m7_tier_map_polygon.json",
+            "m7_tier_map_zksync.json",
+            "m7_tier_map_linea.json",
+            "m7_tier_map_scroll.json",
+            "m7_tier_map_mantle.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):

@@ -241,6 +241,40 @@ def run_loop(cli_args) -> None:
                     if _pa:
                         _cold_exec_pools.add(_pa.lower())
 
+                # M7.E1.47/P1b: Hot consumer of tier_map. Hot-tier pools (seen in
+                # current cold cycle) are merged into priority prewarm queue
+                # alongside cold_executable + near_executable. This widens the
+                # net beyond profit-thresholded executables to also catch
+                # active pools that haven't yet crossed the executable bar.
+                # Pure additive — does not change WS subscription topology.
+                _tier_hot_count = 0
+                _tier_hot_in_ptt = 0
+                _tier_hot_added = 0
+                try:
+                    from discovery.tier_classifier import read_tier_map_artifact
+                    _tm = read_tier_map_artifact(chain=cli_args.chain)
+                    _tier_hot_list = _tm.get("hot", []) or []
+                    _tier_hot_count = len(_tier_hot_list)
+                    _ptt_keys = {
+                        k.lower() for k in _bridge.get("pool_token_transport", {}).keys()
+                    }
+                    for _addr in _tier_hot_list:
+                        _addr_low = (_addr or "").lower()
+                        if not _addr_low:
+                            continue
+                        if _addr_low in _ptt_keys:
+                            _tier_hot_in_ptt += 1
+                        if _addr_low not in _cold_exec_pools:
+                            _cold_exec_pools.add(_addr_low)
+                            _tier_hot_added += 1
+                    if _tier_hot_count > 0:
+                        logger.info(
+                            "tier_map consumed: hot=%d in_ptt=%d added_priority=%d",
+                            _tier_hot_count, _tier_hot_in_ptt, _tier_hot_added,
+                        )
+                except Exception as _tm_exc:
+                    logger.debug("tier_map read failed: %s", str(_tm_exc)[:120])
+
                 _hot_pairs_to_prewarm: dict = {}
                 # 1. Seed defaults on first iteration (profile-aware)
                 if iteration == 1:
@@ -259,6 +293,60 @@ def run_loop(cli_args) -> None:
                 # M7.A.5.40: Update _promoted_pairs for hot artifact reporting
                 if _cross_promoted.get("candidate") or _cross_promoted.get("execution"):
                     _promoted_pairs = _cross_promoted
+
+                # M7.E1.47/P2: DISC -> PROD promotion. PROD hot lane reads
+                # DISC-side rolling artifacts (scoreboard + promoted_pairs)
+                # and merges qualifying pair_keys into the prewarm queue.
+                # Pure additive read; controlled by ARBY_DISC_TO_PROD=1
+                # (default ON) for backward compatibility.
+                if os.environ.get("ARBY_DISC_TO_PROD", "1") != "0":
+                    try:
+                        import json as _json_p2
+                        from m7.orderflow.disc_to_prod_promotion import (
+                            select_pairs_to_promote,
+                        )
+                        _disc_root = os.path.join(
+                            "data", "runs", "_rolling"
+                        )
+                        _disc_sb_path = os.path.join(
+                            _disc_root, "m7_discovery_scoreboard_discovery.json"
+                        )
+                        _disc_pp_path = os.path.join(
+                            _disc_root, "m7_promoted_pairs_discovery.json"
+                        )
+                        _disc_sb: dict = {}
+                        _disc_pp: dict = {}
+                        if os.path.exists(_disc_sb_path):
+                            with open(_disc_sb_path, "r", encoding="utf-8") as _fh:
+                                _disc_sb = _json_p2.load(_fh) or {}
+                        if os.path.exists(_disc_pp_path):
+                            with open(_disc_pp_path, "r", encoding="utf-8") as _fh:
+                                _disc_pp = _json_p2.load(_fh) or {}
+                        # Use intent + accumulated pairs as candidate pool so
+                        # family-tier promotions only emit pairs we already
+                        # know about (no synthesised universes).
+                        _pool = list(_hot_pairs_to_prewarm.keys())
+                        _disc_promoted = select_pairs_to_promote(
+                            _disc_sb, _disc_pp, candidate_pool=_pool,
+                        )
+                        _disc_added = 0
+                        for _dp in _disc_promoted:
+                            if _dp not in _hot_pairs_to_prewarm:
+                                _hot_pairs_to_prewarm[_dp] = {
+                                    "pair": _dp, "seen_count": 0,
+                                    "source": "disc_to_prod",
+                                }
+                                _disc_added += 1
+                        if _disc_promoted:
+                            logger.info(
+                                "DISC->PROD promotion: qualified=%d added=%d",
+                                len(_disc_promoted), _disc_added,
+                            )
+                    except Exception as _p2_exc:
+                        logger.debug(
+                            "DISC->PROD promotion failed: %s",
+                            str(_p2_exc)[:120],
+                        )
 
                 # E1.19a: Only run RPC-heavy prewarm on first iteration (cold
                 # cache) or when registry hasn't been warmed yet.  After the
@@ -994,6 +1082,64 @@ def run_loop(cli_args) -> None:
                                 "event_count": 1, "last_iter": iteration,
                             }
 
+                # M7.E1.47/P1a: Persist tier_map artifact from cold-side pool
+                # activity. Pure read (no RPC). HOT = seen in this iteration;
+                # WARM = seen previously but not now; COLD = unseen since
+                # bootstrap. Provides discovery telemetry for hot-lane
+                # consumer (P1b) without changing today's hot subscription.
+                try:
+                    from discovery.tier_classifier import (
+                        PoolActivitySnapshot,
+                        TierThresholds,
+                        classify_pools_to_tiers,
+                        write_tier_map_artifact,
+                    )
+                    import time as _time_tier
+
+                    _now_ts = _time_tier.time()
+                    _snapshots: list = []
+                    _seen_in_iter = {
+                        addr for addr, meta in _cold_active_pools.items()
+                        if meta.get("last_iter") == iteration
+                    }
+                    for _addr, _meta in _cold_active_pools.items():
+                        # Approximate last_swap_ts from iteration recency.
+                        _li = _meta.get("last_iter", iteration)
+                        if _li == iteration:
+                            _last_ts = _now_ts
+                        else:
+                            # Stale by ~ (iteration - _li) cycles. Cold cycle
+                            # cadence ~50s gives a coarse but useful tier hint.
+                            _last_ts = _now_ts - max(0, iteration - _li) * 50.0
+                        _snapshots.append(
+                            PoolActivitySnapshot(
+                                pool_address=_addr,
+                                last_swap_ts=_last_ts,
+                                swap_count_window=int(_meta.get("event_count", 0)),
+                                chain=cli_args.chain,
+                            )
+                        )
+                    if _snapshots:
+                        _tier_map = classify_pools_to_tiers(
+                            _snapshots,
+                            now_ts=_now_ts,
+                            thresholds=TierThresholds(
+                                hot_max_age_s=120.0, warm_max_age_s=1800.0
+                            ),
+                        )
+                        _path_out = write_tier_map_artifact(
+                            _tier_map, chain=cli_args.chain
+                        )
+                        logger.info(
+                            "tier_map written: HOT=%d WARM=%d COLD=%d path=%s",
+                            len(_tier_map.get("hot", [])),
+                            len(_tier_map.get("warm", [])),
+                            len(_tier_map.get("cold", [])),
+                            _path_out,
+                        )
+                except Exception as _tier_exc:
+                    logger.debug("tier_map write failed: %s", str(_tier_exc)[:120])
+
                 # M7.A.5.37: Log cold registry persistence stats
                 if _cold_registry is not None:
                     logger.info(
@@ -1107,8 +1253,31 @@ def run_loop(cli_args) -> None:
                                 _tok_in_addr = getattr(_r, "backrun_token_in_address", None)
                                 _tok_out_addr = getattr(_r, "backrun_token_out_address", None)
                                 _pair_str = getattr(_r, "actual_pair", None)
+                                # M7.E1.47 fix: when result lacks token
+                                # addresses but the bridge pool IS in the
+                                # PTT cache, use cached tokens as fallback
+                                # — TOKEN_ADDRESS_UNKNOWN should fire only
+                                # when we genuinely don't know the pool's
+                                # tokens, not when the scorer early-returns
+                                # via _reject() before populating them.
+                                if (not _tok_in_addr or not _tok_out_addr) and _cached_all:
+                                    try:
+                                        _t0c, _t1c, _ = _cached_all
+                                        if not _tok_in_addr:
+                                            _tok_in_addr = _t0c
+                                        if not _tok_out_addr:
+                                            _tok_out_addr = _t1c
+                                    except Exception:
+                                        pass
                                 if not _tok_in_addr or not _tok_out_addr:
                                     _reason_code = "TOKEN_ADDRESS_UNKNOWN"
+                                elif _sp_r == "triangular_pending" or "TRIANGULAR_CANDIDATE_DEFERRED" in _rej_u:
+                                    # M7.E1.47/P0: bridge event with no direct
+                                    # registry pair but triangular intermediates
+                                    # exist via intent-token graph. Distinct from
+                                    # REGISTRY_MISS so reviewer can target the
+                                    # follow-up triangle scoring iteration.
+                                    _reason_code = "TRIANGULAR_AVAILABLE"
                                 elif "PAIR_FILTER" in _rej_u or "FILTER_DROPPED" in _rej_u:
                                     _reason_code = "PAIR_FILTER_DROPPED"
                                 elif "REGISTRY" in _rej_u or _sp_r == "hot_skip":

@@ -416,6 +416,40 @@ def run_ws_live(
                             "WS 429 rate limit on %s (%s), trying fallback...",
                             _try_ws_name, urlparse(_try_ws_url).netloc,
                         )
+                        # M7.E1.47/P3: Alchemy WS premium fallback on 429.
+                        # If ALCHEMY_API_KEY is set and the throttled primary
+                        # is NOT already Alchemy, enqueue Alchemy WS BEFORE
+                        # public fallback. This keeps production-grade WS
+                        # under strict_provider_policy and gives a higher
+                        # quality reconnect target than publicnode.
+                        # Controlled by ARBY_ALCHEMY_WS_FALLBACK=1 (default ON).
+                        if os.environ.get("ARBY_ALCHEMY_WS_FALLBACK", "1") != "0":
+                            try:
+                                from core.rpc_urls import (
+                                    build_alchemy_ws_url,
+                                    _NETWORK_ALIASES as _NA_AL,
+                                )
+                                _api = os.environ.get("ALCHEMY_API_KEY")
+                                _net_alc = _NA_AL.get(args.chain.lower())
+                                if (
+                                    _api and _net_alc
+                                    and _try_ws_name != "alchemy"
+                                ):
+                                    _alc_ws = build_alchemy_ws_url(_net_alc, _api)
+                                    if (
+                                        _alc_ws
+                                        and (_alc_ws, "alchemy") not in _ws_tried_urls
+                                    ):
+                                        _ws_tried_urls.append((_alc_ws, "alchemy"))
+                                        logger.info(
+                                            "WS fallback enqueued: alchemy (%s)",
+                                            urlparse(_alc_ws).netloc,
+                                        )
+                            except Exception as _alc_exc:
+                                logger.debug(
+                                    "Alchemy WS fallback enqueue failed: %s",
+                                    str(_alc_exc)[:120],
+                                )
                         # Add public WS fallback if not already tried
                         from core.rpc_urls import _PUBLIC_WS_FALLBACKS, _NETWORK_ALIASES
                         _net_key = _NETWORK_ALIASES.get(args.chain.lower())
