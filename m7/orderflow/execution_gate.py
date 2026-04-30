@@ -986,12 +986,29 @@ def _build_sell_leg_tx_params(
         sell_fee = getattr(result, "best_buy_fee", None)  # fallback
     if sell_fee is None or sell_fee not in _ACCEPTED:
         # E1.32: Classify by origin for monitoring clarity.
+        # E1.42 (fee 2600 audit): when fee comes from scoring with a
+        # registered venue but is not in that venue's declared fee_tiers,
+        # surface BOTH venue and fee so reviewers can see whether the
+        # mismatch is a discovery bug (registered venue + stray fee) vs a
+        # genuinely unknown source (off-registry venue).
         _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2655, 3024, 5000, 20000}
+        _venue_label = str(sell_venue) if sell_venue else "UNKNOWN_VENUE"
         if isinstance(sell_fee, int):
             if sell_fee in _AERODROME_CL_KNOWN:
                 return None, f"SELL_FEE_UNSUPPORTED:AERODROME_CL:{sell_fee}"
             if 1 < sell_fee <= 100:
                 return None, f"SELL_FEE_UNSUPPORTED:ALGEBRA_DYNAMIC:{sell_fee}"
+            # Determine whether the venue is registered at all for *chain*.
+            try:
+                from config import load_dexes as _load_dexes
+                _registered = (_load_dexes() or {}).get(chain, {})
+                _venue_known = _venue_label in _registered
+            except Exception:
+                _venue_known = False
+            if _venue_known:
+                # Registered venue but fee not in its declared tier set.
+                return None, f"SELL_FEE_UNSUPPORTED:VENUE_FEE_MISMATCH:{_venue_label}:{sell_fee}"
+            return None, f"SELL_FEE_UNSUPPORTED:UNKNOWN_SOURCE:{_venue_label}:{sell_fee}"
         return None, f"SELL_FEE_UNSUPPORTED:{sell_fee}"
 
     # Reverse token direction: buy.tokenOut becomes sell.tokenIn

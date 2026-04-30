@@ -1958,6 +1958,44 @@ def _update_hot_rollup(
             "stage_breakdown": None,
         }
 
+    # E1.42 Iter 3 — derived rate metrics (cumulative across the session).
+    # Always computed, even when zero, so reviewers can classify a soak
+    # window as "market_quiet" vs "scoring_blackhole" vs "active" without
+    # ad-hoc math. Uses cumulative session counters; for short windows
+    # the rates are noisy by construction — that is intentional, since
+    # the metric exists to expose statistical insufficiency.
+    try:
+        _rate_block: dict = {}
+        _sess_now = rollup.get("session") or {}
+        _elapsed_min = float(_sess_now.get("session_elapsed_minutes") or 0.0)
+        _elapsed_hrs = _elapsed_min / 60.0
+        if _elapsed_hrs > 0:
+            _rt_att_t = int(rollup.get("roundtrip_attempted_total", 0) or 0)
+            _rt_prof_t = int(rollup.get("roundtrip_profitable_total", 0) or 0)
+            _rate_block["roundtrip_attempt_rate_per_hour"] = round(
+                _rt_att_t / _elapsed_hrs, 4
+            )
+            _rate_block["profitable_event_rate_per_hour"] = round(
+                _rt_prof_t / _elapsed_hrs, 4
+            )
+        else:
+            _rate_block["roundtrip_attempt_rate_per_hour"] = None
+            _rate_block["profitable_event_rate_per_hour"] = None
+        # scoring_blackhole_rate = windows where events_seen>0 but
+        # fast_path_scored=0, divided by total session windows. Uses the
+        # already-tracked counters so cost is one division.
+        _wnd_total = int(_sess_now.get("session_windows_seen", 0) or 0)
+        _wnd_blackhole = int(rollup.get("windows_events_without_fast_score_total", 0) or 0)
+        if _wnd_total > 0:
+            _rate_block["scoring_blackhole_rate"] = round(_wnd_blackhole / _wnd_total, 4)
+        else:
+            _rate_block["scoring_blackhole_rate"] = None
+        _rate_block["session_elapsed_minutes"] = round(_elapsed_min, 3)
+        _rate_block["session_windows_seen"] = _wnd_total
+        rollup["rate_metrics"] = _rate_block
+    except Exception as exc:
+        logger.debug("rate_metrics computation failed: %s", str(exc)[:120])
+
     try:
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:

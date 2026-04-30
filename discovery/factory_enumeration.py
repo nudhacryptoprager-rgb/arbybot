@@ -1,4 +1,4 @@
-"""Factory pool enumeration scaffold.
+﻿"""Factory pool enumeration scaffold.
 
 Reviewer post-2h-soak step #6: extend the production universe via factory
 enumeration. The current onboarding loads a hand-curated subset of pools
@@ -19,7 +19,7 @@ chain-aware Web3 reader (see ``chains/providers.py``) and emit
   - a deterministic enumerator stub that reads from the cache.
 
 The scaffold is required by the post-2h-soak fix list because the 2h Base
-soak produced only 1 fresh fast-path score — the universe is too narrow
+soak produced only 1 fresh fast-path score вЂ” the universe is too narrow
 for production-scale opportunities. A dedicated live-enumeration iteration
 will land on top of this scaffold without touching the orderflow path.
 """
@@ -35,6 +35,8 @@ __all__ = [
     "FactoryPoolRecord",
     "EnumerationCache",
     "enumerate_factory_pools",
+    "populate_cache_from_pool_index",
+    "default_cache_path",
 ]
 
 
@@ -133,3 +135,102 @@ def enumerate_factory_pools(
     if cache.chain != chain:
         return []
     return cache.filter(dex=dex)
+
+
+# E1.42 Iter 4 — cold-lane collector wiring.
+#
+# `populate_cache_from_pool_index` bridges the existing
+# `discovery.index_factories.PoolIndex` (already populated by the cold
+# lane via `index_intent_pairs` / on-chain factory.getPool calls) into
+# the offline enumeration cache that the rest of the system reads via
+# `enumerate_factory_pools`. Calling it is side-effect-controlled: a
+# single JSON write to `cache_path`. It performs NO RPC.
+#
+# Hot lane MUST NOT call this; it belongs to the cold lane only.
+
+def default_cache_path(chain: str, root: Optional[Path] = None) -> Path:
+    """Canonical cache location: data/cache/factory_enum/<chain>.json."""
+    base = root or Path("data") / "cache" / "factory_enum"
+    return base / f"{chain}.json"
+
+
+def populate_cache_from_pool_index(
+    *,
+    chain: str,
+    pool_index: object,
+    cache_path: Optional[Path] = None,
+    discovered_at: Optional[str] = None,
+) -> int:
+    """Convert a `PoolIndex` snapshot into an `EnumerationCache` JSON file.
+
+    Returns the number of records written. Idempotent: rewriting the
+    same chain replaces prior content.
+
+    `pool_index` is duck-typed: any object with `get_pools(chain)`
+    returning iterable of namedtuple-likes with attributes
+    (chain, dex, address, token0, token1, fee_tier) is accepted. This
+    intentionally avoids a hard import of `discovery.index_factories`
+    so the cold collector can also be wired against alternative
+    enumerators (subgraph, log-scan) without changing this signature.
+    """
+    if cache_path is None:
+        cache_path = default_cache_path(chain)
+
+    pools = []
+    try:
+        pools = list(pool_index.get_pools(chain))
+    except Exception:
+        pools = []
+
+    base = root or Path("data") / "cache" / "factory_enum"
+    return base / f"{chain}.json"
+
+
+def populate_cache_from_pool_index(
+    *,
+    chain: str,
+    pool_index: object,
+    cache_path: Optional[Path] = None,
+    discovered_at: Optional[str] = None,
+) -> int:
+    """Convert a `PoolIndex` snapshot into an `EnumerationCache` JSON file.
+
+    Returns the number of records written. Idempotent: rewriting the
+    same chain replaces prior content.
+
+    `pool_index` is duck-typed: any object with `get_pools(chain)`
+    returning iterable of namedtuple-likes with attributes
+    (chain, dex, address, token0, token1, fee_tier) is accepted.
+    """
+    if cache_path is None:
+        cache_path = default_cache_path(chain)
+
+    pools = []
+    try:
+        pools = list(pool_index.get_pools(chain))
+    except Exception:
+        pools = []
+
+    cache = EnumerationCache(chain=chain)
+    for p in pools:
+        try:
+            rec = FactoryPoolRecord(
+                chain=str(getattr(p, "chain", chain)),
+                dex=str(getattr(p, "dex", "unknown")),
+                factory_address=str(getattr(p, "factory_address", "") or ""),
+                pool_address=str(getattr(p, "address", "") or ""),
+                token0_address=str(getattr(p, "token0", "") or ""),
+                token1_address=str(getattr(p, "token1", "") or ""),
+                fee_tier=getattr(p, "fee_tier", None),
+                adapter_type=getattr(p, "adapter_type", None),
+                tick_spacing=getattr(p, "tick_spacing", None),
+                discovered_at=discovered_at,
+            )
+        except Exception:
+            continue
+        if not rec.pool_address:
+            continue
+        cache.add(rec)
+
+    cache.write(cache_path)
+    return len(cache.records)
