@@ -2192,3 +2192,94 @@ def mark_supervisor_end(chain: str = "arbitrum_one") -> None:
     if sibling != bound and os.path.exists(sibling):
         _flush_rollup_at_path(path=sibling, chain=chain, is_supervisor_exit=True)
 
+
+# ---------------------------------------------------------------------------
+# E1.49 — Periodic mid-cycle heartbeat (speed-audit reviewer fix #3)
+# ---------------------------------------------------------------------------
+#
+# Reviewer 30m soak verdict (2026-04-30): hot lane completes only 1 cycle
+# in ~7 minutes when ws_timeout=600 and the WS provider 429-throttles. The
+# rollup is only updated on iteration boundaries, so reviewers see stale
+# `last_updated` even when the WS recv loop is alive and reconnecting.
+#
+# This helper writes a lightweight, additive-only heartbeat that:
+#   - bumps `last_heartbeat_utc` and `last_periodic_heartbeat_at`
+#   - stamps `cycle_window_started_at` (first call of a cycle)
+#   - stamps `cycle_window_elapsed_s` (wall seconds since cycle start)
+#   - stamps `last_hot_write_at` (every call)
+# without mutating session counters or invariant baselines. It is safe to
+# call many times per cycle.
+def heartbeat_hot_rollup_cycle(
+    cycle_started_monotonic: float,
+    chain: str = "arbitrum_one",
+) -> None:
+    """E1.49: Mid-cycle heartbeat with cycle-elapsed telemetry.
+
+    Designed to be called from inside the WS recv loop every
+    ``ARBY_HOT_HEARTBEAT_INTERVAL_S`` seconds (default 30s). The caller
+    is responsible for rate-limiting; this function does NOT throttle
+    itself so unit tests can assert each call's effect deterministically.
+
+    Parameters
+    ----------
+    cycle_started_monotonic
+        ``time.monotonic()`` snapshot taken when the current hot cycle
+        began. Used to compute ``cycle_window_elapsed_s``.
+    chain
+        Chain label (mirrors ``flush_rollup_shutdown``).
+    """
+    import time as _t  # local to avoid touching module-level imports
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path = _rio._HOT_ROLLUP_PATH
+    rollup: dict = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                rollup = json.load(f)
+    except Exception:
+        rollup = {}
+    if not isinstance(rollup, dict):
+        return
+
+    elapsed_s = max(0.0, _t.monotonic() - cycle_started_monotonic)
+    rollup["last_heartbeat_utc"] = ts
+    rollup["last_periodic_heartbeat_at"] = ts
+    rollup["last_hot_write_at"] = ts
+    rollup.setdefault("cycle_window_started_at", ts)
+    rollup["cycle_window_elapsed_s"] = round(elapsed_s, 2)
+    rollup.setdefault("chain", chain)
+    rollup["periodic_heartbeats_total"] = (
+        int(rollup.get("periodic_heartbeats_total", 0) or 0) + 1
+    )
+    try:
+        _atomic_json_write(path, rollup, indent=2, default=str)
+    except Exception as exc:
+        logger.debug("Failed to write periodic heartbeat: %s", str(exc)[:80])
+
+
+def reset_cycle_window_marker(chain: str = "arbitrum_one") -> None:
+    """E1.49: Stamp a fresh ``cycle_window_started_at`` at iteration start.
+
+    Called by ``loop_runner`` at the top of each hot iteration so that the
+    next periodic heartbeat anchors elapsed-seconds against the correct
+    cycle (not the previous cycle's start).
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path = _rio._HOT_ROLLUP_PATH
+    rollup: dict = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                rollup = json.load(f)
+    except Exception:
+        rollup = {}
+    if not isinstance(rollup, dict):
+        return
+    rollup["cycle_window_started_at"] = ts
+    rollup["cycle_window_elapsed_s"] = 0.0
+    rollup.setdefault("chain", chain)
+    try:
+        _atomic_json_write(path, rollup, indent=2, default=str)
+    except Exception as exc:
+        logger.debug("Failed to reset cycle marker: %s", str(exc)[:80])
+

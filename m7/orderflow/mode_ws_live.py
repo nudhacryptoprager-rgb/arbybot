@@ -37,6 +37,33 @@ from m7.orderflow.contracts import BackrunResult
 logger = logging.getLogger("m7.orderflow.cli")
 
 
+# ---------------------------------------------------------------------------
+# E1.50 / TD-003 — In-process WS-target refresh bridge.
+# Module-level cache of the last-working WS endpoint per chain. Once the
+# WS escalation chain (drpc -> alchemy / public_fallback) succeeds, the next
+# iteration starts directly from that proven endpoint instead of re-paying
+# the drpc 429 reconnect cost on every iteration.
+#
+# Pure additive: prefer-only — never overrides _strict_provider_policy gates
+# (refusal of public_fallback under strict policy still applies).
+# Reset on process restart (no on-disk persistence by design — keeps the
+# rolling artifact contract unchanged).
+# ---------------------------------------------------------------------------
+_LAST_WORKING_WS: Dict[str, Dict[str, str]] = {}  # chain -> {"url": str, "provider": str}
+
+
+def _remember_last_working_ws(chain: str, url: str, provider: str) -> None:
+    if not chain or not url:
+        return
+    _LAST_WORKING_WS[chain.lower()] = {"url": url, "provider": provider or "unknown"}
+
+
+def _peek_last_working_ws(chain: str) -> Optional[Dict[str, str]]:
+    if not chain:
+        return None
+    return _LAST_WORKING_WS.get(chain.lower())
+
+
 def run_ws_live(
     args,
     *,
@@ -213,6 +240,39 @@ def run_ws_live(
     if not isinstance(ws_diag, dict):
         ws_diag = {"source": str(ws_diag)}
     ws_host = urlparse(ws_url).netloc
+
+    # E1.50 / TD-003: prefer last-working WS endpoint for this chain across
+    # iterations. After a successful escalation (e.g. drpc 429 -> alchemy),
+    # subsequent iterations should not re-pay the drpc reconnect cost.
+    # Honors strict provider policy: never resurrect public_fallback when
+    # ARBY_STRICT_PROVIDER_POLICY=1 (handled later in _open_ws_subscription).
+    if not _flashblocks_ws and os.environ.get("ARBY_WS_REUSE_LAST_WORKING", "1") != "0":
+        try:
+            _last = _peek_last_working_ws(args.chain)
+            if _last and _last.get("url"):
+                _last_url = _last["url"]
+                _last_provider = _last.get("provider") or "unknown"
+                if _last_url != ws_url and _last_provider != "public_fallback":
+                    logger.info(
+                        "WS reuse last-working endpoint: provider=%s host=%s "
+                        "(was: provider=%s host=%s)",
+                        _last_provider,
+                        urlparse(_last_url).netloc,
+                        ws_provider,
+                        ws_host,
+                    )
+                    ws_url = _last_url
+                    ws_provider = _last_provider
+                    ws_host = urlparse(ws_url).netloc
+                    ws_diag = {
+                        "source": "ws_reuse_last_working",
+                        "original_source": ws_diag.get("source", "unknown"),
+                        "reused_provider": _last_provider,
+                    }
+        except Exception as _reuse_exc:
+            logger.debug(
+                "WS reuse last-working skipped: %s", str(_reuse_exc)[:120]
+            )
 
     logger.info(
         "RPC resolved: http=%s ws=%s ws_provider=%s",
@@ -487,6 +547,20 @@ def run_ws_live(
             _ws_connection_status = "connected"
             _ws_error_detail = None
             _ws_subscribe_count += 1
+            # E1.50 / TD-003: remember last-working WS endpoint so the next
+            # iteration starts from the proven target (skip re-paying drpc
+            # 429 reconnect cost). Only memorize non-fallback providers to
+            # respect strict provider policy.
+            try:
+                if ws_provider and ws_provider != "public_fallback":
+                    _remember_last_working_ws(
+                        getattr(args, "chain", ""), ws_url, ws_provider
+                    )
+            except Exception as _mem_exc:
+                logger.debug(
+                    "WS remember-last-working skipped: %s",
+                    str(_mem_exc)[:120],
+                )
             logger.info(
                 "WebSocket newHeads subscribed: sub_id=%s reason=%s recv_timeout=%ds",
                 sub_id,
@@ -508,12 +582,91 @@ def run_ws_live(
         # no hint at why each lane kept ending after ~20s.
         _exit_reason = "loop_not_entered"
 
+        # E1.49: periodic heartbeat — write rollup every N seconds even
+        # when WS feed is silent or stuck in 429 reconnect. Reviewer
+        # cadence guard checks `last_periodic_heartbeat_at`.
+        _hot_hb_interval_s = max(
+            5.0,
+            float(os.environ.get("ARBY_HOT_HEARTBEAT_INTERVAL_S", "30") or 30),
+        )
+        _last_hb_monotonic = time.monotonic()
+        # E1.50 / TD-003: mid-recv-loop bridge refresh. Re-reads the
+        # cold->hot bridge file (no RPC) every M seconds and merges newly
+        # resolved pool_token_transport entries into the in-process
+        # _pool_token_cache. New pools become scoreable without restarting
+        # the WS subscription, decoupling search-window cadence from
+        # WS-provider reconnect bursts. Pure additive: cache writes only;
+        # registry mutation is left to the iteration boundary to keep the
+        # cross-process safety contract (see TD-003 risk note).
+        _bridge_refresh_interval_s = max(
+            10.0,
+            float(
+                os.environ.get("ARBY_HOT_BRIDGE_REFRESH_S", "45") or 45
+            ),
+        )
+        _last_bridge_refresh_monotonic = time.monotonic()
+        _bridge_refresh_total = 0
+        _bridge_refresh_added_total = 0
+
         while blocks_processed < args.ws_blocks:
             elapsed = time.monotonic() - ws_start_time
             if elapsed > args.ws_timeout:
                 logger.info("ws-live timeout reached (%ds)", args.ws_timeout)
                 _exit_reason = "ws_timeout"
                 break
+
+            # E1.49: periodic mid-cycle heartbeat (lane=hot only — cold has
+            # frequent iteration boundaries). Adds last_periodic_heartbeat_at
+            # + cycle_window_elapsed_s to the rollup so reviewer can see
+            # liveness even during WS 429 storms.
+            if (time.monotonic() - _last_hb_monotonic) >= _hot_hb_interval_s:
+                try:
+                    if str(getattr(args, "lane", "") or "").lower() == "hot":
+                        from m7.orderflow.hot_runtime_artifacts import (
+                            heartbeat_hot_rollup_cycle as _hb_hot,
+                        )
+                        _hb_hot(
+                            cycle_started_monotonic=ws_start_time,
+                            chain=getattr(args, "chain", "arbitrum_one"),
+                        )
+                except Exception as _hb_exc:
+                    logger.debug(
+                        "periodic heartbeat skipped: %s", str(_hb_exc)[:80]
+                    )
+                _last_hb_monotonic = time.monotonic()
+
+            # E1.50 / TD-003: mid-recv-loop bridge refresh. Re-read PTT and
+            # warm _pool_token_cache so newly-resolved pools become
+            # scoreable without an iteration restart. Hot-lane only —
+            # cold lane already has frequent iteration boundaries.
+            if (
+                str(getattr(args, "lane", "") or "").lower() == "hot"
+                and (time.monotonic() - _last_bridge_refresh_monotonic)
+                >= _bridge_refresh_interval_s
+            ):
+                try:
+                    from m7.orderflow.bridge_runtime import (
+                        _read_cold_hot_bridge as _read_bridge_mid,
+                        _populate_pool_token_cache_from_bridge as _populate_mid,
+                    )
+                    _bridge_mid = _read_bridge_mid()
+                    _added_mid = _populate_mid(_bridge_mid)
+                    _bridge_refresh_total += 1
+                    _bridge_refresh_added_total += int(_added_mid or 0)
+                    if _added_mid:
+                        logger.info(
+                            "mid-loop bridge refresh: +%d ptt entries "
+                            "(refresh #%d, total_added=%d)",
+                            _added_mid,
+                            _bridge_refresh_total,
+                            _bridge_refresh_added_total,
+                        )
+                except Exception as _br_exc:
+                    logger.debug(
+                        "mid-loop bridge refresh skipped: %s",
+                        str(_br_exc)[:120],
+                    )
+                _last_bridge_refresh_monotonic = time.monotonic()
 
             try:
                 msg = ws_conn.recv()

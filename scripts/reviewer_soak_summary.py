@@ -242,6 +242,34 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
             "supervisor cycles_completed likely 0)"
         )
         ok = False
+    # E1.49 reviewer guard: HOT_CADENCE_TOO_SLOW.
+    # When the periodic mid-cycle heartbeat is firing (delta>0 confirms
+    # the WS recv loop is alive and the rollup is being refreshed) but
+    # clean cycles are scarce relative to the soak window, the hot lane
+    # cadence is below production-search threshold. Threshold defaults
+    # match step #10 of the 2026-04-30 reviewer playbook (>=2 cycles per
+    # ~30 minutes, where ~30 min ≈ 60 heartbeats at 30s default).
+    _hb_delta = max(
+        0,
+        int(current.get("periodic_heartbeats_total", 0) or 0)
+        - int(baseline.get("periodic_heartbeats_total", 0) or 0),
+    )
+    _hb_min = int(
+        os.environ.get("ARBY_REVIEWER_MIN_HEARTBEATS_FOR_CADENCE", "40") or 40
+    )
+    _cycles_min = int(
+        os.environ.get("ARBY_REVIEWER_MIN_HOT_CYCLES_PER_SOAK", "2") or 2
+    )
+    if _hb_delta >= _hb_min and _cce_delta < _cycles_min:
+        reasons.append(
+            "HOT_CADENCE_TOO_SLOW "
+            f"periodic_heartbeats_delta={_hb_delta} clean_child_exits_delta={_cce_delta}"
+            f" (expected >={_cycles_min} hot cycles when heartbeats>={_hb_min};"
+            " consider --m7-hot-ws-timeout 120 --m7-hot-blocks 300 --m7-hot-max-events 120)"
+        )
+        # Informational — does not flip `ok` because a slow cadence may
+        # still produce a valid sim_passed window. The reviewer surfaces
+        # it so operators can decide whether to shorten ws_timeout.
     if _events_delta > 0 and _fps_delta == 0:
         # E1.45: enriched SCORING_BLACKHOLE breakdown using the existing
         # admission-funnel counters. NO_BRIDGE_HIT and BRIDGE_HIT_NOT_SCORED

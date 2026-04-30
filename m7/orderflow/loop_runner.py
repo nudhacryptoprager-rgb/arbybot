@@ -201,6 +201,42 @@ def run_loop(cli_args) -> None:
             lane.upper(), iteration, window_started_at,
         )
 
+        # E1.49: stamp cycle_window_started_at on hot iteration start so
+        # mid-cycle heartbeats anchor elapsed-seconds against the right
+        # boundary (per reviewer 30m soak verdict 2026-04-30).
+        if lane == "hot":
+            try:
+                from m7.orderflow.hot_runtime_artifacts import (
+                    reset_cycle_window_marker as _reset_marker,
+                )
+                _reset_marker(chain=cli_args.chain)
+            except Exception as _exc_marker:
+                logger.debug(
+                    "cycle marker reset skipped: %s", str(_exc_marker)[:80]
+                )
+
+        # E1.49 canary fix: also bump periodic_heartbeats_total at iteration
+        # boundary. The mid-cycle heartbeat in mode_ws_live only runs after
+        # successful WS subscribe — under drpc 429 storms the subscribe
+        # itself never completes, so the reviewer cadence guard would never
+        # see heartbeat deltas. Stamping at iteration start guarantees
+        # cadence visibility regardless of WS health.
+        if lane == "hot":
+            try:
+                import time as _t_iter
+                from m7.orderflow.hot_runtime_artifacts import (
+                    heartbeat_hot_rollup_cycle as _hb_iter,
+                )
+                _hb_iter(
+                    cycle_started_monotonic=_t_iter.monotonic(),
+                    chain=cli_args.chain,
+                )
+            except Exception as _exc_hb_iter:
+                logger.debug(
+                    "iteration-boundary heartbeat skipped: %s",
+                    str(_exc_hb_iter)[:80],
+                )
+
         try:
             # M7.A.5.39: Lane-specific registry init + prewarm
             _ext_registry = None
@@ -455,7 +491,16 @@ def run_loop(cli_args) -> None:
                 # V3/CL pools can have 0 in-range liquidity at prewarm time
                 # (concentrated positions out of range temporarily) but real
                 # liquidity later.  Re-query them before each hot window.
-                if _hot_registry is not None and _hot_rpc:
+                # E1.50 / TD-003: throttle to every Nth iteration to reduce
+                # per-iteration drpc HTTP load (eth.block_number + per-pool
+                # state queries). Default N=3 keeps refresh frequency
+                # acceptable while cutting drpc HTTP traffic by ~66%, which
+                # leaves headroom for the WS recv loop to avoid 429.
+                _zlr_every_n = max(
+                    1,
+                    int(os.environ.get("ARBY_HOT_ZLR_EVERY_N_ITERS", "3") or 3),
+                )
+                if _hot_registry is not None and _hot_rpc and (iteration % _zlr_every_n == 1):
                     try:
                         from web3 import Web3 as _W3_zlr
                         _zlr_block = _W3_zlr(_W3_zlr.HTTPProvider(
@@ -477,6 +522,11 @@ def run_loop(cli_args) -> None:
                             "hot-phase: zero-liq refresh error: %s",
                             str(_zlr_exc)[:80],
                         )
+                elif _hot_registry is not None and _hot_rpc:
+                    logger.debug(
+                        "hot-phase: zero-liq refresh throttled (iter %d, every_n=%d)",
+                        iteration, _zlr_every_n,
+                    )
             elif lane == "cold":
                 # M7.A.5.38: Lazy-init persistent cold registry with wide stale
                 # threshold (5000 blocks ≈ 20 min). Cold lane is diagnostic, not
