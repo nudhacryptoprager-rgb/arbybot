@@ -590,6 +590,29 @@ def run_ws_live(
                             time.sleep(_cool)
                 if not _reconnected:
                     _exit_reason = "recv_error_reconnect_failed"
+                    # E1.46 reviewer fix #4: classify rate-limit-driven
+                    # reconnect storms as failed_429 so
+                    # session_ws_failed_429_windows actually counts
+                    # dRPC code 15 / "Too many request" / HTTP 429
+                    # cascades on reconnect (previously only HTTP 429
+                    # on the very first connect was tagged 429).
+                    _last_err_lower = (_ws_last_recv_error or "").lower()
+                    if (
+                        "too many request" in _last_err_lower
+                        or "'code': 15" in _last_err_lower
+                        or "\"code\": 15" in _last_err_lower
+                        or "code\":15" in _last_err_lower
+                        or "code': 15" in _last_err_lower
+                        or " 429" in _last_err_lower
+                        or ":429" in _last_err_lower
+                        or "rate limit" in _last_err_lower
+                        or "rate-limit" in _last_err_lower
+                    ):
+                        _ws_connection_status = "failed_429"
+                        _ws_error_detail = (
+                            "WS reconnect storm rate-limited; last="
+                            f"{(_ws_last_recv_error or '')[:120]}"
+                        )
                     break
                 continue
 

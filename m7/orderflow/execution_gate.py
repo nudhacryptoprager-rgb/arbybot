@@ -72,6 +72,7 @@ SLIPSTREAM_FEE_TO_TICKSPACING: Dict[int, int] = {
     600: 50,     # low-volatility pairs
     1000: 100,   # medium-volatility (e.g. WETH/cbETH)
     2105: 100,   # medium-volatility
+    2600: 100,   # medium-volatility (E1.45: PROD soak fee_2600 SELL_FEE_UNSUPPORTED unblock)
     2655: 100,   # medium-volatility (dominant bucket in soak3 histogram)
     3024: 100,   # medium-volatility
     5000: 200,   # high-volatility (e.g. AERO/WETH)
@@ -730,7 +731,7 @@ def _build_sim_tx_params(
                 # `tickSpacing` lookup is still pending (scanner does not
                 # yet carry it through BackrunResult).  Submit remains
                 # blocked until the lookup layer lands.
-                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2655, 3024, 5000, 20000}
+                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 2105, 2600, 2655, 3024, 5000, 20000}
                 if _fee_hint in _AERODROME_CL_KNOWN:
                     try:
                         _slip_cfg = _gdc(chain, "aerodrome_slipstream")

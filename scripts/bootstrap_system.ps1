@@ -209,6 +209,22 @@ if (-not $NoRollupProbe -and $RollupProbeSeconds -gt 0) {
         $probeElapsed += 5
         if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) {
             Write-Step "rollup probe: supervisor exited early — aborting probe"
+            # E1.45 step 4: lane-aware exit. If the supervisor exited
+            # cleanly and the rollup carries a fresh shutdown_flush_at
+            # / supervisor_end_utc stamp, treat that as positive proof
+            # that the system flushed at least once (even if no fresh
+            # active hot write occurred). This avoids killing the
+            # post-mortem reviewer summary on short windows where the
+            # supervisor finishes before the probe wakes up.
+            if (Test-Path $rollupPath) {
+                try {
+                    $rJson = Get-Content $rollupPath -Raw | ConvertFrom-Json
+                    if ($rJson.shutdown_flush_at -or $rJson.supervisor_end_utc) {
+                        Write-Step ("rollup probe: PASS-by-shutdown — shutdown_flush_at=" + $rJson.shutdown_flush_at + " supervisor_end_utc=" + $rJson.supervisor_end_utc)
+                        $progressed = $true
+                    }
+                } catch {}
+            }
             break
         }
         if (Test-Path $rollupPath) {

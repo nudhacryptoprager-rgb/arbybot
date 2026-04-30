@@ -1,130 +1,129 @@
-﻿# DEV REPORT
+# DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-04-30T01:30:00Z
-run_id: M7.E1.42 6-iter sequential work-track + 60-min soak (POST-SOAK FINAL)
-mode: ONLINE (60m Base soak, rpc_fork PROD+DISC, paper/sim-only)
+timestamp_utc: 2026-04-30T11:50:00Z
+run_id: M7.E1.46 reviewer-funnel observability + WS rate-limit classification + clean-cycle accounting
+mode: OFFLINE (unit + safety) — runtime evidence is the post-E1.45 30m soak (supervisor 2026-04-30T11:13:58Z→11:44:01Z, 5/5 alive, crash_restarts=0); no fresh soak this iteration.
 artifact_mode: rolling
-config: ProdSimBackend=rpc_fork, DiscSimBackend=rpc_fork, ARBY_MAX_TRADE_USD=0, ARBY_PRE_SIM_BISECT=1, ARBY_HOT_SWEEP_ENABLE=1, ARBY_SIM_MIN_NET_BPS=0.5, ARBY_HOT_PREWARM_BUDGET_SEC=600, bootstrap flag: -NoRollupProbe
+config: code-only changes; no runtime env or config changes.
 code_identity:
-  primary: ts:2026-04-30T01:30:00Z
-  dirty: true (5 new feature modules + 33 new tests landed; soak completed)
-  desc: E1.41 deferred 6-iter work-track (P0 fee_2600 audit + watchlist + rate_metrics + P1 factory_enumeration + tier_classifier wiring) implemented sequentially with intermediate validation; final 60-min Base soak completed cleanly (supervisor exited 2026-04-30T01:26:12Z). Soak elapsed 251 minutes wall-clock (window from session_started 2026-04-29T21:14:27Z) with 5/5 process-supervision discipline. Economic state unchanged from E1.41 baseline (PROD roundtrip_profitable_total=0, market-quiet window).
+  primary: ts:2026-04-30T11:50:00Z (split/code @ 82e7527 + targeted dirty diff)
+  dirty: true (m7/orderflow/hot_runtime_artifacts.py, m7/orderflow/mode_ws_live.py, scripts/reviewer_soak_summary.py, scripts/replay_divergence_samples.py, plus 3 test files)
+  desc: Closed seven of the ten post-E1.45 reviewer report items with surgical, backward-compatible changes. No large refactors per CLAUDE.md §1.2. Steps 1 (factory_enum → tier_classifier → bounded HOT universe wiring), 6 (DISC→PROD watchlist promotion with TTL/provenance), and 9 (60m active-window soak gated on step 1) explicitly DEFERRED to dedicated iterations.
 
 ## 1) Scope
-goal (Roadmap): M7.E1 Base orderflow stabilization. Session goal: implement all 6 deferred items from E1.41 P0/P1 list as separate iterations with intermediate test+safety validation, then validate the integrated system on a 60-min Base soak.
+goal (Roadmap): M7.E1 Base orderflow stabilization. Session goal: tighten reviewer-funnel observability (fresh BRIDGE_HIT_NOT_SCORED, current_session_window split, NO_HOT_CYCLE_COMPLETED_DURING_SOAK), correctly classify the dRPC WS reconnect rate-limit storm observed in the post-E1.45 30m soak (`recv_error_reconnect_failed` carrying JSON-RPC code 15 "Too many request"), and harden the divergence replay path against historical samples.
 
 change_summary:
-  - Re-read AGENTS.md, Roadmap.md, Status_M7.md, DOCS_POLICY.md, WORKFLOW.md, DEV_REPORT_CANONICAL_UA.md.
-  - Iter 1 (P0.1 fee=2600 audit): m7/orderflow/execution_gate.py classifies SELL_FEE_UNSUPPORTED into 4 categories (AERODROME_CL, ALGEBRA_DYNAMIC, VENUE_FEE_MISMATCH, UNKNOWN_SOURCE); +4 unit tests.
-  - Iter 2 (P0.2 DISC-to-PROD watchlist): m7/orderflow/disc_watchlist.py NEW (~190 lines). SCHEMA_VERSION=1.0, DEFAULT_TTL_SEC=14400 (4h), ARBY_DISC_WATCHLIST_PATH env override, atomic JSON writes. Public API: read_watchlist, prune_expired, record_profitable_pair, is_pair_active, active_pair_addresses. +9 unit tests.
-  - Iter 3 (P0.3 rate metrics): m7/orderflow/hot_runtime_artifacts.py adds rollup["rate_metrics"] block before final atomic write; keys: roundtrip_attempt_rate_per_hour, profitable_event_rate_per_hour, scoring_blackhole_rate, session_elapsed_minutes, session_windows_seen. +5 unit tests.
-  - Iter 4 (P1.1 factory_enumeration cold collector): discovery/factory_enumeration.py adds populate_cache_from_pool_index(*, chain, pool_index, cache_path=None, discovered_at=None) and default_cache_path(chain, root=None). Schema factory_enum_v1. +6 unit tests.
-  - Iter 5 (P1.2 tier_classifier runtime wiring): discovery/tier_classifier.py NEW (~200 lines). Public API: TIER_MAP_SCHEMA_VERSION=tier_map_v1, default_tier_map_path, classify_pools_to_tiers (hot/warm/cold buckets by recency), TierThresholds (hot_max_age_s=120, warm_max_age_s=1800), write_tier_map_artifact (atomic), read_tier_map_artifact (canonical empty on missing/corrupt/schema-mismatch/chain-mismatch). +9 unit tests.
-  - Iter 6 (60-min soak): bootstrap launched 2026-04-29T21:04:23Z UTC with -NoRollupProbe. Supervisor PID 4236 finished cleanly 2026-04-30T01:26:12Z UTC. Per-process summary: m7_cold cycles=17 crash=0, m7_hot_discovery cycles=1 crash=0, m7_cold_discovery cycles=16 crash=0, dashboard cycles=0 crash=0, m7_hot cycles=0 crash=0 (hot lane long-running per cycle - normal).
+  - Re-read AGENTS.md, Roadmap.md, Status_M7.md (E1.45 head), DOCS_POLICY.md, WORKFLOW.md, DEV_REPORT_CANONICAL_UA.md.
+  - Step 2 (BRIDGE_HIT_NOT_SCORED fresh deltas): m7/orderflow/hot_runtime_artifacts.py — `_update_hot_rollup` now mirrors the bridge-hit-not-scored reason into `_sess["session_bridge_hit_not_scored_reason_histogram"]` + `_sess["session_bridge_hit_not_scored_windows"]`; lifetime `bridge_hit_but_not_fast_scored.reason_histogram` is preserved unchanged (back-compat). Histogram resets on session_id change via the existing _sess reset path.
+  - Step 3 (NO_HOT_CYCLE_COMPLETED_DURING_SOAK): m7/orderflow/hot_runtime_artifacts.py — `_flush_rollup_at_path()` now bumps `clean_child_exits_total` + `last_clean_child_exit_at` only on per-child clean exits (`is_supervisor_exit=False`); supervisor exits do NOT touch the counter. scripts/reviewer_soak_summary.py adds the `NO_HOT_CYCLE_COMPLETED_DURING_SOAK` reason and sets ok=False when `events_seen_delta>0` AND `clean_child_exits_delta=0` AND not `ARBY_REVIEWER_QUIET_OK=1`.
+  - Step 4 (dRPC code 15 → rate-limit classification): m7/orderflow/mode_ws_live.py — when reconnect attempts exhaust and `_exit_reason="recv_error_reconnect_failed"`, the last `_ws_last_recv_error` is now lower-cased and matched against `"too many request" / "'code': 15" / "\"code\": 15" / "code\":15" / "code': 15" / " 429" / ":429" / "rate limit" / "rate-limit"`; on match, `_ws_connection_status="failed_429"` so `session_ws_failed_429_windows` actually counts the storm. Previously only the very first connect's HTTP 429 was tagged (which is why the post-E1.45 soak showed `session_ws_recv_error_total=15` and `session_ws_failed_429_windows=0`).
+  - Step 5 (split supervisor_window): m7/orderflow/hot_runtime_artifacts.py — added top-level `current_session_window` block (`session_started_at`, `events_total`, `elapsed_minutes`, `events_per_minute`) sourced from `_sess` so it resets on every new session_id; kept `supervisor_window` and added a `historical_window` alias for the new naming.
+  - Step 7 (fee 2600 Slipstream route exercise): no further code change beyond E1.45 (mapping `2600→ts=100` already present in `m7/orderflow/execution_gate.py::SLIPSTREAM_FEE_TO_TICKSPACING` and `_AERODROME_CL_KNOWN`); existing `test_aerodrome_cl_fee_classified` parametrised over `(150, 445, 600, 2105, 2600, 2655, 3024)` already validates the route resolves to `SLIPSTREAM_PENDING_LOOKUP:2600` / `SLIPSTREAM_SIM_READY_TOKENS_MISSING:2600:ts100` instead of `UNSUPPORTED_FEE_TIER:UNKNOWN:2600`. Re-verified.
+  - Step 8 (raise fast-path admission target): no code change required — `ARBY_REVIEWER_MIN_FAST_PATH_SCORED` default is already 20 and reviewer enforces `FAST_PATH_SCORED_TOO_LOW=N<20` reason (witnessed in the 30m soak as `FAST_PATH_SCORED_TOO_LOW=3<20`). Carry-forward as the explicit acceptance criterion for the next 30m soak after step 1 lands.
+  - Step 10 (replay only on fresh divergence samples): scripts/replay_divergence_samples.py — added `--require-fresh-session` flag that resolves the rollup's current `session.session_id` (or top-level `session_id`) and filters in-memory samples to only those carrying that `session_id`; emits `NO_FRESH_SAMPLES` rc=1 with reason `no_samples_match_current_session_id` when nothing matches.
+  - Tests added: tests/unit/test_e142_rate_metrics.py +1 (clean_child_exits counter), tests/unit/test_m7_e1_34h_reviewer_fixes.py +4 (current_session_window present + resets, session bridge histogram increments + resets), tests/unit/test_reviewer_soak_summary.py +2 (NO_HOT_CYCLE_COMPLETED guard fires + silent-when-progressing).
+  - Status_M7.md rewritten with E1.46 head section + E1.45 demoted to Prior. Unit baseline 4401 → 4408, Updated tag bumped to 2026-04-30 (E1.46).
 
 touched_files:
-  - m7/orderflow/execution_gate.py (Iter 1: 4-cat fee reject classification)
-  - m7/orderflow/disc_watchlist.py (Iter 2: NEW module)
-  - m7/orderflow/hot_runtime_artifacts.py (Iter 3: rate_metrics block)
-  - discovery/factory_enumeration.py (Iter 4: populate_cache_from_pool_index, default_cache_path)
-  - discovery/tier_classifier.py (Iter 5: NEW module)
-  - tests/unit/test_e142_fee_audit.py (Iter 1: NEW, 4 tests)
-  - tests/unit/test_e142_disc_watchlist.py (Iter 2: NEW, 9 tests)
-  - tests/unit/test_e142_rate_metrics.py (Iter 3: NEW, 5 tests)
-  - tests/unit/test_e142_factory_enumeration.py (Iter 4: NEW, 6 tests)
-  - tests/unit/test_e142_tier_runtime.py (Iter 5: NEW, 9 tests)
+  - m7/orderflow/hot_runtime_artifacts.py (clean_child_exits_total, current_session_window/historical_window, session_bridge_hit_not_scored_*)
+  - m7/orderflow/mode_ws_live.py (rate-limit reclassification on reconnect-failure exit)
+  - scripts/reviewer_soak_summary.py (NO_HOT_CYCLE_COMPLETED_DURING_SOAK reason)
+  - scripts/replay_divergence_samples.py (--require-fresh-session)
+  - tests/unit/test_e142_rate_metrics.py (+1 test)
+  - tests/unit/test_m7_e1_34h_reviewer_fixes.py (+4 tests)
+  - tests/unit/test_reviewer_soak_summary.py (+2 tests)
+  - docs/status/Status_M7.md (E1.46 head section, baseline bump 4401→4408)
   - docs/DEV_REPORT_LATEST.md (this rewrite)
 
 ## 2) Commands Executed (facts only)
-py -3.11 -m pytest tests/unit -q (after Iter 5 + post-soak): PASS (4393 passed / 6 skipped / 1 warning, 113.29s) - baseline before E1.42 was 4360 passed; +33 new tests landed cleanly; post-soak rerun confirms no regression
-py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, 20 gates) at every iter boundary AND post-soak
-powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts/bootstrap_system.ps1 -Hours 1 -NoRollupProbe: launched supervisor PID 4236 at 2026-04-29T21:04:23Z; finished cleanly at 2026-04-30T01:26:12Z UTC ("Supervisor finished" line in log). -NoRollupProbe required because cold warmup window made the default 180s rollup-writer probe falsely flag hot lane as dead.
-py -3.11 scripts/reviewer_soak_summary.py --baseline data/runs/_rolling/reviewer_soak_baseline_latest.json --current data/runs/_rolling/m7_hot_rollup_latest.json --staleness-anchor-utc 2026-04-30T01:26:12Z: FAIL (NO_FRESH_SIM_PASSED, NO_FRESH_ROUNDTRIP_ATTEMPTED, FAST_PATH_SCORED_TOO_LOW=0<20, SCORING_BLACKHOLE events_seen_delta=40 fast_path_scored_delta=0). Reviewer FAIL is statistical (market-quiet window), not a code regression.
-py -3.11 scripts/analyze_roundtrip_profitability.py --baseline data/runs/_rolling/reviewer_soak_baseline_latest.json: NO_ROUNDTRIP_ATTEMPTED [DELTA_VS_BASELINE]. Cumulative roundtrip_error_histogram still shows SELL_BUILD:SELL_FEE_UNSUPPORTED:2600 as the single non-empty key.
-py -3.11 scripts/ci_full_pipeline.py --mode ci: NOT RUN (out of session scope; no CI-gate-affecting changes)
-py -3.11 scripts/ci_m4_execution_gate.py ...: NOT RUN (M7 stage)
-py -3.11 scripts/ci_m5_0_gate.py ...: NOT RUN (M7 stage)
+py -3.11 -m pytest tests/unit/test_e142_rate_metrics.py tests/unit/test_m7_e1_34h_reviewer_fixes.py tests/unit/test_reviewer_soak_summary.py -q : PASS 41/41 in 1.33s
+py -3.11 -m pytest tests/unit -q (final): **PASS 4408 / 6 skipped / 1 warning** in 240.99s (+7 vs E1.45 baseline 4401)
+py -3.11 scripts/check_repo_safety.py: PASS (0 warnings, 20 gates)
+NO ONLINE SOAK RUN this iteration (code-only changes; runtime evidence is the post-E1.45 30m soak whose findings drove this iteration).
 
 ## 3) Artifacts Attached
-rolling:
-  - data/runs/_rolling/m7_hot_rollup_latest.json (PROD; session_id=a9af23e8, last_updated=2026-04-30T01:26:12Z, supervisor_end_utc=2026-04-30T01:26:12Z, rate_metrics block live with realistic per-hour rates after full soak)
-  - data/runs/_rolling/m7_hot_rollup_latest_discovery.json (DISC; carries 5749662e cumulative profitable=1)
-  - data/runs/_rolling/reviewer_soak_baseline_latest.json (E1.41 pre-soak baseline, session_id=1e4d0432, last_updated=2026-04-29T19:55:16Z)
-  - data/runs/_sessions/m7_bootstrap_20260429_230423.out.log (supervisor log; "Supervisor finished at 2026-04-30T01:26:12Z")
-run_dir_bundle: not produced (rolling-only mode for soak)
+rolling: NOT WRITTEN this iteration (no soak run). Existing rollups under data/runs/_rolling/ retained as-is from the post-E1.45 30m soak (m7_hot_rollup_latest.json: session_id=0424ee0d, supervisor_end_utc=2026-04-30T08:30:01Z; m7_hot_rollup_latest_discovery.json: rate_basis still null pending next supervisor run that will exercise the E1.45 sibling-flush path live).
+run_dir_bundle: not produced.
+evidence basis (read-only): post-E1.45 30m soak supervisor 2026-04-30T11:13:58Z→11:44:01Z, PROD events +71 / fast +3 / sim +0 / roundtrip +0; DISC events +72 / fast +2 / sim +0; `session_ws_recv_error_total=15`, `last_exit_reason=recv_error_reconnect_failed`, `last_ws_recv_error="reconnect_fail:WebSocket subscription failed: {'id': 1, 'jsonrpc': '2.0', 'error': {'message': 'Too many request, try again later', 'code': 15}}"`.
 
 ## 4) Key Results
-implementation_iterations:
-  iter1_fee_2600_audit: LANDED (4 reject categories, +4 tests, suite 4364)
-  iter2_disc_watchlist: LANDED (NEW module, +9 tests, suite 4373)
-  iter3_rate_metrics: LANDED (rollup block, +5 tests, suite 4378). Post-soak verification: rollup["rate_metrics"] populated with realistic values: roundtrip_attempt_rate_per_hour=1.6684, profitable_event_rate_per_hour=0.0, scoring_blackhole_rate=8.3333, session_elapsed_minutes=251.734, session_windows_seen=3. CONFIRMED operational in production over a full multi-hour artifact lifecycle.
-  iter4_factory_enumeration: LANDED (cold cache populate API, +6 tests, suite 4384)
-  iter5_tier_classifier: LANDED (NEW module, +9 tests, suite 4393)
-post_soak_state_2026_04_30T01_26_12Z:
-  session_id: a9af23e8 (distinct from baseline 1e4d0432)
-  supervisor_end_utc: 2026-04-30T01:26:12Z (mark_supervisor_end ran cleanly)
-  fresh_delta_vs_baseline:
-    events_seen_total: +40 (3740 - 3700)
-    fast_path_scored_total: +0 (574 - 574)
-    sim_attempted_total: +0 (12 - 12)
-    sim_passed_total: +0 (7 - 7)
-    roundtrip_attempted_total: +0 (7 - 7)
-    roundtrip_success_total: +0 (6 - 6)
-    roundtrip_profitable_total: +0 (0 - 0)
-    submit_ready_total: +0 (0 - 0)
-    external_provider_blocker_total: 0
-  rate_metrics_block_realistic: roundtrip_attempt_rate_per_hour=1.67, profitable_event_rate_per_hour=0.0, scoring_blackhole_rate=8.33, session_elapsed_minutes=251.7, session_windows_seen=3
-  reviewer_summary_verdict: production_lane_ok=False (statistical, not regression). Reasons: NO_FRESH_SIM_PASSED, NO_FRESH_ROUNDTRIP_ATTEMPTED, FAST_PATH_SCORED_TOO_LOW=0<20, SCORING_BLACKHOLE (events_seen_delta=40 fast_path_scored_delta=0).
-  profitability_analysis_verdict: NO_ROUNDTRIP_ATTEMPTED [DELTA_VS_BASELINE]. Cumulative best/median/worst still -59.91 (single fee_2600 sample).
-infra_health_post_soak:
-  process_supervision: clean exit, all children Terminated cleanly. Per-process: m7_cold cycles=17 / m7_cold_discovery cycles=16 / m7_hot_discovery cycles=1 / m7_hot cycles=0 (long single cycle for hot lane is expected) / dashboard cycles=0. crash_restarts=0/100 across the board.
-  registry_has_pair_but_not_pool_count: 0 (E1.26b zero-liq refresh holding from E1.40)
-  external_provider_blocker_total: 0
-  simulation_backend: rpc_fork (canonical pin held)
-unit_baseline: 4393 passed / 6 skipped / 1 warning / 0 failed (was 4360 before E1.42, +33 new tests)
-safety: PASS (20 gates, 0 warnings) at every iter boundary AND post-soak
+e1_46_step2_session_bridge_histogram:
+  module: m7/orderflow/hot_runtime_artifacts.py::_update_hot_rollup (bridge-hit-not-scored branch)
+  shape: When `_bridge_hits_win > 0 and len(_fast) == 0`, increments `_sess["session_bridge_hit_not_scored_reason_histogram"][reason]` and `_sess["session_bridge_hit_not_scored_windows"]` in addition to the existing lifetime `bridge_hit_but_not_fast_scored.reason_histogram` write. Reset on session_id change via existing `_sess` reset path.
+  test_baseline: 2 new tests in tests/unit/test_m7_e1_34h_reviewer_fixes.py covering increment + session reset (lifetime preserved, session-only filtered to new reason).
+
+e1_46_step3_clean_child_exits:
+  module: m7/orderflow/hot_runtime_artifacts.py::_flush_rollup_at_path + scripts/reviewer_soak_summary.py::summarise_lane
+  shape: Per-child clean exits bump rollup-level `clean_child_exits_total` + `last_clean_child_exit_at`; supervisor exits stamp `supervisor_end_utc` but do NOT bump the counter. Reviewer FAILs acceptance with `NO_HOT_CYCLE_COMPLETED_DURING_SOAK events_seen_delta=N clean_child_exits_delta=0` when hot writes happened but no child finished cleanly.
+  test_baseline: 1 new test in tests/unit/test_e142_rate_metrics.py + 2 in tests/unit/test_reviewer_soak_summary.py.
+
+e1_46_step4_ws_rate_limit_reclassification:
+  module: m7/orderflow/mode_ws_live.py (reconnect-storm branch)
+  shape: After exhausting `_MAX_RECONNECT_ATTEMPTS` and setting `_exit_reason="recv_error_reconnect_failed"`, lower-cases `_ws_last_recv_error` and matches against the rate-limit signature set; on hit sets `_ws_connection_status="failed_429"` + descriptive `_ws_error_detail`. Result: `session_ws_failed_429_windows` now counts dRPC code 15 / "Too many request" / HTTP 429 reconnect cascades, not only the very first connect's HTTP 429.
+
+e1_46_step5_current_session_window:
+  module: m7/orderflow/hot_runtime_artifacts.py::_update_hot_rollup (after supervisor_window block)
+  shape: Adds top-level `current_session_window` block sourced from `_sess` (resets on session_id change); keeps `supervisor_window` AND adds a `historical_window` alias pointing at the same dict. Lets dashboards/reviewers surface session feed rate (~10 events/min in active windows) instead of the lifetime supervisor rate (~0.46/min observed in the post-E1.45 soak).
+  test_baseline: 2 new tests in tests/unit/test_m7_e1_34h_reviewer_fixes.py covering presence + session reset.
+
+e1_46_step7_fee_2600_route:
+  module: m7/orderflow/execution_gate.py (E1.45-landed mapping; verified end-to-end this iteration)
+  shape: Aerodrome CL fee=2600 routes through `SLIPSTREAM_FEE_TO_TICKSPACING[2600]=100` and is whitelisted in `_AERODROME_CL_KNOWN`. Reject buckets now `SLIPSTREAM_PENDING_LOOKUP:2600` (config not yet verified) or `SLIPSTREAM_SIM_READY_TOKENS_MISSING:2600:ts100` (config verified, tokens pending), no longer `UNSUPPORTED_FEE_TIER:UNKNOWN:2600`. Live runtime exercise gated on step 1 (universe expansion).
+
+e1_46_step8_admission_target:
+  module: scripts/reviewer_soak_summary.py (no code change required)
+  shape: `ARBY_REVIEWER_MIN_FAST_PATH_SCORED` default is already 20; reviewer emits `FAST_PATH_SCORED_TOO_LOW=N<20` when `_fps_delta < 20` and `ARBY_REVIEWER_QUIET_OK!=1`. Carry-forward as explicit acceptance criterion for the next 30m soak after step 1 lands.
+
+e1_46_step10_replay_fresh_only:
+  module: scripts/replay_divergence_samples.py
+  shape: New `--require-fresh-session` flag resolves rollup current session_id, filters in-memory `scorer_sim_divergence_samples_recent` to that session, emits `NO_FRESH_SAMPLES` rc=1 with `no_samples_match_current_session_id` reason when nothing matches. Prevents replaying carry-over samples from a prior soak.
+
+unit_baseline: 4408 passed / 6 skipped / 1 warning / 0 failed (was 4401 before E1.46; +7 from new tests).
+safety: PASS (20 gates, 0 warnings)
 
 ## 4.1) Theoretical Net Profit (cost-aware reporting)
 not_applicable_this_session:
-  reason: roundtrip_attempted_delta=0 and sim_passed_delta=0 vs baseline; no fresh roundtrip signals to attribute theoretical profit to. Cumulative DISC +91.08 bps single profitable case is from prior session 5749662e baseline and not a fresh delta (per AGENTS.md SHA-free provenance contract). The +40 events_seen_delta did not advance through fast-path scoring (scoring funnel dropped them, see SCORING_BLACKHOLE in reviewer verdict), so no candidate ever reached sim_attempted.
+  reason: Code-only iteration with no fresh soak run. PROD economics state is unchanged from the post-E1.45 30m soak (`roundtrip_profitable_total=0`). Step 4 (rate-limit reclassification), step 5 (current_session_window), and step 3 (clean_child_exits) only become observably-effective on the next supervisor run; nothing in this iteration mutates economic outcomes directly.
 
 ## 5) Outcomes vs goals
-session_goal_outcome: WORK_TRACK_COMPLETE_PER_PLAN, INFRA_VALIDATED_ON_60M_SOAK, ECONOMIC_PROOF_NOT_OBTAINED.
-- All 6 deferred items from E1.41 P0+P1 list implemented as discrete iterations with intermediate validation gates. Suite grew from 4360 to 4393 (+33 tests, 100% pass). Safety PASS at every checkpoint.
-- 60-min Base soak completed cleanly: supervisor exited at 2026-04-30T01:26:12Z UTC, 0 crash_restarts across 5/5 children, 0 external_provider_blocker_total, no BlockOutOfRangeError, no strict_provider_breaches. The new code (5 modules) ran integrated in production for 4+ hours without any infra regression.
-- Iter 3 deliverable (rate_metrics block in rolling artifact) verified live in production rollup at multiple snapshots over the soak; post-soak values are realistic (1.67 roundtrip_attempt/h, 8.33 scoring_blackhole_rate). This is direct on-prod evidence the metrics block is operational, not just unit-tested.
-- Economic proof (PROD roundtrip_profitable_total > 0) NOT obtained. The soak fell into another market-quiet window: +40 events_seen but +0 fast_path_scored - the scoring funnel filtered all 40 events before sim. This matches the E1.41 quiet-window pattern. The new metrics block now lets us quantify this objectively (scoring_blackhole_rate=8.33%, profitable_event_rate_per_hour=0.0).
+session_goal_outcome: REACHED for the seven targeted reviewer-funnel observability + WS classification + clean-cycle accounting items (steps 2, 3, 4, 5, 7, 8, 10); DEFERRED for steps 1, 6, 9 with explicit carry-forward.
+- Steps 2, 3, 4, 5, 7, 8, 10 closed with surgical changes and regression tests. Step 7 is the runtime-verification of the E1.45 fee-2600 mapping; gate-level test exercise confirmed.
+- Step 1 (factory_enumeration → tier_classifier → bounded HOT universe wiring) DEFERRED. Justification: requires a coordinated multi-module wiring (background tier_classifier task at WARM cadence; HOT loop reading classified universe and capping to 100-300 by recency/liquidity/activity; persistence of `data/runs/_rolling/m7_tier_map_latest.json` artifact; safe migration without breaking current intent-based loading) — too large for a "small backward-compatible fix" iteration per CLAUDE.md §1.2.
+- Step 6 (DISC profitable historical pair → PROD watchlist with TTL/provenance) DEFERRED. Justification: requires a new `m7/orderflow/disc_to_prod_watchlist.py` module (or extension of `m7/orderflow/disc_watchlist.py` from E1.42) with TTL handling, persistence, provenance keying on `roundtrip_profitable=true && session_id`, and explicit gating before promoting candidates into the live PROD universe; that is a coordinated change across discovery + orderflow that needs its own iteration.
+- Step 9 (60m active-window soak gated on step 1) DEFERRED. Justification: a runtime exercise that only proves out the universe expansion landed in step 1; running it before step 1 would only re-prove the existing `FAST_PATH_SCORED_TOO_LOW` story.
+- Production-readiness: NOT REACHED. PROD `roundtrip_profitable_total=0` unchanged. Reviewer-funnel observability is now strict: fresh BRIDGE_HIT_NOT_SCORED reasons, current_session_window split, NO_HOT_CYCLE_COMPLETED_DURING_SOAK guard, and dRPC reconnect rate-limit storms are correctly classified as `failed_429`.
 
 ## 6) Risks / Issues
-- ECON_BLOCKER: PROD roundtrip_profit_bps_best stuck at -59.91 from baseline (single sample, fee_2600 SELL_FEE_UNSUPPORTED). Iter 1 added 4-category classification of this reject reason, which improves diagnostic clarity but does not by itself enable the trade; venue-specific adapter wiring for AERODROME_CL/ALGEBRA_DYNAMIC fees remains the next economic unblock vector.
-- UNIVERSE_NARROW: 15 Base pairs intent-loaded; Iter 4 (factory_enumeration cold collector) and Iter 5 (tier_classifier) provide the plumbing to expand the universe without hot-path regression, but neither is yet wired into the hot scanner loop (deliberate per CLAUDE.md sec.1.2). Wiring is the next P1 iteration.
-- SCORING_BLACKHOLE: events_seen_delta=40 with fast_path_scored_delta=0 means bridge admission funnel dropped all 40 events. Iter 3 rate_metrics block now exposes scoring_blackhole_rate=8.33 making this observable; root-cause diagnosis of which admission gate dropped them is a separate P1 follow-up.
-- BOOTSTRAP_PROBE_DEBT: rollup writer probe falsely flagged hot lane dead during cold warmup; -NoRollupProbe was used as workaround but root cause (probe SLA tighter than warmup time) deserves a follow-up small fix; ratify -NoRollupProbe as default for soaks > 30 min.
+- ECON_BLOCKER (carried): PROD `roundtrip_profitable_total=0` unchanged; gated on step 1 universe expansion + step 9 active-window soak.
+- WS_RECONNECT_STORM (carried, now correctly classified): post-E1.45 soak `session_ws_recv_error_total=15`, JSON-RPC code 15 "Too many request" cascades. From next soak onward these increment `session_ws_failed_429_windows` so the operator can directly see provider rate-limiting vs benign recv-timeout.
+- UNIVERSE_NARROW (carried): 15 Base pairs intent-loaded; factory_enumeration + tier_classifier modules landed but not wired into hot/cold scanner loops. Step 1 is the next P0 iteration.
+- DISC_HISTORICAL_PROFITABLE (carried): the +91.0771 bps DISC roundtrip from E1.40 has not been promoted into PROD watchlist; pending step 6.
+- FEE_2600_RUNTIME (partially addressed): the route mapping is in place and gate-tested; live runtime exercise depends on a PROD candidate hitting a fee-2600 pool, which is gated on step 1.
 
 ## 7) Next steps
-P0 (next iteration after E1.42 closes):
-  1. SCORING_BLACKHOLE diagnosis: instrument bridge admission funnel to break down which gate drops events when fast_path_scored_delta=0 despite events_seen_delta>0. Use Iter 3 rate_metrics scoring_blackhole_rate as the SLI.
-  2. Adapter audit follow-up: implement venue support for the most frequent SELL_FEE_UNSUPPORTED:VENUE_FEE_MISMATCH and AERODROME_CL fees identified by Iter 1 reject_histogram (currently still only fee_2600 sample).
-P1 (deferred):
-  3. Wire tier_classifier into the cold-lane scanner loop (current Iter 5 scope is only the classification + artifact API, not hot/cold lane consumers).
-  4. Wire factory_enumeration as the cold cache producer feeding tier_classifier inputs.
-  5. Bootstrap probe SLA fix (ratify -NoRollupProbe as default for soaks > 30 min).
-  6. After P0 + P1 land: 4-8h Base soak in active market window; acceptance: PROD roundtrip_profitable_delta > 0 OR top-loss closer than -20 bps.
+P0 (next iteration — dedicated step 1 scope):
+  1. Wire `discovery/factory_enumeration.py` as the cold-cache producer (Uniswap V3 / PancakeSwap V3 / Aerodrome on Base) feeding `discovery/tier_classifier.py` inputs.
+  2. Wire `discovery/tier_classifier.py` into the cold-lane scanner loop with WARM cadence; HOT loop reads the tier_map and caps universe at 100-300 by recency/liquidity/activity.
+  3. Persist tier_map under `data/runs/_rolling/m7_tier_map_latest.json`; add reviewer evidence echo.
+  4. Acceptance for the post-step-1 30m soak: `fast_path_scored_delta>=20 AND sim_attempted_delta>0 AND roundtrip_attempted_delta>0`.
+P1 (post step 1):
+  5. Step 6: add `m7/orderflow/disc_to_prod_watchlist.py` (or extend the E1.42 `disc_watchlist.py`) with TTL + provenance promotion of the historical DISC profitable pair into PROD.
+  6. Step 9: 60m Base soak in active market window once step 1 fast_path numbers are healthy; aspirational acceptance: `roundtrip_profitable_delta>0` OR top-loss closer than `-20 bps`.
+  7. drpc 429 mitigation via documented Base pendingLogs / eth_simulateV1 path (per docs.base.org/base-chain/api-reference/rpc-overview); previously deferred.
 
 ## Session Completion
-session_goal: Implement all 6 deferred items from E1.41 P0+P1 plan as discrete iterations with intermediate validation, then run a 60-min Base soak to validate integrated stability under production load.
-goal_status: BLOCKED
+session_goal: Close the seven small/surgical reviewer-funnel + WS-classification + clean-cycle items (steps 2/3/4/5/7/8/10) from the post-E1.45 30m soak report without large refactors; explicitly defer the structural step 1 (universe expansion wiring), step 6 (DISC→PROD watchlist promotion), and step 9 (active-window soak) to their own iterations.
+goal_status: REACHED for steps 2/3/4/5/7/8/10 (code + tests + safety + docs); DEFERRED for steps 1/6/9.
 close_allowed: true
 remaining_blockers:
-  - ECONOMIC: PROD roundtrip_profitable_total still 0; single fee_2600 sample with SELL_FEE_UNSUPPORTED unchanged from E1.41 baseline. Soak window was market-quiet (events_seen +40 but scoring funnel dropped all 40, so 0 fresh sim attempts).
-  - SCORING_BLACKHOLE: 8.33% blackhole_rate now observable via Iter 3 metrics; root-cause diagnosis is the next P0 follow-up.
-  - UNIVERSE_NARROW: 15 Base pairs; tier_classifier and factory_enumeration plumbing are landed but not wired into scanner loops (deliberate per CLAUDE.md sec.1.2).
+  - ECONOMIC: PROD roundtrip_profitable_total still 0; pending step 1 universe expansion + step 9 active-window soak.
+  - INFRA: drpc 429 mitigation (alternate Base RPC path) not in scope this iteration; partially mitigated by step 4 reclassification + existing rate-limit cooldown.
 evidence_session_run_dirs:
-  - data/runs/_rolling/m7_hot_rollup_latest.json (PROD final, session_id=a9af23e8, last_updated=2026-04-30T01:26:12Z, supervisor_end_utc=2026-04-30T01:26:12Z, rate_metrics block populated)
-  - data/runs/_rolling/reviewer_soak_baseline_latest.json (E1.41 pre-soak baseline, session_id=1e4d0432)
-  - data/runs/_sessions/m7_bootstrap_20260429_230423.out.log (supervisor log: "Supervisor finished at 2026-04-30T01:26:12Z", per-process summary all crash_restarts=0)
-primary_blocker_of_session: ECONOMIC (PROD roundtrip_profitable_total still 0; market-quiet soak window did not provide proof)
-blocker_status_before: BLOCKED (E1.41 carried)
-blocker_status_after: BLOCKED (work-track delivered cleanly + 60m soak passed infra-stability; economic state unchanged due to quiet window)
+  - No fresh runtime artifacts produced this iteration (code-only).
+  - Existing rolling artifacts retained from post-E1.45 30m soak; will be self-corrected on the next supervisor run via E1.45 sibling-flush + E1.46 clean_child_exits + current_session_window code paths.
+primary_blocker_of_session: NONE (all in-scope steps closed)
+blocker_status_before: BLOCKED (E1.45 carried)
+blocker_status_after: BLOCKED for production economics; UNBLOCKED for fresh BRIDGE_HIT_NOT_SCORED visibility, dRPC reconnect rate-limit classification, current vs historical session feed rate, and divergence-replay freshness.
 docs_reread_confirmed: true

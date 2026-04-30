@@ -209,11 +209,123 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
     # quiet market. Surfaced as an explicit reason so operators do not
     # confuse a scoring-funnel regression with low liquidity.
     _events_delta = deltas.get("events_seen_total", 0)
-    if _events_delta > 0 and _fps_delta == 0:
+    # E1.45 reviewer guard #3: active-hot-write acceptance check.
+    # If events_seen_delta == 0 the hot lane never observed a single
+    # event during the soak — almost always drpc/WS provider trouble
+    # (bare WS subscribe rejected, supervisor reaped child early). The
+    # reviewer must surface this distinctly from market_quiet so the
+    # operator does not confuse infra silence with quiet liquidity.
+    # Suppressed when no fresh window-clock at all (handled elsewhere).
+    if _events_delta == 0 and not _quiet_ok:
         reasons.append(
-            f"SCORING_BLACKHOLE events_seen_delta={_events_delta} "
-            f"fast_path_scored_delta=0 (bridge/admission funnel dropped all)"
+            "NO_HOT_WRITE_DURING_SOAK events_seen_delta=0 "
+            "(check WS subscribe / drpc 429 / hot lane child crashes; "
+            "set ARBY_REVIEWER_QUIET_OK=1 if intentionally market_quiet)"
         )
+    # E1.46 reviewer fix #3: NO_HOT_CYCLE_COMPLETED_DURING_SOAK.
+    # Hot writes happened (events_seen_delta>0) but no child finished
+    # its scan cycle cleanly across the soak (clean_child_exits_delta
+    # stayed at 0). Distinguishes "hot lane is alive but every child
+    # crashed before flush_rollup_shutdown" from a healthy soak whose
+    # children completed cycles. ``clean_child_exits_total`` is the
+    # rollup-side mirror added in E1.46 (see hot_runtime_artifacts).
+    _cce_delta = max(
+        0,
+        int(current.get("clean_child_exits_total", 0) or 0)
+        - int(baseline.get("clean_child_exits_total", 0) or 0),
+    )
+    if _events_delta > 0 and _cce_delta == 0 and not _quiet_ok:
+        reasons.append(
+            "NO_HOT_CYCLE_COMPLETED_DURING_SOAK "
+            f"events_seen_delta={_events_delta} clean_child_exits_delta=0 "
+            "(hot lane wrote but no child exited cleanly; "
+            "supervisor cycles_completed likely 0)"
+        )
+        ok = False
+    if _events_delta > 0 and _fps_delta == 0:
+        # E1.45: enriched SCORING_BLACKHOLE breakdown using the existing
+        # admission-funnel counters. NO_BRIDGE_HIT and BRIDGE_HIT_NOT_SCORED
+        # come straight from rolling artifacts; PAIR_FILTERED / TIER_COLD
+        # are pulled from the bridge_hit_but_not_fast_scored.reason_histogram.
+        no_bridge_hit_delta = max(
+            0,
+            int(current.get("windows_events_without_bridge_hit_total", 0) or 0)
+            - int(baseline.get("windows_events_without_bridge_hit_total", 0) or 0),
+        )
+        cur_bhns = (current.get("bridge_hit_but_not_fast_scored") or {})
+        base_bhns = (baseline.get("bridge_hit_but_not_fast_scored") or {})
+        bridge_hit_not_scored_delta = max(
+            0,
+            int(cur_bhns.get("windows", 0) or 0)
+            - int(base_bhns.get("windows", 0) or 0),
+        )
+        cur_rh = cur_bhns.get("reason_histogram") or {}
+        base_rh = base_bhns.get("reason_histogram") or {}
+
+        def _rh_delta(name: str) -> int:
+            return max(
+                0,
+                int(cur_rh.get(name, 0) or 0) - int(base_rh.get(name, 0) or 0),
+            )
+
+        pair_filtered_delta = (
+            _rh_delta("PAIR_FILTERED") + _rh_delta("UNKNOWN_PAIR")
+        )
+        tier_cold_delta = _rh_delta("TIER_COLD")
+        reasons.append(
+            "SCORING_BLACKHOLE "
+            f"events_seen_delta={_events_delta} fast_path_scored_delta=0 "
+            f"[NO_BRIDGE_HIT={no_bridge_hit_delta} "
+            f"BRIDGE_HIT_NOT_SCORED={bridge_hit_not_scored_delta} "
+            f"PAIR_FILTERED={pair_filtered_delta} "
+            f"TIER_COLD={tier_cold_delta}]"
+        )
+    # E1.45 reviewer guard #1: rate_metrics schema contract.
+    # The rate_metrics block must use the E1.43+ session-delta schema:
+    # `rate_basis == "current_worker_session_delta"` plus the *_delta keys.
+    # A missing rate_basis indicates the rollup was last written by code
+    # older than E1.43 (or the lane never refreshed at supervisor exit).
+    rm = current.get("rate_metrics") or {}
+    if rm:
+        rb = rm.get("rate_basis")
+        if rb != "current_worker_session_delta":
+            reasons.append(
+                f"RATE_METRICS_SCHEMA_STALE rate_basis={rb!r} "
+                f"(expected 'current_worker_session_delta'; rollup not refreshed by E1.43+)"
+            )
+            ok = False
+        for required_key in (
+            "roundtrip_attempted_delta",
+            "roundtrip_profitable_delta",
+            "scoring_blackhole_windows_delta",
+        ):
+            if required_key not in rm:
+                reasons.append(
+                    f"RATE_METRICS_MISSING_KEY={required_key} "
+                    f"(rollup pre-E1.43 schema or partial refresh)"
+                )
+                ok = False
+                break
+    # E1.45 reviewer guard #2: impossible per-hour rates.
+    # An absurd value (> ABS_RATE_THRESHOLD per hour) is the canonical
+    # symptom of dividing lifetime cumulative counters by short worker
+    # elapsed time (the E1.42 bug class). Catch any future regression
+    # at acceptance time.
+    _abs_rate_threshold = float(
+        os.environ.get("ARBY_REVIEWER_ABS_RATE_THRESHOLD_PER_HOUR", "1000") or 1000
+    )
+    for rate_key in (
+        "roundtrip_attempt_rate_per_hour",
+        "profitable_event_rate_per_hour",
+    ):
+        rate_val = rm.get(rate_key)
+        if isinstance(rate_val, (int, float)) and rate_val > _abs_rate_threshold:
+            reasons.append(
+                f"RATE_METRICS_ABSURD {rate_key}={rate_val:.2f}>"
+                f"{_abs_rate_threshold:.0f}/h "
+                f"(symptom of lifetime/elapsed bug — verify rate_baseline seeding)"
+            )
+            ok = False
     reasons.append(f"pre_sim_skip_total={pre_sim_hits}")
     return ok, ",".join(reasons)
 

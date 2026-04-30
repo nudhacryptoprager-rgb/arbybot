@@ -27,6 +27,69 @@ if TYPE_CHECKING:
 
 logger = get_logger("m7.orderflow.hot_artifacts")
 
+
+def _compute_rate_metrics(rollup: dict) -> dict:
+    """Compute session-delta rates for the current hot worker session.
+
+    Top-level rollup counters are cumulative across many supervisor runs. The
+    rate block must therefore subtract a session baseline before dividing by
+    the current worker-session elapsed time; otherwise an idle window after a
+    restart can report absurd per-hour rates from historical roundtrips.
+    """
+    block: dict = {}
+    sess = rollup.get("session") or {}
+    baseline = sess.get("rate_baseline")
+    if not isinstance(baseline, dict):
+        baseline = {
+            "roundtrip_attempted_total": int(
+                rollup.get("roundtrip_attempted_total", 0) or 0
+            ),
+            "roundtrip_profitable_total": int(
+                rollup.get("roundtrip_profitable_total", 0) or 0
+            ),
+            "windows_events_without_fast_score_total": int(
+                rollup.get("windows_events_without_fast_score_total", 0) or 0
+            ),
+        }
+        sess["rate_baseline"] = baseline
+        rollup["session"] = sess
+
+    def _delta_int(key: str) -> int:
+        cur = int(rollup.get(key, 0) or 0)
+        base = int(baseline.get(key, cur) or 0)
+        return max(0, cur - base)
+
+    elapsed_min = float(sess.get("session_elapsed_minutes") or 0.0)
+    elapsed_hrs = elapsed_min / 60.0
+    rt_attempted_delta = _delta_int("roundtrip_attempted_total")
+    rt_profitable_delta = _delta_int("roundtrip_profitable_total")
+    if elapsed_hrs > 0:
+        block["roundtrip_attempt_rate_per_hour"] = round(
+            rt_attempted_delta / elapsed_hrs, 4
+        )
+        block["profitable_event_rate_per_hour"] = round(
+            rt_profitable_delta / elapsed_hrs, 4
+        )
+    else:
+        block["roundtrip_attempt_rate_per_hour"] = None
+        block["profitable_event_rate_per_hour"] = None
+
+    wnd_total = int(sess.get("session_windows_seen", 0) or 0)
+    wnd_blackhole_delta = _delta_int("windows_events_without_fast_score_total")
+    if wnd_total > 0:
+        block["scoring_blackhole_rate"] = round(wnd_blackhole_delta / wnd_total, 4)
+    else:
+        block["scoring_blackhole_rate"] = None
+
+    block["session_elapsed_minutes"] = round(elapsed_min, 3)
+    block["session_windows_seen"] = wnd_total
+    block["roundtrip_attempted_delta"] = rt_attempted_delta
+    block["roundtrip_profitable_delta"] = rt_profitable_delta
+    block["scoring_blackhole_windows_delta"] = wnd_blackhole_delta
+    block["rate_basis"] = "current_worker_session_delta"
+    return block
+
+
 def _write_hot_heartbeat_on_error(
     iteration: int,
     window_started_at: str,
@@ -996,7 +1059,21 @@ def _update_hot_rollup(
     # Uses _rio._SESSION_ID (generated at import time) to detect new sessions.
     _prev_sid = rollup.get("session", {}).get("session_id", "")
     if _prev_sid != _rio._SESSION_ID:
-        rollup["session"] = {"session_id": _rio._SESSION_ID, "session_started_at": ts}
+        rollup["session"] = {
+            "session_id": _rio._SESSION_ID,
+            "session_started_at": ts,
+            "rate_baseline": {
+                "roundtrip_attempted_total": int(
+                    rollup.get("roundtrip_attempted_total", 0) or 0
+                ),
+                "roundtrip_profitable_total": int(
+                    rollup.get("roundtrip_profitable_total", 0) or 0
+                ),
+                "windows_events_without_fast_score_total": int(
+                    rollup.get("windows_events_without_fast_score_total", 0) or 0
+                ),
+            },
+        }
     _sess = rollup["session"]
     # Reviewer post-20m-control fix #7: surface session_started_at at the
     # top level too so reviewer staleness logic does not need to dig into
@@ -1049,6 +1126,25 @@ def _update_hot_rollup(
             _sw["elapsed_minutes"] = round(_sw_elapsed, 3)
             _sw["events_per_minute"] = round(_sw["events_total"] / _sw_elapsed, 3)
             rollup["supervisor_window"] = _sw
+    except Exception:
+        pass
+    # E1.46 reviewer fix #5: split supervisor_window into historical
+    # (lifetime, persists across child restarts) and current_session
+    # (resets on every new session_id). Reviewer / dashboard surface
+    # the latter so a hot session producing ~10 events/min is not
+    # confused with a long-tail supervisor_window of 0.46 events/min.
+    try:
+        _csw = {
+            "session_started_at": _sess.get("session_started_at"),
+            "events_total": int(_sess.get("session_events_seen_total", 0) or 0),
+            "elapsed_minutes": _sess.get("session_elapsed_minutes"),
+            "events_per_minute": _sess.get("session_events_per_minute"),
+        }
+        rollup["current_session_window"] = _csw
+        # Back-compat alias: keep existing supervisor_window key, also
+        # expose it under historical_window so the new naming is clear.
+        if "supervisor_window" in rollup:
+            rollup["historical_window"] = rollup["supervisor_window"]
     except Exception:
         pass
     _sess["session_bridge_pool_hit_total"] = (
@@ -1180,6 +1276,19 @@ def _update_hot_rollup(
         _reason = (_bd.get("bridge_hit_not_scored_reason") or "UNKNOWN") if isinstance(_bd, dict) else "UNKNOWN"
         _rh = _diag.get("reason_histogram") or {}
         _rh[_reason] = int(_rh.get(_reason, 0) or 0) + 1
+        # E1.46 reviewer fix #2: session-scoped mirror so the reviewer
+        # can surface FRESH BRIDGE_HIT_NOT_SCORED reasons (lifetime
+        # histogram is too noisy after multiple soaks). Sibling key
+        # ``session_bridge_hit_not_scored_reason_histogram`` resets on
+        # session_id change via the existing _sess block reset path.
+        _srh = _sess.get("session_bridge_hit_not_scored_reason_histogram") or {}
+        if not isinstance(_srh, dict):
+            _srh = {}
+        _srh[_reason] = int(_srh.get(_reason, 0) or 0) + 1
+        _sess["session_bridge_hit_not_scored_reason_histogram"] = _srh
+        _sess["session_bridge_hit_not_scored_windows"] = (
+            int(_sess.get("session_bridge_hit_not_scored_windows", 0) or 0) + 1
+        )
         _diag["reason_histogram"] = _rh
         # M7.E1.34h fix #3: propagate enriched sample (raw pair context)
         # into the rollup bucket so reviewer can route drops by pair
@@ -1964,35 +2073,10 @@ def _update_hot_rollup(
     # ad-hoc math. Uses cumulative session counters; for short windows
     # the rates are noisy by construction — that is intentional, since
     # the metric exists to expose statistical insufficiency.
+    # The helper below subtracts rate_baseline; do not divide lifetime totals
+    # by this worker's elapsed time.
     try:
-        _rate_block: dict = {}
-        _sess_now = rollup.get("session") or {}
-        _elapsed_min = float(_sess_now.get("session_elapsed_minutes") or 0.0)
-        _elapsed_hrs = _elapsed_min / 60.0
-        if _elapsed_hrs > 0:
-            _rt_att_t = int(rollup.get("roundtrip_attempted_total", 0) or 0)
-            _rt_prof_t = int(rollup.get("roundtrip_profitable_total", 0) or 0)
-            _rate_block["roundtrip_attempt_rate_per_hour"] = round(
-                _rt_att_t / _elapsed_hrs, 4
-            )
-            _rate_block["profitable_event_rate_per_hour"] = round(
-                _rt_prof_t / _elapsed_hrs, 4
-            )
-        else:
-            _rate_block["roundtrip_attempt_rate_per_hour"] = None
-            _rate_block["profitable_event_rate_per_hour"] = None
-        # scoring_blackhole_rate = windows where events_seen>0 but
-        # fast_path_scored=0, divided by total session windows. Uses the
-        # already-tracked counters so cost is one division.
-        _wnd_total = int(_sess_now.get("session_windows_seen", 0) or 0)
-        _wnd_blackhole = int(rollup.get("windows_events_without_fast_score_total", 0) or 0)
-        if _wnd_total > 0:
-            _rate_block["scoring_blackhole_rate"] = round(_wnd_blackhole / _wnd_total, 4)
-        else:
-            _rate_block["scoring_blackhole_rate"] = None
-        _rate_block["session_elapsed_minutes"] = round(_elapsed_min, 3)
-        _rate_block["session_windows_seen"] = _wnd_total
-        rollup["rate_metrics"] = _rate_block
+        rollup["rate_metrics"] = _compute_rate_metrics(rollup)
     except Exception as exc:
         logger.debug("rate_metrics computation failed: %s", str(exc)[:120])
 
@@ -2000,6 +2084,55 @@ def _update_hot_rollup(
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:
         logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
+
+
+def _flush_rollup_at_path(
+    path: str,
+    chain: str,
+    is_supervisor_exit: bool,
+) -> None:
+    """E1.45 helper: flush a single rollup path atomically.
+
+    Extracted so ``mark_supervisor_end`` can refresh both PROD and
+    DISC rollups in one supervisor-exit hook (DISC parity for the
+    rate_metrics shutdown write-through landed in E1.44).
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rollup: dict = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                rollup = json.load(f)
+    except Exception:
+        rollup = {}
+    if not isinstance(rollup, dict):
+        return
+    rollup["last_heartbeat_utc"] = ts
+    rollup["last_updated"] = ts
+    rollup["shutdown_flush_at"] = ts
+    if is_supervisor_exit:
+        rollup["supervisor_end_utc"] = ts
+    else:
+        # E1.46 reviewer fix #3: count clean per-child exits at the
+        # rollup level so the reviewer can FAIL with
+        # ``NO_HOT_CYCLE_COMPLETED_DURING_SOAK`` when hot writes happen
+        # but no child ever finished its cycle cleanly (supervisor
+        # cycles_completed stays 0). The supervisor itself increments
+        # its own counter on rc==0 exits; mirroring it here makes the
+        # signal visible in the reviewer summary.
+        rollup["clean_child_exits_total"] = (
+            int(rollup.get("clean_child_exits_total", 0) or 0) + 1
+        )
+        rollup["last_clean_child_exit_at"] = ts
+    rollup.setdefault("chain", chain)
+    try:
+        rollup["rate_metrics"] = _compute_rate_metrics(rollup)
+    except Exception as exc:
+        logger.debug("rate_metrics shutdown refresh failed: %s", str(exc)[:120])
+    try:
+        _atomic_json_write(path, rollup, indent=2, default=str)
+    except Exception as exc:
+        logger.debug("Failed to flush hot rollup at shutdown: %s", str(exc)[:80])
 
 
 def flush_rollup_shutdown(
@@ -2020,40 +2153,42 @@ def flush_rollup_shutdown(
     reviewer's staleness window early in the run. Pass
     ``is_supervisor_exit=True`` from the actual supervisor exit hook
     (``mark_supervisor_end``) when the runtime is truly shutting down.
+
+    Operates on the currently bound ``_rio._HOT_ROLLUP_PATH``
+    (profile-aware) so child loop_runner exits flush their own lane.
     """
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rollup: dict = {}
-    try:
-        if os.path.exists(_rio._HOT_ROLLUP_PATH):
-            with open(_rio._HOT_ROLLUP_PATH, "r", encoding="utf-8") as f:
-                rollup = json.load(f)
-    except Exception:
-        rollup = {}
-    if not isinstance(rollup, dict):
-        return
-    rollup["last_heartbeat_utc"] = ts
-    rollup["last_updated"] = ts
-    rollup["shutdown_flush_at"] = ts
-    if is_supervisor_exit:
-        # Only the real supervisor exit hook may stamp this; child
-        # cycle clean-exits must NOT, otherwise the reviewer's stale
-        # anchor jumps to T+50s and FALSE-fails an entire long soak.
-        rollup["supervisor_end_utc"] = ts
-    rollup.setdefault("chain", chain)
-    try:
-        _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
-    except Exception as exc:
-        logger.debug("Failed to flush hot rollup at shutdown: %s", str(exc)[:80])
+    _flush_rollup_at_path(
+        path=_rio._HOT_ROLLUP_PATH,
+        chain=chain,
+        is_supervisor_exit=is_supervisor_exit,
+    )
 
 
 def mark_supervisor_end(chain: str = "arbitrum_one") -> None:
     """Reviewer post-1h-soak fix: explicit supervisor-exit hook.
 
-    Called from ``scripts/start_nonstop_runtime.py`` finally block on
-    the actual nonstop-runtime supervisor termination. Stamps
-    ``supervisor_end_utc`` and refreshes ``last_updated`` so the
-    reviewer staleness gate has a true supervisor-end anchor instead
-    of the last child cycle clean-exit timestamp.
+    E1.45: Refreshes BOTH the production and discovery rollups so the
+    reviewer's DISC rate_metrics block also lands with the current
+    schema (rate_basis + delta keys) at supervisor exit. Without this
+    the DISC rollup would only refresh when m7_hot_discovery completes
+    a cycle in-process \u2014 which is unreliable under drpc 429 storms.
+
+    Resolves the discovery sibling path from the currently bound
+    ``_rio._HOT_ROLLUP_PATH`` (so unit tests that monkeypatch the path
+    keep working) by toggling the ``_discovery`` filename suffix.
     """
-    flush_rollup_shutdown(chain=chain, is_supervisor_exit=True)
+    bound = _rio._HOT_ROLLUP_PATH
+    # Flush the currently bound path (preserves existing test contracts).
+    _flush_rollup_at_path(path=bound, chain=chain, is_supervisor_exit=True)
+    # Flush the sibling lane (production <-> discovery toggle on filename).
+    base_dir = os.path.dirname(bound)
+    fname = os.path.basename(bound)
+    stem, ext = os.path.splitext(fname)
+    if stem.endswith("_discovery"):
+        sibling_stem = stem[: -len("_discovery")]
+    else:
+        sibling_stem = stem + "_discovery"
+    sibling = os.path.join(base_dir, sibling_stem + ext)
+    if sibling != bound and os.path.exists(sibling):
+        _flush_rollup_at_path(path=sibling, chain=chain, is_supervisor_exit=True)
 

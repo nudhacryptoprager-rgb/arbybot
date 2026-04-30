@@ -393,3 +393,107 @@ class TestScoringBlackholeCounters:
         # No events => neither counter must increment.
         assert rollup.get("windows_events_without_fast_score_total", 0) == 0
         assert rollup.get("windows_events_without_bridge_hit_total", 0) == 0
+
+
+class TestE146CurrentSessionWindow:
+    """E1.46 reviewer fix #5: split supervisor_window into historical
+    (cumulative) and current_session_window (fresh per session)."""
+
+    def test_current_session_window_block_present(self, tmp_path, monkeypatch):
+        _, rollup = _call_rollup(
+            tmp_path, monkeypatch, events_count=4, fast_results=[],
+        )
+        csw = rollup.get("current_session_window")
+        assert csw is not None
+        assert csw["events_total"] == 4
+        assert csw["elapsed_minutes"] is not None
+        assert csw["events_per_minute"] is not None
+        # Historical alias of supervisor_window must exist alongside.
+        assert "historical_window" in rollup
+        assert rollup["historical_window"] == rollup["supervisor_window"]
+
+    def test_current_session_window_resets_on_new_session(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-A", raising=False)
+        hra._update_hot_rollup(
+            events_count=10, fast_results=[], guard_results=None,
+            bridge_diagnostics=None, chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup["current_session_window"]["events_total"] == 10
+
+        # New session_id -> session counters reset, csw must reflect new
+        # session only (NOT cumulative).
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-B", raising=False)
+        hra._update_hot_rollup(
+            events_count=2, fast_results=[], guard_results=None,
+            bridge_diagnostics=None, chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        assert rollup["current_session_window"]["events_total"] == 2
+        # supervisor_window/historical_window keeps accumulating.
+        assert rollup["supervisor_window"]["events_total"] == 12
+
+
+class TestE146SessionBridgeHitNotScoredHistogram:
+    """E1.46 reviewer fix #2: session-scoped fresh histogram for
+    BRIDGE_HIT_NOT_SCORED reasons, not only lifetime cumulative."""
+
+    def test_session_bridge_hit_not_scored_histogram_increments(
+        self, tmp_path, monkeypatch
+    ):
+        bd = {
+            "bridge_pool_address_hit_count": 1,
+            "bridge_hit_not_scored_reason": "PAIR_FILTERED",
+        }
+        _, rollup = _call_rollup(
+            tmp_path, monkeypatch, events_count=1, fast_results=[],
+            bridge_diagnostics=bd,
+        )
+        sess = rollup["session"]
+        srh = sess.get("session_bridge_hit_not_scored_reason_histogram")
+        assert srh == {"PAIR_FILTERED": 1}
+        assert sess.get("session_bridge_hit_not_scored_windows") == 1
+
+    def test_session_bridge_hit_histogram_resets_on_new_session(
+        self, tmp_path, monkeypatch
+    ):
+        import m7.orderflow.hot_runtime_artifacts as hra
+
+        rollup_path = tmp_path / "m7_hot_rollup_latest.json"
+        monkeypatch.setattr(hra._rio, "_HOT_ROLLUP_PATH", str(rollup_path))
+
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-A", raising=False)
+        hra._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=None,
+            bridge_diagnostics={
+                "bridge_pool_address_hit_count": 1,
+                "bridge_hit_not_scored_reason": "PAIR_FILTERED",
+            },
+            chain="base",
+        )
+        # New session
+        monkeypatch.setattr(hra._rio, "_SESSION_ID", "sid-B", raising=False)
+        hra._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=None,
+            bridge_diagnostics={
+                "bridge_pool_address_hit_count": 1,
+                "bridge_hit_not_scored_reason": "TIER_COLD",
+            },
+            chain="base",
+        )
+        rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+        # Lifetime histogram has both; session histogram has only new.
+        lifetime = rollup["bridge_hit_but_not_fast_scored"]["reason_histogram"]
+        assert lifetime.get("PAIR_FILTERED") == 1
+        assert lifetime.get("TIER_COLD") == 1
+        sess = rollup["session"]
+        srh = sess["session_bridge_hit_not_scored_reason_histogram"]
+        assert srh == {"TIER_COLD": 1}
+        assert sess["session_bridge_hit_not_scored_windows"] == 1

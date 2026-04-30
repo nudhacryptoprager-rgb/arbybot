@@ -130,6 +130,16 @@ def main() -> int:
         help="directory to write replay manifests (created if missing)",
     )
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument(
+        "--require-fresh-session",
+        action="store_true",
+        help=(
+            "E1.46 reviewer fix #10: only replay samples whose "
+            "session_id matches the rollup's current session.session_id "
+            "(or rollup-level session_id). Prevents replaying samples "
+            "carried over from a prior soak's divergence ring."
+        ),
+    )
     args = ap.parse_args()
 
     try:
@@ -140,6 +150,36 @@ def main() -> int:
     except json.JSONDecodeError as exc:
         print(f"FAIL: rollup JSON parse error: {exc}", file=sys.stderr)
         return 2
+
+    if args.require_fresh_session:
+        try:
+            raw = json.loads(args.rollup.read_text(encoding="utf-8"))
+        except Exception:
+            raw = {}
+        cur_sid = (
+            (raw.get("session") or {}).get("session_id")
+            or raw.get("session_id")
+        )
+        if not cur_sid:
+            if not args.quiet:
+                print(json.dumps(
+                    {"status": "NO_FRESH_SAMPLES",
+                     "reason": "rollup_session_id_missing"},
+                    indent=2,
+                ))
+            return 1
+        fresh = [s for s in samples if s.get("session_id") == cur_sid]
+        if not fresh:
+            if not args.quiet:
+                print(json.dumps(
+                    {"status": "NO_FRESH_SAMPLES",
+                     "reason": "no_samples_match_current_session_id",
+                     "current_session_id": cur_sid,
+                     "candidate_count": len(samples)},
+                    indent=2,
+                ))
+            return 1
+        samples = fresh
 
     summary = summarize(samples)
     if not samples:
