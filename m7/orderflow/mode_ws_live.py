@@ -28,6 +28,7 @@ from m7.shared.constants import (
 from m7.orderflow.artifacts import build_replay_summary
 from m7.orderflow.coverage import seed_tokens_from_subgraph
 from m7.orderflow.events import normalize_swap_log
+from m7.orderflow.pool_price_state import feed_raw_logs as _feed_pool_price_logs
 from m7.orderflow.pool_registry import PoolRegistry
 from m7.orderflow.profit_guard import annotate_profit_guard_results
 from m7.orderflow.resolve import _build_address_to_symbol, batch_pre_resolve_pools
@@ -883,6 +884,15 @@ def run_ws_live(
                     _lg_addr = (_lg.get("address") or "").lower()
                     if _lg_addr:
                         _hot_event_pool_counts[_lg_addr] = _hot_event_pool_counts.get(_lg_addr, 0) + 1
+
+            # E1.51 slice-3: feed local pool price state registry from raw
+            # WS logs. Passive sink; never raises. Gated by
+            # ARBY_USE_LOCAL_PRICE_STATE (default on).
+            if os.environ.get("ARBY_USE_LOCAL_PRICE_STATE", "1") not in ("0", "false", "False"):
+                try:
+                    _feed_pool_price_logs(getattr(args, "chain", "base"), logs)
+                except Exception:
+                    pass
 
             # Normalize logs
             block_events = []

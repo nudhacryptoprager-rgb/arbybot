@@ -419,24 +419,68 @@ def extract_pool_state_for_sim(
     pool_addresses: List[str],
     rpc_url: str,
     block_num: int,
+    *,
+    chain: Optional[str] = None,
 ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Extract V3 pool state (sqrtPriceX96, tick, liquidity) for local simulation.
 
-    Uses existing MulticallBatcher.batch_full_pool_data() to read slot0 + liquidity
-    in one multicall. This is the state-preparation step for future local pricing.
+    E1.51 slice-3b: when ``ARBY_REGISTRY_FIRST_POOL_STATE=1`` AND ``chain``
+    is provided, the local ``PoolPriceStateRegistry`` is consulted FIRST.
+    Pools missing from the registry fall back to
+    ``MulticallBatcher.batch_full_pool_data`` (the legacy path).
+
+    Default behaviour (env unset / chain=None) is unchanged: full multicall.
 
     Returns {pool_addr: {sqrt_price_x96, tick, liquidity} or None}.
     """
     if not pool_addresses:
         return {}
 
+    # Slice-3b: registry-first lookup, opt-in via env until canary green.
+    use_registry = (
+        chain is not None
+        and os.environ.get("ARBY_REGISTRY_FIRST_POOL_STATE", "0") in ("1", "true", "True")
+    )
+    result: Dict[str, Optional[Dict[str, Any]]] = {}
+    cold_pools: List[str] = list(pool_addresses)
+
+    if use_registry:
+        try:
+            from m7.orderflow.pool_price_state import get_registry as _ps_get_registry
+            reg = _ps_get_registry()
+            cold_pools = []
+            for addr in pool_addresses:
+                st = reg.get(chain, addr)
+                if st is not None:
+                    result[addr.lower()] = {
+                        "sqrt_price_x96": st.sqrt_price_x96,
+                        "tick": st.tick,
+                        "liquidity": st.liquidity,
+                        "source": "local_registry",
+                    }
+                else:
+                    cold_pools.append(addr)
+        except Exception as exc:
+            logger.debug("registry-first lookup failed, falling back: %s", str(exc)[:100])
+            cold_pools = list(pool_addresses)
+            result = {}
+
+    if not cold_pools:
+        return result
+
     try:
         from core.multicall import get_multicall_batcher
         batcher = get_multicall_batcher(rpc_url, block_num)
-        return batcher.batch_full_pool_data(pool_addresses)
+        rpc_state = batcher.batch_full_pool_data(cold_pools)
     except Exception as exc:
         logger.debug("extract_pool_state_for_sim failed: %s", str(exc)[:100])
-        return {addr: None for addr in pool_addresses}
+        for addr in cold_pools:
+            result.setdefault(addr.lower(), None)
+        return result
+
+    for addr, st in rpc_state.items():
+        result[addr.lower() if isinstance(addr, str) else addr] = st
+    return result
 
 
 

@@ -4,6 +4,30 @@
 
 ## Active Items
 
+### TD-004: RPC-Per-Pool `slot0`/`liquidity` Reads — Replace with Event-Derived State
+
+**Added**: 2026-05-01 (E1.51 slice-1)
+**Priority**: HIGH (drives RPC budget exhaustion under drpc/Alchemy free tiers)
+**Category**: Hot lane cost model
+
+`m7/orderflow/resolve.py::extract_pool_state_for_sim` calls `core.multicall.MulticallBatcher.batch_full_pool_data` (per-pool `slot0` + `liquidity` RPC reads) for every shortlisted pool on every scored event. Under free-tier provider budgets this is the dominant RPC-CU consumer in the hot lane; it competes with `eth_subscribe newHeads` for the same drpc CU/min budget and contributes to the 429 storms tracked in TD-003.
+
+The full V3 `Swap` event payload **already contains** `sqrtPriceX96`, `liquidity`, `tick` (the same 3 values returned by `slot0`+`liquidity`), but `m7/orderflow/events.py::normalize_swap_log` validates the 320-hex layout and then explicitly drops the last 3 fields with the comment `# sqrtPriceX96, liquidity, tick available but not needed for event normalization`. Replacing the RPC read with an event-derived registry should cut `multicall_full_pool_data_calls_total / scored_event` by ≥50% on a healthy WS feed.
+
+**Slice plan (E1.51, executed slice-by-slice with checkpoint gates):**
+- **slice-1 ✅ DONE** (2026-05-01): `m7/orderflow/pool_price_state.py` — `V3PoolState` dataclass + `decode_v3_swap_log_state` + thread-safe chain-scoped `PoolPriceStateRegistry` with latest-write-wins by `(block_number, log_index)` + module-level singleton. Test shield `tests/unit/test_pool_price_state.py` 19 PASS. NO public API change to `OrderflowEvent`. NO hot-lane wiring yet.
+- **slice-2 ✅ DONE** (2026-05-01): V2/ve33 `Sync(uint112,uint112)` decoder + `V2PoolState` dataclass + parallel `_v2_state` substore in registry + schema bump to `m7.e1.51.slice2.pool_price_state.v2`; +13 unit tests (32 total in `test_pool_price_state.py`).
+- **slice-3 ✅ DONE** (2026-05-01): `m7/orderflow/pool_price_state.feed_raw_logs(chain, logs)` passive sink + wiring in `m7/orderflow/mode_ws_live.py` recv loop (gated by `ARBY_USE_LOCAL_PRICE_STATE`, default on); +5 unit tests (37 total). `extract_pool_state_for_sim` registry-first lookup is deferred to slice-3b for safety.
+- **slice-4 ✅ DONE** (2026-05-01): `scripts/replay_v3_state_drift.py` offline harness + `tests/unit/test_replay_v3_state_drift.py` (5 tests). Acceptance gates: `drift_pools_pct < 1%` AND `max_sqrt_price_drift_bps < 5`.
+- **slice-5 ✅ DONE** (2026-05-01, doc-only): `docs/m7/SIM_BACKEND_ANVIL.md` — operational runbook. Anvil router was already wired in `m7/orderflow/simulation.py` (no code duplication needed).
+- **slice-6 ✅ DONE** (2026-05-01): `m7/orderflow/flashblocks_ingest.py` (`consume_flashblock` + `FlashblockSubscriber` stub) + 5 unit tests. Real WS subscriber lands in slice-6b when provider chosen.
+- **slice-7 ✅ DONE** (2026-05-01, doc-only): `docs/m7/SELF_HOST_BASE_NODE.md` — Hetzner AX52 ~$60/mo plan, op-geth + op-node, snapshot bootstrap, monitoring matrix, break-even calc.
+- **slice-8 ✅ DOC DONE** (2026-05-01): `docs/m7/E1_51_CANARY_ACCEPTANCE.md` — canary command + 8-row acceptance metric table + verdict mapping. Real 30m canary run is an ops step (not synchronously verifiable in CI).
+
+**Acceptance for full TD-004 closure**: full slice-3 wire-up confirmed by 30m canary showing `multicall_full_pool_data_calls_per_scored_event` drops by ≥50% AND no regression in `sim_passed_rate`.
+
+---
+
 ### TD-003: In-Process Hot Registry / Tier-Map Refresh Bridge
 
 **Added**: 2026-04-30 (E1.49 speed-audit)

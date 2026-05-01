@@ -20,6 +20,7 @@
 # Приклад:
 #   pwsh -File scripts/bootstrap_system.ps1 -Hours 0.5
 #   pwsh -File scripts/bootstrap_system.ps1 -Hours 2 -StartAnvil
+#   pwsh -File scripts/bootstrap_system.ps1 -Hours 0.17 -ProviderBudget free
 [CmdletBinding()]
 param(
     [double]$Hours = 0.5,
@@ -27,6 +28,12 @@ param(
     [string]$ProdSimBackend = 'rpc_fork',
     [ValidateSet('tenderly','rpc_fork')]
     [string]$DiscSimBackend = 'rpc_fork',
+    [ValidateSet('standard','free')]
+    [string]$ProviderBudget = 'standard',
+    [int]$RpcRpsLimit = 60,
+    [int]$RpcRpsBurst = 20,
+    [int]$WsMaxReconnectAttempts = 4,
+    [int]$WsReconnectCooldownSeconds = 30,
     [switch]$StartAnvil,
     [switch]$SkipBaseline,
     # soak18 step 4: fail-fast probe. After supervisor starts we wait
@@ -53,6 +60,21 @@ param(
     [switch]$NoRollupProbe)
 
 $ErrorActionPreference = 'Stop'
+
+if ($ProviderBudget -eq 'free') {
+    if (-not $PSBoundParameters.ContainsKey('RpcRpsLimit')) {
+        $RpcRpsLimit = 35
+    }
+    if (-not $PSBoundParameters.ContainsKey('RpcRpsBurst')) {
+        $RpcRpsBurst = 5
+    }
+    if (-not $PSBoundParameters.ContainsKey('WsMaxReconnectAttempts')) {
+        $WsMaxReconnectAttempts = 1
+    }
+    if (-not $PSBoundParameters.ContainsKey('WsReconnectCooldownSeconds')) {
+        $WsReconnectCooldownSeconds = 180
+    }
+}
 
 function Write-Step([string]$msg) {
     Write-Host ("[bootstrap] " + $msg) -ForegroundColor Cyan
@@ -109,16 +131,16 @@ $env:ARBY_PAPER_SIGNING                        = '1'
 $env:ARBY_ROUNDTRIP_SIM                        = '1'
 $env:ARBY_ADAPTIVE_SIZING                      = '1'
 $env:ARBY_WS_RECV_TIMEOUT_S                    = '30'
-$env:ARBY_WS_MAX_RECONNECT_ATTEMPTS            = '4'
-$env:ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S   = '30'
+$env:ARBY_WS_MAX_RECONNECT_ATTEMPTS            = [string]$WsMaxReconnectAttempts
+$env:ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S   = [string]$WsReconnectCooldownSeconds
 $env:ARBY_BASE_USE_FLASHBLOCKS_WS              = '0'
 
 # soak16: explicit RPC rate-limit bypass routes (avoid 403/429 from
 # Tenderly / Alchemy / dRPC). All of these activate already-implemented
 # fallback paths in core/rpc_rate_limiter.py and core/rpc_urls.py.
 $env:ARBY_RPC_THROTTLE                         = '1'      # token bucket on
-$env:ARBY_RPC_RPS_LIMIT                        = '60'     # safe under dRPC free 100 rps
-$env:ARBY_RPC_RPS_BURST                        = '20'
+$env:ARBY_RPC_RPS_LIMIT                        = [string]$RpcRpsLimit
+$env:ARBY_RPC_RPS_BURST                        = [string]$RpcRpsBurst
 $env:ARBY_PERSISTENT_POOL_CACHE                = '1'      # P0.1
 $env:ARBY_BACKRUN_MAX_INPUT_RATIO              = '1000'   # P0.2 sanity clamp
 $env:ARBY_RT_BPS_FLOOR                         = '-1000'  # P0.2 outlier filter
@@ -127,7 +149,7 @@ $env:ARBY_RPC_PUBLIC_WS_FALLBACK               = '1'      # publicnode.com fallb
 $env:ARBY_RPC_FALLBACK_ON_429                  = '1'
 $env:ARBY_TENDERLY_DISABLE                     = '1'      # explicit bypass — sim runs via rpc_fork
 
-Write-Step ("ENV set; PROD sim=" + $ProdSimBackend + ", DISC sim=" + $DiscSimBackend)
+Write-Step ("ENV set; PROD sim=" + $ProdSimBackend + ", DISC sim=" + $DiscSimBackend + ", provider_budget=" + $ProviderBudget + ", rpc_rps=" + $RpcRpsLimit + ", rpc_burst=" + $RpcRpsBurst + ", ws_attempts=" + $WsMaxReconnectAttempts + ", ws_cooldown_s=" + $WsReconnectCooldownSeconds)
 
 # --- 4) clean rolling ---
 Write-Step "cleaning rolling artifacts ..."

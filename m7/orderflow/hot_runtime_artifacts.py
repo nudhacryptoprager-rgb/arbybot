@@ -1047,7 +1047,24 @@ def _update_hot_rollup(
     rollup["windows_seen"] = rollup.get("windows_seen", 0) + 1
     rollup["events_seen_total"] = rollup.get("events_seen_total", 0) + events_count
 
-    # M7.E1.8: Error counters вЂ” track heartbeat-on-error windows vs normal
+    # E1.51 slice-3c: surface local pool price-state registry counters
+    # so canary acceptance can verify ``price_state_updates_delta>0``.
+    # Defensive: never raise.
+    try:
+        from m7.orderflow.pool_price_state import get_registry as _ps_get_registry
+        _ps_reg = _ps_get_registry()
+        _ps_counters = _ps_reg.counters()
+        rollup["pool_price_state"] = {
+            "updates_total": int(_ps_counters.get("updates_total", 0)),
+            "v2_updates_total": int(_ps_counters.get("v2_updates_total", 0)),
+            "decode_errors_total": int(_ps_counters.get("decode_errors_total", 0)),
+            "v2_decode_errors_total": int(_ps_counters.get("v2_decode_errors_total", 0)),
+            "stale_drops_total": int(_ps_counters.get("stale_drops_total", 0)),
+            "v2_stale_drops_total": int(_ps_counters.get("v2_stale_drops_total", 0)),
+            "pools_tracked": _ps_reg.pools_tracked(),
+        }
+    except Exception:
+        pass    # M7.E1.8: Error counters вЂ” track heartbeat-on-error windows vs normal
     _is_error_window = (events_count == 0 and fast_results is None and guard_results is None
                         and bridge_diagnostics is None and ws_live_stats is None)
     _er = rollup.get("error_counts") or {}
@@ -2125,6 +2142,24 @@ def _flush_rollup_at_path(
         )
         rollup["last_clean_child_exit_at"] = ts
     rollup.setdefault("chain", chain)
+    # E1.51 slice-3c: surface registry counters at every shutdown flush
+    # so each clean child exit refreshes the ``pool_price_state`` block
+    # even if the child never reached _update_hot_rollup.
+    try:
+        from m7.orderflow.pool_price_state import get_registry as _ps_get_registry
+        _ps_reg = _ps_get_registry()
+        _ps_counters = _ps_reg.counters()
+        rollup["pool_price_state"] = {
+            "updates_total": int(_ps_counters.get("updates_total", 0)),
+            "v2_updates_total": int(_ps_counters.get("v2_updates_total", 0)),
+            "decode_errors_total": int(_ps_counters.get("decode_errors_total", 0)),
+            "v2_decode_errors_total": int(_ps_counters.get("v2_decode_errors_total", 0)),
+            "stale_drops_total": int(_ps_counters.get("stale_drops_total", 0)),
+            "v2_stale_drops_total": int(_ps_counters.get("v2_stale_drops_total", 0)),
+            "pools_tracked": _ps_reg.pools_tracked(),
+        }
+    except Exception:
+        pass
     try:
         rollup["rate_metrics"] = _compute_rate_metrics(rollup)
     except Exception as exc:
@@ -2251,6 +2286,24 @@ def heartbeat_hot_rollup_cycle(
     rollup["periodic_heartbeats_total"] = (
         int(rollup.get("periodic_heartbeats_total", 0) or 0) + 1
     )
+    # E1.51 slice-3c: surface registry counters in heartbeat path too,
+    # so even cycles that never reach _update_hot_rollup expose the
+    # ``pool_price_state`` block for canary verification.
+    try:
+        from m7.orderflow.pool_price_state import get_registry as _ps_get_registry
+        _ps_reg = _ps_get_registry()
+        _ps_counters = _ps_reg.counters()
+        rollup["pool_price_state"] = {
+            "updates_total": int(_ps_counters.get("updates_total", 0)),
+            "v2_updates_total": int(_ps_counters.get("v2_updates_total", 0)),
+            "decode_errors_total": int(_ps_counters.get("decode_errors_total", 0)),
+            "v2_decode_errors_total": int(_ps_counters.get("v2_decode_errors_total", 0)),
+            "stale_drops_total": int(_ps_counters.get("stale_drops_total", 0)),
+            "v2_stale_drops_total": int(_ps_counters.get("v2_stale_drops_total", 0)),
+            "pools_tracked": _ps_reg.pools_tracked(),
+        }
+    except Exception:
+        pass
     try:
         _atomic_json_write(path, rollup, indent=2, default=str)
     except Exception as exc:
