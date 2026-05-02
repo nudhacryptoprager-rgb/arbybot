@@ -418,6 +418,10 @@ def run_ws_live(
         "blocks_dropped_all_normalized_none": 0,
         "blocks_dropped_all_below_broad_floor": 0,
         "events_dropped_broad_floor": 0,
+        # E1.51 pps sink counters (accumulated per session)
+        "pps_v3_updates": 0,
+        "pps_v2_updates": 0,
+        "pps_skipped": 0,
     }
     ws_start_time = time.monotonic()
     # M7.E1.34m (soak7): default exit_reason so artifact always carries it
@@ -890,7 +894,10 @@ def run_ws_live(
             # ARBY_USE_LOCAL_PRICE_STATE (default on).
             if os.environ.get("ARBY_USE_LOCAL_PRICE_STATE", "1") not in ("0", "false", "False"):
                 try:
-                    _feed_pool_price_logs(getattr(args, "chain", "base"), logs)
+                    _pps_ret = _feed_pool_price_logs(getattr(args, "chain", "base"), logs)
+                    _funnel_debug["pps_v3_updates"] += _pps_ret.get("v3_updates", 0)
+                    _funnel_debug["pps_v2_updates"] += _pps_ret.get("v2_updates", 0)
+                    _funnel_debug["pps_skipped"] += _pps_ret.get("skipped", 0)
                 except Exception:
                     pass
 

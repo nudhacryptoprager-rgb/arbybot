@@ -29,6 +29,7 @@ validates the ``len(data_hex) >= 320`` invariant.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from threading import RLock
@@ -412,10 +413,22 @@ def feed_raw_logs(chain: str, logs) -> Dict[str, int]:
         return counters
     for lg in logs:
         try:
-            data_hex = lg.get("data") if isinstance(lg, dict) else None
+            # web3 v6 returns AttributeDict (inherits Mapping, NOT dict).
+            # Using isinstance(lg, dict) would be False for AttributeDict —
+            # fix: check for Mapping so both dict and AttributeDict are handled.
+            # (E1.51 Root Cause 3 fix)
+            data_hex = lg.get("data") if isinstance(lg, Mapping) else None
             if not data_hex:
                 counters["skipped"] += 1
                 continue
+            # Normalize HexBytes / bytes → plain hex string so that
+            # `.startswith("0x")` and `len()` work correctly.
+            # web3 v6 eth.get_logs() returns log["data"] as HexBytes
+            # (a bytes subclass), not str — calling .startswith("0x")
+            # on it raises TypeError which was silently caught, causing
+            # every log to fall into the skipped bucket. (E1.51 fix)
+            if not isinstance(data_hex, str):
+                data_hex = data_hex.hex() if hasattr(data_hex, "hex") else data_hex.decode("utf-8", errors="replace")
             payload = data_hex[2:] if data_hex.startswith("0x") else data_hex
             n = len(payload)
             if n >= 320:

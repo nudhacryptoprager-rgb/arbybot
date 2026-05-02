@@ -148,6 +148,33 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
         deltas[key] = _delta_scalar(current, baseline, key)
         print(f"  {key:<32s} : {deltas[key]:+d}")
 
+    # E1.51 slice-3c reviewer surface: pool price-state registry deltas.
+    # Pulled from the nested ``pool_price_state`` block in the rolling
+    # hot rollup (``data/runs/_rolling/m7_hot_rollup_latest.json``) and
+    # promoted into the same scalar deltas dict so downstream guards
+    # can reason about ``pool_price_state_updates_delta`` uniformly.
+    _pps_cur = current.get("pool_price_state") or {}
+    _pps_base = baseline.get("pool_price_state") or {}
+    _pps_keys = (
+        "updates_total",
+        "v2_updates_total",
+        "decode_errors_total",
+        "v2_decode_errors_total",
+        "stale_drops_total",
+        "v2_stale_drops_total",
+    )
+    for _k in _pps_keys:
+        _d = _num(_pps_cur.get(_k)) - _num(_pps_base.get(_k))
+        deltas[f"pool_price_state_{_k}"] = _d
+        print(f"  pool_price_state.{_k:<22s} : {_d:+d}")
+    deltas["pool_price_state_pools_tracked_current"] = _num(
+        _pps_cur.get("pools_tracked")
+    )
+    print(
+        f"  pool_price_state.pools_tracked     : "
+        f"{deltas['pool_price_state_pools_tracked_current']} (current)"
+    )
+
     print("\n-- Histogram deltas (non-zero only) --")
     delta_hist = _delta_histogram(current, baseline)
     if not delta_hist:
@@ -270,6 +297,24 @@ def summarise_lane(lane_name: str, baseline: dict, current: dict) -> tuple:
         # Informational — does not flip `ok` because a slow cadence may
         # still produce a valid sim_passed window. The reviewer surfaces
         # it so operators can decide whether to shorten ws_timeout.
+    # E1.51 reviewer guard: POOL_PRICE_STATE_SINK_STARVED.
+    # Hot lane wrote events (events_seen_delta > 0) but the registry
+    # never received a single Swap/Sync log decode. Almost always means
+    # the WS recv loop yielded `newHeads` only, or `feed_raw_logs` is
+    # mis-wired in mode_ws_live. Distinct from the surfacing question
+    # (block presence in rollup) which is now permanently wired across
+    # all three rollup writers in `hot_runtime_artifacts.py`.
+    _pps_upd_delta = int(deltas.get("pool_price_state_updates_total", 0) or 0)
+    _pps_v2_delta = int(deltas.get("pool_price_state_v2_updates_total", 0) or 0)
+    if _events_delta > 0 and (_pps_upd_delta + _pps_v2_delta) == 0 and not _quiet_ok:
+        reasons.append(
+            "POOL_PRICE_STATE_SINK_STARVED "
+            f"events_seen_delta={_events_delta} "
+            f"pool_price_state_updates_delta={_pps_upd_delta} "
+            f"pool_price_state_v2_updates_delta={_pps_v2_delta} "
+            "(rollup carries the block but registry got 0 decodes; "
+            "check ARBY_USE_LOCAL_PRICE_STATE and feed_raw_logs wiring)"
+        )
     if _events_delta > 0 and _fps_delta == 0:
         # E1.45: enriched SCORING_BLACKHOLE breakdown using the existing
         # admission-funnel counters. NO_BRIDGE_HIT and BRIDGE_HIT_NOT_SCORED

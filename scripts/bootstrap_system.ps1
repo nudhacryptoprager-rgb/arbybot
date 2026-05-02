@@ -148,6 +148,11 @@ $env:ARBY_FAST_PATH_COMPONENTS_RING_SIZE       = '50'     # P1.5 dump
 $env:ARBY_RPC_PUBLIC_WS_FALLBACK               = '1'      # publicnode.com fallback when Alchemy 429
 $env:ARBY_RPC_FALLBACK_ON_429                  = '1'
 $env:ARBY_TENDERLY_DISABLE                     = '1'      # explicit bypass — sim runs via rpc_fork
+# E1.51: local pool price-state registry (feed_raw_logs in WS recv loop).
+# Respect caller override; default ON so bootstrap-launched children
+# benefit from Swap/Sync log decoding without extra CLI flags.
+if (-not $env:ARBY_USE_LOCAL_PRICE_STATE)   { $env:ARBY_USE_LOCAL_PRICE_STATE   = '1' }
+if (-not $env:ARBY_REGISTRY_FIRST_POOL_STATE) { $env:ARBY_REGISTRY_FIRST_POOL_STATE = '0' }  # safe default OFF
 
 Write-Step ("ENV set; PROD sim=" + $ProdSimBackend + ", DISC sim=" + $DiscSimBackend + ", provider_budget=" + $ProviderBudget + ", rpc_rps=" + $RpcRpsLimit + ", rpc_burst=" + $RpcRpsBurst + ", ws_attempts=" + $WsMaxReconnectAttempts + ", ws_cooldown_s=" + $WsReconnectCooldownSeconds)
 

@@ -421,3 +421,68 @@ class TestFeedRawLogs:
         assert out["v3_updates"] == 1
         assert out["v2_updates"] == 1
         assert out["skipped"] == 2
+
+    def test_hexbytes_data_field_decoded(self):
+        """E1.51 fix: web3 v6 eth.get_logs() returns log['data'] as HexBytes
+        (bytes subclass). feed_raw_logs must not raise TypeError on
+        .startswith('0x') and must successfully update the registry."""
+        class HexBytes(bytes):
+            """Minimal web3 HexBytes stub."""
+            def hex(self, *a, **kw):
+                return super().hex(*a, **kw)
+
+        swap = _build_swap_log()
+        # Replace str data with HexBytes equivalent
+        raw_hex = swap["data"]
+        hex_no_prefix = raw_hex[2:] if raw_hex.startswith("0x") else raw_hex
+        swap["data"] = HexBytes(bytes.fromhex(hex_no_prefix))
+        out = feed_raw_logs("base", [swap])
+        assert out["v3_updates"] == 1, "HexBytes data must decode as V3 update"
+        assert out["skipped"] == 0
+
+    def test_hexbytes_v2_data_field_decoded(self):
+        """E1.51 fix: same HexBytes normalization for V2 Sync logs."""
+        class HexBytes(bytes):
+            def hex(self, *a, **kw):
+                return super().hex(*a, **kw)
+
+        sync = _build_sync_log()
+        raw_hex = sync["data"]
+        hex_no_prefix = raw_hex[2:] if raw_hex.startswith("0x") else raw_hex
+        sync["data"] = HexBytes(bytes.fromhex(hex_no_prefix))
+        out = feed_raw_logs("base", [sync])
+        assert out["v2_updates"] == 1, "HexBytes data must decode as V2 update"
+        assert out["skipped"] == 0
+
+    def test_attributedict_mapping_not_dict(self):
+        """E1.51 Root Cause 3 fix: web3 AttributeDict inherits Mapping but NOT dict.
+        isinstance(lg, dict) is False for AttributeDict → data_hex was always None
+        → every log silently skipped. Fix: isinstance(lg, Mapping) covers both."""
+        from collections.abc import Mapping as AbcMapping
+
+        class FakeAttributeDict(AbcMapping):
+            """Minimal web3 AttributeDict stub — Mapping but NOT dict subclass."""
+            def __init__(self, data):
+                self._data = data
+
+            def __getitem__(self, key):
+                return self._data[key]
+
+            def __iter__(self):
+                return iter(self._data)
+
+            def __len__(self):
+                return len(self._data)
+
+            def get(self, key, default=None):
+                return self._data.get(key, default)
+
+        assert not isinstance(FakeAttributeDict({}), dict), "precondition: not a dict"
+
+        # Build a V3 Swap log wrapped in FakeAttributeDict
+        swap = _build_swap_log()
+        fake_log = FakeAttributeDict(swap)
+        out = feed_raw_logs("base", [fake_log])
+        assert out["v3_updates"] == 1, "Mapping (non-dict) log must be processed"
+        assert out["skipped"] == 0
+
