@@ -487,20 +487,20 @@ def run_loop(cli_args) -> None:
                         iteration, _bridge_cache_count,
                     )
 
-                # E1.26b: Periodic refresh of zero-liquidity CL pools.
-                # V3/CL pools can have 0 in-range liquidity at prewarm time
-                # (concentrated positions out of range temporarily) but real
-                # liquidity later.  Re-query them before each hot window.
-                # E1.50 / TD-003: throttle to every Nth iteration to reduce
-                # per-iteration drpc HTTP load (eth.block_number + per-pool
-                # state queries). Default N=3 keeps refresh frequency
-                # acceptable while cutting drpc HTTP traffic by ~66%, which
-                # leaves headroom for the WS recv loop to avoid 429.
+                # E1.26b / E1.53: Periodic refresh of zero-liquidity CL pools
+                # AND fully-unread PTT-injected pools (sqrt_price_x96=0).
+                # E1.50 / TD-003: throttle to every Nth iteration.
+                # Default reduced to 1 (every iteration) so that the 526 PTT
+                # direct-inject pools whose state reads failed at prewarm time
+                # get recovered quickly. Once recovered their liquidity>0 and
+                # ZLR skips them, so the cost quickly drops to near-zero.
+                # Operators can set ARBY_HOT_ZLR_EVERY_N_ITERS=3 to restore
+                # original throttling after a warm run.
                 _zlr_every_n = max(
                     1,
-                    int(os.environ.get("ARBY_HOT_ZLR_EVERY_N_ITERS", "3") or 3),
+                    int(os.environ.get("ARBY_HOT_ZLR_EVERY_N_ITERS", "1") or 1),
                 )
-                if _hot_registry is not None and _hot_rpc and (iteration % _zlr_every_n == 1):
+                if _hot_registry is not None and _hot_rpc and (iteration % _zlr_every_n == 0 or iteration == 1):
                     try:
                         from web3 import Web3 as _W3_zlr
                         _zlr_block = _W3_zlr(_W3_zlr.HTTPProvider(
@@ -714,6 +714,10 @@ def run_loop(cli_args) -> None:
 
                         # M7.A.5.47d: Adaptive cap — expand to 100 when we have
                         # events but zero bridge hits (coverage gap)
+                        # E1.53 (2026-05-02): cap is env-configurable via
+                        # ARBY_BRIDGE_POOL_CAP / ARBY_BRIDGE_POOL_CAP_GAP so
+                        # operators can lift the artificial 50-pool ceiling
+                        # when the broader funnel can absorb more attention.
                         _rollup_wwe = 0
                         _rollup_wwbh = 0
                         try:
@@ -724,7 +728,11 @@ def run_loop(cli_args) -> None:
                                 _rollup_wwbh = _rl.get("windows_with_bridge_hits", 0)
                         except Exception:
                             pass
-                        _pool_cap = 100 if (_rollup_wwe > 0 and _rollup_wwbh == 0) else 50
+                        _cap_default = max(1, int(os.environ.get(
+                            "ARBY_BRIDGE_POOL_CAP", "200") or 200))
+                        _cap_gap = max(1, int(os.environ.get(
+                            "ARBY_BRIDGE_POOL_CAP_GAP", "300") or 300))
+                        _pool_cap = _cap_gap if (_rollup_wwe > 0 and _rollup_wwbh == 0) else _cap_default
                         _remaining_ranked = sorted(
                             _remaining, key=_activity_score, reverse=True,
                         )
@@ -845,7 +853,10 @@ def run_loop(cli_args) -> None:
                         # M7.A.5.47f: Diversity-aware fill — max _FAMILY_CAP pools
                         # per token-pair family to prevent one family from monopolizing
                         # the focused filter and cementing concentration.
-                        _FAMILY_CAP = 8
+                        # E1.53: cap is env-configurable via ARBY_BRIDGE_FAMILY_CAP
+                        # (default raised 8 -> 16 to widen surface area).
+                        _FAMILY_CAP = max(1, int(os.environ.get(
+                            "ARBY_BRIDGE_FAMILY_CAP", "16") or 16))
                         def _pool_family(pa):
                             """Return normalized pair family for a pool (sorted tokens)."""
                             _info = _ptt.get(pa) or _ptt.get(pa.lower())
@@ -1036,9 +1047,11 @@ def run_loop(cli_args) -> None:
             _gate_result = None  # E1.12.2: execution gate result
             if lane == "hot":
                 # E1.12.2: Run full execution gate (profit_guard → sim → submit)
+                # E1.53: pass profile so discovery lane uses ARBY_SIM_BACKEND_DISC
                 _gate_result = run_execution_gate(
                     artifact.get("_raw_results", artifact.get("results", [])),
                     chain=cli_args.chain,
+                    profile=profile,
                 )
                 guard_results = _gate_result.guard_passed
 
@@ -1064,9 +1077,10 @@ def run_loop(cli_args) -> None:
             if lane == "cold":
                 # E1.22: Run full execution gate on cold lane results
                 # (profit guard already annotated in mode_ws_live; gate adds sim + submit)
+                # E1.53: pass profile so discovery lane uses ARBY_SIM_BACKEND_DISC
                 _raw = artifact.get("_raw_results", [])
                 if _raw:
-                    _gate_result = run_execution_gate(_raw, chain=cli_args.chain)
+                    _gate_result = run_execution_gate(_raw, chain=cli_args.chain, profile=profile)
                     guard_results = _gate_result.guard_passed
                     # Post-patch signal_counts with sim/submit from gate
                     _sc = artifact.get("signal_counts", {})

@@ -486,3 +486,57 @@ class TestFeedRawLogs:
         assert out["v3_updates"] == 1, "Mapping (non-dict) log must be processed"
         assert out["skipped"] == 0
 
+
+class TestTopicDispatch:
+    """E1.52 step 4: topic-aware dispatch must override length heuristic."""
+
+    def setup_method(self):
+        reset_registry_for_tests()
+
+    def test_v3_topic_routes_to_v3_decoder(self):
+        from m7.orderflow.pool_price_state import V3_SWAP_TOPIC
+        swap = _build_swap_log()
+        swap["topics"] = [V3_SWAP_TOPIC]
+        out = feed_raw_logs("base", [swap])
+        assert out == {"v3_updates": 1, "v2_updates": 0, "skipped": 0}
+
+    def test_v2_topic_routes_to_v2_decoder(self):
+        from m7.orderflow.pool_price_state import V2_SYNC_TOPIC
+        sync = _build_sync_log()
+        sync["topics"] = [V2_SYNC_TOPIC]
+        out = feed_raw_logs("base", [sync])
+        assert out == {"v3_updates": 0, "v2_updates": 1, "skipped": 0}
+
+    def test_unknown_topic_skipped_not_misrouted(self):
+        """A V3-sized payload with a wrong topic must NOT be decoded as V3."""
+        swap = _build_swap_log()
+        # Malicious / non-Swap log with same payload size
+        swap["topics"] = ["0x" + "ff" * 32]
+        out = feed_raw_logs("base", [swap])
+        assert out["v3_updates"] == 0
+        assert out["v2_updates"] == 0
+        assert out["skipped"] == 1
+
+    def test_topic_as_hexbytes(self):
+        """Topics may arrive as HexBytes (web3 v6) — must still match."""
+        from m7.orderflow.pool_price_state import V3_SWAP_TOPIC
+
+        class HexBytes(bytes):
+            def hex(self):
+                return super().hex()
+
+        swap = _build_swap_log()
+        topic_no_prefix = V3_SWAP_TOPIC[2:]
+        swap["topics"] = [HexBytes(bytes.fromhex(topic_no_prefix))]
+        out = feed_raw_logs("base", [swap])
+        assert out["v3_updates"] == 1
+        assert out["skipped"] == 0
+
+    def test_no_topics_falls_back_to_length(self):
+        """Backward-compat: logs without topics still use length heuristic."""
+        swap = _build_swap_log()  # no topics field
+        sync = _build_sync_log()
+        out = feed_raw_logs("base", [swap, sync])
+        assert out == {"v3_updates": 1, "v2_updates": 1, "skipped": 0}
+
+

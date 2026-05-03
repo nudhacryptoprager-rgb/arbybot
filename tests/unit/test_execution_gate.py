@@ -1,10 +1,10 @@
-"""E1.12.2: Protective tests for the execution gate pipeline.
+﻿"""E1.12.2: Protective tests for the execution gate pipeline.
 
 Tests:
-  1. Schema stability — BackrunResult has exactly 75 fields (8 new terminal)
-  2. Funnel invariant — submit_ready <= sim_passed <= guard_passed <= route_viable
-  3. SIM_DISABLED — without Tenderly, stage is honestly marked
-  4. Backward-compat — all 13 extracted symbols importable from loop
+  1. Schema stability вЂ” BackrunResult has exactly 75 fields (8 new terminal)
+  2. Funnel invariant вЂ” submit_ready <= sim_passed <= guard_passed <= route_viable
+  3. SIM_DISABLED вЂ” without Tenderly, stage is honestly marked
+  4. Backward-compat вЂ” all 13 extracted symbols importable from loop
   5. ExecutionGateResult dataclass defaults
   6. run_execution_gate with empty input
 """
@@ -91,8 +91,8 @@ class TestSimDisabledHonest:
         from m7.orderflow.execution_gate import run_execution_gate
         import m7.orderflow.execution_gate as gate_mod
 
-        # Ensure simulation is not configured — patch generic check in gate module namespace
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: False)
+        # Ensure simulation is not configured вЂ” patch generic check in gate module namespace
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
 
         # Create a fake result that will pass profit guard
         from m7.orderflow.contracts import BackrunResult
@@ -291,7 +291,7 @@ class TestE1123SimErrorHistogram:
         from m7.orderflow.simulation import SimulationResult
         import m7.orderflow.execution_gate as gate_mod
 
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
         monkeypatch.setattr(
             gate_mod,
             "_attempt_simulation",
@@ -331,7 +331,7 @@ class TestE1123SimErrorHistogram:
         # Ensure paper signing is off so signing_ready stays None
         monkeypatch.delenv("ARBY_PAPER_SIGNING", raising=False)
 
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
         monkeypatch.setattr(
             gate_mod,
             "_attempt_simulation",
@@ -572,7 +572,7 @@ class TestBuildSimTxParams:
     def test_adaptive_sizing_prefers_smaller_sweep_over_event_amount(self, monkeypatch):
         """Soak13: when best_sweep_size_wei < amount_in_wei, sim uses sweep size.
 
-        Roundtrip_profit_bps ≈ -9937 on soak12 came from oversized backrun
+        Roundtrip_profit_bps в‰€ -9937 on soak12 came from oversized backrun
         inherited from mimicked swap events. Adaptive sizing picks the
         sweep-optimized size, which bounds slippage on low-liquidity pools.
         """
@@ -609,7 +609,7 @@ class TestBuildSimTxParams:
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
         raw_amount = 5 * 10**16
-        sweep_size = 10 * 10**18  # larger — ignored
+        sweep_size = 10 * 10**18  # larger вЂ” ignored
         br = self._make_result(
             amount_in_wei=raw_amount, best_sweep_size_wei=sweep_size
         )
@@ -689,7 +689,7 @@ class TestBuildSimTxParams:
         (router + quoter_v2 + verified=True), the reject bucket is
         `SLIPSTREAM_PENDING_LOOKUP:<fee>` to surface adapter readiness.
         M7.E1.34j: if the fee is in `SLIPSTREAM_FEE_TO_TICKSPACING`, the
-        reject surfaces `SLIPSTREAM_MAPPED_PENDING_SUBMIT` — superseded in
+        reject surfaces `SLIPSTREAM_MAPPED_PENDING_SUBMIT` вЂ” superseded in
         M7.E1.34k.
         M7.E1.34k: without token addresses the pipeline now reaches the
         pre-calldata stage and emits `SLIPSTREAM_SIM_READY_TOKENS_MISSING:
@@ -734,12 +734,12 @@ class TestBuildSimTxParams:
         assert err is None, err
         assert tx is not None
         assert tx.get("adapter_type") == "aerodrome_slipstream"
-        assert tx.get("tick_spacing") == 100  # fee 2655 → ts 100
+        assert tx.get("tick_spacing") == 100  # fee 2655 в†’ ts 100
         # SwapRouter Slipstream selector is distinct from V3 SwapRouter02
         assert tx["calldata"][:4] != bytes.fromhex("04e45aaf")
 
     def test_algebra_dynamic_small_fee_classified(self):
-        """Small non-standard fee (<=100) → ALGEBRA_DYNAMIC sub-tag."""
+        """Small non-standard fee (<=100) в†’ ALGEBRA_DYNAMIC sub-tag."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
         br = self._make_result(
@@ -751,7 +751,7 @@ class TestBuildSimTxParams:
         assert err == "UNSUPPORTED_FEE_TIER:ALGEBRA_DYNAMIC:85"
 
     def test_unknown_non_standard_fee_classified(self):
-        """Truly unknown non-standard fee → UNKNOWN sub-tag."""
+        """Truly unknown non-standard fee в†’ UNKNOWN sub-tag."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
         br = self._make_result(
@@ -773,7 +773,7 @@ class TestAttemptSimulationRealCalldata:
         from m7.orderflow.profit_guard import ProfitGuardResult
         import m7.orderflow.execution_gate as gate_mod
 
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
 
         captured = {}
 
@@ -799,7 +799,7 @@ class TestAttemptSimulationRealCalldata:
 
         result = _attempt_simulation(br, guard, chain="base")
         assert result.success is True
-        # Verify real calldata was sent (Base → SwapRouter02)
+        # Verify real calldata was sent (Base в†’ SwapRouter02)
         assert captured["to"] == "0x2626664c2603336E57B271c5C0b26F421741e481"
         assert captured["calldata"][:4] == bytes.fromhex("04e45aaf")
         assert captured["value"] == 0
@@ -810,7 +810,7 @@ class TestAttemptSimulationRealCalldata:
         from m7.orderflow.profit_guard import ProfitGuardResult
         import m7.orderflow.execution_gate as gate_mod
 
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
 
         br = BackrunResult(
             event_id="test-4b",
@@ -818,7 +818,7 @@ class TestAttemptSimulationRealCalldata:
             event_type="swap",
             post_trade_state_used="estimated",
             backrun_direction="buy",
-            best_buy_venue="syncswap_linea",  # syncswap → unsupported
+            best_buy_venue="syncswap_linea",  # syncswap в†’ unsupported
             actual_pair="WETH/USDC",
             amount_in_wei=10**16,
         )
@@ -845,10 +845,10 @@ class TestE115SimExceptionCapture:
             "m7.orderflow.execution_gate._attempt_simulation", _boom
         )
         monkeypatch.setattr(
-            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda **_: True
         )
         monkeypatch.setattr(
-            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda **_: "anvil"
         )
 
         from m7.orderflow.contracts import BackrunResult
@@ -891,10 +891,10 @@ class TestE115PaperSigning:
             "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
         )
         monkeypatch.setattr(
-            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda **_: True
         )
         monkeypatch.setattr(
-            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda **_: "anvil"
         )
         monkeypatch.setenv("ARBY_PAPER_SIGNING", "1")
 
@@ -932,10 +932,10 @@ class TestE115PaperSigning:
             "m7.orderflow.execution_gate._attempt_simulation", _mock_sim
         )
         monkeypatch.setattr(
-            "m7.orderflow.execution_gate.is_simulation_configured", lambda: True
+            "m7.orderflow.execution_gate.is_simulation_configured", lambda **_: True
         )
         monkeypatch.setattr(
-            "m7.orderflow.execution_gate.get_simulation_backend", lambda: "anvil"
+            "m7.orderflow.execution_gate.get_simulation_backend", lambda **_: "anvil"
         )
         # No ARBY_PAPER_SIGNING set
         monkeypatch.delenv("ARBY_PAPER_SIGNING", raising=False)
@@ -1011,8 +1011,8 @@ class TestE135SubmitEconomicsGuard:
     def _mock_gate_ready(self, monkeypatch, br, sim_result):
         import m7.orderflow.execution_gate as gate_mod
 
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
-        monkeypatch.setattr(gate_mod, "get_simulation_backend", lambda: "anvil")
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
+        monkeypatch.setattr(gate_mod, "get_simulation_backend", lambda **_: "anvil")
         monkeypatch.setattr(
             gate_mod,
             "_run_profit_guard_on_results",
@@ -1092,7 +1092,7 @@ class TestE135SubmitEconomicsGuard:
 
 
 # ---------------------------------------------------------------------------
-# E1.16 regression — TOKEN_ADDRESS_UNKNOWN and DEX_CONFIG_MISSING fixes
+# E1.16 regression вЂ” TOKEN_ADDRESS_UNKNOWN and DEX_CONFIG_MISSING fixes
 # ---------------------------------------------------------------------------
 
 
@@ -1466,7 +1466,7 @@ class TestPreSimAdmissionFilter:
         import m7.orderflow.execution_gate as gate_mod
         monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "1")
         monkeypatch.setenv("ARBY_SIM_MIN_NET_BPS", "10.0")
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
         br = self._make_br(best_backrun_net_bps=5.0)
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_attempted == 0
@@ -1477,7 +1477,7 @@ class TestPreSimAdmissionFilter:
         from m7.orderflow.execution_gate import run_execution_gate
         import m7.orderflow.execution_gate as gate_mod
         monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "1")
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
         br = self._make_br(actual_pair=None)
         gate = run_execution_gate([br], chain="base")
         assert gate.sim_attempted == 0
@@ -1488,7 +1488,7 @@ class TestPreSimAdmissionFilter:
         import m7.orderflow.execution_gate as gate_mod
         monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "1")
         monkeypatch.setenv("ARBY_SIM_BYPASS_GUARD", "1")
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: True)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
         # Guard would normally reject amount=0, but BYPASS_GUARD lets it through.
         # Admission must still skip due to missing fee hint + no sweep size.
         br = self._make_br(amount_in_wei=0, best_sweep_size_wei=None, best_buy_fee=None)
@@ -1500,8 +1500,10 @@ class TestPreSimAdmissionFilter:
         from m7.orderflow.execution_gate import run_execution_gate
         import m7.orderflow.execution_gate as gate_mod
         monkeypatch.setenv("ARBY_SIM_ADMISSION_STRICT", "0")
-        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda: False)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
         br = self._make_br(best_backrun_net_bps=0.1)
         gate = run_execution_gate([br], chain="base")
         # With strict=0, sub-threshold candidate passes admission (SIM_DISABLED hits later).
         assert len(gate.guard_passed) == 1
+
+

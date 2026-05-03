@@ -1227,21 +1227,29 @@ def _attempt_simulation(
 def run_execution_gate(
     scored_results: list,
     chain: str = "base",
+    profile: Optional[str] = None,
 ) -> ExecutionGateResult:
     """Run the full execution gate pipeline on scored results.
 
     Stages:
       1. profit_guard — filters to positive-net candidates
-      2. simulation — Tenderly fork sim for each guard-passed candidate
+      2. simulation — backend selected by ARBY_SIM_BACKEND (or
+         ARBY_SIM_BACKEND_DISC / ARBY_SIM_BACKEND_PROD if profile given)
       3. submit_ready — requires sim_passed + calldata + signing (future)
+
+    Pass ``profile='discovery'`` from the discovery lane so that
+    ARBY_SIM_BACKEND_DISC (default rpc_fork, no credit limits) is used
+    instead of Tenderly. Pass ``profile='production'`` to force PROD backend.
 
     Returns ExecutionGateResult with honest counts and blockers.
     """
     gate = ExecutionGateResult()
 
-    # E1.12.4: Always record which simulation backend is available
-    _sim_configured = is_simulation_configured()
-    gate.simulation_backend = get_simulation_backend() if _sim_configured else None
+    # E1.12.4 / E1.53: Always record which simulation backend is active.
+    # Profile-aware: discovery lane reads ARBY_SIM_BACKEND_DISC so it
+    # never accidentally burns Tenderly credits.
+    _sim_configured = is_simulation_configured(profile=profile)
+    gate.simulation_backend = get_simulation_backend(profile=profile) if _sim_configured else None
 
     # Stage 1: Profit guard
     gate.guard_passed = _run_profit_guard_on_results(scored_results, chain=chain)

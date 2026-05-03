@@ -71,6 +71,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "reviewer_soak_delta_latest.json",
             # M7.A.5.4.0 batch pre-resolve cache (rolling, overwritten)
             "_pool_token_cache.json",
+            # M7.E1.52: HTTP-only proof lane artifact (rolling, overwritten)
+            "m7_proof_latest.json",
             # M7.E1.47/P1a tier_map artifacts (per-chain, rolling, overwritten)
             "m7_tier_map_base.json",
             "m7_tier_map_arbitrum.json",

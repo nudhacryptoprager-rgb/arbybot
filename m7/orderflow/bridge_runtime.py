@@ -483,43 +483,70 @@ def _prewarm_registry_from_bridge(
 
 
 def _refresh_zero_liquidity_entries(registry, rpc_url: str, block_num: int) -> int:
-    """E1.26b: Refresh registry entries that have sqrt_price_x96>0 but liquidity=0.
+    """E1.26b / E1.53: Refresh registry entries that are not active.
 
-    V3/CL pools can have 0 in-range liquidity at prewarm time (concentrated
-    positions temporarily out of range) but non-zero liquidity later as price
-    moves back into active tick ranges.  This function batch-refreshes those
-    entries so the hot lane can score events from them.
+    Covers two cases:
+    1. sqrt_price_x96>0 AND liquidity=0: CL pools temporarily out of range.
+    2. sqrt_price_x96=0/None AND liquidity=0/None: PTT-injected pools whose
+       initial multicall state read returned empty (Aerodrome CL, BaseSwap,
+       other non-standard V3 forks). These need a second read attempt once
+       the block is confirmed.
+
+    Bounded to ARBY_ZLR_MAX_POOLS (default 150) to avoid oversized multicall
+    batches. Candidate pools sorted: fully-unread (sqrt=0) first so the most
+    broken get fixed first.
 
     Returns the number of entries updated to non-zero liquidity.
     """
-    zero_liq_addrs: list = []
+    _max_pools = int(os.environ.get("ARBY_ZLR_MAX_POOLS", "150") or 150)
+    zero_liq_addrs: list = []  # (priority, address)
     addr_to_entry: dict = {}
     for entries_list in registry._pools.values():
         for e in entries_list:
-            if (
-                e.sqrt_price_x96 and e.sqrt_price_x96 > 0
-                and (e.liquidity is None or e.liquidity == 0)
-            ):
-                zero_liq_addrs.append(e.address)
+            _has_sqrtp = bool(e.sqrt_price_x96 and e.sqrt_price_x96 > 0)
+            _has_liq = bool(e.liquidity and e.liquidity > 0)
+            if not _has_liq:
+                # priority 0 = completely unread (needs fix most urgently)
+                # priority 1 = has sqrtPrice but no liquidity (CL out-of-range)
+                prio = 1 if _has_sqrtp else 0
+                zero_liq_addrs.append((prio, e.address))
                 addr_to_entry[e.address] = e
 
     if not zero_liq_addrs:
         return 0
 
+    # Sort: unread pools first, then sqrtP-only pools; cap to max
+    zero_liq_addrs.sort(key=lambda x: x[0])
+    zero_liq_addrs = zero_liq_addrs[:_max_pools]
+    candidate_addrs = [a for _, a in zero_liq_addrs]
+    logger.debug(
+        "zero-liq refresh: %d candidates (unread=%d, out-of-range=%d), max=%d",
+        len(candidate_addrs),
+        sum(1 for p, _ in zero_liq_addrs if p == 0),
+        sum(1 for p, _ in zero_liq_addrs if p == 1),
+        _max_pools,
+    )
+
     try:
         from core.multicall import get_multicall_batcher
         batcher = get_multicall_batcher(rpc_url, block_num)
-        fresh_states = batcher.batch_full_pool_data(zero_liq_addrs)
+        fresh_states = batcher.batch_full_pool_data(candidate_addrs)
         refreshed = 0
         for addr, state in fresh_states.items():
             if state and state.get("liquidity", 0) > 0:
                 entry = addr_to_entry.get(addr)
                 if entry:
                     entry.liquidity = state["liquidity"]
-                    entry.sqrt_price_x96 = state["sqrt_price_x96"]
-                    entry.tick = state["tick"]
+                    entry.sqrt_price_x96 = state.get("sqrt_price_x96") or entry.sqrt_price_x96
+                    if state.get("tick") is not None:
+                        entry.tick = state["tick"]
                     entry.last_block = block_num
                     refreshed += 1
+        if refreshed > 0:
+            logger.info(
+                "zero-liq refresh: recovered %d/%d inactive pools",
+                refreshed, len(candidate_addrs),
+            )
         return refreshed
     except Exception as exc:
         logger.debug("zero-liq refresh failed: %s", str(exc)[:80])

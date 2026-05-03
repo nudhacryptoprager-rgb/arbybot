@@ -334,6 +334,9 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
     Returns tuple (url_or_none, provider_name, diagnostics_dict).
 
     Resolution order:
+    0. (NEW) ARBY_FORCE_PUBLIC_WS=1 — short-circuit straight to publicnode
+       fallback. Used when premium providers (drpc/alchemy) are 429-storming
+       and we want the system to keep flowing on a free public WS endpoint.
     1. Chain-scoped env var (e.g. BASE_WSS, ARBITRUM_WSS)
     2. Global explicit env var (ALCHEMY_RPC_WS / ARBY_RPC_WS_PRIMARY)
     3. Alchemy API key
@@ -343,6 +346,13 @@ def resolve_rpc_ws(chain_id: Optional[int] = None, network: Optional[str] = None
     diagnostics = {}
 
     net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
+
+    # 0) Force-public override — bypass premium providers entirely.
+    if str(env.get("ARBY_FORCE_PUBLIC_WS", "")).strip() == "1":
+        if net and net in _PUBLIC_WS_FALLBACKS:
+            diagnostics["source"] = "force_public_ws"
+            diagnostics["normalized_network"] = net
+            return _PUBLIC_WS_FALLBACKS[net], "publicnode", diagnostics
 
     # 1) Chain-scoped env var
     if net and net in _CHAIN_ENV_VARS:

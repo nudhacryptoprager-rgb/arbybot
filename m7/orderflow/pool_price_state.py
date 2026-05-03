@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from threading import RLock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,12 @@ _UINT160_MASK = (1 << 160) - 1
 _UINT128_MASK = (1 << 128) - 1
 # uint112 max — V2 reserves
 _UINT112_MASK = (1 << 112) - 1
+
+# Topic signatures for proof-grade dispatch (E1.52 step 4)
+# Uniswap V3 Swap(address,address,int256,int256,uint160,uint128,int24)
+V3_SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+# Uniswap V2 Sync(uint112,uint112)
+V2_SYNC_TOPIC = "0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1"
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +323,16 @@ class PoolPriceStateRegistry:
             v2 = len(self._v2_state.get(chain) or {})
             return v3 + v2
 
+    def all_v3_states(self, chain: str) -> List[V3PoolState]:
+        """Return a snapshot list of all V3PoolState for *chain*. Thread-safe copy."""
+        with self._lock:
+            return list((self._state.get(chain) or {}).values())
+
+    def all_v2_states(self, chain: str) -> List[V2PoolState]:
+        """Return a snapshot list of all V2PoolState for *chain*. Thread-safe copy."""
+        with self._lock:
+            return list((self._v2_state.get(chain) or {}).values())
+
     def counters(self) -> Dict[str, int]:
         with self._lock:
             return dict(self._counters)
@@ -395,10 +411,12 @@ def reset_registry_for_tests() -> None:
 def feed_raw_logs(chain: str, logs) -> Dict[str, int]:
     """Passive sink for raw WS logs. Never raises.
 
-    Dispatches each log to the appropriate decoder based on payload size:
-      - >= 320 hex chars -> V3 Swap
-      - >= 128 hex chars -> V2 Sync
-      - otherwise        -> skipped
+    Dispatch order (E1.52 step 4 — topic-aware):
+      1. If `topics[0]` matches `V3_SWAP_TOPIC` → V3 Swap decoder
+      2. If `topics[0]` matches `V2_SYNC_TOPIC` → V2 Sync decoder
+      3. Fallback (logs without topics): payload-length heuristic
+         (>=320 hex → V3, >=128 → V2, else skipped). Used only when
+         topics array is missing or empty (e.g. test stubs).
 
     Returns a small dict of per-call counters useful for canary metrics::
 
@@ -417,16 +435,49 @@ def feed_raw_logs(chain: str, logs) -> Dict[str, int]:
             # Using isinstance(lg, dict) would be False for AttributeDict —
             # fix: check for Mapping so both dict and AttributeDict are handled.
             # (E1.51 Root Cause 3 fix)
-            data_hex = lg.get("data") if isinstance(lg, Mapping) else None
+            if not isinstance(lg, Mapping):
+                counters["skipped"] += 1
+                continue
+            data_hex = lg.get("data")
             if not data_hex:
                 counters["skipped"] += 1
                 continue
+
+            # Topic-aware dispatch (E1.52 step 4): prefer explicit topic[0]
+            # over payload-length heuristic. Length-only heuristic could
+            # silently misroute a non-Swap/non-Sync log with the right
+            # number of bytes.
+            topics = lg.get("topics") or []
+            topic0_str: Optional[str] = None
+            if topics:
+                t0 = topics[0]
+                if isinstance(t0, str):
+                    topic0_str = t0.lower()
+                elif hasattr(t0, "hex"):
+                    h = t0.hex()
+                    topic0_str = h if h.startswith("0x") else "0x" + h
+                    topic0_str = topic0_str.lower()
+
+            if topic0_str == V3_SWAP_TOPIC:
+                if reg.update_from_v3_log(chain, lg):
+                    counters["v3_updates"] += 1
+                else:
+                    counters["skipped"] += 1
+                continue
+            if topic0_str == V2_SYNC_TOPIC:
+                if reg.update_from_v2_log(chain, lg):
+                    counters["v2_updates"] += 1
+                else:
+                    counters["skipped"] += 1
+                continue
+            # Unknown topic with non-empty topics array: refuse to guess.
+            if topic0_str is not None:
+                counters["skipped"] += 1
+                continue
+
+            # Fallback (no topics): payload-length heuristic (legacy).
             # Normalize HexBytes / bytes → plain hex string so that
             # `.startswith("0x")` and `len()` work correctly.
-            # web3 v6 eth.get_logs() returns log["data"] as HexBytes
-            # (a bytes subclass), not str — calling .startswith("0x")
-            # on it raises TypeError which was silently caught, causing
-            # every log to fall into the skipped bucket. (E1.51 fix)
             if not isinstance(data_hex, str):
                 data_hex = data_hex.hex() if hasattr(data_hex, "hex") else data_hex.decode("utf-8", errors="replace")
             payload = data_hex[2:] if data_hex.startswith("0x") else data_hex
@@ -451,6 +502,8 @@ def feed_raw_logs(chain: str, logs) -> Dict[str, int]:
 __all__ = [
     "V3PoolState",
     "V2PoolState",
+    "V3_SWAP_TOPIC",
+    "V2_SYNC_TOPIC",
     "decode_v3_swap_log_state",
     "decode_v2_sync_log_state",
     "PoolPriceStateRegistry",
