@@ -147,7 +147,13 @@ $env:ARBY_RT_BPS_FLOOR                         = '-1000'  # P0.2 outlier filter
 $env:ARBY_FAST_PATH_COMPONENTS_RING_SIZE       = '50'     # P1.5 dump
 $env:ARBY_RPC_PUBLIC_WS_FALLBACK               = '1'      # publicnode.com fallback when Alchemy 429
 $env:ARBY_RPC_FALLBACK_ON_429                  = '1'
-$env:ARBY_TENDERLY_DISABLE                     = '1'      # explicit bypass — sim runs via rpc_fork
+# Only disable Tenderly when ProdSimBackend is NOT tenderly.
+# If operator explicitly passes -ProdSimBackend tenderly, respect that choice.
+if ($ProdSimBackend -ne 'tenderly') {
+    $env:ARBY_TENDERLY_DISABLE                 = '1'      # explicit bypass — sim runs via rpc_fork
+} else {
+    $env:ARBY_TENDERLY_DISABLE                 = '0'      # allow tenderly sim when ProdSimBackend=tenderly
+}
 # E1.51: local pool price-state registry (feed_raw_logs in WS recv loop).
 # Respect caller override; default ON so bootstrap-launched children
 # benefit from Swap/Sync log decoding without extra CLI flags.

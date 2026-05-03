@@ -25,3 +25,18 @@ def test_bootstrap_rpc_ws_envs_are_parameterized() -> None:
     assert "$env:ARBY_RPC_RPS_BURST                        = [string]$RpcRpsBurst" in text
     assert "$env:ARBY_WS_MAX_RECONNECT_ATTEMPTS            = [string]$WsMaxReconnectAttempts" in text
     assert "$env:ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S   = [string]$WsReconnectCooldownSeconds" in text
+
+
+def test_bootstrap_tenderly_disable_not_set_when_prod_is_tenderly() -> None:
+    """ARBY_TENDERLY_DISABLE must NOT be unconditionally set to '1'.
+    When ProdSimBackend=tenderly, the operator wants Tenderly enabled.
+    The bootstrap must use a conditional so the disable flag is only
+    applied for non-tenderly backends.
+    """
+    text = _script_text()
+
+    # The unconditional hardcode must be gone
+    assert "$env:ARBY_TENDERLY_DISABLE                     = '1'" not in text
+    # A conditional block must exist
+    assert "if ($ProdSimBackend -ne 'tenderly')" in text
+    assert "ARBY_TENDERLY_DISABLE" in text
