@@ -410,6 +410,13 @@ class ExecutionGateResult:
     roundtrip_errors: List[str] = field(default_factory=list)
     # E4: Diagnostic — true when guard was bypassed via ARBY_SIM_BYPASS_GUARD.
     guard_bypassed: bool = False
+    # E1.57 fix step 4: L1 data fee diagnostic fields — visible in rolling artifact
+    # so reviewer can confirm: L1 fee is live (not 0), source is "onchain",
+    # and the correct 228-byte calldata kind is being used for estimation.
+    l1_fee_wei: int = 0
+    l1_fee_source: str = ""   # "onchain" | "fallback_zero" | "not_applicable"
+    l1_fee_calldata_len: int = 0
+    l1_fee_calldata_kind: str = ""  # "swaprouter02_representative" | ""
 
 
 def _run_profit_guard_on_results(
@@ -1271,12 +1278,19 @@ def run_execution_gate(
     _chain_lower = chain.lower().replace("_one", "").replace("_", "")
     if _chain_lower in ("base", "optimism"):
         try:
-            from chains.l1_cost import get_l1_fee_wei as _get_l1_fee
+            from chains.l1_cost import get_l1_fee_wei as _get_l1_fee, _REPRESENTATIVE_SWAP_CALLDATA as _rep_cd
             _l1_fee_wei = _get_l1_fee(chain=chain)
+            gate.l1_fee_wei = _l1_fee_wei
+            gate.l1_fee_source = "onchain" if _l1_fee_wei > 0 else "fallback_zero"
+            gate.l1_fee_calldata_len = len(_rep_cd)
+            gate.l1_fee_calldata_kind = "swaprouter02_representative"
             logger.debug("E1.57: L1 fee for %s: %d wei", chain, _l1_fee_wei)
         except Exception as _l1_exc:
             logger.debug("E1.57: L1 fee lookup failed (%s), using 0", type(_l1_exc).__name__)
             _l1_fee_wei = 0
+            gate.l1_fee_source = "fallback_zero"
+    else:
+        gate.l1_fee_source = "not_applicable"
 
     # Stage 1: Profit guard
     gate.guard_passed = _run_profit_guard_on_results(

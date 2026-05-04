@@ -1,15 +1,49 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-06T00:00:00Z
-run_id: data/runs/_rolling/ (E1.57 fix steps #1+#2+#8 LANDED; 4572 PASS; canonicalization path + L1 fee CLOSED)
-mode: OFFLINE — unit tests + repo safety (code fixes applied; 1h verification soak pending)
+timestamp_utc: 2026-05-04T20:10:09Z
+run_id: data/runs/_rolling/ (session 2f5d116d — 1h soak 19:10:07Z → 20:10:09Z, base chain)
+mode: ONLINE — 1h E1.57 verification soak with rpc_fork backend on Base
 artifact_mode: rolling
-config: pending next soak (same: scripts/start_nonstop_runtime.py --chain base --hours 1 --no-m4 --with-discovery --dashboard-port 8114 --m7-cold-pause 3, ARBY_SIM_BACKEND_PROD=rpc_fork, ARBY_COLD_IMMEDIATE_SIM=1, ARBY_COLD_IMMEDIATE_MIN_NET_BPS=0, ARBY_COLD_IMMEDIATE_TOP_N=5)
+verdict: **BREAKTHROUGH** — `cold_immediate_roundtrip_profitable_total=4` (PROD) + `=8` (DISC); `roundtrip_profitable_total=4` (PROD) + `=8` (DISC); `cold_immediate_profitable_waiting_canonicalization` CLEARED on both lanes; L1 fee live (`l1_fee_source_last="onchain"`, `l1_fee_wei_last≈3.47e9 wei`, `l1_fee_calldata_kind="swaprouter02_representative"`). 0 crashes, 0 restarts, 5/5 alive 60min.
+config: scripts/start_nonstop_runtime.py --chain base --hours 1 --no-m4 --with-discovery --dashboard-port 8114 --m7-cold-pause 3 --m7-hot-pause 1 --m7-hot-ws-timeout 120 --m7-hot-blocks 300 --m7-hot-max-events 120; ARBY_SIM_BACKEND_PROD=rpc_fork, ARBY_SIM_BACKEND_DISC=rpc_fork, ARBY_COLD_IMMEDIATE_SIM=1, ARBY_COLD_IMMEDIATE_MIN_NET_BPS=0, ARBY_COLD_IMMEDIATE_TOP_N=5
 code_identity:
-  primary: ts:2026-05-06T00:00:00Z
+  primary: ts:2026-05-04T20:10:09Z
   dirty: true
-  desc: E1.57 fix steps #1+#2+#8 — canonicalization path (CI roundtrip → roundtrip_profitable_total) + L1 fee onchain (228-byte calldata, profit guard); 4572 PASS
+  desc: E1.57 fix steps #1+#2+#4+#8 — canonicalization path (CI roundtrip → roundtrip_profitable_total + roundtrip_success_total), L1 fee onchain with diagnostic fields, 228-byte calldata, profit guard; **4577 PASS** (+5 new tests).
+
+## 0.1) E1.57 1h soak verdict (BREAKTHROUGH — 2026-05-04T19:10:07Z → 20:10:09Z)
+
+**Funnel — PROD lane** (1h, base, session 2f5d116d):
+- `cold_immediate_sim_input_total=312`, `attempted=260`, `guard_passed=242`
+- `pre_sim_skip=15`, `sim_revert=143`, `sim_passed=84`, `sim_profitable=84`
+- `cold_immediate_roundtrip_attempted_total=14`, **`cold_immediate_roundtrip_profitable_total=4`** ✓
+- **`roundtrip_profitable_total=4`**, **`roundtrip_success_total=4`**, `roundtrip_attempted_total=15` ✓
+- `cold_immediate_profitable_waiting_canonicalization` ABSENT (cleared) ✓
+- `cold_immediate_profitable_not_canonical` ABSENT ✓
+
+**Funnel — DISCOVERY lane** (1h, base):
+- `cold_immediate_sim_input_total=383`, `attempted=324`, `passed=43`, `profitable=43`
+- `cold_immediate_roundtrip_attempted_total=14`, **`cold_immediate_roundtrip_profitable_total=8`** ✓
+- **`roundtrip_profitable_total=8`** ✓
+- `waiting_canonicalization` ABSENT ✓
+
+**L1 fee diagnostic — both lanes** (fix step #4):
+- `l1_fee_source_last="onchain"` ✓ (live RPC, not fallback)
+- `l1_fee_wei_last≈3,467,746,307 wei` (~3.47 Gwei representative) ✓
+- `l1_fee_calldata_len=228`, `l1_fee_calldata_kind="swaprouter02_representative"` ✓
+
+**Stability**: 5/5 alive, 0 crashes, 0 restarts across 60 min.
+
+**Minor regression** (Discovery only, NOT a blocker): `PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:1570 (5x)`, `:9500 (1x)`, `:7500 (1x)` — fee tail still leaks intermittently in DISC subprocess despite E1.56 fix step #4 (unconditional classification). Hot/PROD lane unaffected. To address in follow-up E1.58.
+
+**Pass criteria (per reviewer)**:
+- ✓ #2 PASS: `cold_immediate_roundtrip_attempted_total=14 > 0` (PROD), `=14` (DISC)
+- ✓ #3 BREAKTHROUGH: `cold_immediate_roundtrip_profitable_total=4` (PROD), `=8` (DISC); `roundtrip_profitable_total=4` (PROD), `=8` (DISC)
+- ✓ #4 PASS: L1 fee fields visible in artifact (`source_last="onchain"`, `wei_last≈3.47e9`, `calldata_kind="swaprouter02_representative"`, `calldata_len=228`)
+- ✓ #8 PASS: `roundtrip_success_total=4 == roundtrip_profitable_total=4` (consistency holds)
+
+
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): M7 — після E1.55 (scoring ingress reached) — close STRATEGY_GATING blocker per reviewer pushback "BLOCKED не лише market_window, а MARKET_WINDOW + STRATEGY_GATING". Cold lane has +997 bps profitable, but hot lane чекає WS-події на тих самих пулах і ніколи не симулює cold-positive проти поточного стану. Step 1 (P0) closes this gap.

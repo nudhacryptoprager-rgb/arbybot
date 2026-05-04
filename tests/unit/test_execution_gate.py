@@ -1706,5 +1706,50 @@ class TestE157L1FeeIntegration:
         assert "l1_fee_wei" in sig.parameters
         assert sig.parameters["l1_fee_wei"].default == 0
 
+    def test_gate_result_l1_fee_fields_populated_for_base(self, monkeypatch):
+        """E1.57 fix step 4: gate result carries l1_fee_wei/source/calldata fields for Base."""
+        import m7.orderflow.execution_gate as gate_mod
+        import chains.l1_cost as l1_mod
+
+        monkeypatch.setattr(gate_mod, "annotate_profit_guard_results", lambda r, chain="base", l1_fee_wei=0: [])
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
+        monkeypatch.setattr(l1_mod, "get_l1_fee_wei", lambda chain="base", calldata=b"": 500_000_000)
+
+        result = gate_mod.run_execution_gate([self._make_br()], chain="base")
+
+        assert result.l1_fee_wei == 500_000_000
+        assert result.l1_fee_source == "onchain"
+        assert result.l1_fee_calldata_len == 228
+        assert result.l1_fee_calldata_kind == "swaprouter02_representative"
+
+    def test_gate_result_l1_fee_source_not_applicable_for_arbitrum(self, monkeypatch):
+        """E1.57 fix step 4: non-OP chains set source='not_applicable'."""
+        import m7.orderflow.execution_gate as gate_mod
+
+        monkeypatch.setattr(gate_mod, "annotate_profit_guard_results", lambda r, chain="arbitrum_one", l1_fee_wei=0: [])
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
+
+        result = gate_mod.run_execution_gate([self._make_br()], chain="arbitrum_one")
+
+        assert result.l1_fee_wei == 0
+        assert result.l1_fee_source == "not_applicable"
+        assert result.l1_fee_calldata_len == 0
+
+    def test_gate_result_l1_fee_source_fallback_zero_on_rpc_failure(self, monkeypatch):
+        """E1.57 fix step 4: source='fallback_zero' when RPC call raises."""
+        import m7.orderflow.execution_gate as gate_mod
+        import chains.l1_cost as l1_mod
+
+        def _raise(chain="base", calldata=b""):
+            raise RuntimeError("RPC unavailable")
+
+        monkeypatch.setattr(gate_mod, "annotate_profit_guard_results", lambda r, chain="base", l1_fee_wei=0: [])
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
+        monkeypatch.setattr(l1_mod, "get_l1_fee_wei", _raise)
+
+        result = gate_mod.run_execution_gate([self._make_br()], chain="base")
+
+        assert result.l1_fee_wei == 0
+        assert result.l1_fee_source == "fallback_zero"
 
 

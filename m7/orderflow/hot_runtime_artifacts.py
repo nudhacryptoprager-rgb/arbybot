@@ -1601,6 +1601,11 @@ def _update_hot_rollup(
             rollup["roundtrip_profitable_total"] = (
                 int(rollup.get("roundtrip_profitable_total", 0) or 0) + _ci_rt_prof
             )
+            # E1.57 fix step 8: profitable ⊆ success — also increment success_total
+            # so counters stay internally consistent (success >= profitable).
+            rollup["roundtrip_success_total"] = (
+                int(rollup.get("roundtrip_success_total", 0) or 0) + _ci_rt_prof
+            )
         # E1.56 fix step #6: accumulate cold_immediate revert samples (pair/fee/reason)
         # sourced from cold_immediate_sim.py via signal_counts["cold_immediate_sim_revert_samples"].
         _ci_revert_samples = _ci_sc.get("cold_immediate_sim_revert_samples") or []
@@ -1693,6 +1698,18 @@ def _update_hot_rollup(
         rollup["simulation_backend"] = getattr(gate_result, "simulation_backend", None)
         if gate_result.sim_blocker:
             rollup["sim_blocker"] = gate_result.sim_blocker
+        # E1.57 fix step 4: persist L1 fee diagnostic so reviewer can confirm
+        # the fee is live (source="onchain"), the calldata kind is correct, and
+        # the wei value is non-zero on Base/OP-Stack runs.
+        _l1_wei = getattr(gate_result, "l1_fee_wei", 0)
+        _l1_src = getattr(gate_result, "l1_fee_source", "")
+        _l1_cdlen = getattr(gate_result, "l1_fee_calldata_len", 0)
+        _l1_cdkind = getattr(gate_result, "l1_fee_calldata_kind", "")
+        if _l1_src:
+            rollup["l1_fee_wei_last"] = _l1_wei
+            rollup["l1_fee_source_last"] = _l1_src
+            rollup["l1_fee_calldata_len"] = _l1_cdlen
+            rollup["l1_fee_calldata_kind"] = _l1_cdkind
         # E1.12.3: Cumulative simulation error histogram — surfaces WHY sim fails
         # P0 (2026-04-20): truncation 80→256 to preserve full classification
         # tags and (when needed) longer raw revert substrings for diagnosis.

@@ -646,3 +646,90 @@ def test_e1_57_waiting_canonicalization_remains_when_no_ci_roundtrip(tmp_path, m
         rollup = json.load(f)
 
     assert rollup.get("cold_immediate_profitable_waiting_canonicalization") is True
+
+
+def test_e1_57_fix8_roundtrip_success_total_incremented_on_ci_profitable(tmp_path, monkeypatch) -> None:
+    """E1.57 fix step 8: CI roundtrip profitable merge also increments roundtrip_success_total."""
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+    initial = {
+        "roundtrip_success_total": 5,
+        "roundtrip_profitable_total": 0,
+    }
+    with open(rollup_path, "w") as f:
+        json.dump(initial, f)
+
+    monkeypatch.setattr(_rio_mod, "_HOT_ROLLUP_PATH", rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_success=0,
+        roundtrip_profitable_count=0,
+        l1_fee_wei=0,
+        l1_fee_source="",
+        l1_fee_calldata_len=0,
+        l1_fee_calldata_kind="",
+    )
+    extra_counts = {
+        "cold_immediate_roundtrip_profitable": 2,
+        "cold_immediate_roundtrip_attempted": 2,
+    }
+
+    _update_hot_rollup(
+        0, [], [], {},
+        gate_result=mock_gate,
+        extra_signal_counts=extra_counts,
+    )
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    # profitable merge: +2 → profitable_total = 2
+    assert rollup["roundtrip_profitable_total"] == 2
+    # fix step 8: success_total also incremented by same amount
+    assert rollup["roundtrip_success_total"] == 7  # 5 + 2
+
+
+def test_e1_57_fix4_l1_fee_fields_in_rollup(tmp_path, monkeypatch) -> None:
+    """E1.57 fix step 4: l1_fee_wei/source/calldata fields written to rollup from gate_result."""
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+    with open(rollup_path, "w") as f:
+        json.dump({}, f)
+
+    monkeypatch.setattr(_rio_mod, "_HOT_ROLLUP_PATH", rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_success=0,
+        roundtrip_profitable_count=0,
+        l1_fee_wei=600_000_000,
+        l1_fee_source="onchain",
+        l1_fee_calldata_len=228,
+        l1_fee_calldata_kind="swaprouter02_representative",
+    )
+
+    _update_hot_rollup(0, [], [], {}, gate_result=mock_gate)
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    assert rollup["l1_fee_wei_last"] == 600_000_000
+    assert rollup["l1_fee_source_last"] == "onchain"
+    assert rollup["l1_fee_calldata_len"] == 228
+    assert rollup["l1_fee_calldata_kind"] == "swaprouter02_representative"
+
