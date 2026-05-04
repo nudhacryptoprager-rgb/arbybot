@@ -81,6 +81,20 @@ def load_persistent_pool_token_cache() -> int:
         return 0
 
 
+def force_reload_persistent_pool_token_cache() -> int:
+    """Force re-read of persistent cache from disk, bypassing the already-loaded guard.
+
+    E1.55: Hot lane calls this when bridge PTT is empty (cold hasn't written
+    the bridge yet) but cold may have written ``_pool_token_cache.json`` to
+    disk since the hot process first imported this module.
+
+    Returns the number of entries now in ``_pool_token_cache``.
+    """
+    global _PERSISTENT_CACHE_LOADED
+    _PERSISTENT_CACHE_LOADED = False
+    return load_persistent_pool_token_cache()
+
+
 def save_persistent_pool_token_cache() -> int:
     """Persist current `_pool_token_cache` to disk atomically.
 

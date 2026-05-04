@@ -367,6 +367,14 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "bridge_focused_pool_count": _bd.get("bridge_focused_pool_count", 0),
         # M7.A.5.46: Pair-level fallback counter
         "bridge_pair_fallback_count": _bd.get("bridge_pair_fallback_count", 0),
+        # E1.55: cold-start bridge/cache diagnostics. These make the
+        # force-reload path reviewable from the per-window artifact.
+        "bridge_file_exists": _bd.get("bridge_file_exists", False),
+        "bridge_ptt_raw_count": _bd.get("bridge_ptt_raw_count", 0),
+        "bridge_mtime_age_s": _bd.get("bridge_mtime_age_s"),
+        "persistent_cache_forced_reload_count": _bd.get(
+            "persistent_cache_forced_reload_count", 0
+        ),
         # M7.A.5.47e: Canonical per-window scoring counters
         "fast_score_attempted": _admitted_to_scoring,
         "fast_score_scored": _fast_scored,

@@ -259,11 +259,42 @@ def run_loop(cli_args) -> None:
                 # 4. Fall back to symbol-pair prewarm for seeds / accumulated pairs
                 logger.info("hot-phase: reading cold->hot bridge")
                 _bridge = _read_cold_hot_bridge()
+                _bridge_ptt_raw = _bridge.get("pool_token_transport", {})
                 logger.info("hot-phase: populating pool_token_cache (ptt=%d)",
-                             len(_bridge.get("pool_token_transport", {})))
+                             len(_bridge_ptt_raw))
                 _bridge_cache_count = _populate_pool_token_cache_from_bridge(_bridge)
                 _bridge_prewarm_count = 0
                 logger.info("hot-phase: bridge_cache_count=%d", _bridge_cache_count)
+
+                # E1.55: When bridge PTT is empty (cold lane not yet written its
+                # first window), force-reload the persistent pool-token cache from
+                # disk.  Cold writes _pool_token_cache.json earlier than it writes
+                # the full bridge, so a late-joining hot process can recover token
+                # resolution even before the first cold→hot bridge appears.
+                _persistent_force_reload_count = 0
+                if _bridge_cache_count == 0:
+                    try:
+                        from m7.orderflow.resolve import (
+                            force_reload_persistent_pool_token_cache as _frl,
+                            _pool_token_cache as _ptc_check,
+                        )
+                        if not _ptc_check:
+                            _persistent_force_reload_count = _frl()
+                            if _persistent_force_reload_count > 0:
+                                logger.info(
+                                    "hot: E1.55 force-reloaded persistent cache: %d entries",
+                                    _persistent_force_reload_count,
+                                )
+                            else:
+                                logger.info(
+                                    "hot: E1.55 persistent cache also empty "
+                                    "(cold lane first run still in progress)"
+                                )
+                    except Exception as _frl_exc:
+                        logger.debug(
+                            "hot: E1.55 persistent cache force-reload skipped: %s",
+                            str(_frl_exc)[:80],
+                        )
 
                 # M7.A.5.45: Build execution queue — cold_executable pool addresses
                 # get priority prewarm so hot lane scores them first.
@@ -1216,6 +1247,17 @@ def run_loop(cli_args) -> None:
             else:
                 # Hot lane: minimal artifact with profit guard
                 # M7.A.5.43: Compute 3 hot-miss counters from raw results
+                # E1.55: Bridge file diagnostic fields
+                _bridge_file_exists = os.path.exists(_rio._COLD_HOT_BRIDGE_PATH)
+                _bridge_mtime_age_s = None
+                try:
+                    if _bridge_file_exists:
+                        import time as _time_diag
+                        _bridge_mtime_age_s = round(
+                            _time_diag.time() - os.path.getmtime(_rio._COLD_HOT_BRIDGE_PATH), 1
+                        )
+                except Exception:
+                    pass
                 _hot_bridge_diag = {
                     "bridge_cache_populated": _bridge_cache_count,
                     "bridge_registry_prewarmed": _bridge_prewarm_count,
@@ -1230,6 +1272,11 @@ def run_loop(cli_args) -> None:
                     # bridge_loaded_candidate_count which is just A-bucket).
                     "bridge_focused_pool_count": len(_bridge_pool_addrs) if _bridge_pool_addrs else 0,
                     "bridge_loaded_candidate_count": 0,
+                    # E1.55: Bridge file existence diagnostic
+                    "bridge_file_exists": _bridge_file_exists,
+                    "bridge_ptt_raw_count": len(_bridge_ptt_raw) if '_bridge_ptt_raw' in dir() else 0,
+                    "bridge_mtime_age_s": _bridge_mtime_age_s,
+                    "persistent_cache_forced_reload_count": _persistent_force_reload_count if '_persistent_force_reload_count' in dir() else 0,
                     # M7.A.5.47k: Bridge exclusion reasons (why pools were left out)
                     "bridge_excluded_top": _bridge_excluded_top if '_bridge_excluded_top' in dir() else [],
                     # M7.A.5.47l: Bridge selected pools at assembly time
@@ -1563,6 +1610,24 @@ def run_loop(cli_args) -> None:
                     profile=profile,
                     gate_result=_gate_result,
                 )
+
+                # E1.55: SCORING_BLACKHOLE guard — reviewer hard-fail warning.
+                # If we saw events but scored zero fast-path candidates, the
+                # hot pipeline is in a black-hole state (registry/bridge not
+                # populated). Log a prominent WARNING so logs are searchable.
+                _sb_events = artifact.get("events_count", 0)
+                _sb_scored = _hot_bridge_diag.get("fast_score_scored", 0)
+                if _sb_events > 0 and _sb_scored == 0:
+                    logger.warning(
+                        "E1.55 SCORING_BLACKHOLE detected: events_seen=%d "
+                        "fast_path_scored=0 bridge_ptt=%d persistent_cache_loaded=%d "
+                        "bridge_file_exists=%s — hot lane is NOT scoring any events. "
+                        "Likely cause: bridge/cache empty (cold first window in progress).",
+                        _sb_events,
+                        len(_bridge_ptt_raw) if '_bridge_ptt_raw' in dir() else 0,
+                        _persistent_force_reload_count if '_persistent_force_reload_count' in dir() else 0,
+                        _bridge_file_exists if '_bridge_file_exists' in dir() else None,
+                    )
 
                 # M7.A.5.47p: Auto-pin live-miss pools from other_live_pool_trace.
                 # Pools that had hot events but are not in bridge get pinned so
