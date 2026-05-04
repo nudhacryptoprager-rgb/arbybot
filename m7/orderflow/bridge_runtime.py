@@ -155,6 +155,10 @@ def _write_cold_hot_bridge(
             "c3_gas_hopeless_skipped", "c3_gas_hopeless_families",
             "bridge_selected_family_diff_top",
             "family_unresolved_pool_count",
+            # E1.56 Step 7: pool-level gas-hopeless quarantine fields.
+            "c3_pool_gas_hopeless_skipped",
+            "pool_gas_hopeless",
+            "pool_gas_hopeless_streak",
         )
         _HOT_PRESERVE_IF_COLD_EXEC = (
             "bridge_hit_trace_top", "cold_exec_pool_trace",

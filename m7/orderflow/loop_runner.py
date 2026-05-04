@@ -881,6 +881,50 @@ def run_loop(cli_args) -> None:
                                     and _ghf not in _gas_viable_families):
                                 _gas_hopeless_families.add(_ghf)
 
+                        # E1.56 Step 7: pool-level gas-hopeless quarantine.
+                        # Family-level (above) is conservative — one bad pool in
+                        # a family can spare the others. Pool-level tracks
+                        # consecutive `GAS_EXCEEDS_GROSS` per pool address and
+                        # quarantines the pool after `_POOL_GAS_HOPELESS_STREAK`
+                        # consecutive windows. Backward-compatible: default
+                        # streak=3, set 0 to disable entirely.
+                        _POOL_GAS_HOPELESS_STREAK = max(0, int(os.environ.get(
+                            "ARBY_POOL_GAS_HOPELESS_STREAK", "3") or 3))
+                        _pool_gas_kills_now: dict = {}
+                        _pool_gas_pos_now: set = set()
+                        for _cand in _bridge.get("candidates", []):
+                            _pgp_pa = (_cand.get("pool_address") or "").lower()
+                            if not _pgp_pa:
+                                continue
+                            if _cand.get("reject_reason") == "GAS_EXCEEDS_GROSS":
+                                _gfg2 = _cand.get("gas_floor_gap_bps")
+                                _pool_gas_kills_now[_pgp_pa] = (
+                                    float(_gfg2) if _gfg2 is not None else 0.0
+                                )
+                            elif (_cand.get("net_bps") or 0) > 0:
+                                _pool_gas_pos_now.add(_pgp_pa)
+                        _prev_streak = dict(_bridge.get("pool_gas_hopeless_streak", {}) or {})
+                        _new_streak: dict = {}
+                        # Pools currently gas-killed: streak += 1 (or start at 1)
+                        for _pgp_pa, _gap in _pool_gas_kills_now.items():
+                            _new_streak[_pgp_pa] = int(_prev_streak.get(_pgp_pa, 0)) + 1
+                        # Pools currently positive: explicit reset to 0 (cleared)
+                        for _pgp_pa in _pool_gas_pos_now:
+                            _new_streak[_pgp_pa] = 0
+                        # Pools previously tracked but absent this window: keep streak
+                        # but cap age to avoid unbounded growth.
+                        for _old_pa, _old_streak in _prev_streak.items():
+                            if _old_pa in _new_streak:
+                                continue
+                            _kept = int(_old_streak)
+                            if _kept > 0 and _kept < 100:
+                                _new_streak[_old_pa] = _kept
+                        _pool_gas_hopeless: set = set()
+                        if _POOL_GAS_HOPELESS_STREAK > 0:
+                            for _pgp_pa, _streak_v in _new_streak.items():
+                                if int(_streak_v) >= _POOL_GAS_HOPELESS_STREAK:
+                                    _pool_gas_hopeless.add(_pgp_pa)
+
                         # M7.A.5.47f: Diversity-aware fill — max _FAMILY_CAP pools
                         # per token-pair family to prevent one family from monopolizing
                         # the focused filter and cementing concentration.
@@ -904,6 +948,7 @@ def run_loop(cli_args) -> None:
                         _slots_for_fill = max(0, _pool_cap - len(_committed))
                         _diverse_fill: list = []
                         _c3_gas_hopeless_skipped = 0
+                        _c3_pool_gas_hopeless_skipped = 0
                         for _rpa in _remaining_for_fill:
                             if len(_diverse_fill) >= _slots_for_fill:
                                 break
@@ -918,6 +963,12 @@ def run_loop(cli_args) -> None:
                             # M7.A.5.47o: skip gas-hopeless families in C3 fill
                             if _fam in _gas_hopeless_families:
                                 _c3_gas_hopeless_skipped += 1
+                                continue
+                            # E1.56 Step 7: skip pool-level gas-hopeless even if
+                            # family is still viable — a single recurrent loser
+                            # pool in an otherwise viable family.
+                            if _rpa in _pool_gas_hopeless:
+                                _c3_pool_gas_hopeless_skipped += 1
                                 continue
                             _diverse_fill.append(_rpa)
                             _family_counts[_fam] = _family_counts.get(_fam, 0) + 1
@@ -1103,6 +1154,49 @@ def run_loop(cli_args) -> None:
                         events_count,
                         sum(1 for r in fast_results
                             if (getattr(r, "best_backrun_net_bps", 0) or 0) > 0),
+                    )
+
+                # E1.56 Step 1: cold-positive immediate sim queue.
+                # When hot WS stream is dominated by thin-spread pools and
+                # never delivers cold-positive pools, we never call sim. The
+                # cold-immediate lane converts bridge `cold_executable`
+                # entries into synthetic candidates and runs them through
+                # the SAME execution_gate. Strictly opt-in via
+                # ARBY_COLD_IMMEDIATE_SIM=1 (default OFF, full back-compat).
+                _cold_immediate_counters = {
+                    "cold_immediate_sim_input_count": 0,
+                    "cold_immediate_sim_attempted": 0,
+                    "cold_immediate_sim_passed": 0,
+                    "cold_immediate_sim_profitable": 0,
+                }
+                try:
+                    from m7.orderflow.cold_immediate_sim import (
+                        is_enabled as _ci_enabled,
+                        queue_cold_executable_for_sim,
+                    )
+                    if _ci_enabled():
+                        _ci_gate, _cold_immediate_counters = queue_cold_executable_for_sim(
+                            _bridge if '_bridge' in dir() else {},
+                            chain=cli_args.chain,
+                            profile=profile,
+                        )
+                        if _ci_gate is not None:
+                            logger.info(
+                                "cold_immediate_sim: input=%d attempted=%d passed=%d profitable=%d",
+                                _cold_immediate_counters["cold_immediate_sim_input_count"],
+                                _cold_immediate_counters["cold_immediate_sim_attempted"],
+                                _cold_immediate_counters["cold_immediate_sim_passed"],
+                                _cold_immediate_counters["cold_immediate_sim_profitable"],
+                            )
+                            # Surface counts in the hot artifact's signal_counts
+                            # so the rolling rollup can aggregate over windows.
+                            _sc_ci = artifact.get("signal_counts", {})
+                            _sc_ci.update(_cold_immediate_counters)
+                            artifact["signal_counts"] = _sc_ci
+                except Exception as _ci_exc:
+                    logger.debug(
+                        "cold_immediate_sim: skipped (%s)",
+                        type(_ci_exc).__name__,
                     )
 
             if lane == "cold":
@@ -1293,6 +1387,10 @@ def run_loop(cli_args) -> None:
                     # M7.A.5.47o: Gas-hopeless family stats from C3 bridge tightening.
                     "c3_gas_hopeless_skipped": _c3_gas_hopeless_skipped if '_c3_gas_hopeless_skipped' in dir() else 0,
                     "c3_gas_hopeless_families": sorted(str(f) for f in _gas_hopeless_families) if '_gas_hopeless_families' in dir() and _gas_hopeless_families else [],
+                    # E1.56 Step 7: pool-level gas-hopeless quarantine.
+                    "c3_pool_gas_hopeless_skipped": _c3_pool_gas_hopeless_skipped if '_c3_pool_gas_hopeless_skipped' in dir() else 0,
+                    "pool_gas_hopeless": sorted(_pool_gas_hopeless) if '_pool_gas_hopeless' in dir() and _pool_gas_hopeless else [],
+                    "pool_gas_hopeless_streak": dict(_new_streak) if '_new_streak' in dir() else {},
                 }
                 # M7.A.5.47i: Split bridge diagnostics into independent blocks
                 # so one failure doesn't kill the bridge hit counter.
@@ -1723,6 +1821,17 @@ def run_loop(cli_args) -> None:
                         _bridge_update["c3_gas_hopeless_families"] = (
                             _hot_bridge_diag.get("c3_gas_hopeless_families") or []
                         )
+                        # E1.56 Step 7: persist pool-level gas-hopeless tracking
+                        # so streak survives across windows.
+                        _bridge_update["c3_pool_gas_hopeless_skipped"] = (
+                            _hot_bridge_diag.get("c3_pool_gas_hopeless_skipped") or 0
+                        )
+                        _bridge_update["pool_gas_hopeless"] = (
+                            _hot_bridge_diag.get("pool_gas_hopeless") or []
+                        )
+                        _bridge_update["pool_gas_hopeless_streak"] = (
+                            _hot_bridge_diag.get("pool_gas_hopeless_streak") or {}
+                        )
                         # M7.A.5.47r: Persist bridge_selected_family_diff_top
                         # into bridge file — cross-artifact contract: if hot has
                         # the field, bridge must too (non-null).
@@ -1762,6 +1871,7 @@ def run_loop(cli_args) -> None:
                     bridge=_bridge,
                     chain=cli_args.chain,
                     gate_result=_gate_result,
+                    extra_signal_counts=_cold_immediate_counters,
                 )
 
             best = artifact.get("best_net_bps_clean")

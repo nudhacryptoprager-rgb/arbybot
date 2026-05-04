@@ -3142,6 +3142,13 @@ class TestM7A541TopCandidatePersistence:
             "l1_data_gas_bps", "l2_exec_gas_bps", "total_gas_bps", "gap_to_zero_bps",
             # M7.E1.6: Per-candidate gate trace
             "gate_trace",
+            # E1.56 Step 1: execution_gate admission metadata
+            "best_buy_fee", "best_sell_fee", "best_buy_venue", "best_sell_venue",
+            "backrun_token_in_address", "backrun_token_out_address",
+            "token_in_decimals", "amount_in_wei", "best_sweep_size_wei",
+            "size_usd_estimate",
+            # E1.56 Step 1b: PnL metadata for profit_guard
+            "gross_pnl_wei", "net_pnl_wei",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys

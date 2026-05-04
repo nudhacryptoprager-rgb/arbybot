@@ -295,6 +295,19 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
         "submit_ready": _submit_ready,
         "realized": 0,
     }
+    # E1.56 Step 1: cold-positive immediate sim queue counters merge.
+    # When the cold_immediate lane (ENV-gated) ran on this window, the
+    # loop_runner places counters into `artifact["signal_counts"]`. Merge
+    # them into the canonical `hot["signal_counts"]` so the rolling
+    # rollup picks them up and produces `*_total` aggregates per window.
+    _src_sc = artifact.get("signal_counts", {}) or {}
+    for _ci_k in (
+        "cold_immediate_sim_input_count",
+        "cold_immediate_sim_attempted",
+        "cold_immediate_sim_passed",
+        "cold_immediate_sim_profitable",
+    ):
+        hot["signal_counts"][_ci_k] = int(_src_sc.get(_ci_k, 0) or 0)
     # E1.12.3: Per-window sim error + submit blocker detail
     if gate_result is not None:
         hot["sim_errors"] = list(getattr(gate_result, "sim_errors", []))
@@ -412,6 +425,70 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     hot["hot_gap_debug"]["matched_bridge_then_gas_rejected"] = _m_bridge_gas_rejected
     hot["hot_gap_debug"]["matched_bridge_then_scored_positive"] = _m_bridge_scored_positive
 
+    # E1.56 step 6: pool-level visibility for STRATEGY_GATING analysis.
+    # Cold lane writes `cold_executable` with pool addresses that were
+    # profitable in cold simulation. We need to know whether hot WS event
+    # stream actually delivers events on those pools (otherwise hot has
+    # no chance to attempt sim regardless of code correctness).
+    #   - cold_positive_pools_count: how many distinct positive pool
+    #     addresses cold lane reported in current bridge.
+    #   - cold_positive_pool_seen_in_hot_count: of those, how many hit
+    #     the hot WS stream this window.
+    #   - pool_address_mismatch_count: hot events on pool addresses that
+    #     share token-pair (family) with a cold-positive entry but the
+    #     pool address differs (different fee/factory/version).
+    _cold_exec_list = _bd.get("_bridge_cold_executable", []) or []
+    _cold_pos_pool_set: set = set()
+    _cold_pos_pool_family_map: dict = {}
+    for _ce_e in _cold_exec_list:
+        if not isinstance(_ce_e, dict):
+            continue
+        _ce_pa = (_ce_e.get("pool_address") or "").lower()
+        if not _ce_pa:
+            continue
+        _cold_pos_pool_set.add(_ce_pa)
+        _t0 = (_ce_e.get("token_in") or "").lower() or None
+        _t1 = (_ce_e.get("token_out") or "").lower() or None
+        if _t0 and _t1:
+            _fam_key = tuple(sorted((_t0, _t1)))
+            _cold_pos_pool_family_map.setdefault(_fam_key, set()).add(_ce_pa)
+    _cold_pos_seen_in_hot: set = set()
+    _pool_addr_mismatch = 0
+    _hot_evt_pools: list = []
+    for _r_pl in _raw_results:
+        _evt_pl = getattr(_r_pl, "_source_event", None)
+        if not _evt_pl:
+            continue
+        _evt_pa = (getattr(_evt_pl, "pool_address", "") or "").lower()
+        if not _evt_pa:
+            continue
+        _hot_evt_pools.append(_evt_pa)
+        if _evt_pa in _cold_pos_pool_set:
+            _cold_pos_seen_in_hot.add(_evt_pa)
+            continue
+        # mismatch: hot event family overlaps a cold-positive family but
+        # exact pool address differs — different fee tier / factory.
+        try:
+            _t0_h = (
+                getattr(_evt_pl, "token0", None)
+                or getattr(_evt_pl, "token_in", None)
+                or ""
+            ).lower()
+            _t1_h = (
+                getattr(_evt_pl, "token1", None)
+                or getattr(_evt_pl, "token_out", None)
+                or ""
+            ).lower()
+        except Exception:
+            _t0_h = _t1_h = ""
+        if _t0_h and _t1_h:
+            _fam_h = tuple(sorted((_t0_h, _t1_h)))
+            if _fam_h in _cold_pos_pool_family_map:
+                _pool_addr_mismatch += 1
+    hot["hot_gap_debug"]["cold_positive_pools_count"] = len(_cold_pos_pool_set)
+    hot["hot_gap_debug"]["cold_positive_pool_seen_in_hot_count"] = len(_cold_pos_seen_in_hot)
+    hot["hot_gap_debug"]["pool_address_mismatch_count"] = _pool_addr_mismatch
+
     # M7.A.5.47o: Surface bridge counts at top level (not just in hot_gap_debug).
     hot["bridge_focused_pool_count"] = _bd.get("bridge_focused_pool_count", 0)
     hot["bridge_loaded_candidate_count"] = _bd.get("bridge_loaded_candidate_count", 0)
@@ -419,6 +496,10 @@ def _write_hot_artifact(artifact: dict, iteration: int, guard_results: list = No
     # M7.A.5.47p: Guarantee non-None вЂ” use `or` fallback for explicit None values.
     hot["c3_gas_hopeless_skipped"] = _bd.get("c3_gas_hopeless_skipped") or 0
     hot["c3_gas_hopeless_families"] = _bd.get("c3_gas_hopeless_families") or []
+    # E1.56 Step 7: pool-level gas-hopeless quarantine surface fields.
+    hot["c3_pool_gas_hopeless_skipped"] = _bd.get("c3_pool_gas_hopeless_skipped") or 0
+    hot["pool_gas_hopeless"] = _bd.get("pool_gas_hopeless") or []
+    hot["pool_gas_hopeless_count"] = len(_bd.get("pool_gas_hopeless") or [])
 
     # M7.A.5.47d: Surface bridge miss sample at top level for diagnostics
     hot["bridge_miss_sample_top"] = _bd.get("bridge_miss_sample_top", [])
@@ -994,6 +1075,7 @@ def _update_hot_rollup(
     bridge: dict | None = None,
     chain: str = "arbitrum_one",
     gate_result: "ExecutionGateResult | None" = None,
+    extra_signal_counts: dict | None = None,
 ) -> None:
     """Update cumulative hot rollup artifact вЂ” survives across windows.
 
@@ -1480,6 +1562,21 @@ def _update_hot_rollup(
             rollup.get("submit_ready_total", 0) + gate_result.submit_ready
         )
         rollup["sim_disabled"] = gate_result.sim_disabled
+        # E1.56 Step 1: cold-immediate sim queue rollup totals.
+        # Counters live in artifact["signal_counts"] (set by loop_runner
+        # after queue_cold_executable_for_sim runs). Aggregate per-window
+        # into rollup *_total fields so the rolling artifact answers
+        # "did cold-immediate fire across the soak?" in one read.
+        _ci_sc = (extra_signal_counts or {})
+        for _ci_k, _ci_total_k in (
+            ("cold_immediate_sim_input_count", "cold_immediate_sim_input_total"),
+            ("cold_immediate_sim_attempted", "cold_immediate_sim_attempted_total"),
+            ("cold_immediate_sim_passed", "cold_immediate_sim_passed_total"),
+            ("cold_immediate_sim_profitable", "cold_immediate_sim_profitable_total"),
+        ):
+            rollup[_ci_total_k] = int(rollup.get(_ci_total_k, 0) or 0) + int(
+                _ci_sc.get(_ci_k, 0) or 0
+            )
         # E1.27/D1: Store last N sim output samples (bounded) for offline
         # profit analysis. Raw bps cannot be derived because token decimals
         # differ between token_in/token_out for single-leg swaps.

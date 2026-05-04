@@ -987,6 +987,25 @@ def build_replay_summary(
                 "sim_passed": None,
                 "submit_ready": None,
             },
+            # E1.56 Step 1: execution_gate admission metadata.
+            # Without these fields, synthetic BackrunResult objects built
+            # from cold_executable entries are skipped before simulation
+            # with PRE_SIM_SKIP:NO_FEE_HINT or MISSING_SIZE_METADATA.
+            "best_buy_fee": getattr(r, "best_buy_fee", None),
+            "best_sell_fee": getattr(r, "best_sell_fee", None),
+            "best_buy_venue": getattr(r, "best_buy_venue", None),
+            "best_sell_venue": getattr(r, "best_sell_venue", None),
+            "backrun_token_in_address": getattr(r, "backrun_token_in_address", None),
+            "backrun_token_out_address": getattr(r, "backrun_token_out_address", None),
+            "token_in_decimals": getattr(r, "token_in_decimals", None),
+            "amount_in_wei": getattr(r, "amount_in_wei", None),
+            "best_sweep_size_wei": getattr(r, "best_sweep_size_wei", None),
+            "size_usd_estimate": getattr(r, "size_usd_estimate", None),
+            # E1.56 Step 1b: PnL fields required by profit_guard in execution_gate.
+            # profit_guard computes sell_amount_wei = amount_in_wei + gross_pnl_wei;
+            # if gross_pnl_wei=0 the guard always rejects (net_pnl_wei < 0).
+            "gross_pnl_wei": getattr(r, "gross_pnl_wei", None),
+            "net_pnl_wei": getattr(r, "net_pnl_wei", None),
         }
 
     _TOP_N = 5
