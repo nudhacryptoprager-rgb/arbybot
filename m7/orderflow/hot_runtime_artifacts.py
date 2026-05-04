@@ -1582,6 +1582,28 @@ def _update_hot_rollup(
             rollup[_ci_total_k] = int(rollup.get(_ci_total_k, 0) or 0) + int(
                 _ci_sc.get(_ci_k, 0) or 0
             )
+        # E1.56 issue #4 (teamlead fix step #4): reviewer verdict —
+        # cold_immediate found profitable sim candidates but canonical
+        # roundtrip_profitable_total is still 0.  These are different layers:
+        # cold_immediate_sim_profitable = sim_passed + net_bps>0 (synthetic
+        #   BackrunResult; pre-production signal).
+        # roundtrip_profitable_total = canonical E2 roundtrip with real token
+        #   flow from _gate_result.roundtrip_profitable_count (MAIN hot gate).
+        # They must NOT be conflated — cold_immediate does not drive the MAIN
+        # gate roundtrip path.  Surface the gap so reviewers see it in one read.
+        _ci_prof_total = int(rollup.get("cold_immediate_sim_profitable_total", 0) or 0)
+        _rt_prof_total = int(rollup.get("roundtrip_profitable_total", 0) or 0)
+        if _ci_prof_total > 0 and _rt_prof_total == 0:
+            rollup["cold_immediate_profitable_not_canonical"] = True
+            rollup["cold_immediate_profitable_not_canonical_note"] = (
+                f"cold_immediate_sim_profitable_total={_ci_prof_total} but "
+                f"roundtrip_profitable_total={_rt_prof_total}: "
+                "cold_immediate profit is pre-production (synthetic BackrunResult). "
+                "Canonical production profit requires MAIN gate roundtrip success."
+            )
+        else:
+            rollup.pop("cold_immediate_profitable_not_canonical", None)
+            rollup.pop("cold_immediate_profitable_not_canonical_note", None)
         # E1.27/D1: Store last N sim output samples (bounded) for offline
         # profit analysis. Raw bps cannot be derived because token decimals
         # differ between token_in/token_out for single-leg swaps.

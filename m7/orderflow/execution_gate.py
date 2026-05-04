@@ -732,7 +732,7 @@ def _build_sim_tx_params(
                 # `tickSpacing` lookup is still pending (scanner does not
                 # yet carry it through BackrunResult).  Submit remains
                 # blocked until the lookup layer lands.
-                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2600, 2655, 3024, 5000, 20000}
+                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2600, 2655, 3024, 5000, 9500, 20000}
                 if _fee_hint in _AERODROME_CL_KNOWN:
                     try:
                         _slip_cfg = _gdc(chain, "aerodrome_slipstream")
@@ -993,7 +993,7 @@ def _build_sell_leg_tx_params(
         # surface BOTH venue and fee so reviewers can see whether the
         # mismatch is a discovery bug (registered venue + stray fee) vs a
         # genuinely unknown source (off-registry venue).
-        _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 20000}
+        _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 9500, 20000}
         _venue_label = str(sell_venue) if sell_venue else "UNKNOWN_VENUE"
         if isinstance(sell_fee, int):
             if sell_fee in _AERODROME_CL_KNOWN:
@@ -1477,7 +1477,7 @@ def run_execution_gate(
             # Record in sim_errors (for histogram) but do NOT count as sim_attempted.
             # E1.35 P1.1 step 3: classify Aerodrome Slipstream fees under
             # SLIPSTREAM_PENDING_LOOKUP when adapter+config are verified.
-            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 20000}
+            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 9500, 20000}
             _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint}"
             if _fee_hint in _AERODROME_CL_KNOWN:
                 try:

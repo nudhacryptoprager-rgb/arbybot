@@ -429,7 +429,43 @@ class TestE1123SimErrorHistogram:
         assert hist.get("CALLDATA_NOT_READY") == 2
         assert hist.get("SIGNING_NOT_READY") == 2
 
-    def test_hot_artifact_includes_sim_errors(self, tmp_path, monkeypatch):
+    def test_cold_immediate_profitable_not_canonical_verdict(self, tmp_path, monkeypatch):
+        """E1.56 issue #4: when cold_immediate_sim_profitable_total>0 AND
+        roundtrip_profitable_total==0, rollup must carry
+        cold_immediate_profitable_not_canonical=True so reviewer immediately
+        sees the gap between pre-production signal and canonical production
+        DoD. Also verifies it clears when roundtrip_profitable is finally >0."""
+        import json
+        import m7.orderflow.runtime_io as _rio
+        import scripts.m7a_orderflow_loop as loop_mod
+        from m7.orderflow.execution_gate import ExecutionGateResult
+
+        rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+        monkeypatch.setattr(loop_mod, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio, "_HOT_ROLLUP_PATH", rollup_path)
+        monkeypatch.setattr(_rio, "_SESSION_ID", "test-verdict-001")
+        monkeypatch.setattr(loop_mod, "_SESSION_ID", "test-verdict-001")
+
+        gate = ExecutionGateResult(
+            sim_attempted=1, sim_passed=0, sim_errors=[], submit_blockers_detail=[],
+        )
+
+        # Inject cold_immediate profitable > 0 via extra_signal_counts
+        loop_mod._update_hot_rollup(
+            events_count=1, fast_results=[], guard_results=[],
+            bridge_diagnostics={}, chain="base", gate_result=gate,
+            extra_signal_counts={
+                "cold_immediate_sim_profitable": 3,
+            },
+        )
+        with open(rollup_path) as f:
+            data = json.load(f)
+        assert data.get("cold_immediate_sim_profitable_total") == 3
+        assert data.get("roundtrip_profitable_total", 0) == 0
+        assert data.get("cold_immediate_profitable_not_canonical") is True
+        assert "synthetic BackrunResult" in data.get("cold_immediate_profitable_not_canonical_note", "")
+
+
         """_write_hot_artifact includes per-window sim_errors and submit_blockers."""
         import json
         import m7.orderflow.runtime_io as _rio
