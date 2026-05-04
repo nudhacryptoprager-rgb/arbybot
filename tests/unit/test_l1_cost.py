@@ -194,20 +194,83 @@ class TestGetL1CostForChain(unittest.TestCase):
 
 class TestCreateSampleSwapCalldata(unittest.TestCase):
     """Tests for sample swap calldata generation."""
-    
+
     def test_creates_bytes(self):
         """Should return bytes."""
         from chains.l1_cost import create_sample_swap_calldata
-        
+
         result = create_sample_swap_calldata(
             token_in="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
             token_out="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
             amount_in=int(1e18),
             fee=3000,
         )
-        
+
         self.assertIsInstance(result, bytes)
         self.assertGreater(len(result), 4)  # At least selector
+
+    def test_calldata_is_228_bytes(self):
+        """E1.57: Calldata must be 228 bytes (SwapRouter02 exactInputSingle)."""
+        from chains.l1_cost import create_sample_swap_calldata
+
+        result = create_sample_swap_calldata(
+            token_in="0x4200000000000000000000000000000000000006",
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            amount_in=int(1e17),
+            fee=500,
+        )
+
+        # 4-byte selector + 7 × 32-byte ABI params = 228 bytes
+        self.assertEqual(len(result), 228, f"Expected 228 bytes, got {len(result)}")
+
+    def test_calldata_starts_with_swaprouter02_selector(self):
+        """E1.57: Selector must be SwapRouter02 exactInputSingle (0x04e45aaf)."""
+        from chains.l1_cost import create_sample_swap_calldata
+
+        result = create_sample_swap_calldata(
+            token_in="0x4200000000000000000000000000000000000006",
+            token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            amount_in=int(1e17),
+            fee=500,
+        )
+
+        self.assertEqual(result[:4].hex(), "04e45aaf")
+
+
+class TestGetL1FeeWei(unittest.TestCase):
+    """E1.57: Tests for the get_l1_fee_wei convenience function."""
+
+    def test_non_op_chain_returns_zero(self):
+        """Chains without L1 data fees should return 0 immediately."""
+        from chains.l1_cost import get_l1_fee_wei
+
+        self.assertEqual(get_l1_fee_wei("arbitrum"), 0)
+        self.assertEqual(get_l1_fee_wei("arbitrum_one"), 0)
+        self.assertEqual(get_l1_fee_wei("ethereum"), 0)
+
+    def test_base_chain_returns_int(self):
+        """Base chain must return a non-negative int (network call or fallback)."""
+        from unittest.mock import patch, MagicMock
+        from chains.l1_cost import get_l1_fee_wei
+
+        # Monkeypatch get_l1_cost_for_chain to avoid real network call
+        with patch("chains.l1_cost.get_l1_cost_for_chain") as mock_fn:
+            mock_fn.return_value = (400_000_000, "onchain_op_fallback")
+            result = get_l1_fee_wei("base")
+
+        self.assertIsInstance(result, int)
+        self.assertEqual(result, 400_000_000)
+
+    def test_base_chain_returns_default_on_failure(self):
+        """When all RPCs fail, fallback value must be the DEFAULT_OP_L1_FEE_WEI."""
+        from unittest.mock import patch
+        from chains.l1_cost import get_l1_fee_wei, DEFAULT_OP_L1_FEE_WEI
+
+        with patch("chains.l1_cost.get_l1_cost_for_chain") as mock_fn:
+            mock_fn.return_value = (DEFAULT_OP_L1_FEE_WEI, "default_op")
+            result = get_l1_fee_wei("base")
+
+        self.assertEqual(result, DEFAULT_OP_L1_FEE_WEI)
 
 
 if __name__ == "__main__":

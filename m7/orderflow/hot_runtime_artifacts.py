@@ -1578,10 +1578,37 @@ def _update_hot_rollup(
             ("cold_immediate_profit_guard_rejected", "cold_immediate_profit_guard_rejected_total"),
             ("cold_immediate_pre_sim_skip", "cold_immediate_pre_sim_skip_total"),
             ("cold_immediate_sim_revert", "cold_immediate_sim_revert_total"),
+            # E1.57 fix steps #1/#2: roundtrip canonicalization
+            ("cold_immediate_roundtrip_attempted", "cold_immediate_roundtrip_attempted_total"),
+            ("cold_immediate_roundtrip_profitable", "cold_immediate_roundtrip_profitable_total"),
         ):
             rollup[_ci_total_k] = int(rollup.get(_ci_total_k, 0) or 0) + int(
                 _ci_sc.get(_ci_k, 0) or 0
             )
+        # E1.57 fix steps #1/#2: canonicalize cold_immediate roundtrip results.
+        # When a cold_immediate candidate completes a full buy+sell round-trip
+        # simulation successfully, it IS canonical evidence of profitability —
+        # the same execution_gate pipeline as the main hot path.  Merge these
+        # into the top-level roundtrip totals so the reviewer sees a unified
+        # roundtrip_profitable_total > 0 and the waiting_canonicalization flag clears.
+        _ci_rt_att = int(_ci_sc.get("cold_immediate_roundtrip_attempted", 0) or 0)
+        _ci_rt_prof = int(_ci_sc.get("cold_immediate_roundtrip_profitable", 0) or 0)
+        if _ci_rt_att > 0:
+            rollup["roundtrip_attempted_total"] = (
+                int(rollup.get("roundtrip_attempted_total", 0) or 0) + _ci_rt_att
+            )
+        if _ci_rt_prof > 0:
+            rollup["roundtrip_profitable_total"] = (
+                int(rollup.get("roundtrip_profitable_total", 0) or 0) + _ci_rt_prof
+            )
+        # E1.56 fix step #6: accumulate cold_immediate revert samples (pair/fee/reason)
+        # sourced from cold_immediate_sim.py via signal_counts["cold_immediate_sim_revert_samples"].
+        _ci_revert_samples = _ci_sc.get("cold_immediate_sim_revert_samples") or []
+        if _ci_revert_samples:
+            _existing_rev = rollup.get("cold_immediate_sim_revert_samples_recent", [])
+            rollup["cold_immediate_sim_revert_samples_recent"] = (
+                _existing_rev + _ci_revert_samples
+            )[-30:]  # keep last 30 across windows
         # E1.56 issue #4 (teamlead fix step #4): reviewer verdict —
         # cold_immediate found profitable sim candidates but canonical
         # roundtrip_profitable_total is still 0.  These are different layers:
@@ -1593,7 +1620,8 @@ def _update_hot_rollup(
         # gate roundtrip path.  Surface the gap so reviewers see it in one read.
         _ci_prof_total = int(rollup.get("cold_immediate_sim_profitable_total", 0) or 0)
         _rt_prof_total = int(rollup.get("roundtrip_profitable_total", 0) or 0)
-        if _ci_prof_total > 0 and _rt_prof_total == 0:
+        _ci_rt_prof_total = int(rollup.get("cold_immediate_roundtrip_profitable_total", 0) or 0)
+        if _ci_prof_total > 0 and _rt_prof_total == 0 and _ci_rt_prof_total == 0:
             rollup["cold_immediate_profitable_not_canonical"] = True
             rollup["cold_immediate_profitable_not_canonical_note"] = (
                 f"cold_immediate_sim_profitable_total={_ci_prof_total} but "
@@ -1601,9 +1629,12 @@ def _update_hot_rollup(
                 "cold_immediate profit is pre-production (synthetic BackrunResult). "
                 "Canonical production profit requires MAIN gate roundtrip success."
             )
+            # E1.56 fix step #3: separate short verdict field for canonical gap
+            rollup["cold_immediate_profitable_waiting_canonicalization"] = True
         else:
             rollup.pop("cold_immediate_profitable_not_canonical", None)
             rollup.pop("cold_immediate_profitable_not_canonical_note", None)
+            rollup.pop("cold_immediate_profitable_waiting_canonicalization", None)
         # E1.27/D1: Store last N sim output samples (bounded) for offline
         # profit analysis. Raw bps cannot be derived because token decimals
         # differ between token_in/token_out for single-leg swaps.

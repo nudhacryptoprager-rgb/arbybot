@@ -51,7 +51,7 @@ class TestSlipstreamPendingLookup:
         assert ts is not None
         assert reason == f"SLIPSTREAM_SIM_READY_TOKENS_MISSING:2655:ts{ts}"
 
-    @pytest.mark.parametrize("fee", [150, 445, 600, 1000, 1570, 2105, 3024, 5000, 9500, 20000])
+    @pytest.mark.parametrize("fee", [150, 445, 600, 1000, 1570, 2105, 3024, 5000, 7500, 9500, 20000])
     def test_all_known_cl_fees_route_to_pending_lookup(self, fee):
         from m7.orderflow.execution_gate import SLIPSTREAM_FEE_TO_TICKSPACING
 

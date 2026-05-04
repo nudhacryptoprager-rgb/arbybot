@@ -412,17 +412,28 @@ class ExecutionGateResult:
     guard_bypassed: bool = False
 
 
-def _run_profit_guard_on_results(results: list, chain: str = "arbitrum_one") -> list:
+def _run_profit_guard_on_results(
+    results: list,
+    chain: str = "arbitrum_one",
+    l1_fee_wei: int = 0,
+) -> list:
     """Run profit_guard on all scored results with positive net_bps.
 
     E1.12.2 Phase 2: Delegates to annotate_profit_guard_results()
     (canonical batch helper in profit_guard.py). This function is
     maintained as the execution_gate entry point and for backward compat.
 
+    Args:
+        results: List of scored BackrunResult objects.
+        chain: Chain name for gas estimation.
+        l1_fee_wei: Absolute L1 data fee in wei for the chain (OP-Stack).
+            Passed through to annotate_profit_guard_results which converts
+            to per-candidate bps.
+
     Returns list of (result_dict_or_obj, ProfitGuardResult) for candidates
     that pass the guard.
     """
-    return annotate_profit_guard_results(results, chain=chain)
+    return annotate_profit_guard_results(results, chain=chain, l1_fee_wei=l1_fee_wei)
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +743,7 @@ def _build_sim_tx_params(
                 # `tickSpacing` lookup is still pending (scanner does not
                 # yet carry it through BackrunResult).  Submit remains
                 # blocked until the lookup layer lands.
-                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2600, 2655, 3024, 5000, 9500, 20000}
+                _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2600, 2655, 3024, 5000, 7500, 9500, 20000}
                 if _fee_hint in _AERODROME_CL_KNOWN:
                     try:
                         _slip_cfg = _gdc(chain, "aerodrome_slipstream")
@@ -993,7 +1004,7 @@ def _build_sell_leg_tx_params(
         # surface BOTH venue and fee so reviewers can see whether the
         # mismatch is a discovery bug (registered venue + stray fee) vs a
         # genuinely unknown source (off-registry venue).
-        _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 9500, 20000}
+        _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 7500, 9500, 20000}
         _venue_label = str(sell_venue) if sell_venue else "UNKNOWN_VENUE"
         if isinstance(sell_fee, int):
             if sell_fee in _AERODROME_CL_KNOWN:
@@ -1252,8 +1263,25 @@ def run_execution_gate(
     _sim_configured = is_simulation_configured(profile=profile)
     gate.simulation_backend = get_simulation_backend(profile=profile) if _sim_configured else None
 
+    # E1.57 (Step 8): Compute exact L1 data fee for OP-Stack chains (Base).
+    # Called once per gate invocation — not per candidate — to minimize RPC calls.
+    # For Base: GasPriceOracle.getL1Fee(representative_calldata) via public fallback.
+    # For non-OP chains: 0 (no L1 data fee).
+    _l1_fee_wei = 0
+    _chain_lower = chain.lower().replace("_one", "").replace("_", "")
+    if _chain_lower in ("base", "optimism"):
+        try:
+            from chains.l1_cost import get_l1_fee_wei as _get_l1_fee
+            _l1_fee_wei = _get_l1_fee(chain=chain)
+            logger.debug("E1.57: L1 fee for %s: %d wei", chain, _l1_fee_wei)
+        except Exception as _l1_exc:
+            logger.debug("E1.57: L1 fee lookup failed (%s), using 0", type(_l1_exc).__name__)
+            _l1_fee_wei = 0
+
     # Stage 1: Profit guard
-    gate.guard_passed = _run_profit_guard_on_results(scored_results, chain=chain)
+    gate.guard_passed = _run_profit_guard_on_results(
+        scored_results, chain=chain, l1_fee_wei=_l1_fee_wei
+    )
 
     # E4: Diagnostic bypass — when ARBY_SIM_BYPASS_GUARD=1, run round-trip
     # sim on ALL scored_results even if profit_guard rejected them. This lets
@@ -1477,21 +1505,16 @@ def run_execution_gate(
             # Record in sim_errors (for histogram) but do NOT count as sim_attempted.
             # E1.35 P1.1 step 3: classify Aerodrome Slipstream fees under
             # SLIPSTREAM_PENDING_LOOKUP when adapter+config are verified.
-            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 9500, 20000}
+            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 7500, 9500, 20000}
             _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint}"
             if _fee_hint in _AERODROME_CL_KNOWN:
-                try:
-                    from config import get_dex_config as _gdc_pre
-                    _slip_cfg = _gdc_pre(chain, "aerodrome_slipstream")
-                except (KeyError, ImportError):
-                    _slip_cfg = None
-                if (
-                    _slip_cfg
-                    and _slip_cfg.get("verified") is True
-                    and _slip_cfg.get("router")
-                    and _slip_cfg.get("quoter_v2")
-                ):
-                    _skip_key = f"PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"
+                # E1.56 fix: unconditional routing for known Aerodrome CL fees.
+                # The config check was needed for calldata building (_build_sim_tx_params)
+                # but NOT for skip-bucket classification. Removing it eliminates
+                # intermittent UNSUPPORTED_FEE_TIER in the Discovery subprocess
+                # where the config import occasionally raises a non-(KeyError,
+                # ImportError) exception that was silently swallowing the slip_cfg.
+                _skip_key = f"PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"
             gate.sim_errors.append(_skip_key)
             if hasattr(r, "sim_attempted"):
                 r.sim_attempted = False

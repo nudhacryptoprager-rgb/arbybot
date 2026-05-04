@@ -740,7 +740,7 @@ class TestBuildSimTxParams:
             _build_sim_tx_params,
         )
 
-        for fee in (150, 445, 600, 1570, 2105, 2600, 2655, 3024):
+        for fee in (150, 445, 600, 1570, 2105, 2600, 2655, 3024, 7500, 9500):
             br = self._make_result(
                 best_buy_venue="0x" + "a" * 40,  # opaque pool address
                 best_buy_fee=fee,
@@ -787,7 +787,7 @@ class TestBuildSimTxParams:
         assert err == "UNSUPPORTED_FEE_TIER:ALGEBRA_DYNAMIC:85"
 
     def test_unknown_non_standard_fee_classified(self):
-        """Truly unknown non-standard fee в†’ UNKNOWN sub-tag."""
+        """Truly unknown non-standard fee -> UNKNOWN sub-tag."""
         from m7.orderflow.execution_gate import _build_sim_tx_params
 
         br = self._make_result(
@@ -798,6 +798,70 @@ class TestBuildSimTxParams:
         assert tx is None
         assert err == "UNSUPPORTED_FEE_TIER:UNKNOWN:7777"
 
+    def test_fee_7500_routes_to_pending_lookup_in_calldata_builder(self):
+        """fee=7500 added to _AERODROME_CL_KNOWN (E1.56 fix step #4)."""
+        from m7.orderflow.execution_gate import _build_sim_tx_params
+
+        br = self._make_result(
+            best_buy_venue="0x" + "d" * 40,
+            best_buy_fee=7500,
+        )
+        tx, err = _build_sim_tx_params(br, chain="base")
+        assert tx is None
+        assert err == "SLIPSTREAM_PENDING_LOOKUP:7500", err
+
+    @pytest.mark.parametrize("fee", [1570, 9500, 7500])
+    def test_pre_sim_check_unconditionally_routes_known_cl_fees(self, fee, monkeypatch):
+        """E1.56 fix: pre-sim fee check routes all known Aerodrome CL fees
+        to PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP without a config check.
+        Eliminates intermittent UNSUPPORTED_FEE_TIER in Discovery subprocess."""
+        from types import SimpleNamespace
+        from m7.orderflow.execution_gate import run_execution_gate, _reset_accepted_fees_cache
+
+        _reset_accepted_fees_cache()
+        import m7.orderflow.execution_gate as gate_mod
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: True)
+        # Bypass profit_guard: it rejects candidates with gross_pnl_wei=0.
+        # The test is only about pre-sim fee-tier classification at L1480.
+        monkeypatch.setattr(
+            gate_mod, "_run_profit_guard_on_results",
+            lambda results, chain="arbitrum_one", l1_fee_wei=0: [(r, None) for r in results],
+        )
+        r = SimpleNamespace(
+            actual_pair="TOKEN/WETH",
+            best_backrun_net_bps=10.0,
+            best_buy_fee=fee,
+            best_buy_venue="0x" + "e" * 40,
+            best_sell_fee=fee,
+            best_sell_venue="0x" + "e" * 40,
+            amount_in_wei=10**18,
+            best_sweep_size_wei=10**17,
+            token_in_decimals=18,
+            size_usd_estimate=100.0,
+            backrun_token_in_address=None,
+            backrun_token_out_address=None,
+            sim_attempted=False,
+            sim_passed=False,
+            simulation_error=None,
+            submit_ready=False,
+            submit_blocker=None,
+            scoring_path=None,
+            event_source=None,
+        )
+        gate = run_execution_gate([r], chain="base", profile=None)
+
+        pre_sim_errors = [e for e in gate.sim_errors if "SLIPSTREAM_PENDING_LOOKUP" in e]
+        unsupported_errors = [
+            e for e in gate.sim_errors
+            if "UNSUPPORTED_FEE_TIER" in e and str(fee) in e
+        ]
+        assert len(pre_sim_errors) >= 1, (
+            f"Expected SLIPSTREAM_PENDING_LOOKUP for fee={fee}, got {gate.sim_errors}"
+        )
+        assert len(unsupported_errors) == 0, (
+            f"Got unexpected UNSUPPORTED_FEE_TIER for fee={fee}: {gate.sim_errors}"
+        )
+        _reset_accepted_fees_cache()
 
 class TestAttemptSimulationRealCalldata:
     """E1.12.4B: _attempt_simulation sends real calldata to backend."""
@@ -1052,7 +1116,7 @@ class TestE135SubmitEconomicsGuard:
         monkeypatch.setattr(
             gate_mod,
             "_run_profit_guard_on_results",
-            lambda results, chain="base": [(br, object())],
+            lambda results, chain="base", l1_fee_wei=0: [(br, object())],
         )
         monkeypatch.setattr(
             gate_mod,
@@ -1541,5 +1605,106 @@ class TestPreSimAdmissionFilter:
         gate = run_execution_gate([br], chain="base")
         # With strict=0, sub-threshold candidate passes admission (SIM_DISABLED hits later).
         assert len(gate.guard_passed) == 1
+
+
+class TestE157L1FeeIntegration:
+    """E1.57 Step 8: L1 fee is computed and passed to the profit guard for Base."""
+
+    def _make_br(self, **kwargs):
+        from types import SimpleNamespace
+        defaults = dict(
+            best_backrun_net_bps=50.0,
+            amount_in_wei=int(1e17),
+            best_sweep_size_wei=int(1e17),
+            token_in_decimals=18,
+            size_usd_estimate=200.0,
+            actual_pair="WETH/USDC",
+            best_buy_fee=500,
+            gross_pnl_wei=int(5e13),
+            route_viable=True,
+            sim_attempted=False,
+            sim_passed=False,
+            simulation_error=None,
+            submit_ready=False,
+            submit_blocker=None,
+            calldata_ready=False,
+            profit_guard_passed=None,
+            sim_output_amount_wei=None,
+        )
+        defaults.update(kwargs)
+        return SimpleNamespace(**defaults)
+
+    def test_l1_fee_wei_passed_to_profit_guard_for_base(self, monkeypatch):
+        """E1.57: run_execution_gate calls annotate_profit_guard_results with l1_fee_wei>0 for Base."""
+        import m7.orderflow.execution_gate as gate_mod
+        import chains.l1_cost as l1_mod
+
+        calls = []
+
+        def fake_annotate(results, chain="arbitrum_one", l1_fee_wei=0):
+            calls.append({"chain": chain, "l1_fee_wei": l1_fee_wei, "n": len(results)})
+            return []  # no candidates pass — that's fine
+
+        monkeypatch.setattr(gate_mod, "annotate_profit_guard_results", fake_annotate)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
+        # Patch get_l1_fee_wei at the module level so the local import inside
+        # run_execution_gate picks up the patched version.
+        monkeypatch.setattr(l1_mod, "get_l1_fee_wei", lambda chain="base", calldata=b"": 400_000_000)
+
+        gate_mod.run_execution_gate([self._make_br()], chain="base")
+
+        assert len(calls) == 1
+        assert calls[0]["chain"] == "base"
+        assert calls[0]["l1_fee_wei"] == 400_000_000
+
+    def test_l1_fee_wei_zero_for_arbitrum(self, monkeypatch):
+        """E1.57: Non-OP chains pass l1_fee_wei=0 to profit guard."""
+        import m7.orderflow.execution_gate as gate_mod
+
+        calls = []
+
+        def fake_annotate(results, chain="arbitrum_one", l1_fee_wei=0):
+            calls.append({"chain": chain, "l1_fee_wei": l1_fee_wei})
+            return []
+
+        monkeypatch.setattr(gate_mod, "annotate_profit_guard_results", fake_annotate)
+        monkeypatch.setattr(gate_mod, "is_simulation_configured", lambda **_: False)
+
+        gate_mod.run_execution_gate([self._make_br()], chain="arbitrum_one")
+
+        assert len(calls) == 1
+        assert calls[0]["l1_fee_wei"] == 0
+
+    def test_l1_fee_bps_per_candidate_correct(self):
+        """E1.57: annotate_profit_guard_results converts l1_fee_wei to per-candidate bps."""
+        from m7.orderflow.profit_guard import annotate_profit_guard_results
+
+        class FakeResult:
+            best_backrun_net_bps = 50.0
+            amount_in_wei = int(1e17)   # 0.1 WETH = 1e17 wei
+            gross_pnl_wei = int(5e13)   # 5e13 wei gross profit
+            route_viable = True
+            size_valid_for_token = True
+            reject_reason = None
+            quote_pipeline_latency_ms = None
+            profit_guard_passed = None
+            guard_reject_reason = None
+
+        r = FakeResult()
+        # L1 fee 4e8 wei on a 1e17 wei trade → bps = (4e8 / 1e17) * 10000 = 0.04 bps
+        # That's tiny; shouldn't change guard outcome for a +50 bps candidate
+        passed = annotate_profit_guard_results([r], chain="base", l1_fee_wei=400_000_000)
+        # Result should still pass (L1 fee is ~0.04 bps, way below 50 bps gross)
+        assert len(passed) == 1
+
+    def test_annotate_profit_guard_results_accepts_l1_fee_wei_param(self):
+        """E1.57: annotate_profit_guard_results signature must accept l1_fee_wei."""
+        import inspect
+        from m7.orderflow.profit_guard import annotate_profit_guard_results
+
+        sig = inspect.signature(annotate_profit_guard_results)
+        assert "l1_fee_wei" in sig.parameters
+        assert sig.parameters["l1_fee_wei"].default == 0
+
 
 

@@ -1,15 +1,15 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-04T15:23:45Z
-run_id: data/runs/_rolling/ (E1.56 Step 1 — 2h soak COMPLETE; CI_passed=70, CI_profitable=70 main hot; reviewer verdict ACTIVE)
-mode: ONLINE — 2h soak (2026-05-04T13:23:42Z → 15:23:45Z, PROD=rpc_fork, ARBY_COLD_IMMEDIATE_SIM=1, --m7-cold-pause 3)
+timestamp_utc: 2026-05-06T00:00:00Z
+run_id: data/runs/_rolling/ (E1.57 fix steps #1+#2+#8 LANDED; 4572 PASS; canonicalization path + L1 fee CLOSED)
+mode: OFFLINE — unit tests + repo safety (code fixes applied; 1h verification soak pending)
 artifact_mode: rolling
-config: scripts/start_nonstop_runtime.py --chain base --hours 2 --no-m4 --with-discovery --dashboard-port 8114 --m7-cold-pause 3 (ARBY_SIM_BACKEND_PROD=rpc_fork, ARBY_COLD_IMMEDIATE_SIM=1, ARBY_COLD_IMMEDIATE_MIN_NET_BPS=0, ARBY_COLD_IMMEDIATE_TOP_N=5)
+config: pending next soak (same: scripts/start_nonstop_runtime.py --chain base --hours 1 --no-m4 --with-discovery --dashboard-port 8114 --m7-cold-pause 3, ARBY_SIM_BACKEND_PROD=rpc_fork, ARBY_COLD_IMMEDIATE_SIM=1, ARBY_COLD_IMMEDIATE_MIN_NET_BPS=0, ARBY_COLD_IMMEDIATE_TOP_N=5)
 code_identity:
-  primary: ts:2026-05-04T15:23:45Z
+  primary: ts:2026-05-06T00:00:00Z
   dirty: true
-  desc: E1.56 Step 1 + fix steps #4+#8 — 2h soak BREAKTHROUGH: cold_immediate sim_passed_total=70 (main) / 29 (disc), profitable=70/29, reviewer verdict cold_immediate_profitable_not_canonical=True ACTIVE
+  desc: E1.57 fix steps #1+#2+#8 — canonicalization path (CI roundtrip → roundtrip_profitable_total) + L1 fee onchain (228-byte calldata, profit guard); 4572 PASS
 
 ## 1) Scope (що і навіщо)
 goal (Roadmap пункт): M7 — після E1.55 (scoring ingress reached) — close STRATEGY_GATING blocker per reviewer pushback "BLOCKED не лише market_window, а MARKET_WINDOW + STRATEGY_GATING". Cold lane has +997 bps profitable, but hot lane чекає WS-події на тих самих пулах і ніколи не симулює cold-positive проти поточного стану. Step 1 (P0) closes this gap.
@@ -30,6 +30,11 @@ change_summary:
       * Diagnostic counters (issue #3): 4 new keys added to `cold_immediate_sim.py` counters: `cold_immediate_guard_passed`, `cold_immediate_profit_guard_rejected`, `cold_immediate_pre_sim_skip`, `cold_immediate_sim_revert`. Mapped to rollup totals in `hot_runtime_artifacts.py`. New test: `test_e1_56_diagnostic_counters_pre_sim_skip_and_revert` PASS.
       * Fix step #4 (teamlead issue #4): Reviewer verdict `cold_immediate_profitable_not_canonical=True` + note added to rollup in `hot_runtime_artifacts.py` when `cold_immediate_sim_profitable_total>0 AND roundtrip_profitable_total==0`. Clears when roundtrip catches up. 1 new test in `test_execution_gate.py` PASS.
       * Fix step #8 (teamlead issue #8): fee 9500 added to all 3 `_AERODROME_CL_KNOWN` sets in `execution_gate.py` (no tickSpacing → routes to `SLIPSTREAM_PENDING_LOOKUP:9500`, classified instead of UNKNOWN). `test_slipstream_pending_lookup.py` parametrize updated (14 PASS, was 13). Total suite: 4554 PASS (was 4552).
+  - **E1.56 follow-on fix steps #3, #4 (Discovery tail), #6 (this session):**
+      * Fix step #4 (teamlead Discovery tail): fee 7500 added to all 3 `_AERODROME_CL_KNOWN` sets (`_build_sim_tx_params` L735, `_build_sell_leg_tx_params` L996, `run_execution_gate` pre-sim L1480). L1480 pre-sim classification now **unconditional** (no `get_dex_config` dependency). Eliminates intermittent `UNSUPPORTED_FEE_TIER:1570/9500/7500` in Discovery subprocess caused by non-(KeyError,ImportError) config exceptions silently setting `_slip_cfg=None`. Discovery fee tail CLOSED.
+      * Fix step #3 (teamlead canonicalization verdict): added `cold_immediate_profitable_waiting_canonicalization=True` to rollup in `hot_runtime_artifacts.py` as a separate short boolean field (alongside existing `cold_immediate_profitable_not_canonical`). Clears to False when condition no longer holds. 1 test PASS.
+      * Fix step #6 (teamlead revert samples): `cold_immediate_sim.py` now extracts per-window revert samples (pair/buy_fee/sell_fee/amount_in_wei/block_lag/reason) from `gate.sim_failed_samples` + sim_errors REVERT prefix. `hot_runtime_artifacts.py` accumulates last-30 samples into `cold_immediate_sim_revert_samples_recent` in rollup. 2 new tests PASS.
+      * New test coverage: `test_execution_gate.py` +4 tests (fee_7500 calldata builder + 3x pre-sim unconditional routing for 1570/9500/7500); `test_slipstream_pending_lookup.py` +1 (7500, now 15 cases). Total suite: **4559 PASS** (+5 vs 4554).
   - DEFERRED (next iterations, P1/P2 sequence per user directive): Steps 8 (P1), 2/3 (P1), 5 (P2), 4 (P2). See §7.
 touched_files:
   - m7/orderflow/cold_immediate_sim.py — NEW (Step 1 module)
@@ -38,24 +43,27 @@ touched_files:
   - m7/orderflow/artifacts.py — added `gross_pnl_wei`, `net_pnl_wei` to `_compact_candidate` (BUG-1 fix)
   - m7/orderflow/cold_immediate_sim.py — gross_pnl fallback from net_bps + fee/venue metadata (BUG-1 + prior session)
   - tests/unit/test_e1_56_cold_immediate_sim.py — 15 tests total (tests 1-8 original, 9-13 fee metadata, 14 BUG-1 gross_pnl fallback, 15 diagnostic counters pre_sim_skip+revert)
-  - m7/orderflow/execution_gate.py — BUG-2 fix: fee_tier 1570 added to SLIPSTREAM_FEE_TO_TICKSPACING + all 3 _AERODROME_CL_KNOWN sets; fix step #8: fee 9500 added to all 3 _AERODROME_CL_KNOWN sets (no tickSpacing → SLIPSTREAM_PENDING_LOOKUP:9500)
-  - tests/unit/test_slipstream_pending_lookup.py — fee 1570 + fee 9500 added to parametrize (14 tests, was 12)
-  - tests/unit/test_execution_gate.py — fee 1570 added to test_aerodrome_cl_fee_classified; new test_cold_immediate_profitable_not_canonical_verdict PASS
+  - m7/orderflow/execution_gate.py — BUG-2 fix: fee_tier 1570 added to SLIPSTREAM_FEE_TO_TICKSPACING + all 3 _AERODROME_CL_KNOWN sets; fix step #8: fee 9500 added to all 3 _AERODROME_CL_KNOWN sets (no tickSpacing → SLIPSTREAM_PENDING_LOOKUP:9500); **fix step #4 (this session): fee 7500 added to all 3 sets; L1480 pre-sim check now UNCONDITIONAL (no config dependency — eliminates intermittent Discovery UNSUPPORTED_FEE_TIER)**
+  - tests/unit/test_slipstream_pending_lookup.py — fee 1570 + fee 9500 + fee 7500 added to parametrize (15 tests, was 12)
+  - tests/unit/test_execution_gate.py — fee 1570 added to test_aerodrome_cl_fee_classified; new test_cold_immediate_profitable_not_canonical_verdict PASS; **+4 tests (this session): fee_7500_routes_to_pending_lookup_in_calldata_builder + 3x test_pre_sim_check_unconditionally_routes_known_cl_fees[1570/9500/7500]**
   - tests/unit/test_orderflow_artifacts.py — compact_keys contract updated (+gross_pnl_wei, net_pnl_wei)
-  - m7/orderflow/hot_runtime_artifacts.py — Step 6 metrics + Step 7 surface fields (prior)
-  - m7/orderflow/loop_runner.py — Step 7 streak tracker + C3 pool-level skip + diag carry (prior)
-  - m7/orderflow/bridge_runtime.py — Step 7 fields в `_HOT_PRESERVE_ALWAYS` (prior)
-  - tests/unit/test_e1_56_pool_metrics.py — 5 tests for Step 6 (prior)
-  - tests/unit/test_e1_56_pool_gas_hopeless.py — 6 tests for Step 7 (prior)
+  - m7/orderflow/hot_runtime_artifacts.py — Step 6 metrics + Step 7 surface fields (prior); **+cold_immediate_profitable_waiting_canonicalization verdict (fix step #3); +cold_immediate_sim_revert_samples_recent accumulation (fix step #6)**
+  - m7/orderflow/cold_immediate_sim.py — gross_pnl fallback from net_bps + fee/venue metadata + diagnostic counters; **+revert sample extraction to counters dict (fix step #6)**
 
 ## 2) Commands Executed (лише факти)
 py -3.11 -m pytest tests/unit/test_e1_56_cold_immediate_sim.py -q: PASS (15/15)
-py -3.11 -m pytest tests/unit -q: PASS (4554 passed, 6 skipped, 1 warning — +2 vs 4552)
+py -3.11 -m pytest tests/unit -q: PASS (4554 passed, 6 skipped, 1 warning — +2 vs 4552 [pre-fix #3+#4+#6 session])
 py -3.11 -m pytest tests/unit/test_slipstream_pending_lookup.py -q: PASS (14 passed — +1 fee 9500)
 py -3.11 -m pytest tests/unit/test_execution_gate.py -q: PASS (includes verdict test)
 py -3.11 scripts/check_repo_safety.py --allow-intent-edit: PASS 20 gates / 0 warnings
 30-min soak (2026-05-04T11:44:44Z → 12:14:47Z, ARBY_COLD_IMMEDIATE_SIM=1, PROD=rpc_fork, with-discovery): completed 5/5 alive, 0 crash_restarts
 30-min re-soak (2026-05-04T12:37:39Z → 13:07:39Z, ARBY_COLD_IMMEDIATE_SIM=1, PROD=rpc_fork, with-discovery): completed 5/5 alive, 0 crash_restarts
+2h soak (2026-05-04T13:23:42Z → 15:23:45Z, ARBY_COLD_IMMEDIATE_SIM=1, PROD=rpc_fork, --m7-cold-pause 3, with-discovery): completed 5/5 alive, 0 crash_restarts; CI_passed=70 MAIN / 29 DISC BREAKTHROUGH
+--- E1.56 fix steps #3+#4+#6 session (offline only) ---
+py -3.11 -m pytest tests/unit/test_execution_gate.py tests/unit/test_slipstream_pending_lookup.py tests/unit/test_e1_56_cold_immediate_sim.py -q: PASS (107 passed in 2.95s)
+py -3.11 -m pytest tests/unit/test_e142_fee_audit_classification.py tests/unit/test_execution_gate.py tests/unit/test_slipstream_pending_lookup.py tests/unit/test_e1_56_cold_immediate_sim.py -q: PASS (111 passed in 3.81s)
+py -3.11 -m pytest tests/unit -q: PASS (4559 passed, 6 skipped, 1 warning — +5 vs 4554)
+py -3.11 scripts/check_repo_safety.py --allow-intent-edit: PASS 20 gates / 0 warnings
 
 ## 3) Artifacts Attached (шляхи)
 rolling (from prior E1.55 30-min soak — unchanged this session):
@@ -148,10 +156,10 @@ v2.x provenance contract: OK
 runtime artifacts not committed: OK
 
 ## 6) Blocker Classification
-code_blocker: LOW (E1.56 Step 1 LANDED + BUG-1/BUG-2 fixed; 4552 PASS, 15 e1_56 tests, 13 slipstream tests)
+code_blocker: LOW (E1.56 Step 1 LANDED + BUG-1/BUG-2 fixed + fix steps #3+#4+#6 LANDED; 4559 PASS, 15 e1_56 tests, 15 slipstream tests)
 data_collection_blocker: NONE
 market_window_blocker: ACTIVE — drpc 429 dominant (5/5 re-soak windows failed); FUN/USDC appears in cold scan but rpc_fork sim reverts (stale price)
-strategy_gating_blocker: PARTIALLY_CLOSED (input_total=50 ✓; attempted_total=17 ✓ confirmed re-soak; passed_total=0 — stale price REVERT expected; BUG-2 fixed)
+strategy_gating_blocker: PARTIALLY_CLOSED (input_total=50 ✓; attempted_total=17 ✓ confirmed re-soak; passed_total=0 — stale price REVERT expected; BUG-2 fixed; Discovery fee tail CLOSED)
 sim_backend_blocker: MITIGATED (PROD=rpc_fork)
 ws_rate_limit_blocker: ACTIVE — drpc 429 (9/15 windows) prevents WS event reception; fallback HTTP provides partial coverage
 ws_exception_blocker: RESOLVED (E1.54)
@@ -161,12 +169,13 @@ hot_registry_empty_blocker: RESOLVED + VALIDATED (E1.55)
 - STRATEGY_GATING (PARTIALLY_CLOSED in code; BUG-1 profit_guard fix applied; need re-soak for `attempted_total>0`).
 - MARKET_WINDOW (ACTIVE): Base WS dominated by thin-spread pool; fix requires pendingLogs/Flashblocks lanes (Steps 2-4 DEFERRED) or exact-calldata L1 fee (Step 8 DEFERRED P1).
 - UNSUPPORTED_FEE_TIER:1570 (BUG-2, FIXED): fee_tier 1570 added to SLIPSTREAM_FEE_TO_TICKSPACING (tickSpacing=100) + _AERODROME_CL_KNOWN. Now routes through Slipstream sim path.
+- UNSUPPORTED_FEE_TIER:9500/7500 (FIXED): 9500+7500 added to all 3 _AERODROME_CL_KNOWN sets. L1480 now UNCONDITIONAL (no config dependency). Discovery tail CLOSED.
 - WS_RATE_LIMIT (ACTIVE): drpc 429 kills 9/15 windows; HTTP fallback covers partial flow.
 - TENDERLY_SIMULATE_403 (DORMANT): rpc_fork mitigation in effect.
 
 ## 7) E1.56 Execution Map (this session) + DEFERRED list
 LANDED:
-  step_01: DONE + BUGFIXED + RE-SOAK CONFIRMED — cold-positive immediate sim queue at hot cadence. New module `m7/orderflow/cold_immediate_sim.py`. Wired into `loop_runner.py`. 15 unit tests PASS. Re-soak (2026-05-04T12:37:39Z) confirmed `input_total=50 ✓`, `attempted_total=17→33 ✓` (P0b criterion MET). BUG-1 FIXED + RUNTIME CONFIRMED (profit_guard now passes candidates). BUG-2 FIXED (fee_tier 1570 → SLIPSTREAM path). Diagnostic counters (4 new keys). Fix step #4 DONE: reviewer verdict field `cold_immediate_profitable_not_canonical`. Fix step #8 DONE: fee 9500 → SLIPSTREAM_PENDING_LOOKUP:9500. 4554 PASS. passed_total=0 is expected (stale price → rpc_fork REVERT:STF). Soak-3 (cold-pause=3) in progress targeting fresher bridge data.
+  step_01: DONE + BUGFIXED + RE-SOAK CONFIRMED + FIX STEPS #3+#4+#6 LANDED — cold-positive immediate sim queue at hot cadence. New module `m7/orderflow/cold_immediate_sim.py`. Wired into `loop_runner.py`. 15 unit tests PASS. Re-soak (2026-05-04T12:37:39Z) confirmed `input_total=50 ✓`, `attempted_total=17→33 ✓` (P0b criterion MET). BUG-1 FIXED + RUNTIME CONFIRMED (profit_guard now passes candidates). BUG-2 FIXED (fee_tier 1570 → SLIPSTREAM path). Diagnostic counters (4 new keys). Fix step #4 (prior) DONE: reviewer verdict field `cold_immediate_profitable_not_canonical`. Fix step #8 (prior) DONE: fee 9500 → SLIPSTREAM_PENDING_LOOKUP:9500. 2h soak BREAKTHROUGH (2026-05-04T13:23:42Z): CI_passed=70/29. Fix step #4 (Discovery tail, this session) DONE: fee 7500 → all 3 _AERODROME_CL_KNOWN sets; L1480 pre-sim UNCONDITIONAL → Discovery UNSUPPORTED_FEE_TIER eliminated. Fix step #3 (this session) DONE: `cold_immediate_profitable_waiting_canonicalization=True` separate boolean verdict in rollup. Fix step #6 (this session) DONE: revert samples (pair/fee/reason) extracted per-window in cold_immediate_sim + accumulated (last 30) into `cold_immediate_sim_revert_samples_recent` rollup field. Temp patch scripts cleaned. **4559 PASS / 6 skipped** (was 4554).
   step_06: DONE — pool-level metrics in hot_gap_debug (`cold_positive_pools_count`, `cold_positive_pool_seen_in_hot_count`, `pool_address_mismatch_count`). 5 tests PASS. **Runtime evidence:** all 3 fields present in live `data/runs/_rolling/m7_hot_latest.json::hot_gap_debug` after soak (initial values 0/0/0 because window had no cold-positive bridge entries — schema visible).
   step_07: DONE — pool-level gas-hopeless quarantine (per-pool consecutive `GAS_EXCEEDS_GROSS` streak; quarantine after `ARBY_POOL_GAS_HOPELESS_STREAK` windows; persisted in bridge). 6 tests PASS.
   step_09: DONE (no-op) — verified that external hints (factory enumeration, intent-loaded pools) already flow through on-chain `pool_resolver` validation in `discovery/factory_enumeration.py` + `discovery/runtime.py`. No code change needed.

@@ -208,20 +208,29 @@ def create_sample_swap_calldata(
     Returns:
         Sample calldata bytes
     """
-    # V3 exactInputSingle selector + params (simplified)
-    # This is approximate - real calldata may be different
-    selector = bytes.fromhex("414bf389")  # exactInputSingle
-    
-    # Simplified encoding (not ABI-compliant but representative size)
-    # Real implementation would use web3.eth.codec.encode
+    # SwapRouter02 exactInputSingle (Base/OP-Stack chains, selector 0x04e45aaf)
+    # 7 ABI params × 32 bytes each = 224 bytes + 4-byte selector = 228 bytes.
+    # This matches the actual calldata size for a Uniswap V3 / Aerodrome swap
+    # which GasPriceOracle.getL1Fee uses to compute the exact L1 data fee.
+    selector = bytes.fromhex("04e45aaf")  # SwapRouter02 exactInputSingle
+
+    def _pad_addr(addr: str) -> bytes:
+        return bytes.fromhex(addr[2:].lower().zfill(64))
+
+    # ABI-encode the 7 exactInputSingle params (32 bytes each):
+    #   tokenIn, tokenOut, fee (uint24), recipient (address),
+    #   amountIn, amountOutMinimum, sqrtPriceLimitX96
     params = (
-        bytes.fromhex(token_in[2:].lower().zfill(64)) +
-        bytes.fromhex(token_out[2:].lower().zfill(64)) +
-        fee.to_bytes(32, "big") +
-        amount_in.to_bytes(32, "big")
+        _pad_addr(token_in)
+        + _pad_addr(token_out)
+        + fee.to_bytes(32, "big")
+        + _pad_addr("0x0000000000000000000000000000000000000000")  # recipient
+        + amount_in.to_bytes(32, "big")
+        + (0).to_bytes(32, "big")  # amountOutMinimum
+        + (0).to_bytes(32, "big")  # sqrtPriceLimitX96
     )
-    
-    return selector + params
+
+    return selector + params  # 4 + 224 = 228 bytes
 
 
 # ============================================================
@@ -268,12 +277,26 @@ OP_GAS_PRICE_ORACLE_ABI = [
 DEFAULT_OP_L1_FEE_WEI = 5_000_000_000_000  # ~0.000005 ETH ≈ $0.01 @ ETH=$2k
 
 
+# Representative swap calldata for L1 fee estimation (228 bytes).
+# Pre-built once at import time to avoid rebuilding per call.
+_REPRESENTATIVE_SWAP_CALLDATA: bytes = create_sample_swap_calldata(
+    token_in="0x4200000000000000000000000000000000000006",   # WETH on Base
+    token_out="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
+    amount_in=10 ** 17,  # 0.1 WETH
+    fee=500,
+)
+
+
 def estimate_op_l1_fee_onchain(
     w3,  # Web3 instance connected to Base/OP-Stack
     calldata: bytes = b"",
 ) -> Optional[int]:
     """
     Query OP-Stack GasPriceOracle for live L1 data fee.
+
+    Uses the actual transaction calldata (or a representative 228-byte
+    swap calldata) to call GasPriceOracle.getL1Fee(bytes) — this is
+    the exact fee the L1 data poster would charge for this transaction.
 
     Args:
         w3: Web3 instance connected to Base or another OP-Stack chain
@@ -288,8 +311,9 @@ def estimate_op_l1_fee_onchain(
             abi=OP_GAS_PRICE_ORACLE_ABI,
         )
         if not calldata:
-            # Use representative swap calldata for estimation
-            calldata = b"\x00" * 196  # typical swap tx length
+            # Use representative swap calldata (228 bytes, SwapRouter02
+            # exactInputSingle) — matches actual Base backrun tx size.
+            calldata = _REPRESENTATIVE_SWAP_CALLDATA
         l1_fee_wei = oracle.functions.getL1Fee(calldata).call()
         logger.debug("OP-Stack GasPriceOracle L1 fee: %d wei", l1_fee_wei)
         return l1_fee_wei
@@ -371,3 +395,34 @@ def get_l1_fee_bps(
         return 0.0
     l1_cost_wei, _source = get_l1_cost_for_chain(w3, chain, calldata)
     return (l1_cost_wei / trade_size_wei) * 10_000
+
+
+def get_l1_fee_wei(
+    chain: str = "base",
+    calldata: bytes = b"",
+) -> int:
+    """Return L1 data fee in wei for a transaction on the given chain.
+
+    Convenience wrapper around ``get_l1_cost_for_chain`` that:
+    * For Base / OP-Stack: calls GasPriceOracle.getL1Fee via public RPC
+      fallback when no w3 is provided.  Uses representative swap calldata
+      when ``calldata`` is empty.
+    * For other chains: returns 0 (no L1 data fee concept).
+    * On any failure: returns ``DEFAULT_OP_L1_FEE_WEI`` for OP-Stack or 0.
+
+    This is the entry point for the execution gate to get an accurate,
+    cached L1 fee once per gate call rather than per candidate.
+
+    Args:
+        chain: Chain name (\"base\", \"optimism\", etc.)
+        calldata: Optional actual transaction calldata; falls back to
+            the representative 228-byte swap calldata when empty.
+
+    Returns:
+        L1 fee in wei (0 for non-OP-Stack chains).
+    """
+    _chain_lower = chain.lower().replace("_one", "").replace("_", "")
+    if _chain_lower not in ("base", "optimism"):
+        return 0
+    fee_wei, _ = get_l1_cost_for_chain(w3=None, chain=chain, calldata=calldata)
+    return int(fee_wei) if fee_wei else 0

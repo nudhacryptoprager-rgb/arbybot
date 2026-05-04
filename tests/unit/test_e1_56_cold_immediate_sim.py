@@ -475,3 +475,174 @@ def test_e1_56_diagnostic_counters_pre_sim_skip_and_revert(monkeypatch) -> None:
     assert counters["cold_immediate_pre_sim_skip"] == 1
     assert counters["cold_immediate_sim_revert"] == 1
     assert counters["cold_immediate_guard_passed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# E1.57 fix steps #1/#2: Canonicalization path tests
+# ---------------------------------------------------------------------------
+
+def test_e1_57_roundtrip_counters_in_cold_immediate_counters(monkeypatch) -> None:
+    """E1.57: queue_cold_executable_for_sim must expose roundtrip counters from gate."""
+    monkeypatch.setenv("ARBY_COLD_IMMEDIATE_SIM", "1")
+    monkeypatch.setenv("ARBY_COLD_IMMEDIATE_MIN_NET_BPS", "0")
+    from m7.orderflow.cold_immediate_sim import queue_cold_executable_for_sim
+
+    bridge = {
+        "cold_executable": [
+            {"pool_address": "0xabc", "net_bps": 200,
+             "token_in": "WETH", "token_out": "USDC"},
+        ],
+    }
+
+    mock_gate = MagicMock(
+        sim_attempted=1,
+        sim_passed=1,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=1,
+        roundtrip_profitable_count=1,
+    )
+    with patch(
+        "m7.orderflow.execution_gate.run_execution_gate",
+        return_value=mock_gate,
+    ):
+        returned_gate, counters = queue_cold_executable_for_sim(bridge, chain="base")
+
+    # The gate object is returned; roundtrip counts accessible via attributes
+    assert returned_gate is not None
+    assert getattr(returned_gate, "roundtrip_attempted", 0) == 1
+    assert getattr(returned_gate, "roundtrip_profitable_count", 0) == 1
+
+
+def test_e1_57_hot_rollup_ci_roundtrip_merges_into_canonical_total(tmp_path, monkeypatch) -> None:
+    """E1.57: _update_hot_rollup must merge cold_immediate roundtrip into roundtrip_profitable_total."""
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+    # Pre-populate rollup with CI profitable sims but zero roundtrip
+    initial = {
+        "cold_immediate_sim_profitable_total": 5,
+        "cold_immediate_sim_passed_total": 5,
+        "roundtrip_profitable_total": 0,
+        "roundtrip_attempted_total": 0,
+    }
+    with open(rollup_path, "w") as f:
+        json.dump(initial, f)
+
+    monkeypatch.setattr(_rio_mod, "_HOT_ROLLUP_PATH", rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_profitable_count=0,
+    )
+
+    extra_counts = {
+        "cold_immediate_roundtrip_attempted": 1,
+        "cold_immediate_roundtrip_profitable": 1,  # CI roundtrip passed!
+    }
+
+    _update_hot_rollup(
+        0, [], [], {},
+        gate_result=mock_gate,
+        extra_signal_counts=extra_counts,
+    )
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    # CI roundtrip must increment the canonical total
+    assert rollup.get("roundtrip_profitable_total", 0) >= 1
+    assert rollup.get("roundtrip_attempted_total", 0) >= 1
+    assert rollup.get("cold_immediate_roundtrip_profitable_total", 0) == 1
+    assert rollup.get("cold_immediate_roundtrip_attempted_total", 0) == 1
+
+
+def test_e1_57_waiting_canonicalization_cleared_when_ci_roundtrip_present(tmp_path, monkeypatch) -> None:
+    """E1.57: flag clears when cold_immediate_roundtrip_profitable_total > 0."""
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+    initial = {
+        "cold_immediate_sim_profitable_total": 10,
+        "cold_immediate_roundtrip_profitable_total": 0,
+        "roundtrip_profitable_total": 0,
+        "cold_immediate_profitable_waiting_canonicalization": True,
+    }
+    with open(rollup_path, "w") as f:
+        json.dump(initial, f)
+
+    monkeypatch.setattr(_rio_mod, "_HOT_ROLLUP_PATH", rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_profitable_count=0,
+    )
+    extra_counts = {
+        "cold_immediate_roundtrip_profitable": 1,
+        "cold_immediate_roundtrip_attempted": 1,
+    }
+
+    _update_hot_rollup(
+        0, [], [], {},
+        gate_result=mock_gate,
+        extra_signal_counts=extra_counts,
+    )
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    assert "cold_immediate_profitable_waiting_canonicalization" not in rollup
+
+
+def test_e1_57_waiting_canonicalization_remains_when_no_ci_roundtrip(tmp_path, monkeypatch) -> None:
+    """E1.57: flag stays when CI has profitable sim but no roundtrip success yet."""
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / "m7_hot_rollup_latest.json")
+    initial = {
+        "cold_immediate_sim_profitable_total": 10,
+        "cold_immediate_roundtrip_profitable_total": 0,
+        "roundtrip_profitable_total": 0,
+    }
+    with open(rollup_path, "w") as f:
+        json.dump(initial, f)
+
+    monkeypatch.setattr(_rio_mod, "_HOT_ROLLUP_PATH", rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_profitable_count=0,
+    )
+    extra_counts = {
+        "cold_immediate_sim_profitable": 3,
+        "cold_immediate_roundtrip_profitable": 0,
+    }
+
+    _update_hot_rollup(
+        0, [], [], {},
+        gate_result=mock_gate,
+        extra_signal_counts=extra_counts,
+    )
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    assert rollup.get("cold_immediate_profitable_waiting_canonicalization") is True

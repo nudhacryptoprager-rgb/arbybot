@@ -157,6 +157,7 @@ def check_profit_guard(
 def annotate_profit_guard_results(
     results: list,
     chain: str = "arbitrum_one",
+    l1_fee_wei: int = 0,
 ) -> list:
     """Run profit guard on a list of scored results and annotate in-place.
 
@@ -164,6 +165,14 @@ def annotate_profit_guard_results(
     _run_profit_guard_on_results() pattern. Sets
     result.profit_guard_passed on each BackrunResult that has
     the attribute.
+
+    Args:
+        results: List of BackrunResult objects to check.
+        chain: Chain name for gas estimation.
+        l1_fee_wei: Absolute L1 data fee in wei (OP-Stack only).
+            Converted per-candidate to bps using the candidate's
+            trade size so that the fixed L1 cost is correctly
+            normalized regardless of trade size.
 
     Returns list of (result, ProfitGuardResult) for candidates
     that pass the guard.
@@ -206,10 +215,19 @@ def annotate_profit_guard_results(
             continue
         pipeline_ms = (r.get("quote_pipeline_latency_ms") if isinstance(r, dict)
                        else getattr(r, "quote_pipeline_latency_ms", None))
+        # E1.57: Per-candidate L1 fee bps.  The L1 fee is a fixed absolute cost
+        # (independent of trade size), so we convert it to bps per candidate.
+        # l1_fee_bps = (l1_fee_wei / backrun_size_wei) * 10000.
+        # estimate_gas_cost then computes: l1_cost_wei = size * l1_fee_bps / 10000
+        # = size * (l1_fee_wei / size) * 10000 / 10000 = l1_fee_wei.  Correct.
+        _cand_l1_bps = 0.0
+        if l1_fee_wei > 0 and size > 0:
+            _cand_l1_bps = (l1_fee_wei / size) * 10_000
         guard = check_profit_guard(
             buy_amount_wei=buy, sell_amount_wei=sell,
             backrun_size_wei=size, pipeline_latency_ms=pipeline_ms,
             chain=chain,
+            l1_fee_bps=_cand_l1_bps,
         )
         if hasattr(r, "profit_guard_passed"):
             r.profit_guard_passed = guard.passed

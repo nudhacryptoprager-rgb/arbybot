@@ -1168,6 +1168,12 @@ def run_loop(cli_args) -> None:
                     "cold_immediate_sim_attempted": 0,
                     "cold_immediate_sim_passed": 0,
                     "cold_immediate_sim_profitable": 0,
+                    # E1.57 fix steps #1/#2: roundtrip canonicalization counters.
+                    # When a cold_immediate candidate passes the full buy+sell
+                    # round-trip simulation, it is canonical evidence of
+                    # profitability and should contribute to roundtrip_profitable_total.
+                    "cold_immediate_roundtrip_attempted": 0,
+                    "cold_immediate_roundtrip_profitable": 0,
                 }
                 try:
                     from m7.orderflow.cold_immediate_sim import (
@@ -1181,12 +1187,23 @@ def run_loop(cli_args) -> None:
                             profile=profile,
                         )
                         if _ci_gate is not None:
+                            # E1.57 fix steps #1/#2: extract roundtrip counters
+                            # from the cold_immediate gate result so that the
+                            # hot_runtime_artifacts rollup can canonicalize them.
+                            _cold_immediate_counters["cold_immediate_roundtrip_attempted"] = (
+                                int(getattr(_ci_gate, "roundtrip_attempted", 0) or 0)
+                            )
+                            _cold_immediate_counters["cold_immediate_roundtrip_profitable"] = (
+                                int(getattr(_ci_gate, "roundtrip_profitable_count", 0) or 0)
+                            )
                             logger.info(
-                                "cold_immediate_sim: input=%d attempted=%d passed=%d profitable=%d",
+                                "cold_immediate_sim: input=%d attempted=%d passed=%d profitable=%d rt_att=%d rt_prof=%d",
                                 _cold_immediate_counters["cold_immediate_sim_input_count"],
                                 _cold_immediate_counters["cold_immediate_sim_attempted"],
                                 _cold_immediate_counters["cold_immediate_sim_passed"],
                                 _cold_immediate_counters["cold_immediate_sim_profitable"],
+                                _cold_immediate_counters["cold_immediate_roundtrip_attempted"],
+                                _cold_immediate_counters["cold_immediate_roundtrip_profitable"],
                             )
                             # Surface counts in the hot artifact's signal_counts
                             # so the rolling rollup can aggregate over windows.

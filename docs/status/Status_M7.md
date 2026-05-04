@@ -1,4 +1,20 @@
-﻿# Status: M7 (Triangular Feasibility)
+# Status: M7 (Triangular Feasibility)
+
+**Status**: **E1.57 fix steps #1+#2+#8 LANDED (offline-only session).** Canonicalization path CLOSED: `cold_immediate_roundtrip_attempted/profitable` counters extracted from `_ci_gate` in `loop_runner.py`; merged into `roundtrip_profitable_total` + `roundtrip_attempted_total` in `hot_runtime_artifacts.py`; `cold_immediate_profitable_waiting_canonicalization` cleared when `cold_immediate_roundtrip_profitable_total > 0`. L1 fee CLOSED (Step 8): `create_sample_swap_calldata` now returns proper 228-byte SwapRouter02 exactInputSingle calldata; `estimate_op_l1_fee_onchain` uses representative WETH→USDC calldata (not null bytes); `get_l1_fee_wei()` convenience function added; `annotate_profit_guard_results` accepts `l1_fee_wei` and converts to per-candidate bps before passing to `check_profit_guard`; `run_execution_gate` computes L1 fee once per gate call for Base/OP-Stack chains. Full suite: **4572 PASS / 6 skipped** (+13 vs 4559). `check_repo_safety.py` PASS 20/20, 0 warnings. Next: 1h verification soak to confirm `cold_immediate_profitable_waiting_canonicalization` clears when CI roundtrip succeeds, no `UNSUPPORTED_FEE_TIER` in Discovery histogram, `cold_immediate_sim_revert_samples_recent` populated. docs_reread_confirmed: true.
+
+## E1.56 fix steps #3+#4+#6 — prior status entry below.
+
+**Status**: **E1.56 fix steps #3+#4+#6 LANDED (offline-only session).** Discovery fee tail CLOSED: fee 7500 added to all 3 `_AERODROME_CL_KNOWN` sets; L1480 pre-sim classification now **unconditional** (no `get_dex_config` dependency → eliminates intermittent `UNSUPPORTED_FEE_TIER:7500/9500/1570` in Discovery subprocess). New rollup fields: `cold_immediate_profitable_waiting_canonicalization=True` (fix step #3 — separate short boolean alongside `cold_immediate_profitable_not_canonical`) and `cold_immediate_sim_revert_samples_recent` list (fix step #6 — last 30 pair/fee/reason samples across windows). Temp patch scripts deleted. Full suite: **4559 PASS / 6 skipped** (+5 vs 4554). `check_repo_safety.py` PASS 20/20. Next: 1h verification soak to confirm no `UNSUPPORTED_FEE_TIER` in Discovery histogram + revert samples populated in rollup. docs_reread_confirmed: true.
+
+## E1.56 2h soak BREAKTHROUGH — prior status entry below.
+
+**Status**: **E1.56 Step 1 — 2h soak BREAKTHROUGH (2026-05-04T13:23:42Z → 15:23:45Z, --m7-cold-pause 3).** 5/5 alive, 0 crashes. **MAIN HOT** (65 windows): `cold_immediate_sim_input_total=242`, `attempted=190`, `guard_passed=172`, `pre_sim_skip=15`, `revert=87`, `sim_passed_total=70` ✓, `sim_profitable_total=70` ✓, `cold_immediate_profitable_not_canonical=True` ✓ (reviewer verdict ACTIVE). **DISCOVERY** (63 windows): `input=290`, `attempted=240`, `passed=29`, `profitable=29`, verdict ACTIVE. `roundtrip_profitable_total=0` (canonical hot WS path) — gas blocker on hot WS (919/919 matched_then_gas_rejected). 9500 fee classified correctly (no UNKNOWN errors). 1570 fee shows as `SLIPSTREAM_PENDING_LOOKUP:1570` (4 occurrences — proper Slipstream path, not UNSUPPORTED). Cold lane found profitable pairs continuously: TIG/WETH (+1489 bps), PING/WETH (+462 bps), BSHIB/WETH (+682 bps), SHRMN/WETH (+342 bps), TN100x/WETH (+40 bps). Step 1 + fix steps #4 + #8 fully validated in production rollups. docs_reread_confirmed: true.
+
+## Next steps (historical — pre-E1.45)
+
+1. M7 Arbitrum mainline FROZEN. Phases 1-4.5 DONE (E1.17-E1.26). Phase 5 (sim revert diagnosis) and Phase 6 (Flashblocks) superseded by E1.45+ cadence improvements. Triangular arb CLOSED (-14.16 bps).
+
+## E1.56 2h soak BREAKTHROUGH — prior status entry below.
 
 **Status**: **E1.56 Step 1 — 2h soak BREAKTHROUGH (2026-05-04T13:23:42Z → 15:23:45Z, --m7-cold-pause 3).** 5/5 alive, 0 crashes. **MAIN HOT** (65 windows): `cold_immediate_sim_input_total=242`, `attempted=190`, `guard_passed=172`, `pre_sim_skip=15`, `revert=87`, `sim_passed_total=70` ✓, `sim_profitable_total=70` ✓, `cold_immediate_profitable_not_canonical=True` ✓ (reviewer verdict ACTIVE). **DISCOVERY** (63 windows): `input=290`, `attempted=240`, `passed=29`, `profitable=29`, verdict ACTIVE. `roundtrip_profitable_total=0` (canonical hot WS path) — gas blocker on hot WS (919/919 matched_then_gas_rejected). 9500 fee classified correctly (no UNKNOWN errors). 1570 fee shows as `SLIPSTREAM_PENDING_LOOKUP:1570` (4 occurrences — proper Slipstream path, not UNSUPPORTED). Cold lane found profitable pairs continuously: TIG/WETH (+1489 bps), PING/WETH (+462 bps), BSHIB/WETH (+682 bps), SHRMN/WETH (+342 bps), TN100x/WETH (+40 bps). Step 1 + fix steps #4 + #8 fully validated in production rollups. docs_reread_confirmed: true.
 
@@ -266,34 +282,5 @@ py -3.11 scripts/start_nonstop_runtime.py --hours 0.17 --no-m4 --dashboard-port 
 ## Known Blockers
 
 1. **EVENT-SOURCE CEILING вЂ” FROZEN (Arbitrum only)** вЂ” 47s proof confirms `event_source_absence`. Does NOT apply to Base.
-2. **GAS_EXCEEDS_GROSS вЂ” MAJORITY BLOCKER (Base)** вЂ” ~7% viable rate. Near-exec frontier at -2.20 bps.
-3. **~~Submit-stage sim = 0 in canonical rolling~~ в†’ RESOLVED (E1.14)** вЂ” sim_passed=1 in production rolling.
-4. **~~dRPC HTTP 429 INTERMITTENT (Base)~~ в†’ RESOLVED (E1.19)** вЂ” Rate limit root causes fixed: stale threshold 10в†’150, prewarm skip, max_pairs=10 cap, V2 timeout. Public RPC soak 10/10 with 0 rate limit errors.
-5. **~~SIGNING_NOT_READY~~ в†’ RESOLVED (E1.16)** вЂ” rpc_fork backend + paper signing available. Requires env vars: `ARBY_SIM_BACKEND=rpc_fork`, `ARBY_PAPER_SIGNING=1`.
-6. **~~TOKEN_ADDRESS_UNKNOWN (12 sim errors)~~ в†’ RESOLVED (E1.17)** вЂ” Address prefix resolution + improved token fallback paths.
-7. **~~DEX_CONFIG_MISSING (6 sim errors)~~ в†’ RESOLVED (E1.17)** вЂ” DEX fallback reordered, pre-E1.16 errors in rolling histogram.
-8. **~~ve33 ABI mismatch (1 sim error)~~ в†’ RESOLVED (E1.18)** вЂ” Velodrome calldata encoder implemented. Aerodrome pools now use correct `swapExactTokensForTokens` ABI.
-9. **~~ve33 pricing broken (0% bridge hit)~~ в†’ RESOLVED (E1.24)** вЂ” ve33 fell through to V3 math. Fixed: routed to V2 constant-product with ve33 fee model. Bridge hit rate 46.9%.
-10. **~~ve33 coverage broken (73% TRULY_INACTIVE)~~ в†’ RESOLVED (E1.24)** вЂ” No quoter for ve33 в†’ 0 buy/sell venues. Fixed: local pricing counts as quote capability.
-11. **~~Aerodrome stable sim reverts~~ в†’ RESOLVED (E1.24)** вЂ” Hardcoded `stable=False` в†’ fee field detection.
-12. **~~PTT router mismatch (dex=ptt_direct)~~ в†’ RESOLVED (E1.26)** вЂ” Feeв†’DEX mapping + factory() multicall + execution_gate fee preference. DISC sim_passed=1.
-13. **~~PROD coverage gap (3 pairs, 80.6% miss)~~ в†’ PARTIALLY RESOLVED (E1.26)** вЂ” PREWARM 3в†’7 pairs, miss 80.6%в†’47.6%. PROD positive still 0 вЂ” production pairs don't find spread.
-14. **DISC sim revert rate 83% (5/6)** вЂ” 5 out of 6 sim attempts revert. Factory multicall may improve. Needs re-soak.
-15. **Triangular arb NOT viable** вЂ” Baseline -14.16 bps. CLOSED.
-16. **Scorer-vs-sim gap (E1.28 finding)** вЂ” AERO/WETH scored +20334 bps, real round-trip -10000 bps (1 WETH в†’ 32 wei output). 5/5 samples. Root cause unknown; need venue/fee + reserves in sample log and per-size sweep.
 
-Resolved: HOT LANE NOT WRITING (E1.7), MARKET-WINDOW SCARCITY (E1.10), ALCHEMY 429 (E1.10), Dashboard dead (E1.8), Chain provenance (E1.8.1), Submit-stage sim=0 (E1.14), SIGNING_NOT_READY (E1.16), TOKEN_ADDRESS_UNKNOWN (E1.17), DEX_CONFIG_MISSING (E1.17), ve33 ABI mismatch (E1.18), dRPC 429 INTERMITTENT (E1.19), ve33 pricing broken (E1.24), ve33 coverage broken (E1.24), Aerodrome stable sim (E1.24), PTT router mismatch (E1.26), PROD coverage gap partial (E1.26).
-
-## Next steps
-
-1. **M7 Arbitrum mainline FROZEN.** No further Arbitrum M7 changes.
-2. **Phase 1 DONE (E1.17)**: Config coverage gaps resolved. rpc_fork switch available via env vars.
-3. **Phase 2 DONE (E1.18)**: ve33 calldata encoder implemented. All known sim error classes resolved.
-4. **Phase 2.5 DONE (E1.19)**: Rate limit fix вЂ” public RPC soak proven (10/10 iters, 0 errors).
-5. **Phase 3 DONE (E1.24)**: ve33 pricing + coverage + gas floor + MIN_EVENT_SIZE. 1h soak: 46.9% bridge, 40 scored, 0 restarts.
-6. **Phase 3.5 DONE (E1.26)**: Router mismatch fix + PROD coverage 3в†’7. DISC sim_passed=1 + submit_ready=1 (first ever).
-7. **Phase 4: Re-soak with factory multicall**: Factory matching added but NOT in current soak. Expected: better sim pass rate (correct DEXв†’routerв†’ABI chain).
-8. **Phase 4.5: DISCв†’PROD promotion**: Migrate successful DISC pairs (AERO/USDC, cbBTC/USDC) to production profile.
-9. **Phase 5: sim revert diagnosis**: Why 5/6 DISC sim attempts revert? Stale state? Wrong token direction? Slippage?
-10. **Phase 6: Flashblocks integration**: Sub-block delivery for latency edge. `mainnet-preconf.base.org` enabled via env var.
-11. **Triangular arb CLOSED** (-14.16 bps baseline, not viable).
+Resolved (historical E1.7-E1.26): HOT LANE NOT WRITING, MARKET-WINDOW SCARCITY, ALCHEMY 429, Dashboard dead, Chain provenance, Submit-stage sim=0, SIGNING_NOT_READY, TOKEN_ADDRESS_UNKNOWN, DEX_CONFIG_MISSING, ve33 ABI mismatch, dRPC 429 INTERMITTENT, ve33 pricing broken, ve33 coverage broken, Aerodrome stable sim, PTT router mismatch, PROD coverage gap partial, DISC sim revert 83%, Scorer-vs-sim gap. Triangular arb CLOSED (-14.16 bps).

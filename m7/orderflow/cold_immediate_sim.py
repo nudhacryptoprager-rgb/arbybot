@@ -265,6 +265,21 @@ def queue_cold_executable_for_sim(
     counters["cold_immediate_sim_revert"] = sum(
         1 for e in sim_errors if isinstance(e, str) and e.startswith("REVERT:")
     )
+    # E1.56 fix step #6: revert samples for reviewer diagnosis (pair/fee/reason).
+    # Sourced from gate.sim_failed_samples which tracks detailed info per failed sim.
+    _failed_samples = getattr(gate, "sim_failed_samples", []) or []
+    _revert_errors = [e for e in sim_errors if isinstance(e, str) and e.startswith("REVERT:")]
+    counters["cold_immediate_sim_revert_samples"] = [
+        {
+            "pair": s.get("pair"),
+            "buy_fee": s.get("buy_fee"),
+            "sell_fee": s.get("sell_fee"),
+            "amount_in_wei": s.get("amount_in_wei"),
+            "block_lag": s.get("block_lag_at_sim"),
+            "reason": _revert_errors[i] if i < len(_revert_errors) else "REVERT:unknown",
+        }
+        for i, s in enumerate(_failed_samples[:10])  # at most 10 samples per window
+    ]
     # profit_guard_rejected = guard_passed_input_size - guard_passed_count
     # guard_passed input size = len(synthetic) passed into gate.
     # Approximate: gate.sim_attempted + guard_rejected = guard_passed_list expected items.
