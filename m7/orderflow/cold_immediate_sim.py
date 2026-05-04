@@ -203,6 +203,11 @@ def queue_cold_executable_for_sim(
         "cold_immediate_sim_attempted": 0,
         "cold_immediate_sim_passed": 0,
         "cold_immediate_sim_profitable": 0,
+        # issue #3: detailed diagnostics for why attempted candidates fail
+        "cold_immediate_guard_passed": 0,
+        "cold_immediate_profit_guard_rejected": 0,
+        "cold_immediate_pre_sim_skip": 0,
+        "cold_immediate_sim_revert": 0,
     }
     if not is_enabled():
         return None, counters
@@ -249,12 +254,38 @@ def queue_cold_executable_for_sim(
 
     counters["cold_immediate_sim_attempted"] = int(getattr(gate, "sim_attempted", 0) or 0)
     counters["cold_immediate_sim_passed"] = int(getattr(gate, "sim_passed", 0) or 0)
+    # issue #3: guard_passed count and profit_guard_rejected count
+    guard_passed_list = getattr(gate, "guard_passed", []) or []
+    counters["cold_immediate_guard_passed"] = len(guard_passed_list)
+    # sim_errors contains PRE_SIM_SKIP:* and REVERT:* reasons
+    sim_errors = getattr(gate, "sim_errors", []) or []
+    counters["cold_immediate_pre_sim_skip"] = sum(
+        1 for e in sim_errors if isinstance(e, str) and e.startswith("PRE_SIM_SKIP:")
+    )
+    counters["cold_immediate_sim_revert"] = sum(
+        1 for e in sim_errors if isinstance(e, str) and e.startswith("REVERT:")
+    )
+    # profit_guard_rejected = guard_passed_input_size - guard_passed_count
+    # guard_passed input size = len(synthetic) passed into gate.
+    # Approximate: gate.sim_attempted + guard_rejected = guard_passed_list expected items.
+    # Use sim_errors count that doesn't start with PRE_SIM_SKIP/REVERT as guard rejects.
+    # Simpler: total synthetic - guard_passed = profit_guard_rejected
+    # We track via gate field if available, else compute from sim_errors.
+    _guard_rej = sum(
+        1 for e in sim_errors
+        if isinstance(e, str)
+        and not e.startswith("PRE_SIM_SKIP:")
+        and not e.startswith("REVERT:")
+        and not e.startswith("SIM_EXCEPTION:")
+        and "PROFIT_GUARD" in e
+    )
+    counters["cold_immediate_profit_guard_rejected"] = _guard_rej
     # `cold_immediate_sim_profitable` is a stricter signal: how many
     # synthetic candidates carry a positive post-sim net_bps after the
     # gate annotated them. Count from `guard_passed` so we walk the
     # admitted set only.
     profitable = 0
-    for r, _g in (getattr(gate, "guard_passed", []) or []):
+    for r, _g in guard_passed_list:
         try:
             net_post = getattr(r, "best_live_net_bps", None)
             if net_post is None:

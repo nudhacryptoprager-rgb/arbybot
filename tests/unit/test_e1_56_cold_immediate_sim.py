@@ -169,6 +169,7 @@ def test_e1_56_step1_counters_propagate_from_gate(monkeypatch) -> None:
         sim_passed=1,
         submit_ready=0,
         guard_passed=[(fake_r, None)],
+        sim_errors=[],
     )
     with patch(
         "m7.orderflow.execution_gate.run_execution_gate",
@@ -178,6 +179,10 @@ def test_e1_56_step1_counters_propagate_from_gate(monkeypatch) -> None:
     assert counters["cold_immediate_sim_attempted"] == 1
     assert counters["cold_immediate_sim_passed"] == 1
     assert counters["cold_immediate_sim_profitable"] == 1
+    # issue #3: diagnostic counters present
+    assert counters["cold_immediate_guard_passed"] == 1
+    assert counters["cold_immediate_pre_sim_skip"] == 0
+    assert counters["cold_immediate_sim_revert"] == 0
 
 
 def test_e1_56_step1_handles_gate_exception_gracefully(monkeypatch) -> None:
@@ -438,3 +443,35 @@ def test_e1_56_gross_pnl_fallback_from_net_bps(monkeypatch) -> None:
         f"gross_pnl_wei should be estimated from net_bps; got {res.gross_pnl_wei}"
     )
     assert res.gross_pnl_wei > 0, "gross_pnl_wei must be > 0 so profit_guard passes"
+
+
+def test_e1_56_diagnostic_counters_pre_sim_skip_and_revert(monkeypatch) -> None:
+    """issue #3: cold_immediate_pre_sim_skip and cold_immediate_sim_revert
+    counters are populated from gate.sim_errors."""
+    monkeypatch.setenv("ARBY_COLD_IMMEDIATE_SIM", "1")
+    monkeypatch.setenv("ARBY_COLD_IMMEDIATE_MIN_NET_BPS", "0")
+    from m7.orderflow.cold_immediate_sim import queue_cold_executable_for_sim
+
+    bridge = {
+        "cold_executable": [
+            {"pool_address": "0xa", "net_bps": 100,
+             "token_in": "T", "token_out": "U"},
+        ],
+    }
+    mock_gate = MagicMock(
+        sim_attempted=2,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[
+            "PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:1570",
+            "REVERT:STF",
+        ],
+    )
+    with patch(
+        "m7.orderflow.execution_gate.run_execution_gate",
+        return_value=mock_gate,
+    ):
+        _gate, counters = queue_cold_executable_for_sim(bridge, chain="base")
+    assert counters["cold_immediate_pre_sim_skip"] == 1
+    assert counters["cold_immediate_sim_revert"] == 1
+    assert counters["cold_immediate_guard_passed"] == 0

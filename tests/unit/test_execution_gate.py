@@ -704,7 +704,7 @@ class TestBuildSimTxParams:
             _build_sim_tx_params,
         )
 
-        for fee in (150, 445, 600, 2105, 2600, 2655, 3024):
+        for fee in (150, 445, 600, 1570, 2105, 2600, 2655, 3024):
             br = self._make_result(
                 best_buy_venue="0x" + "a" * 40,  # opaque pool address
                 best_buy_fee=fee,

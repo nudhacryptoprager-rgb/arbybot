@@ -1573,6 +1573,11 @@ def _update_hot_rollup(
             ("cold_immediate_sim_attempted", "cold_immediate_sim_attempted_total"),
             ("cold_immediate_sim_passed", "cold_immediate_sim_passed_total"),
             ("cold_immediate_sim_profitable", "cold_immediate_sim_profitable_total"),
+            # issue #3: detailed diagnostics
+            ("cold_immediate_guard_passed", "cold_immediate_guard_passed_total"),
+            ("cold_immediate_profit_guard_rejected", "cold_immediate_profit_guard_rejected_total"),
+            ("cold_immediate_pre_sim_skip", "cold_immediate_pre_sim_skip_total"),
+            ("cold_immediate_sim_revert", "cold_immediate_sim_revert_total"),
         ):
             rollup[_ci_total_k] = int(rollup.get(_ci_total_k, 0) or 0) + int(
                 _ci_sc.get(_ci_k, 0) or 0
