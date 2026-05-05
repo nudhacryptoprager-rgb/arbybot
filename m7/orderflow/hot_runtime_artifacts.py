@@ -1581,6 +1581,10 @@ def _update_hot_rollup(
             # E1.57 fix steps #1/#2: roundtrip canonicalization
             ("cold_immediate_roundtrip_attempted", "cold_immediate_roundtrip_attempted_total"),
             ("cold_immediate_roundtrip_profitable", "cold_immediate_roundtrip_profitable_total"),
+            # E1.58 fix step #1 (runtime): canonicalize CI submit_ready so that
+            # ARBY_PAPER_SIGNING=1 produces a non-zero submit_ready_total when
+            # the cold_immediate path is the only producer of profitable sims.
+            ("cold_immediate_submit_ready", "cold_immediate_submit_ready_total"),
         ):
             rollup[_ci_total_k] = int(rollup.get(_ci_total_k, 0) or 0) + int(
                 _ci_sc.get(_ci_k, 0) or 0
@@ -1606,6 +1610,41 @@ def _update_hot_rollup(
             rollup["roundtrip_success_total"] = (
                 int(rollup.get("roundtrip_success_total", 0) or 0) + _ci_rt_prof
             )
+        # E1.58 fix step #8: drain CI roundtrip bps into the cumulative buffer
+        # so roundtrip_profit_bps_best/worst/median are no longer null when the
+        # cold_immediate canonical path is the only producer of profitable
+        # roundtrips. Strictly additive — main gate values (handled above) are
+        # already merged via getattr(gate_result, "roundtrip_profit_bps_values").
+        _ci_rt_bps_vals = _ci_sc.get("cold_immediate_roundtrip_profit_bps_values") or []
+        # E1.58 fix step #1 (runtime): also bump submit_ready_total by the CI
+        # gate's submit_ready count so ARBY_PAPER_SIGNING=1 actually surfaces
+        # in the canonical metric the reviewer reads.
+        _ci_submit_ready = int(_ci_sc.get("cold_immediate_submit_ready", 0) or 0)
+        if _ci_submit_ready > 0:
+            rollup["submit_ready_total"] = (
+                int(rollup.get("submit_ready_total", 0) or 0) + _ci_submit_ready
+            )
+        if _ci_rt_bps_vals:
+            _all_rt_ci = rollup.get("_roundtrip_profit_bps_all", []) + list(_ci_rt_bps_vals)
+            if len(_all_rt_ci) > 500:
+                _all_rt_ci = _all_rt_ci[-500:]
+            rollup["_roundtrip_profit_bps_all"] = _all_rt_ci
+            # Re-derive aggregates immediately from the updated buffer so the
+            # rollup carries fresh best/worst/median in the same window.
+            try:
+                _floor_ci = float(os.environ.get("ARBY_RT_BPS_FLOOR", "-1000"))
+            except (TypeError, ValueError):
+                _floor_ci = -1000.0
+            _clean_ci = [v for v in _all_rt_ci if isinstance(v, (int, float)) and v >= _floor_ci]
+            if _clean_ci:
+                rollup["roundtrip_profit_bps_best"] = round(max(_clean_ci), 4)
+                rollup["roundtrip_profit_bps_worst"] = round(min(_clean_ci), 4)
+                rollup["roundtrip_profit_bps_median"] = round(
+                    sorted(_clean_ci)[len(_clean_ci) // 2], 4
+                )
+                rollup["roundtrip_profit_bps_outliers_dropped"] = (
+                    len(_all_rt_ci) - len(_clean_ci)
+                )
         # E1.56 fix step #6: accumulate cold_immediate revert samples (pair/fee/reason)
         # sourced from cold_immediate_sim.py via signal_counts["cold_immediate_sim_revert_samples"].
         _ci_revert_samples = _ci_sc.get("cold_immediate_sim_revert_samples") or []

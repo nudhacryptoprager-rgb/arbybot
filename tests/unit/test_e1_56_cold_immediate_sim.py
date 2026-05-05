@@ -733,3 +733,84 @@ def test_e1_57_fix4_l1_fee_fields_in_rollup(tmp_path, monkeypatch) -> None:
     assert rollup["l1_fee_calldata_len"] == 228
     assert rollup["l1_fee_calldata_kind"] == "swaprouter02_representative"
 
+def test_e1_58_fix8_ci_roundtrip_bps_into_buffer(tmp_path, monkeypatch) -> None:
+    '''E1.58 fix step 8: CI roundtrip bps from cold_immediate flow get drained
+    into _roundtrip_profit_bps_all so best/worst/median are no longer null.'''
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / 'm7_hot_rollup_latest.json')
+    with open(rollup_path, 'w') as f:
+        json.dump({}, f)
+
+    monkeypatch.setattr(_rio_mod, '_HOT_ROLLUP_PATH', rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_success=0,
+        roundtrip_profitable_count=0,
+        roundtrip_profit_bps_values=[],
+        roundtrip_errors=[],
+        sim_output_samples=[],
+    )
+
+    extra = {
+        'cold_immediate_roundtrip_attempted': 3,
+        'cold_immediate_roundtrip_profitable': 2,
+        'cold_immediate_roundtrip_profit_bps_values': [12.5, 8.25, -3.1],
+    }
+
+    _update_hot_rollup(0, [], [], {}, gate_result=mock_gate, extra_signal_counts=extra)
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    assert rollup['_roundtrip_profit_bps_all'] == [12.5, 8.25, -3.1]
+    assert rollup['roundtrip_profit_bps_best'] == 12.5
+    assert rollup['roundtrip_profit_bps_worst'] == -3.1
+    assert rollup['roundtrip_profit_bps_median'] == 8.25
+
+def test_e1_58_fix1_ci_submit_ready_into_total(tmp_path, monkeypatch) -> None:
+    '''E1.58 fix step #1 runtime: CI gate submit_ready accumulates into submit_ready_total.'''
+    import json
+    import m7.orderflow.runtime_io as _rio_mod
+    from m7.orderflow.hot_runtime_artifacts import _update_hot_rollup
+
+    rollup_path = str(tmp_path / 'm7_hot_rollup_latest.json')
+    with open(rollup_path, 'w') as f:
+        json.dump({}, f)
+
+    monkeypatch.setattr(_rio_mod, '_HOT_ROLLUP_PATH', rollup_path)
+
+    mock_gate = MagicMock(
+        sim_attempted=0,
+        sim_passed=0,
+        guard_passed=[],
+        sim_errors=[],
+        roundtrip_attempted=0,
+        roundtrip_success=0,
+        roundtrip_profitable_count=0,
+        roundtrip_profit_bps_values=[],
+        roundtrip_errors=[],
+        sim_output_samples=[],
+        submit_ready=0,
+    )
+
+    extra = {
+        'cold_immediate_submit_ready': 4,
+        'cold_immediate_roundtrip_attempted': 5,
+        'cold_immediate_roundtrip_profitable': 4,
+    }
+
+    _update_hot_rollup(0, [], [], {}, gate_result=mock_gate, extra_signal_counts=extra)
+
+    with open(rollup_path) as f:
+        rollup = json.load(f)
+
+    assert rollup['cold_immediate_submit_ready_total'] == 4
+    assert rollup['submit_ready_total'] == 4

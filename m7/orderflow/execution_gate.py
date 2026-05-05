@@ -1515,20 +1515,28 @@ def run_execution_gate(
 
     for r, g in gate.guard_passed:
         _fee_hint = getattr(r, "best_buy_fee", None)
-        if _fee_hint is not None and _fee_hint not in _ACCEPTED_FEES:
+        # E1.58 fix: normalize to int so string fees ("1570") compare correctly
+        # against the integer sets _ACCEPTED_FEES and _AERODROME_CL_KNOWN.
+        _fee_hint_int: Optional[int] = None
+        if _fee_hint is not None:
+            try:
+                _fee_hint_int = int(_fee_hint)
+            except (TypeError, ValueError):
+                _fee_hint_int = None
+        if _fee_hint_int is not None and _fee_hint_int not in _ACCEPTED_FEES:
             # Record in sim_errors (for histogram) but do NOT count as sim_attempted.
             # E1.35 P1.1 step 3: classify Aerodrome Slipstream fees under
             # SLIPSTREAM_PENDING_LOOKUP when adapter+config are verified.
-            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2655, 3024, 5000, 7500, 9500, 20000}
-            _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint}"
-            if _fee_hint in _AERODROME_CL_KNOWN:
+            _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2600, 2655, 3024, 5000, 7500, 9500, 20000}
+            _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint_int}"
+            if _fee_hint_int in _AERODROME_CL_KNOWN:
                 # E1.56 fix: unconditional routing for known Aerodrome CL fees.
                 # The config check was needed for calldata building (_build_sim_tx_params)
                 # but NOT for skip-bucket classification. Removing it eliminates
                 # intermittent UNSUPPORTED_FEE_TIER in the Discovery subprocess
                 # where the config import occasionally raises a non-(KeyError,
                 # ImportError) exception that was silently swallowing the slip_cfg.
-                _skip_key = f"PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP:{_fee_hint}"
+                _skip_key = f"PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP:{_fee_hint_int}"
             gate.sim_errors.append(_skip_key)
             if hasattr(r, "sim_attempted"):
                 r.sim_attempted = False

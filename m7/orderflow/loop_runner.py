@@ -1196,6 +1196,29 @@ def run_loop(cli_args) -> None:
                             _cold_immediate_counters["cold_immediate_roundtrip_profitable"] = (
                                 int(getattr(_ci_gate, "roundtrip_profitable_count", 0) or 0)
                             )
+                            # E1.58 fix step #8: surface CI roundtrip bps so the
+                            # rollup buffer (_roundtrip_profit_bps_all) gets samples
+                            # from the cold_immediate path. Without this the
+                            # best/worst/median values stay null even when the
+                            # CI roundtrip path produces profitable canonical results.
+                            _ci_rt_bps = list(
+                                getattr(_ci_gate, "roundtrip_profit_bps_values", []) or []
+                            )
+                            if _ci_rt_bps:
+                                _cold_immediate_counters[
+                                    "cold_immediate_roundtrip_profit_bps_values"
+                                ] = _ci_rt_bps
+                            # E1.58 fix step #1 (runtime): CI gate's submit_ready
+                            # was previously computed but ignored — main rollup
+                            # only consumed gate_result.submit_ready from the
+                            # main hot path. Surface CI submit_ready here so
+                            # ARBY_PAPER_SIGNING=1 actually drives
+                            # submit_ready_total > 0 when the CI roundtrip path
+                            # is the canonical producer of profitable, sim-passed
+                            # candidates.
+                            _cold_immediate_counters["cold_immediate_submit_ready"] = (
+                                int(getattr(_ci_gate, "submit_ready", 0) or 0)
+                            )
                             logger.info(
                                 "cold_immediate_sim: input=%d attempted=%d passed=%d profitable=%d rt_att=%d rt_prof=%d",
                                 _cold_immediate_counters["cold_immediate_sim_input_count"],
