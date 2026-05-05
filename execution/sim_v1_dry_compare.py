@@ -179,6 +179,13 @@ def stats() -> dict:
     else:
         out["bps_delta_abs_mean"] = None
     out["recent_disagree_samples"] = list(_RECENT_DISAGREE)
+    # Step 7: explicit pending/latest sim state mode fields so reviewer
+    # can confirm which chain-state each backend targets.
+    # rpc_fork uses flashblocks pending-state when ARBY_FLASHBLOCKS_SIM=1,
+    # otherwise it forks at the latest committed block.
+    _flashblocks = os.environ.get("ARBY_FLASHBLOCKS_SIM", "0") == "1"
+    out["rpc_fork_state_mode"] = "pending" if _flashblocks else "latest"
+    out["sim_v1_state_mode"] = "pending"   # eth_simulateV1 always targets the pending block
     return out
 
 

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ARBY — M7 Live Dashboard</title>
+<style>
+  :root {
+    --bg: #0e1117; --panel: #161b22; --border: #30363d;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    --blue: #58a6ff; --muted: #8b949e; --text: #c9d1d9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 13px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 16px; font-weight: 700; color: var(--blue); }
+  .badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: #1a3a1a; color: var(--green); border: 1px solid var(--green); }
+  .badge-red { background: #3a1a1a; color: var(--red); border: 1px solid var(--red); }
+  .badge-yellow { background: #3a2a00; color: var(--yellow); border: 1px solid var(--yellow); }
+  .badge-blue { background: #1a2a3a; color: var(--blue); border: 1px solid var(--blue); }
+  #last-refresh { color: var(--muted); font-size: 11px; margin-left: auto; }
+  main { padding: 16px 20px; display: grid; gap: 16px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-size: 11px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 5px 8px; border-bottom: 1px solid #1c2128; font-size: 12px; }
+  tr:hover td { background: #1c2128; }
+  .mono { font-family: monospace; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+  .yellow { color: var(--yellow); }
+  .muted { color: var(--muted); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+  .kv dt { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .kv dd { font-size: 12px; word-break: break-all; }
+  #stale-warning { display: none; background: #3a2a00; border: 1px solid var(--yellow); color: var(--yellow); padding: 8px 16px; border-radius: 6px; }
+  .pulse { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ ARBY M7 Live</h1>
+  <span id="ks-badge" class="badge badge-yellow">kill-switch: ?</span>
+  <span id="fresh-badge" class="badge badge-yellow">stale</span>
+  <span id="exec-badge" class="badge badge-yellow">exec: blocked</span>
+  <select id="profile-sel" style="background:var(--panel);color:var(--text);border:1px solid var(--border);padding:3px 8px;border-radius:4px;">
+    <option value="production">production</option>
+    <option value="discovery">discovery</option>
+  </select>
+  <span id="last-refresh">—</span>
+</header>
+<main>
+  <div id="stale-warning">⚠ Data is stale — scanner may not be running</div>
+
+  <!-- Row 1: Operator decision line -->
+  <div class="panel">
+    <h2>Operator Decision Line</h2>
+    <div class="kv" id="decision-kv">
+      <dt>Kill switch</dt><dd id="kv-ks">—</dd>
+      <dt>Submit ready (this scan)</dt><dd id="kv-sr">—</dd>
+      <dt>Live executions today</dt><dd id="kv-le">—</dd>
+      <dt>Exec blocked reason</dt><dd id="kv-br">—</dd>
+      <dt>Last updated</dt><dd id="kv-lu">—</dd>
+    </div>
+  </div>
+
+  <!-- Row 2: Opportunities table -->
+  <div class="panel">
+    <h2>Active Opportunities (latest scan)</h2>
+    <div style="overflow-x:auto">
+      <table id="opp-table">
+        <thead><tr>
+          <th>Pair</th><th>Route</th><th>Amount In (USD)</th>
+          <th class="num">Net Spread (bps)</th><th class="num">Expected Profit</th>
+          <th class="num">Gas (USD)</th><th class="num">Slippage (bps)</th>
+          <th>Gate Status</th><th>Submit Ready</th>
+        </tr></thead>
+        <tbody id="opp-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="row2">
+    <!-- Live submit artifact -->
+    <div class="panel">
+      <h2>Last Live Submit</h2>
+      <dl class="kv" id="submit-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
+    </div>
+    <!-- Live PnL artifact -->
+    <div class="panel">
+      <h2>Last Live PnL</h2>
+      <dl class="kv" id="pnl-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
+    </div>
+  </div>
+
+  <!-- Canary -->
+  <div class="panel">
+    <h2>Last Canary</h2>
+    <dl class="kv" id="canary-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
+  </div>
+</main>
+
+<script>
+const REFRESH_MS = 10_000;
+let profile = 'production';
+
+function fmt(v, digits=4) {
+  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  if (typeof v === 'number') return v.toFixed(digits);
+  return String(v);
+}
+function colorNum(v, invert=false) {
+  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  const n = parseFloat(v);
+  if (isNaN(n)) return String(v);
+  const cls = invert ? (n > 0 ? 'red' : 'green') : (n > 0 ? 'green' : n < 0 ? 'red' : 'muted');
+  return `<span class="${cls}">${n.toFixed(4)}</span>`;
+}
+function kv(pairs) {
+  return pairs.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+
+async function refresh() {
+  const url = `/api/m7/current?profile=${profile}`;
+  let data;
+  try { data = await (await fetch(url)).json(); } catch(e) {
+    document.getElementById('fresh-badge').textContent = 'fetch error';
+    document.getElementById('fresh-badge').className = 'badge badge-red';
+    return;
+  }
+
+  document.getElementById('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+
+  // Kill switch badge
+  const ks = data.kill_switch_active;
+  const ksBadge = document.getElementById('ks-badge');
+  ksBadge.textContent = ks ? 'kill-switch: ON' : 'kill-switch: OFF';
+  ksBadge.className = 'badge ' + (ks ? 'badge-red' : 'badge-green');
+
+  // Freshness
+  const freshBadge = document.getElementById('fresh-badge');
+  const staleWarn = document.getElementById('stale-warning');
+  if (data.is_fresh) {
+    freshBadge.textContent = 'live';
+    freshBadge.className = 'badge badge-green';
+    staleWarn.style.display = 'none';
+  } else {
+    freshBadge.textContent = 'stale';
+    freshBadge.className = 'badge badge-yellow pulse';
+    staleWarn.style.display = '';
+  }
+
+  // Exec badge
+  const execBadge = document.getElementById('exec-badge');
+  const blocked = data.live_exec_blocked_reason || data.live_submit_blocked_reason;
+  if (!blocked && !ks && data.live_executions_total > 0) {
+    execBadge.textContent = `live: ${data.live_executions_total} exec`;
+    execBadge.className = 'badge badge-green';
+  } else if (!blocked && !ks) {
+    execBadge.textContent = 'exec: ready';
+    execBadge.className = 'badge badge-blue';
+  } else {
+    execBadge.textContent = `exec: ${blocked || 'KILL_SWITCH'}`;
+    execBadge.className = 'badge badge-yellow';
+  }
+
+  // Decision KV
+  document.getElementById('kv-ks').innerHTML = ks
+    ? '<span class="red">ACTIVE — no live trading</span>'
+    : '<span class="green">OFF — trading allowed</span>';
+  document.getElementById('kv-sr').textContent = data.submit_ready_total ?? '—';
+  document.getElementById('kv-le').textContent = data.live_executions_total ?? '—';
+  document.getElementById('kv-br').innerHTML = blocked
+    ? `<span class="yellow">${blocked}</span>` : '<span class="green">none</span>';
+  document.getElementById('kv-lu').textContent = data.last_updated ?? '—';
+
+  // Opportunities table
+  const tbody = document.getElementById('opp-body');
+  const opps = data.opportunities || [];
+  if (!opps.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="muted">No opportunities in current scan</td></tr>';
+  } else {
+    tbody.innerHTML = opps.map(o => `<tr>
+      <td class="mono">${o.pair ?? '—'}</td>
+      <td class="muted">${o.route ?? '—'}</td>
+      <td class="num">${fmt(o.amount_in_optimal_usd, 2)}</td>
+      <td class="num">${colorNum(o.net_spread_bps)}</td>
+      <td class="num">${colorNum(o.expected_profit_usd)}</td>
+      <td class="num">${colorNum(o.gas_usd, true)}</td>
+      <td class="num">${fmt(o.slippage_bps, 1)}</td>
+      <td>${o.gate_status ?? '—'}</td>
+      <td>${o.submit_ready
+        ? '<span class="badge badge-green">✓ ready</span>'
+        : `<span class="badge badge-yellow">${o.submit_blocker ?? 'blocked'}</span>`
+      }</td>
+    </tr>`).join('');
+  }
+
+  // Live submit
+  const ls = data.live_submit;
+  document.getElementById('submit-kv').innerHTML = ls ? kv([
+    ['Spread ID', ls.spread_id ?? '—'],
+    ['TX Hash', ls.tx_hash ? `<span class="mono">${ls.tx_hash.slice(0,20)}…</span>` : '—'],
+    ['Relay', ls.relay ?? '—'],
+    ['Included', ls.included ? '<span class="green">YES</span>' : '<span class="red">NO</span>'],
+    ['Receipt status', ls.receipt_status ?? '—'],
+    ['State', ls.state ?? '—'],
+    ['Gas used', ls.gas_used ?? '—'],
+    ['Canary only', ls.canary_only ? 'yes' : 'no'],
+    ['Timestamp', ls.timestamp ?? '—'],
+  ]) : '<dt class="muted">No live submit yet</dt><dd>—</dd>';
+
+  // PnL
+  const lp = data.live_pnl;
+  document.getElementById('pnl-kv').innerHTML = lp ? kv([
+    ['Net PnL USD', colorNum(lp.net_pnl_usd)],
+    ['Realized PnL USD', colorNum(lp.realized_pnl_usd)],
+    ['Gas cost USD', colorNum(lp.total_gas_cost_usd, true)],
+    ['Gas used', lp.gas_used ?? '—'],
+    ['L1 fee wei', lp.l1_fee_wei ?? '—'],
+    ['ETH price USD', fmt(lp.eth_price_usd, 2)],
+    ['Timestamp', lp.timestamp ?? '—'],
+  ]) : '<dt class="muted">No live PnL yet</dt><dd>—</dd>';
+
+  // Canary
+  const cn = data.canary;
+  document.getElementById('canary-kv').innerHTML = cn ? kv([
+    ['Chain', cn.chain ?? '—'],
+    ['Dry run', cn.dry_run ? 'yes' : '<span class="yellow">NO — REAL TX</span>'],
+    ['Gate ok', cn.gate_ok ? '<span class="green">PASS</span>' : `<span class="red">FAIL: ${cn.gate_reason}</span>`],
+    ['TX Hash', cn.tx_hash ? `<span class="mono">${cn.tx_hash.slice(0,20)}…</span>` : '—'],
+    ['Included', cn.included ? '<span class="green">YES</span>' : '<span class="red">NO</span>'],
+    ['Receipt status', cn.receipt_status ?? '—'],
+    ['Gas used', cn.gas_used ?? '—'],
+    ['Timestamp', cn.timestamp ?? '—'],
+  ]) : '<dt class="muted">No canary run yet</dt><dd>—</dd>';
+}
+
+document.getElementById('profile-sel').addEventListener('change', e => {
+  profile = e.target.value;
+  refresh();
+});
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

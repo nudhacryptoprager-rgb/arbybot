@@ -1267,6 +1267,99 @@ def run_loop(cli_args) -> None:
                             _gate_result.submit_ready,
                         )
 
+                    # Live execution: only when ARBY_PAPER_SIGNING=0 AND
+                    # ARBY_LIVE_EXECUTION_ACK=YES AND submit_ready > 0.
+                    # All further kill-switch / key checks are inside signer.
+                    _live_enabled = (
+                        os.environ.get("ARBY_PAPER_SIGNING", "1").strip() == "0"
+                        and os.environ.get("ARBY_LIVE_EXECUTION_ACK", "").strip() == "YES"
+                        and _gate_result.submit_ready > 0
+                    )
+                    if not _live_enabled and _gate_result.submit_ready > 0:
+                        # Surface the block reason in rollup so dashboard can show it
+                        _sc["live_exec_blocked_reason"] = (
+                            "ARBY_PAPER_SIGNING=1"
+                            if os.environ.get("ARBY_PAPER_SIGNING", "1") != "0"
+                            else "ARBY_LIVE_EXECUTION_ACK_NOT_SET"
+                        )
+                    if _live_enabled:
+                        _submit_candidates = [
+                            r for r, _g in _gate_result.guard_passed
+                            if getattr(r, "submit_ready", False)
+                        ]
+                        if _submit_candidates:
+                            import asyncio as _asyncio  # noqa: PLC0415
+                            from execution.signer import make_sign_and_send, get_signer_address  # noqa: PLC0415
+                            from execution.dex_dex_executor import DexDexExecutor  # noqa: PLC0415
+                            from chains.providers import RPCProvider  # noqa: PLC0415
+                            _executor = DexDexExecutor()
+                            _rpc_url = os.environ.get("ARBY_RPC_URL_HTTP", "")
+                            _provider = RPCProvider(_rpc_url) if _rpc_url else None
+
+                            # Bounded live mode guards (Step 8 — reviewer requirement)
+                            _max_trades = int(os.environ.get("ARBY_MAX_TRADES_PER_DAY", "1"))
+                            _max_loss_usd = float(os.environ.get("ARBY_MAX_LOSS_USD", "5.0"))
+                            _max_gas_usd = float(os.environ.get("ARBY_MAX_GAS_USD", "2.0"))
+                            _canary_only = os.environ.get("ARBY_LIVE_CANARY_ONLY", "1").strip() != "0"
+                            _trades_today = _sc.get("live_executions_total", 0)
+
+                            if _trades_today >= _max_trades:
+                                logger.warning(
+                                    "Live exec capped: %d/%d trades today (ARBY_MAX_TRADES_PER_DAY=%d)",
+                                    _trades_today, _max_trades, _max_trades,
+                                    extra={"context": {"live_exec_capped": True}},
+                                )
+                                _sc["live_exec_blocked_reason"] = f"MAX_TRADES_PER_DAY:{_max_trades}"
+                            elif _provider is not None:
+                                _signer_addr = get_signer_address()
+                                for _sr in _submit_candidates[:1]:  # one trade per cold cycle
+                                    _chain_id_map = {"base": 8453, "arbitrum": 42161, "linea": 59144}
+                                    _chain_id = _chain_id_map.get(cli_args.chain, 1)
+                                    _sign_fn = make_sign_and_send(_provider, chain_id=_chain_id)
+                                    _opp = {
+                                        "spread_id": getattr(_sr, "spread_id", None) or getattr(_sr, "event_id", "live_unknown"),
+                                        "router_address": getattr(_sr, "router_address", None) or getattr(_sr, "sim_router_address", ""),
+                                        "swap_calldata": getattr(_sr, "sim_calldata_hex", ""),
+                                        "expected_pnl_usd": float(getattr(_sr, "best_backrun_net_bps", 0) or 0),
+                                        "gas_estimate": int(getattr(_sr, "gas_estimate", 300_000) or 300_000),
+                                        "simulation_passed": True,
+                                        "canary_only": _canary_only,
+                                        "max_loss_usd": _max_loss_usd,
+                                        "max_gas_usd": _max_gas_usd,
+                                    }
+                                    try:
+                                        _exec_result = _asyncio.run(
+                                            _executor.execute_live(_opp, _provider, _signer_addr, _sign_fn)
+                                        )
+                                        _tx_hash = getattr(_exec_result, "tx_hash", None)
+                                        logger.info(
+                                            "Live execution result: spread_id=%s state=%s tx_hash=%s canary=%s",
+                                            _opp["spread_id"],
+                                            getattr(_exec_result, "state", "?"),
+                                            _tx_hash,
+                                            _canary_only,
+                                            extra={"context": {"live_exec": True, "canary_only": _canary_only}},
+                                        )
+                                        _sc["live_executions_total"] = _sc.get("live_executions_total", 0) + 1
+                                        # Write live submit artifact (Step 3)
+                                        try:
+                                            from m7.orderflow.live_submit_artifact import write_live_submit_artifact  # noqa: PLC0415
+                                            write_live_submit_artifact(
+                                                spread_id=_opp["spread_id"],
+                                                tx_hash=_tx_hash,
+                                                exec_result=_exec_result,
+                                                canary_only=_canary_only,
+                                            )
+                                        except Exception:
+                                            pass  # artifact write must never crash the loop
+                                    except Exception as _exc:
+                                        logger.warning(
+                                            "Live execution failed: %s", _exc,
+                                            extra={"context": {"live_exec_error": str(_exc)}},
+                                        )
+                            else:
+                                logger.warning("Live exec skipped: ARBY_RPC_URL_HTTP not set")
+
                 # Cold lane: full diagnostic rolling artifact
                 _write_rolling_m7(artifact)
 

@@ -119,3 +119,52 @@ def compute_pnl(
         "total_pnl_usd": round(total_usd, 6),
         "unpriced_tokens": unpriced,
     }
+
+
+def post_trade_accounting_contract(
+    before: Mapping[str, int],
+    after: Mapping[str, int],
+    prices_usd: Mapping[str, float],
+    *,
+    gas_used: int = 0,
+    l1_fee_wei: int = 0,
+    gas_price_wei: int = 0,
+) -> Dict[str, Any]:
+    """Step 8: single-call post-trade accounting contract.
+
+    Combines balance deltas, gas cost, L1 fee, and net PnL into a
+    single dict that can be stored directly in the rolling artifact.
+    In dry_run mode (``ARBY_PNL_DRY_RUN=1``, the default) all balance
+    inputs are caller-supplied synthetic values — no RPC calls are made.
+
+    Fields returned:
+      * ``balances_before`` / ``balances_after``: token→wei snapshots
+      * ``gas_used``, ``gas_price_wei``, ``l1_fee_wei``
+      * ``gas_cost_wei`` = gas_used × gas_price_wei
+      * ``total_cost_wei`` = gas_cost_wei + l1_fee_wei
+      * ``per_token_delta_wei``, ``total_pnl_usd``, ``unpriced_tokens``
+        (from ``compute_pnl``)
+      * ``net_pnl_usd``: total_pnl_usd minus gas/L1 cost in USD
+      * ``accounting_mode``: ``"dry_run"`` | ``"live"``
+    """
+    pnl = compute_pnl(before, after, prices_usd)
+    gas_cost_wei = int(gas_used) * int(gas_price_wei)
+    total_cost_wei = gas_cost_wei + int(l1_fee_wei)
+    native_price = float(prices_usd.get("native", 0.0) or 0.0)
+    cost_usd = float(total_cost_wei) / 1e18 * native_price
+    net_pnl_usd = round(float(pnl["total_pnl_usd"]) - cost_usd, 6)
+    mode = "dry_run" if _dry_run_default() else "live"
+    return {
+        "balances_before": dict(before),
+        "balances_after": dict(after),
+        "gas_used": int(gas_used),
+        "gas_price_wei": int(gas_price_wei),
+        "l1_fee_wei": int(l1_fee_wei),
+        "gas_cost_wei": gas_cost_wei,
+        "total_cost_wei": total_cost_wei,
+        "per_token_delta_wei": pnl["per_token_delta_wei"],
+        "total_pnl_usd": pnl["total_pnl_usd"],
+        "unpriced_tokens": pnl["unpriced_tokens"],
+        "net_pnl_usd": net_pnl_usd,
+        "accounting_mode": mode,
+    }

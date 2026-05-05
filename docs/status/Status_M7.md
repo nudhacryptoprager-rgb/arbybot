@@ -1,8 +1,33 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.59 soak verification + bridge-refresh fix LANDED (2026-05-05T15:40Z → 16:10Z).** Two soaks run this session. Root causes found and fixed: (1) `m7/orderflow/simulation.py` default changed from `BACKEND_TENDERLY` → `BACKEND_RPC_FORK` — was causing Tenderly 429s and WS drops on every soak where `ARBY_SIM_BACKEND` was unset; (2) `m7/orderflow/loop_runner.py` bridge-refresh added — `_bridge` was read only once at hot-lane init time (before cold lane wrote its first window ~15 min later), so `cold_immediate_sim_input_count` stayed 0 even when cold found profitable candidates; fix: re-read `_read_cold_hot_bridge()` each WS iteration before `queue_cold_executable_for_sim`. **Soak 2 results** (bridge-refresh fix applied, 15:40Z → 16:10Z, base, 5/5 alive 0 crashes): DISCOVERY hot `loop_iter=4`, `ws=connected`, `events=73`, `bridge_loaded=8`, `cold_imm_input=3`, **`cold_imm_profitable=3`**, `preflight_aggregator.candidates_total=3, blocked=0`, all 6 E1.59 keys PRESENT in rollup (`sim_backend=rpc_fork`), zero 429 windows in provider_throttle. **Tests**: 6 tests updated to reflect `rpc_fork` as new default (Tenderly now opt-in via `ARBY_SIM_BACKEND=tenderly`); full suite **4730 PASS / 6 skipped / 0 failures**. `simulation.py` docstring updated: "Default: `rpc_fork` (Tenderly is opt-in)". **PROD hot WS**: both soaks showed `failed_other` on first hot window (WS timeout 10 min), then `connected` on subsequent iterations — normal for dRPC WS reconnect. **Open item**: PROD hot lane gets `events=0` on first few iterations after WS reconnect; DISCOVERY hot lane gets `events=73` and is the primary evidence lane for this session. **Operator next**: optionally run longer (1h+) soak with PROD WS reconnect to see PROD hot `cold_imm_profitable > 0` — expected same behavior as DISCOVERY once bridge is fresh. docs_reread_confirmed: true.
+**Status**: **paper/dry-run execution-ready — production readiness BLOCKED by live execution proof (2026-05-05T reviewer 10-step batch LANDED).**
+Reviewer verdict: ненульові gate counters ≠ реальна угода. Статус прямо позначений як
+"paper/dry-run execution-ready", **не** "production ready". Production-ready вимагає:
+receipt + block inclusion + balance-delta PnL + kill-switch live rehearsal на реальній мережі.
 
-## E1.59 runtime wiring — prior status entry below.
+**10-step reviewer batch (code changes, 4743 PASS / 6 skipped / 0 failures):**
+1. Status correctly labeled "paper/dry-run execution-ready" — NOT production ready. (this entry)
+2. 1h paper-signing soak launched after batch (Step 2+9 — see next soak entry when complete).
+3. `production_readiness` block added to `m7/orderflow/hot_runtime_artifacts._update_hot_rollup()` — explicit boolean checklist: `preflight_ok`, `simulation_ok`, `submit_path_ok=True`, `receipt_ok=False`, `pnl_ok=False`, `kill_switch_active`, `pnl_guard_configured`, `live_submit_blocked_reason="REAL_SUBMIT_NOT_IMPLEMENTED"`.
+4. Live canary (1-wei real on-chain) — **BLOCKED: requires explicit operator authorization** (AGENTS.md rule). Not implemented until authorized.
+5. `canary_rehearsal.rehearse()` now gates on `kill_switch_active`: if guard already tripped, rehearsal returns `ok=False, blocked_reason=KILL_SWITCH_ACTIVE` without calling `submit_canary`. Both dry_run and recorded paths respect the gate.
+6. `execution/private_submitter.submit_private()` dry_run path now returns explicit proof fields: `endpoint_selected` (e.g. `flashbots.base`), `payload_built=True`, `refused_live_reason="ARBY_PRIVATE_SUBMIT_DRY_RUN=1"`.
+7. `execution/sim_v1_dry_compare.stats()` now returns `rpc_fork_state_mode` (`"pending"` when `ARBY_FLASHBLOCKS_SIM=1`, else `"latest"`) and `sim_v1_state_mode="pending"` — explicit pending/latest sim compare documentation.
+8. `execution/pnl_accounting.post_trade_accounting_contract()` added — single-call accounting contract: `balances_before/after`, `gas_used`, `gas_price_wei`, `l1_fee_wei`, `gas_cost_wei`, `total_cost_wei`, `per_token_delta_wei`, `total_pnl_usd`, `net_pnl_usd`, `accounting_mode`. Dry-run default.
+9. 1h active soak with all pre-live gates ON (same as Step 2 — see soak entry).
+10. Live canary → production-ready only after successful receipt + controlled PnL. **Gate not met yet.**
+
+**Production readiness gate (explicit):**
+- `receipt_ok=True` — requires live tx + block inclusion (NOT YET)
+- `pnl_ok=True` — requires balance delta after real trade (NOT YET)
+- `kill_switch_active=False` AND `pnl_guard_configured=True` — enforced in canary rehearsal
+- `live_submit_blocked_reason` must be cleared by operator authorization
+
+`check_repo_safety.py --allow-intent-edit` PASS 0 warnings. `py -3.11 -m pytest tests/unit -q` **4743 PASS / 6 skipped**. docs_reread_confirmed: true.
+
+## E1.59 soak verification + bridge-refresh fix — prior status entry below.
+
+
 
 **Status**: **E1.59 runtime wiring LANDED (offline session, post-E1.59 module batch).** All 6 E1.59 instrumentation modules connected to the live runtime loop. Changes: (1) `m7/orderflow/hot_runtime_artifacts._update_hot_rollup` — merges snapshots from `revert_taxonomy`, `disc_to_prod_pool_promotion`, `preflight_aggregator`, `canary_rehearsal`, `sim_v1_dry_compare`, and `provider_throttle` into the hot rollup artifact every window (gated by ARBY_* env per module, default OFF); (2) `m7/orderflow/cold_immediate_sim.queue_cold_executable_for_sim` — added `revert_taxonomy.record` for sim errors, `preflight_aggregator.record` for guard-passed candidates, `canary_rehearsal.rehearse` after gate, and `sim_v1_dry_compare.compare_results` sidecar feeding gate's `sim_output_samples`; (3) `m7/orderflow/loop_runner.py` hot lane — added `pool_state_http_feed.poll_and_feed` for bounded PTT pool set (HTTP RPC), and `disc_to_prod_pool_promotion.observe_profitable` reading DISC cold bridge. **Tests**: +9 new wiring verification tests in `tests/unit/test_e1_59_runtime_wiring.py` (4720 → **4729 PASS / 6 skipped**). `check_repo_safety.py --allow-intent-edit` PASS 0 warnings. **All wiring is non-blocking** (wrapped in `try/except Exception: pass`); never alters gate outcome. docs_reread_confirmed: true.
 

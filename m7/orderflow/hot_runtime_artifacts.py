@@ -2369,6 +2369,34 @@ def _update_hot_rollup(
     except Exception:
         pass
 
+    # Step 3 (production_readiness): explicit bool checklist — gives reviewer a
+    # single block to inspect instead of scraping counters across the artifact.
+    # preflight_ok / simulation_ok are derived from existing accumulators.
+    # receipt_ok / pnl_ok remain False until a real on-chain tx with receipt
+    # and balance-delta is recorded.
+    try:
+        _pfa_snap = rollup.get("preflight_aggregator") or {}
+        _pr: dict = {
+            "preflight_ok": bool(
+                int(_pfa_snap.get("candidates_total", 0) or 0) > 0
+                and int(_pfa_snap.get("blocked_total", 0) or 0) == 0
+            ),
+            "simulation_ok": bool(
+                int(rollup.get("cold_immediate_sim_passed_total", 0) or 0) > 0
+            ),
+            "submit_path_ok": True,           # private_submitter dry-run scaffold wired
+            "receipt_ok": False,              # no live tx submitted yet
+            "pnl_ok": False,                  # no real trade → no balance delta
+            "kill_switch_active": bool(rollup.get("kill_switch_active", False)),
+            "pnl_guard_configured": bool(
+                int(rollup.get("runtime_pnl_max_loss_wei", 0) or 0) > 0
+            ),
+            "live_submit_blocked_reason": "REAL_SUBMIT_NOT_IMPLEMENTED",
+        }
+        rollup["production_readiness"] = _pr
+    except Exception:
+        pass
+
     try:
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:

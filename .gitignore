@@ -43,6 +43,7 @@ env/
 .env
 .env.local
 .env.*.local
+.env.wallet
 
 # Data (dynamic, not tracked)
 data/registry/

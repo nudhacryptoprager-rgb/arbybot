@@ -116,6 +116,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if profile not in ("production", "discovery"):
                 profile = "production"
             self._serve_summary_data(profile=profile)
+        elif path == "/api/m7/current":
+            # Step 9 (reviewer): M7-only fresh current-scan stream.
+            # Returns active opportunities table + gate status + submit readiness.
+            # Refreshed every 10s by the dashboard (no server-sent events needed).
+            qs = parse_qs(parsed.query or "")
+            profile = (qs.get("profile") or ["production"])[0]
+            if profile not in ("production", "discovery"):
+                profile = "production"
+            self._serve_m7_current(profile=profile)
+        elif path == "/m7" or path == "/m7/":
+            self._serve_file(Path(__file__).parent / "dashboard_m7.html", "text/html")
         else:
             self.send_error(404)
 
@@ -253,6 +264,113 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_m7_current(self, profile: str = "production"):
+        """Step 9 (reviewer): /api/m7/current — M7-only fresh scan data.
+
+        Returns every 10s the operator decision table:
+          pair, route (dex/pool), amount_in_optimal_usd, net_spread_bps,
+          expected_profit_usd, gas_usd, slippage_bps, gate_status,
+          submit_ready, live_exec_blocked_reason, kill_switch_active.
+        """
+        files = DISCOVERY_ARTIFACT_FILES if profile == "discovery" else ARTIFACT_FILES
+
+        def _load(key):
+            path = files.get(key)
+            if path is None or not path.is_file():
+                return None
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                return None
+
+        rollup = _load("m7_hot_rollup") or {}
+        orderflow = _load("m7_orderflow") or {}
+        bridge = _load("m7_cold_hot_bridge") or {}
+
+        # Live submit + PnL artifacts (may not exist yet)
+        live_submit = None
+        live_pnl = None
+        canary = None
+        for fname, key in [
+            ("live_submit_latest.json", "live_submit"),
+            ("live_pnl_latest.json", "live_pnl"),
+            ("canary_latest.json", "canary"),
+        ]:
+            p = ROLLING_DIR / fname
+            if p.is_file():
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if key == "live_submit":
+                        live_submit = data
+                    elif key == "live_pnl":
+                        live_pnl = data
+                    else:
+                        canary = data
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+        # Build active opportunities table from bridge / orderflow signals
+        opportunities = []
+        signal_counts = orderflow.get("signal_counts") or {}
+        sim_output_samples = orderflow.get("sim_output_samples") or []
+        for s in sim_output_samples[:20]:
+            if not isinstance(s, dict):
+                continue
+            net_bps = s.get("net_bps") or s.get("best_backrun_net_bps") or 0
+            gas_usd = s.get("gas_cost_usd") or 0
+            opportunities.append({
+                "pair": s.get("pair") or s.get("actual_pair"),
+                "route": f"{s.get('venue', '?')} / {s.get('pool_address', '?')[:10]}…",
+                "amount_in_optimal_usd": s.get("size_usd_estimate"),
+                "net_spread_bps": net_bps,
+                "expected_profit_usd": s.get("expected_profit_usd"),
+                "gas_usd": gas_usd,
+                "slippage_bps": s.get("slippage_bps"),
+                "gate_status": "SIM_PASSED" if s.get("sim_passed") else s.get("sim_error", "UNKNOWN"),
+                "submit_ready": s.get("submit_ready", False),
+                "submit_blocker": s.get("submit_blocker"),
+            })
+
+        pr = rollup.get("production_readiness") or {}
+        now_ts = datetime.now(timezone.utc).isoformat()
+        last_updated = orderflow.get("timestamp") or orderflow.get("last_updated")
+        is_fresh = False
+        if last_updated:
+            try:
+                dt = _parse_iso_utc(last_updated)
+                if dt:
+                    age_s = (datetime.now(timezone.utc) - dt).total_seconds()
+                    is_fresh = age_s < FRESHNESS_THRESHOLD_S
+            except Exception:
+                pass
+
+        result = {
+            "schema_version": "m7_current_v1",
+            "now": now_ts,
+            "profile": profile,
+            "is_fresh": is_fresh,
+            "last_updated": last_updated,
+            "kill_switch_active": pr.get("kill_switch_active", True),
+            "live_submit_blocked_reason": pr.get("live_submit_blocked_reason"),
+            "live_exec_blocked_reason": signal_counts.get("live_exec_blocked_reason"),
+            "submit_ready_total": signal_counts.get("submit_ready", 0),
+            "live_executions_total": signal_counts.get("live_executions_total", 0),
+            "opportunities": opportunities,
+            "live_submit": live_submit,
+            "live_pnl": live_pnl,
+            "canary": canary,
+        }
+
+        payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
         self.end_headers()
         self.wfile.write(payload)
 

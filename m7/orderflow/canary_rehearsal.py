@@ -78,6 +78,31 @@ def rehearse(
     When the feature flag is OFF, the helpers are still invoked (so
     callers can use this synchronously) but no aggregation is recorded.
     """
+    # Step 5: require kill_switch=False before running any canary.
+    # If the guard already tripped (max-loss exceeded) we must not
+    # proceed — even dry-run mode should respect the kill-switch so
+    # operators can verify the gate is enforced end-to-end.
+    if rollup.get("kill_switch_active", False):
+        out = {
+            "ok": False,
+            "blocked_reason": "KILL_SWITCH_ACTIVE",
+            "canary": {"status": "blocked", "error": "KILL_SWITCH_ACTIVE", "dry_run": True},
+            "pnl_guard": {
+                "kill_switch_active": True,
+                "runtime_pnl_cumulative_wei": int(rollup.get("runtime_pnl_cumulative_wei", 0) or 0),
+                "runtime_pnl_blocker": rollup.get("runtime_pnl_blocker"),
+            },
+            "candidate_id": candidate_id,
+        }
+        if is_enabled():
+            _STATS["rehearsals_total"] += 1
+            _STATS["canary_rejected"] += 1
+            _STATS["pnl_guard_kill_switch_trips"] += 1
+            if len(_RECENT) >= _RECENT_CAP:
+                _RECENT.pop(0)
+            _RECENT.append(out)
+        return out
+
     canary = submit_canary(
         w3=None,
         owner=owner,
