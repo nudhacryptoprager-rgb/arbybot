@@ -2316,10 +2316,168 @@ def _update_hot_rollup(
     except Exception as exc:
         logger.debug("rate_metrics computation failed: %s", str(exc)[:120])
 
+    # E1.59: Merge snapshots from opt-in instrumentation modules.
+    # Each block is gated: no import-level side-effects; only active when
+    # the corresponding ARBY_* flag is ON and the module has data.
+    try:
+        from m7.orderflow.revert_taxonomy import is_enabled as _rt_enabled, snapshot as _rt_snap
+        if _rt_enabled():
+            rollup["revert_taxonomy"] = _rt_snap()
+    except Exception:
+        pass
+
+    try:
+        from m7.orderflow.disc_to_prod_pool_promotion import (
+            is_enabled as _pp_enabled, snapshot as _pp_snap,
+        )
+        if _pp_enabled():
+            rollup["pool_promotion"] = _pp_snap()
+    except Exception:
+        pass
+
+    try:
+        from m7.orderflow.preflight_aggregator import (
+            is_enabled as _pfa_enabled, snapshot as _pfa_snap,
+        )
+        if _pfa_enabled():
+            rollup["preflight_aggregator"] = _pfa_snap()
+    except Exception:
+        pass
+
+    try:
+        from m7.orderflow.canary_rehearsal import (
+            is_enabled as _cr_enabled, snapshot as _cr_snap,
+        )
+        if _cr_enabled():
+            rollup["canary_rehearsal"] = _cr_snap()
+    except Exception:
+        pass
+
+    try:
+        from execution.sim_v1_dry_compare import (
+            is_enabled as _sv_enabled, stats as _sv_stats,
+        )
+        if _sv_enabled():
+            rollup["sim_v1_dry_compare"] = _sv_stats()
+    except Exception:
+        pass
+
+    try:
+        from core.provider_throttle import _is_enabled as _pth_enabled, provider_throttle as _pth
+        if _pth_enabled():
+            rollup["provider_throttle"] = _pth.snapshot()
+    except Exception:
+        pass
+
     try:
         _atomic_json_write(_rio._HOT_ROLLUP_PATH, rollup, indent=2, default=str)
     except Exception as exc:
         logger.debug("Failed to write hot rollup: %s", str(exc)[:80])
+
+
+_SOAK_BASELINE_KEYS: tuple = (
+    "submit_ready_total",
+    "sim_attempted_total",
+    "sim_passed_total",
+    "roundtrip_attempted_total",
+    "roundtrip_profitable_total",
+    "roundtrip_success_total",
+    "cold_immediate_sim_input_total",
+    "cold_immediate_sim_attempted_total",
+    "cold_immediate_sim_passed_total",
+    "cold_immediate_sim_revert_total",
+    "cold_immediate_roundtrip_attempted_total",
+    "cold_immediate_roundtrip_profitable_total",
+    "cold_immediate_submit_ready_total",
+    "session_ws_failed_429_windows",
+    "session_ws_failed_408_windows",
+)
+
+
+def _stamp_soak_baseline_at_path(path: str, chain: str) -> None:
+    """E1.59 step #1: snapshot a soak baseline at supervisor start.
+
+    Reviewer post-3h-soak fix: previous runs reused stale
+    ``supervisor_end_utc`` and a residual session_id from a prior
+    short run, polluting the reviewer delta. This helper:
+    1. Reads the current rollup (if any).
+    2. Clears stale ``supervisor_end_utc`` so the reviewer sees the
+       run as in-progress until a real shutdown.
+    3. Snapshots fresh-window-relevant counters under
+       ``soak_baseline.counters`` together with ``soak_baseline_at``
+       and a fresh ``soak_baseline_session_id`` so the reviewer can
+       compute deltas against an explicit anchor.
+
+    No counters are mutated; this is purely additive metadata.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rollup: dict = {}
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                rollup = json.load(f)
+    except Exception:
+        rollup = {}
+    if not isinstance(rollup, dict):
+        rollup = {}
+    # Clear stale shutdown stamp from a previous run.
+    if "supervisor_end_utc" in rollup:
+        rollup.pop("supervisor_end_utc", None)
+    # Snapshot only the keys the reviewer cares about; ignore missing.
+    counters_snapshot: dict = {}
+    for key in _SOAK_BASELINE_KEYS:
+        if key in rollup:
+            try:
+                counters_snapshot[key] = int(rollup[key] or 0)
+            except (TypeError, ValueError):
+                counters_snapshot[key] = 0
+    # Fresh per-soak session identifier (independent of WS session_id).
+    try:
+        import uuid as _uuid
+        soak_session_id = _uuid.uuid4().hex[:12]
+    except Exception:
+        soak_session_id = ts.replace(":", "").replace("-", "")
+    rollup["soak_baseline"] = {
+        "soak_baseline_at": ts,
+        "soak_baseline_session_id": soak_session_id,
+        "counters": counters_snapshot,
+    }
+    rollup["soak_baseline_at"] = ts
+    rollup["supervisor_start_utc"] = ts
+    rollup.setdefault("chain", chain)
+    try:
+        _atomic_json_write(path, rollup, indent=2, default=str)
+    except Exception as exc:
+        logger.debug("Failed to stamp soak baseline: %s", str(exc)[:80])
+
+
+def mark_supervisor_start(chain: str = "arbitrum_one") -> None:
+    """E1.59 step #1: explicit supervisor-start hook.
+
+    Stamps a fresh soak baseline on BOTH the production and discovery
+    rollups (mirroring ``mark_supervisor_end``) so the reviewer's
+    delta computation has a clean anchor for both lanes.
+    """
+    bound = _rio._HOT_ROLLUP_PATH
+    _stamp_soak_baseline_at_path(path=bound, chain=chain)
+    base_dir = os.path.dirname(bound)
+    fname = os.path.basename(bound)
+    stem, ext = os.path.splitext(fname)
+    if stem.endswith("_discovery"):
+        sibling_stem = stem[: -len("_discovery")]
+    else:
+        sibling_stem = stem + "_discovery"
+    sibling = os.path.join(base_dir, sibling_stem + ext)
+    if sibling != bound:
+        # For the sibling path, only stamp if it already exists OR
+        # create an empty baseline so the reviewer can compute deltas.
+        if not os.path.exists(sibling):
+            try:
+                os.makedirs(os.path.dirname(sibling), exist_ok=True)
+                _atomic_json_write(sibling, {"chain": chain}, indent=2, default=str)
+            except Exception:
+                pass
+        _stamp_soak_baseline_at_path(path=sibling, chain=chain)
 
 
 def _flush_rollup_at_path(

@@ -107,7 +107,7 @@ def get_simulation_backend(profile: Optional[str] = None) -> str:
       env var (``ARBY_SIM_BACKEND_DISC`` / ``ARBY_SIM_BACKEND_PROD``) is set
       to a valid backend, that wins.
     - Otherwise falls back to ``ARBY_SIM_BACKEND``.
-    - Default: ``tenderly`` for backward compatibility.
+    - Default: ``rpc_fork`` (Tenderly is opt-in via ARBY_SIM_BACKEND=tenderly).
 
     Unknown profile-env values log a warning and fall through to the generic
     ``ARBY_SIM_BACKEND`` selector (not silently dropped to tenderly).
@@ -122,11 +122,11 @@ def get_simulation_backend(profile: Optional[str] = None) -> str:
                 logger.warning(
                     "Unknown %s=%r, falling back to ARBY_SIM_BACKEND", env_name, override
                 )
-    raw = os.environ.get("ARBY_SIM_BACKEND", BACKEND_TENDERLY).strip().lower()
+    raw = os.environ.get("ARBY_SIM_BACKEND", BACKEND_RPC_FORK).strip().lower()
     if raw in _VALID_BACKENDS:
         return raw
-    logger.warning("Unknown ARBY_SIM_BACKEND=%r, falling back to tenderly", raw)
-    return BACKEND_TENDERLY
+    logger.warning("Unknown ARBY_SIM_BACKEND=%r, falling back to rpc_fork", raw)
+    return BACKEND_RPC_FORK
 
 
 def is_tenderly_configured() -> bool:

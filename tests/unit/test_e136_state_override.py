@@ -98,7 +98,8 @@ class TestTenderlyStateObjects:
         monkeypatch.setenv("TENDERLY_PROJECT", "p")
         monkeypatch.setenv("TENDERLY_ACCESS_KEY", "k")
         monkeypatch.delenv("ARBY_SIM_DISABLE_STATE_OVERRIDE", raising=False)
-        monkeypatch.delenv("ARBY_SIM_BACKEND", raising=False)
+        # Explicitly request Tenderly (no longer the default)
+        monkeypatch.setenv("ARBY_SIM_BACKEND", "tenderly")
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200

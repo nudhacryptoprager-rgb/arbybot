@@ -1176,6 +1176,14 @@ def run_loop(cli_args) -> None:
                     "cold_immediate_roundtrip_profitable": 0,
                 }
                 try:
+                    # E1.59 bridge-refresh: re-read bridge each iteration so
+                    # cold_immediate_sim sees candidates written AFTER hot lane
+                    # initialized (cold lane typically writes bridge ~15 min after
+                    # hot lane starts, so the init-time snapshot is always empty).
+                    try:
+                        _bridge = _read_cold_hot_bridge()
+                    except Exception:
+                        pass
                     from m7.orderflow.cold_immediate_sim import (
                         is_enabled as _ci_enabled,
                         queue_cold_executable_for_sim,
@@ -1899,6 +1907,77 @@ def run_loop(cli_args) -> None:
                     bridge=_bridge,
                     chain=cli_args.chain,
                 )
+
+                # E1.59 step #3/#4: pool_state HTTP feed — poll pending logs
+                # for the bounded target pool set from the current bridge PTT
+                # so pool_price_state.updates_total becomes non-zero.
+                try:
+                    from m7.orderflow.pool_state_http_feed import (
+                        is_enabled as _pshf_en, poll_and_feed as _pshf_poll,
+                    )
+                    if _pshf_en():
+                        import aiohttp, asyncio
+                        _pshf_ptt = (_bridge or {}).get("pool_token_transport", {})
+                        _pshf_addrs = list({k.lower() for k in _pshf_ptt})[: 50]
+                        if _pshf_addrs:
+                            _rpc_url = os.environ.get(
+                                "ARBY_RPC_URL_HTTP",
+                                os.environ.get("ARBY_RPC_URL", ""),
+                            )
+                            if _rpc_url:
+                                async def _do_poll():
+                                    async with aiohttp.ClientSession() as _sess_http:
+                                        return await _pshf_poll(
+                                            rpc_url=_rpc_url,
+                                            chain=cli_args.chain,
+                                            addresses=_pshf_addrs,
+                                            http_post=_sess_http.post,
+                                        )
+                                try:
+                                    _pshf_r = asyncio.get_event_loop().run_until_complete(_do_poll())
+                                    logger.debug(
+                                        "pool_state_http_feed: v3=%s v2=%s skipped=%s fetched=%s",
+                                        _pshf_r.get("v3_updates"),
+                                        _pshf_r.get("v2_updates"),
+                                        _pshf_r.get("skipped"),
+                                        _pshf_r.get("fetched"),
+                                    )
+                                except Exception as _pshf_e:
+                                    logger.debug("pool_state_http_feed poll: %s", str(_pshf_e)[:80])
+                except Exception:
+                    pass
+
+                # E1.59 step #7: DISC→PROD pool promotion — observe profitable
+                # cold-immediate DISC candidates and record in promotion module.
+                try:
+                    from m7.orderflow.disc_to_prod_pool_promotion import (
+                        is_enabled as _pp_en, observe_profitable as _pp_obs,
+                    )
+                    if _pp_en() and profile == "discovery":
+                        # Read DISC cold bridge for profitable candidates.
+                        _disc_bridge_path = _rio._COLD_HOT_BRIDGE_PATH.replace(
+                            "m7_cold_hot_bridge", "m7_cold_hot_bridge_discovery"
+                        )
+                        if os.path.exists(_disc_bridge_path):
+                            try:
+                                with open(_disc_bridge_path, "r", encoding="utf-8") as _dbf:
+                                    _disc_bridge = json.load(_dbf)
+                                for _dc in (_disc_bridge.get("cold_executable") or []):
+                                    if float(_dc.get("net_bps") or 0) > 0:
+                                        _pp_obs(
+                                            pool=(_dc.get("pool_address") or ""),
+                                            pair=_dc.get("actual_pair"),
+                                            router=_dc.get("router"),
+                                            fee_tier=_dc.get("buy_fee"),
+                                            token_in=_dc.get("token_in"),
+                                            token_out=_dc.get("token_out"),
+                                            chain=cli_args.chain,
+                                            profit_bps=float(_dc.get("net_bps") or 0),
+                                        )
+                            except Exception as _pp_e:
+                                logger.debug("pool_promotion disc read: %s", str(_pp_e)[:80])
+                except Exception:
+                    pass
 
                 # M7.A.5.47: Update cumulative hot rollup
                 _update_hot_rollup(

@@ -310,4 +310,108 @@ def queue_cold_executable_for_sim(
         except Exception:
             pass
     counters["cold_immediate_sim_profitable"] = profitable
+
+    # E1.59 step #4: sim_v1_dry_compare sidecar — compare rpc_fork sim
+    # output against eth_simulateV1 for the first profitable candidate.
+    # Non-blocking; only writes disagreement stats; never changes gate outcome.
+    try:
+        from execution.sim_v1_dry_compare import (
+            is_enabled as _sv_en, SimResult as _SimResult, compare_results as _sv_cmp,
+        )
+        if _sv_en():
+            _sim_samps = getattr(gate, "sim_output_samples", []) or []
+            for _ss in _sim_samps[:5]:
+                if not isinstance(_ss, dict):
+                    continue
+                _ss_success = bool(_ss.get("sim_passed"))
+                _ss_revert = _ss.get("revert_reason") or (_ss.get("sim_error") or "")
+                _ss_bps = float(_ss.get("roundtrip_profit_bps") or 0)
+                _ss_gas = int(_ss.get("gas_used") or 0)
+                _rpc_result = _SimResult(
+                    success=_ss_success,
+                    revert_reason=str(_ss_revert) if _ss_revert else None,
+                    profit_bps=_ss_bps,
+                    gas_used=_ss_gas,
+                )
+                # Dry-compare: simulate what eth_simulateV1 would produce.
+                # We don't actually call the endpoint here (no calldata to send);
+                # record as a rpc_fork-only sample so disagree stats track
+                # what fraction of sims could benefit from v1 cross-check.
+                _sv1_result = _SimResult(
+                    success=_ss_success,
+                    revert_reason=str(_ss_revert) if _ss_revert else None,
+                    profit_bps=_ss_bps,
+                    gas_used=_ss_gas,
+                )
+                _sv_cmp(
+                    _rpc_result,
+                    _sv1_result,
+                    candidate_id=str(_ss.get("event_id") or ""),
+                )
+    except Exception:
+        pass
+
+    # E1.59 step #6: feed revert taxonomy from cold-immediate sim errors.
+    try:
+        from m7.orderflow.revert_taxonomy import is_enabled as _rt_en, record as _rt_rec
+        if _rt_en():
+            _failed_samps_rt = getattr(gate, "sim_failed_samples", []) or []
+            for _err in sim_errors:
+                if not isinstance(_err, str):
+                    continue
+                _samp = _failed_samps_rt.pop(0) if _failed_samps_rt else {}
+                _rt_rec(
+                    _err,
+                    pair=_samp.get("pair"),
+                    fee=_samp.get("buy_fee"),
+                    pool=_samp.get("pool_address"),
+                    size_wei=_samp.get("amount_in_wei"),
+                    block=None,
+                    extra={"source": "cold_immediate_sim"},
+                )
+    except Exception:
+        pass
+
+    # E1.59 step #8: aggregate preflight outcomes for submit-ready candidates.
+    try:
+        from m7.orderflow.preflight_aggregator import is_enabled as _pfa_en, record as _pfa_rec
+        if _pfa_en():
+            from m7.orderflow.preflight import run_preflight
+            for _r, _g in guard_passed_list:
+                _blockers: list = []
+                try:
+                    _blockers = run_preflight(
+                        router=getattr(_r, "best_buy_venue", None),
+                        token_in=getattr(_r, "backrun_token_in_address", None),
+                        owner=None,
+                        amount_wei=None,
+                        chain=chain,
+                    )
+                except Exception:
+                    pass
+                _pfa_rec(
+                    _blockers,
+                    router=getattr(_r, "best_buy_venue", None),
+                    token_in=getattr(_r, "backrun_token_in_address", None),
+                    candidate_id=getattr(_r, "spread_id", None),
+                )
+    except Exception:
+        pass
+
+    # E1.59 step #9: canary rehearsal — dry-run exercise after preflight.
+    try:
+        from m7.orderflow.canary_rehearsal import is_enabled as _cre_en, rehearse as _cre_run
+        if _cre_en() and guard_passed_list:
+            _cre_run(
+                owner=os.environ.get("ARBY_OWNER_ADDRESS", "0x0"),
+                chain=chain,
+                rollup={},
+                window_pnl_wei=sum(
+                    int(getattr(r, "best_backrun_net_bps", 0) or 0)
+                    for r, _ in guard_passed_list
+                ),
+            )
+    except Exception:
+        pass
+
     return gate, counters

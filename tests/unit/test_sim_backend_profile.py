@@ -37,7 +37,8 @@ def _clear_env(monkeypatch):
 
 class TestProfileAwareBackend:
     def test_default_no_env_no_profile(self):
-        assert get_simulation_backend() == BACKEND_TENDERLY
+        # Default is now rpc_fork (Tenderly is opt-in via ARBY_SIM_BACKEND=tenderly)
+        assert get_simulation_backend() == BACKEND_RPC_FORK
 
     def test_global_env_without_profile(self, monkeypatch):
         monkeypatch.setenv("ARBY_SIM_BACKEND", "rpc_fork")

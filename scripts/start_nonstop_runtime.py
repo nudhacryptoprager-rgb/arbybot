@@ -375,6 +375,16 @@ def main():
     for p in processes:
         p.start()
 
+    # E1.59 step #1: stamp soak baseline + clear stale supervisor_end_utc
+    # on BOTH PROD and DISC rollups so the reviewer can compute deltas
+    # against an explicit anchor instead of mixed residue from a prior run.
+    try:
+        from m7.orderflow.hot_runtime_artifacts import mark_supervisor_start
+        mark_supervisor_start(chain=args.chain)
+        print("  [supervisor] soak baseline stamped (mark_supervisor_start)")
+    except Exception as _exc_ss:
+        print(f"  [supervisor] mark_supervisor_start failed: {str(_exc_ss)[:120]}")
+
     # Handle graceful shutdown
     _shutdown = False
 

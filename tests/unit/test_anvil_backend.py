@@ -20,20 +20,20 @@ import pytest
 class TestBackendSelection:
     """ARBY_SIM_BACKEND env var controls which backend is active."""
 
-    def test_default_is_tenderly(self, monkeypatch):
+    def test_default_is_rpc_fork(self, monkeypatch):
         monkeypatch.delenv("ARBY_SIM_BACKEND", raising=False)
         from m7.orderflow.simulation import get_simulation_backend
-        assert get_simulation_backend() == "tenderly"
+        assert get_simulation_backend() == "rpc_fork"
 
     def test_anvil_backend_selected(self, monkeypatch):
         monkeypatch.setenv("ARBY_SIM_BACKEND", "anvil")
         from m7.orderflow.simulation import get_simulation_backend
         assert get_simulation_backend() == "anvil"
 
-    def test_unknown_backend_falls_to_tenderly(self, monkeypatch):
+    def test_unknown_backend_falls_to_rpc_fork(self, monkeypatch):
         monkeypatch.setenv("ARBY_SIM_BACKEND", "geth_debug")
         from m7.orderflow.simulation import get_simulation_backend
-        assert get_simulation_backend() == "tenderly"
+        assert get_simulation_backend() == "rpc_fork"
 
     def test_case_insensitive(self, monkeypatch):
         monkeypatch.setenv("ARBY_SIM_BACKEND", "ANVIL")
@@ -44,8 +44,14 @@ class TestBackendSelection:
 class TestIsSimulationConfigured:
     """is_simulation_configured() delegates to backend-specific checks."""
 
-    def test_tenderly_backend_delegates(self, monkeypatch):
+    def test_rpc_fork_backend_is_configured(self, monkeypatch):
         monkeypatch.delenv("ARBY_SIM_BACKEND", raising=False)
+        # rpc_fork is default and always configured (no credentials needed)
+        from m7.orderflow.simulation import is_simulation_configured
+        assert is_simulation_configured() is True
+
+    def test_tenderly_backend_delegates(self, monkeypatch):
+        monkeypatch.setenv("ARBY_SIM_BACKEND", "tenderly")
         # Without Tenderly env vars, should return False
         monkeypatch.delenv("TENDERLY_USER", raising=False)
         monkeypatch.delenv("TENDERLY_PROJECT", raising=False)
@@ -215,8 +221,8 @@ class TestSimulationResultBackendField:
 class TestSimulateSwapRouter:
     """simulate_swap() routes to correct backend."""
 
-    def test_tenderly_route_default(self, monkeypatch):
-        monkeypatch.delenv("ARBY_SIM_BACKEND", raising=False)
+    def test_tenderly_route_explicit(self, monkeypatch):
+        monkeypatch.setenv("ARBY_SIM_BACKEND", "tenderly")
         monkeypatch.delenv("TENDERLY_USER", raising=False)
         monkeypatch.delenv("TENDERLY_PROJECT", raising=False)
         monkeypatch.delenv("TENDERLY_ACCESS_KEY", raising=False)
