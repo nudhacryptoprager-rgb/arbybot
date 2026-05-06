@@ -107,6 +107,18 @@
     <h2>Last Canary</h2>
     <dl class="kv" id="canary-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
   </div>
+
+  <!-- Row: WS Health + Execution Funnel -->
+  <div class="row2">
+    <div class="panel">
+      <h2>WS Health</h2>
+      <dl class="kv" id="ws-health-kv"><dt class="muted">Loading…</dt><dd>—</dd></dl>
+    </div>
+    <div class="panel">
+      <h2>Execution Funnel</h2>
+      <dl class="kv" id="exec-funnel-kv"><dt class="muted">Loading…</dt><dd>—</dd></dl>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -281,6 +293,39 @@ async function refresh() {
     ['Gas used', cn.gas_used ?? '—'],
     ['Timestamp', cn.timestamp ?? '—'],
   ]) : '<dt class="muted">No canary run yet</dt><dd>—</dd>';
+
+  // WS Health
+  const wsh = data.ws_health || {};
+  function pctCls(p) {
+    if (p === null || p === undefined) return 'muted';
+    return p > 30 ? 'red' : p > 10 ? 'yellow' : 'green';
+  }
+  const pct429 = wsh.pct_429;
+  const pctStr = pct429 !== null && pct429 !== undefined
+    ? `<span class="${pctCls(pct429)}">${pct429}%</span>` : '<span class="muted">—</span>';
+  document.getElementById('ws-health-kv').innerHTML = kv([
+    ['Status', wsh.last_status ? `<span class="${wsh.last_status === 'connected' ? 'green' : 'red'}">${wsh.last_status}</span>` : '—'],
+    ['Provider', wsh.last_provider ?? '—'],
+    ['Windows total', wsh.total_windows ?? '—'],
+    ['Connected windows', wsh.connected_windows ?? '—'],
+    ['Failed 429 windows', `${wsh.failed_429_windows ?? '—'} (${pctStr})`],
+    ['Other failed windows', wsh.failed_windows ?? '—'],
+    ['HTTP fallback active', wsh.http_fallback_active ? '<span class="green">YES</span>' : '<span class="muted">no</span>'],
+  ]);
+
+  // Execution Funnel
+  const ef = data.execution_funnel || {};
+  function funnelNum(n, color='green') {
+    if (n === null || n === undefined) return '<span class="muted">—</span>';
+    const cls = parseInt(n) > 0 ? color : 'muted';
+    return `<span class="${cls}">${n}</span>`;
+  }
+  document.getElementById('exec-funnel-kv').innerHTML = kv([
+    ['Paper submit ready', funnelNum(ef.paper_submit_ready, 'blue')],
+    ['Canary dry-run submitted', funnelNum(ef.canary_ready, 'blue')],
+    ['Live receipt ok', funnelNum(ef.live_receipt_ok, 'green')],
+    ['Live PnL ok', funnelNum(ef.live_pnl_ok, 'green')],
+  ]);
 }
 
 document.getElementById('profile-sel').addEventListener('change', e => {

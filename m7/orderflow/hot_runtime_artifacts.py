@@ -50,6 +50,12 @@ def _compute_rate_metrics(rollup: dict) -> dict:
             "windows_events_without_fast_score_total": int(
                 rollup.get("windows_events_without_fast_score_total", 0) or 0
             ),
+            "submit_ready_total": int(
+                rollup.get("submit_ready_total", 0) or 0
+            ),
+            "cold_immediate_submit_ready_total": int(
+                rollup.get("cold_immediate_submit_ready_total", 0) or 0
+            ),
         }
         sess["rate_baseline"] = baseline
         rollup["session"] = sess
@@ -86,6 +92,8 @@ def _compute_rate_metrics(rollup: dict) -> dict:
     block["roundtrip_attempted_delta"] = rt_attempted_delta
     block["roundtrip_profitable_delta"] = rt_profitable_delta
     block["scoring_blackhole_windows_delta"] = wnd_blackhole_delta
+    block["submit_ready_delta"] = _delta_int("submit_ready_total")
+    block["cold_immediate_submit_ready_delta"] = _delta_int("cold_immediate_submit_ready_total")
     block["rate_basis"] = "current_worker_session_delta"
     # Step 8: expose baseline + lifetime totals so operators understand
     # why rate can be 0.0/h when totals are non-zero (prior-session accumulation).
@@ -1202,6 +1210,12 @@ def _update_hot_rollup(
                 ),
                 "windows_events_without_fast_score_total": int(
                     rollup.get("windows_events_without_fast_score_total", 0) or 0
+                ),
+                "submit_ready_total": int(
+                    rollup.get("submit_ready_total", 0) or 0
+                ),
+                "cold_immediate_submit_ready_total": int(
+                    rollup.get("cold_immediate_submit_ready_total", 0) or 0
                 ),
             },
         }

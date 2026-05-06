@@ -804,3 +804,191 @@ def test_m7_current_stream_falls_back_to_hot_candidates():
     assert len(payload["opportunities"]) == 1
     assert payload["opportunities"][0]["source"] == "hot_recent"
     assert payload["opportunities"][0]["gate_status"] == "GAS_EXCEEDS_GROSS"
+
+
+# ===========================================================================
+# Reviewer Step 2: rate_metrics baseline fix — submit_ready_delta
+# ===========================================================================
+
+def test_rate_metrics_submit_ready_delta_not_zero_after_fresh_baseline():
+    """After a fresh session start with cold_immediate_submit_ready_total=13
+    carried from prior run, a new window that adds 1 more must show
+    submit_ready_delta >= 1, never 0 when new candidates arrived."""
+    from m7.orderflow.hot_runtime_artifacts import _compute_rate_metrics
+
+    rollup = {
+        "roundtrip_attempted_total": 81,
+        "roundtrip_profitable_total": 13,
+        "submit_ready_total": 14,          # 13 baseline + 1 new
+        "cold_immediate_submit_ready_total": 14,
+        "windows_events_without_fast_score_total": 5,
+        "session": {
+            "session_id": "fresh_sess",
+            "session_started_at": "2026-05-06T08:00:00Z",
+            "session_elapsed_minutes": 10.0,
+            "session_windows_seen": 20,
+            "rate_baseline": {
+                "roundtrip_attempted_total": 81,
+                "roundtrip_profitable_total": 13,
+                "windows_events_without_fast_score_total": 5,
+                "submit_ready_total": 13,           # ← baseline from prior run
+                "cold_immediate_submit_ready_total": 13,
+            },
+        },
+    }
+    rm = _compute_rate_metrics(rollup)
+    # Fresh session has 1 new submit_ready beyond baseline
+    assert rm["submit_ready_delta"] == 1, (
+        f"Expected submit_ready_delta=1, got {rm['submit_ready_delta']}"
+    )
+    assert rm["cold_immediate_submit_ready_delta"] == 1
+
+
+def test_rate_metrics_submit_ready_delta_zero_when_no_new_candidates():
+    """When no new candidates arrived in this session (all 13 from prior run),
+    submit_ready_delta must be 0."""
+    from m7.orderflow.hot_runtime_artifacts import _compute_rate_metrics
+
+    rollup = {
+        "roundtrip_attempted_total": 81,
+        "roundtrip_profitable_total": 13,
+        "submit_ready_total": 13,
+        "cold_immediate_submit_ready_total": 13,
+        "windows_events_without_fast_score_total": 5,
+        "session": {
+            "session_id": "fresh_sess",
+            "session_started_at": "2026-05-06T08:00:00Z",
+            "session_elapsed_minutes": 10.0,
+            "session_windows_seen": 20,
+            "rate_baseline": {
+                "roundtrip_attempted_total": 81,
+                "roundtrip_profitable_total": 13,
+                "windows_events_without_fast_score_total": 5,
+                "submit_ready_total": 13,
+                "cold_immediate_submit_ready_total": 13,
+            },
+        },
+    }
+    rm = _compute_rate_metrics(rollup)
+    assert rm["submit_ready_delta"] == 0
+    assert rm["cold_immediate_submit_ready_delta"] == 0
+
+
+def test_rate_metrics_baseline_auto_seeds_submit_ready_fields():
+    """When no rate_baseline exists yet (first window of brand-new session),
+    _compute_rate_metrics must auto-seed submit_ready_total and
+    cold_immediate_submit_ready_total into the baseline so subsequent
+    windows compute correct deltas."""
+    from m7.orderflow.hot_runtime_artifacts import _compute_rate_metrics
+
+    rollup = {
+        "roundtrip_attempted_total": 81,
+        "roundtrip_profitable_total": 13,
+        "submit_ready_total": 13,
+        "cold_immediate_submit_ready_total": 13,
+        "windows_events_without_fast_score_total": 0,
+        "session": {
+            "session_id": "brand_new",
+            "session_elapsed_minutes": 1.0,
+            "session_windows_seen": 1,
+            # No rate_baseline — will be auto-created
+        },
+    }
+    rm = _compute_rate_metrics(rollup)
+    # Auto-seeded baseline = current totals → deltas = 0 on first window
+    assert rm["submit_ready_delta"] == 0
+    assert rm["cold_immediate_submit_ready_delta"] == 0
+    # Baseline is now persisted in session
+    seeded = rollup["session"]["rate_baseline"]
+    assert seeded["submit_ready_total"] == 13
+    assert seeded["cold_immediate_submit_ready_total"] == 13
+
+
+# ===========================================================================
+# Reviewer Steps 4-5, 8: ws_health + execution_funnel in /api/m7/current
+# ===========================================================================
+
+def test_m7_current_has_ws_health_block():
+    """ws_health block must be present with expected keys."""
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    rollup = {
+        "last_updated": "2026-05-06T07:59:55Z",
+        "windows_seen": 41,
+        "session_ws_connected_windows": 24,
+        "session_ws_failed_429_windows": 16,
+        "session_ws_failed_windows": 17,
+        "session_ws_fallback_windows": 0,
+        "last_ws_connection_status": "connected",
+        "last_ws_provider": "drpc",
+        "production_readiness": {},
+    }
+    payload = build_m7_current_payload(
+        rollup=rollup, hot={}, orderflow={}, bridge={},
+        profile="production", now_utc=now,
+    )
+    wsh = payload.get("ws_health")
+    assert wsh is not None, "ws_health block must be present"
+    assert wsh["connected_windows"] == 24
+    assert wsh["failed_429_windows"] == 16
+    assert wsh["total_windows"] == 41
+    assert wsh["last_status"] == "connected"
+    assert wsh["last_provider"] == "drpc"
+    # pct_429 = 16/41 * 100 ≈ 39.0
+    assert wsh["pct_429"] is not None
+    assert wsh["pct_429"] > 30.0
+
+
+def test_m7_current_ws_health_pct_429_zero_when_no_failures():
+    """When no 429s, pct_429 must be 0.0, not None."""
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    rollup = {
+        "last_updated": "2026-05-06T07:59:55Z",
+        "windows_seen": 20,
+        "session_ws_connected_windows": 20,
+        "session_ws_failed_429_windows": 0,
+        "session_ws_failed_windows": 0,
+        "production_readiness": {},
+    }
+    payload = build_m7_current_payload(
+        rollup=rollup, hot={}, orderflow={}, bridge={},
+        profile="production", now_utc=now,
+    )
+    assert payload["ws_health"]["pct_429"] == 0.0
+
+
+def test_m7_current_has_execution_funnel_block():
+    """execution_funnel must separate paper / canary / live_receipt / live_pnl."""
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    rollup = {
+        "last_updated": "2026-05-06T07:59:55Z",
+        "submit_ready_total": 13,
+        "canary_rehearsal": {"canary_dry_run_submitted": 3},
+        "production_readiness": {},
+    }
+    payload = build_m7_current_payload(
+        rollup=rollup, hot={}, orderflow={}, bridge={},
+        profile="production", now_utc=now,
+        live_submit={"receipt_ok_total": 0},
+        live_pnl={"pnl_ok_total": 0},
+    )
+    ef = payload.get("execution_funnel")
+    assert ef is not None, "execution_funnel block must be present"
+    assert ef["paper_submit_ready"] == 13
+    assert ef["canary_ready"] == 3
+    assert ef["live_receipt_ok"] == 0
+    assert ef["live_pnl_ok"] == 0
+
+
+def test_m7_current_execution_funnel_zeros_when_no_artifacts():
+    """execution_funnel fields default to 0 when artifacts absent."""
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    payload = build_m7_current_payload(
+        rollup={"last_updated": "2026-05-06T07:59:55Z", "production_readiness": {}},
+        hot={}, orderflow={}, bridge={},
+        profile="production", now_utc=now,
+    )
+    ef = payload["execution_funnel"]
+    assert ef["paper_submit_ready"] == 0
+    assert ef["canary_ready"] == 0
+    assert ef["live_receipt_ok"] == 0
+    assert ef["live_pnl_ok"] == 0

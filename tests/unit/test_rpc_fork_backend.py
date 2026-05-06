@@ -149,6 +149,7 @@ class TestSimulateSwapRpcFork:
 
     def test_successful_sim(self, monkeypatch):
         """Successful eth_call returns output amount."""
+        monkeypatch.delenv("ARBY_FLASHBLOCKS_SIM", raising=False)
         monkeypatch.setattr(
             "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
             lambda chain: "http://fake:8545",
@@ -263,6 +264,7 @@ class TestViaRouter:
 
     def test_router_dispatches_to_rpc_fork(self, monkeypatch):
         monkeypatch.setenv("ARBY_SIM_BACKEND", "rpc_fork")
+        monkeypatch.delenv("ARBY_FLASHBLOCKS_SIM", raising=False)
         monkeypatch.setattr(
             "m7.orderflow.sim_backends.rpc_fork_backend._get_rpc_url",
             lambda chain: "http://fake:8545",

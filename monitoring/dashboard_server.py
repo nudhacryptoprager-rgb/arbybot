@@ -633,6 +633,51 @@ def build_m7_current_payload(
             return max(0, int((now_utc - dt).total_seconds()))
         return None
 
+    # ---- WS health (Step 5 reviewer) -------------------------------------
+    _total_windows = _safe_int(rollup.get("windows_seen"))
+    _failed_429 = _safe_int(rollup.get("session_ws_failed_429_windows"))
+    ws_health = {
+        "connected_windows": _safe_int(rollup.get("session_ws_connected_windows")),
+        "failed_429_windows": _failed_429,
+        "failed_windows": _safe_int(rollup.get("session_ws_failed_windows")),
+        "fallback_windows": _safe_int(rollup.get("session_ws_fallback_windows")),
+        "total_windows": _total_windows,
+        "last_status": rollup.get("last_ws_connection_status"),
+        "last_provider": rollup.get("last_ws_provider"),
+        "pct_429": (
+            round(100.0 * _failed_429 / _total_windows, 1)
+            if _total_windows > 0 else None
+        ),
+        "http_fallback_active": bool(
+            rollup.get("http_fallback_active")
+            or rollup.get("pool_state_http_feed_active")
+        ),
+    }
+
+    # ---- Execution funnel stages (Step 8 reviewer) -----------------------
+    # Explicit separation: paper → canary → live receipt → live PnL
+    _canary_rollup = rollup.get("canary_rehearsal") or {}
+    _live_submit_total = (
+        _safe_int(live_submit.get("receipt_ok_total")) if live_submit else 0
+    )
+    _live_pnl_total = (
+        _safe_int(live_pnl.get("pnl_ok_total")) if live_pnl else 0
+    )
+    execution_funnel = {
+        "paper_submit_ready": _safe_int(rollup.get("submit_ready_total")),
+        "canary_ready": _safe_int(
+            _canary_rollup.get("canary_dry_run_submitted")
+            if isinstance(_canary_rollup, dict) else 0
+        ),
+        "live_receipt_ok": _live_submit_total,
+        "live_pnl_ok": _live_pnl_total,
+        "note": (
+            "paper_submit_ready: sim+preflight+canary rehearsal passed (no real tx). "
+            "canary_ready: dry-run 1-wei canary submitted. "
+            "live_receipt_ok / live_pnl_ok: require real on-chain execution."
+        ),
+    }
+
     return {
         "schema_version": "m7_current_v1",
         "now": now_utc.isoformat(),
@@ -651,6 +696,8 @@ def build_m7_current_payload(
         "submit_ready_age_s": _age_s(
             rollup.get("last_submit_ready_utc") or rollup.get("last_scored_utc")
         ),
+        "ws_health": ws_health,
+        "execution_funnel": execution_funnel,
         "opportunities": _build_m7_opportunity_rows(
             hot=hot,
             orderflow=orderflow,
