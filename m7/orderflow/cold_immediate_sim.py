@@ -213,11 +213,36 @@ def queue_cold_executable_for_sim(
         return None, counters
 
     cold_exec = (bridge or {}).get("cold_executable") or []
-    if not isinstance(cold_exec, list) or not cold_exec:
-        return None, counters
+    if not isinstance(cold_exec, list):
+        cold_exec = []
 
     min_bps = _min_net_bps_threshold()
     top_n = _top_n()
+
+    # Step 7 fast-recheck: also include near_executable entries when
+    # ARBY_COLD_IMMEDIATE_NEAR=1 (default ON when cold_immediate_sim enabled).
+    # near_executable pools are close to the profit threshold — re-running them
+    # against fresh state may flip them to profitable without waiting for the
+    # next full 15-min cold cycle.  Threshold: 0 bps (any positive net) to
+    # avoid missing marginally profitable entries.
+    _include_near = os.getenv("ARBY_COLD_IMMEDIATE_NEAR", "1") == "1"
+    if _include_near:
+        near_exec = (bridge or {}).get("near_executable") or []
+        if isinstance(near_exec, list) and near_exec:
+            # Merge; entries already in cold_exec (same pool_address) are skipped
+            _exec_addrs = {
+                (e.get("pool_address") or "").lower()
+                for e in cold_exec if isinstance(e, dict)
+            }
+            _near_merged = [
+                e for e in near_exec
+                if isinstance(e, dict)
+                and (e.get("pool_address") or "").lower() not in _exec_addrs
+            ]
+            cold_exec = list(cold_exec) + _near_merged
+
+    if not cold_exec:
+        return None, counters
 
     # Sort by net_bps desc, take top-N
     ranked = sorted(

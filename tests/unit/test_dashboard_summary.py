@@ -13,7 +13,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from monitoring.dashboard_server import build_summary_payload
+from monitoring.dashboard_server import (
+    DASHBOARD_HTML,
+    build_m7_current_payload,
+    build_summary_payload,
+)
 
 
 NOW = datetime(2026, 4, 27, 8, 0, 0, tzinfo=timezone.utc)
@@ -712,3 +716,91 @@ def test_live_deltas_histogram_delta_filters_stale_cumulative_blockers():
     assert ld["simulation_error_histogram_delta"] == {}
     assert ld["scorer_sim_divergence_submit_blocker_delta"] == 0
     assert ld["pre_sim_skip_delta_total"] == 0
+
+
+def test_dashboard_root_serves_m7_only_view():
+    """Root dashboard should be the M7 operator surface, not the legacy mixed dashboard."""
+    assert DASHBOARD_HTML.name == "dashboard_m7.html"
+
+
+def test_m7_current_stream_uses_orderflow_candidates_when_sim_samples_absent():
+    """Active stream must not depend on sim_output_samples only."""
+    now = datetime(2026, 5, 5, 22, 2, 0, tzinfo=timezone.utc)
+    rollup = {
+        "last_updated": "2026-05-05T22:01:30Z",
+        "submit_ready_total": 13,
+        "roundtrip_profitable_total": 13,
+        "production_readiness": {
+            "kill_switch_active": False,
+            "live_submit_blocked_reason": "REAL_SUBMIT_NOT_IMPLEMENTED",
+        },
+    }
+    orderflow = {
+        "timestamp": "2026-05-05T21:49:12Z",
+        "top_executable_candidates": [{
+            "event_id": "live_swap_1",
+            "actual_pair": "AAA/WETH",
+            "net_bps": 1084.0247,
+            "route_viable": True,
+            "profit_guard_passed": True,
+            "pool_address": "0xa6d44d25f22115e7b88646c5acaf0370753eb1e9",
+            "best_buy_venue": "aerodrome",
+            "best_sell_venue": "uniswap_v3",
+            "best_buy_fee": 0,
+            "best_sell_fee": 10000,
+            "amount_in_wei": 1_000_000_000_000_000_000,
+            "net_pnl_wei": 108_402_467_413_561_023,
+            "total_gas_bps": 0.002,
+            "gate_trace": {"profit_guard_passed": True},
+        }],
+        "micro_refinement": [{
+            "event_id": "live_swap_1",
+            "best_submit_size": 750_000_000_000_000_000,
+            "verified_net_bps_after_refinement": 1083.8767,
+        }],
+    }
+
+    payload = build_m7_current_payload(
+        rollup=rollup,
+        hot={},
+        orderflow=orderflow,
+        bridge={},
+        profile="production",
+        now_utc=now,
+    )
+
+    assert payload["is_fresh"] is True
+    assert payload["submit_ready_total"] == 13
+    assert len(payload["opportunities"]) == 1
+    opp = payload["opportunities"][0]
+    assert opp["pair"] == "AAA/WETH"
+    assert opp["source"] == "cold_executable"
+    assert opp["amount_in_optimal_wei"] == "750000000000000000"
+    assert opp["net_spread_bps"] == 1083.8767
+    assert opp["expected_profit_wei"] == "108402467413561023"
+    assert opp["gate_status"] == "PROFIT_GUARD_PASSED"
+
+
+def test_m7_current_stream_falls_back_to_hot_candidates():
+    now = datetime(2026, 5, 5, 22, 2, 0, tzinfo=timezone.utc)
+    payload = build_m7_current_payload(
+        rollup={"last_updated": "2026-05-05T22:01:30Z", "production_readiness": {}},
+        hot={
+            "top_hot_candidates": [{
+                "event_id": "hot_1",
+                "actual_pair": "PENGACHU/WETH",
+                "net_bps": -2.15,
+                "route_viable": False,
+                "reject_reason": "GAS_EXCEEDS_GROSS",
+                "pool_address": "0x5d2091e0b3e0b516e0f3abd75242e9287c253499",
+            }]
+        },
+        orderflow={},
+        bridge={},
+        profile="production",
+        now_utc=now,
+    )
+
+    assert len(payload["opportunities"]) == 1
+    assert payload["opportunities"][0]["source"] == "hot_recent"
+    assert payload["opportunities"][0]["gate_status"] == "GAS_EXCEEDS_GROSS"

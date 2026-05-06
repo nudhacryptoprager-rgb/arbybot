@@ -2062,6 +2062,10 @@ class TestM7A532RollingCanonicalSet:
             "m7_tier_map_linea.json",
             "m7_tier_map_scroll.json",
             "m7_tier_map_mantle.json",
+            # Live execution artifacts (written by run_live_canary.py and loop_runner)
+            "canary_latest.json",
+            "live_submit_latest.json",
+            "live_pnl_latest.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):

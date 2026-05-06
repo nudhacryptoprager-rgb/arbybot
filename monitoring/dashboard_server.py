@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -91,7 +92,7 @@ DISCOVERY_ARTIFACT_FILES = {
     "m7_discovery_scoreboard": ROLLING_DIR / "m7_discovery_scoreboard_discovery.json",
 }
 
-DASHBOARD_HTML = Path(__file__).parent / "dashboard.html"
+DASHBOARD_HTML = Path(__file__).parent / "dashboard_m7.html"
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -288,6 +289,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return None
 
         rollup = _load("m7_hot_rollup") or {}
+        hot = _load("m7_hot") or {}
         orderflow = _load("m7_orderflow") or {}
         bridge = _load("m7_cold_hot_bridge") or {}
 
@@ -314,57 +316,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 except (json.JSONDecodeError, OSError):
                     pass
 
-        # Build active opportunities table from bridge / orderflow signals
-        opportunities = []
-        signal_counts = orderflow.get("signal_counts") or {}
-        sim_output_samples = orderflow.get("sim_output_samples") or []
-        for s in sim_output_samples[:20]:
-            if not isinstance(s, dict):
-                continue
-            net_bps = s.get("net_bps") or s.get("best_backrun_net_bps") or 0
-            gas_usd = s.get("gas_cost_usd") or 0
-            opportunities.append({
-                "pair": s.get("pair") or s.get("actual_pair"),
-                "route": f"{s.get('venue', '?')} / {s.get('pool_address', '?')[:10]}…",
-                "amount_in_optimal_usd": s.get("size_usd_estimate"),
-                "net_spread_bps": net_bps,
-                "expected_profit_usd": s.get("expected_profit_usd"),
-                "gas_usd": gas_usd,
-                "slippage_bps": s.get("slippage_bps"),
-                "gate_status": "SIM_PASSED" if s.get("sim_passed") else s.get("sim_error", "UNKNOWN"),
-                "submit_ready": s.get("submit_ready", False),
-                "submit_blocker": s.get("submit_blocker"),
-            })
-
-        pr = rollup.get("production_readiness") or {}
-        now_ts = datetime.now(timezone.utc).isoformat()
-        last_updated = orderflow.get("timestamp") or orderflow.get("last_updated")
-        is_fresh = False
-        if last_updated:
-            try:
-                dt = _parse_iso_utc(last_updated)
-                if dt:
-                    age_s = (datetime.now(timezone.utc) - dt).total_seconds()
-                    is_fresh = age_s < FRESHNESS_THRESHOLD_S
-            except Exception:
-                pass
-
-        result = {
-            "schema_version": "m7_current_v1",
-            "now": now_ts,
-            "profile": profile,
-            "is_fresh": is_fresh,
-            "last_updated": last_updated,
-            "kill_switch_active": pr.get("kill_switch_active", True),
-            "live_submit_blocked_reason": pr.get("live_submit_blocked_reason"),
-            "live_exec_blocked_reason": signal_counts.get("live_exec_blocked_reason"),
-            "submit_ready_total": signal_counts.get("submit_ready", 0),
-            "live_executions_total": signal_counts.get("live_executions_total", 0),
-            "opportunities": opportunities,
-            "live_submit": live_submit,
-            "live_pnl": live_pnl,
-            "canary": canary,
-        }
+        result = build_m7_current_payload(
+            rollup=rollup,
+            hot=hot,
+            orderflow=orderflow,
+            bridge=bridge,
+            profile=profile,
+            now_utc=datetime.now(timezone.utc),
+            live_submit=live_submit,
+            live_pnl=live_pnl,
+            canary=canary,
+        )
 
         payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)
@@ -410,6 +372,294 @@ def _top_hist(hist, n: int = 8):
         ({"reason": k, "count": _safe_int(v)} for k, v in hist.items()),
         key=lambda x: (-x["count"], x["reason"]),
     )[:n]
+
+
+def _safe_decimal(value):
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _safe_float(value):
+    dec = _safe_decimal(value)
+    if dec is None:
+        return None
+    try:
+        return float(dec)
+    except (OverflowError, ValueError):
+        return None
+
+
+def _short_pool(value) -> str:
+    if not value:
+        return "?"
+    txt = str(value)
+    return txt[:10] + "..." if len(txt) > 10 else txt
+
+
+def _string_or_none(value):
+    return None if value is None else str(value)
+
+
+def _candidate_key(candidate: dict) -> str:
+    event_id = candidate.get("event_id")
+    if event_id:
+        return str(event_id)
+    return "|".join(
+        str(candidate.get(k) or "")
+        for k in ("actual_pair", "pair", "pool_address", "net_bps", "scored_net_bps")
+    )
+
+
+def _micro_index(*artifacts: dict) -> dict:
+    idx = {}
+    for artifact in artifacts:
+        for row in artifact.get("micro_refinement") or []:
+            if not isinstance(row, dict):
+                continue
+            for key in (row.get("event_id"), row.get("actual_pair"), row.get("pair")):
+                if key:
+                    idx[str(key)] = row
+    return idx
+
+
+def _candidate_micro(candidate: dict, micro_by_key: dict) -> dict:
+    for key in (candidate.get("event_id"), candidate.get("actual_pair"), candidate.get("pair")):
+        if key and str(key) in micro_by_key:
+            return micro_by_key[str(key)]
+    return {}
+
+
+def _candidate_net_bps(candidate: dict, micro: dict):
+    for value in (
+        micro.get("verified_net_bps_after_refinement"),
+        micro.get("best_micro_net_bps"),
+        candidate.get("roundtrip_profit_bps"),
+        candidate.get("verified_net_bps"),
+        candidate.get("scored_net_bps"),
+        candidate.get("best_net_bps"),
+        candidate.get("net_bps"),
+        candidate.get("best_backrun_net_bps"),
+    ):
+        if value is not None:
+            return _safe_float(value)
+    return None
+
+
+def _candidate_gate_status(candidate: dict) -> str:
+    gate_trace = candidate.get("gate_trace") if isinstance(candidate.get("gate_trace"), dict) else {}
+    if candidate.get("submit_ready") is True or gate_trace.get("submit_ready") is True:
+        return "SUBMIT_READY"
+    if candidate.get("roundtrip_profitable") is True:
+        return "ROUNDTRIP_PROFITABLE"
+    if candidate.get("roundtrip_success") is True:
+        return "ROUNDTRIP_SUCCESS"
+    if candidate.get("sim_passed") is True or gate_trace.get("sim_passed") is True:
+        return "SIM_PASSED"
+    if candidate.get("profit_guard_passed") is True or gate_trace.get("profit_guard_passed") is True:
+        return "PROFIT_GUARD_PASSED"
+    if candidate.get("route_viable") is True:
+        return "ROUTE_VIABLE"
+    return (
+        candidate.get("submit_blocker")
+        or candidate.get("reject_reason")
+        or candidate.get("guard_reject_reason")
+        or candidate.get("sim_error")
+        or "SCANNED"
+    )
+
+
+def _candidate_priority(row: dict) -> tuple:
+    gate_rank = {
+        "SUBMIT_READY": 7,
+        "ROUNDTRIP_PROFITABLE": 6,
+        "ROUNDTRIP_SUCCESS": 5,
+        "SIM_PASSED": 4,
+        "PROFIT_GUARD_PASSED": 3,
+        "ROUTE_VIABLE": 2,
+        "SCANNED": 1,
+    }.get(str(row.get("gate_status")), 0)
+    net = row.get("net_spread_bps")
+    return (
+        1 if row.get("submit_ready") else 0,
+        gate_rank,
+        _safe_float(net) if net is not None else -10**12,
+    )
+
+
+def _expected_profit_usd(size_usd, net_bps):
+    size_dec = _safe_decimal(size_usd)
+    bps_dec = _safe_decimal(net_bps)
+    if size_dec is None or bps_dec is None:
+        return None
+    return float((size_dec * bps_dec / Decimal("10000")).quantize(Decimal("0.000001")))
+
+
+def _build_m7_opportunity_rows(
+    *,
+    hot: dict,
+    orderflow: dict,
+    bridge: dict,
+    limit: int = 20,
+) -> list[dict]:
+    """Build M7 live dashboard rows from the artifacts that actually carry candidates."""
+    micro_by_key = _micro_index(orderflow, bridge, hot)
+    sources = [
+        ("cold_executable", orderflow.get("top_executable_candidates") or []),
+        ("cold_route_viable", orderflow.get("top_route_viable_candidates") or []),
+        ("bridge_cold_executable", bridge.get("cold_executable") or []),
+        ("near_executable", orderflow.get("near_executable_candidates") or []),
+        ("bridge_near_executable", bridge.get("near_executable") or []),
+        ("bridge_stale_positive", bridge.get("stale_positive") or []),
+        ("hot_recent", hot.get("top_hot_candidates") or []),
+        ("sim_output", orderflow.get("sim_output_samples") or []),
+    ]
+    rows = []
+    seen = set()
+    for source, candidates in sources:
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            key = _candidate_key(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            micro = _candidate_micro(candidate, micro_by_key)
+            net_bps = _candidate_net_bps(candidate, micro)
+            size_usd = candidate.get("size_usd_estimate")
+            optimal_wei = (
+                micro.get("best_submit_size")
+                or candidate.get("best_sweep_size_wei")
+                or candidate.get("amount_in_wei")
+            )
+            route = (
+                f"{candidate.get('best_buy_venue') or candidate.get('venue') or '?'}"
+                f" -> {candidate.get('best_sell_venue') or '?'}"
+                f" / {candidate.get('best_buy_fee') or '?'}:{candidate.get('best_sell_fee') or '?'}"
+                f" / {_short_pool(candidate.get('pool_address'))}"
+            )
+            expected_profit_usd = candidate.get("expected_profit_usd")
+            if expected_profit_usd is None:
+                expected_profit_usd = _expected_profit_usd(size_usd, net_bps)
+            gate_status = _candidate_gate_status(candidate)
+            pnl_wei = (
+                candidate.get("net_pnl_wei")
+                if candidate.get("net_pnl_wei") is not None
+                else candidate.get("gross_pnl_wei")
+            )
+            row = {
+                "source": source,
+                "event_id": candidate.get("event_id"),
+                "pair": candidate.get("pair") or candidate.get("actual_pair"),
+                "route": route,
+                "pool_address": candidate.get("pool_address"),
+                "amount_in_optimal_usd": size_usd,
+                "amount_in_optimal_wei": _string_or_none(optimal_wei),
+                "amount_in_wei": _string_or_none(candidate.get("amount_in_wei")),
+                "best_sweep_size_wei": _string_or_none(candidate.get("best_sweep_size_wei")),
+                "net_spread_bps": net_bps,
+                "expected_profit_usd": expected_profit_usd,
+                "expected_profit_wei": _string_or_none(pnl_wei),
+                "profit_basis": "usd" if expected_profit_usd is not None else "token_wei",
+                "gas_usd": candidate.get("gas_cost_usd"),
+                "total_gas_bps": candidate.get("total_gas_bps"),
+                "slippage_bps": candidate.get("slippage_bps"),
+                "gate_status": gate_status,
+                "submit_ready": bool(
+                    candidate.get("submit_ready")
+                    or (candidate.get("gate_trace") or {}).get("submit_ready")
+                ),
+                "submit_blocker": (
+                    candidate.get("submit_blocker")
+                    or candidate.get("reject_reason")
+                    or candidate.get("guard_reject_reason")
+                ),
+                "block_lag": candidate.get("block_lag"),
+                "pipeline_latency_ms": candidate.get("pipeline_latency_ms"),
+            }
+            rows.append(row)
+    rows.sort(key=_candidate_priority, reverse=True)
+    return rows[:limit]
+
+
+def build_m7_current_payload(
+    *,
+    rollup: dict,
+    hot: dict,
+    orderflow: dict,
+    bridge: dict,
+    profile: str,
+    now_utc: datetime,
+    live_submit: dict | None = None,
+    live_pnl: dict | None = None,
+    canary: dict | None = None,
+) -> dict:
+    """Pure builder for /api/m7/current."""
+    rollup = rollup or {}
+    hot = hot or {}
+    orderflow = orderflow or {}
+    bridge = bridge or {}
+    pr = rollup.get("production_readiness") or {}
+
+    last_updated = (
+        rollup.get("last_updated")
+        or hot.get("timestamp")
+        or hot.get("last_updated")
+        or orderflow.get("timestamp")
+        or orderflow.get("last_updated")
+    )
+    is_fresh = False
+    if last_updated:
+        dt = _parse_iso_utc(last_updated)
+        if dt:
+            age_s = (now_utc - dt).total_seconds()
+            if age_s < 0:
+                age_s = 0
+            threshold = (
+                FRESHNESS_THRESHOLD_S_DISCOVERY
+                if profile == "discovery"
+                else FRESHNESS_THRESHOLD_S
+            )
+            is_fresh = age_s < threshold
+
+    def _age_s(ts_str) -> int | None:
+        if not ts_str:
+            return None
+        dt = _parse_iso_utc(str(ts_str))
+        if dt:
+            return max(0, int((now_utc - dt).total_seconds()))
+        return None
+
+    return {
+        "schema_version": "m7_current_v1",
+        "now": now_utc.isoformat(),
+        "profile": profile,
+        "is_fresh": is_fresh,
+        "last_updated": last_updated,
+        "kill_switch_active": pr.get("kill_switch_active", True),
+        "live_submit_blocked_reason": pr.get("live_submit_blocked_reason"),
+        "live_exec_blocked_reason": rollup.get("live_exec_blocked_reason"),
+        "submit_ready_total": _safe_int(rollup.get("submit_ready_total")),
+        "live_executions_total": _safe_int(rollup.get("live_executions_total")),
+        "hot_cycle_age_s": _age_s(rollup.get("last_heartbeat_utc")),
+        "last_event_age_s": _age_s(rollup.get("last_event_utc")),
+        "last_scored_age_s": _age_s(rollup.get("last_scored_utc")),
+        "cold_scan_age_s": _age_s(bridge.get("timestamp") or orderflow.get("timestamp")),
+        "submit_ready_age_s": _age_s(
+            rollup.get("last_submit_ready_utc") or rollup.get("last_scored_utc")
+        ),
+        "opportunities": _build_m7_opportunity_rows(
+            hot=hot,
+            orderflow=orderflow,
+            bridge=bridge,
+        ),
+        "live_submit": live_submit,
+        "live_pnl": live_pnl,
+        "canary": canary,
+    }
 
 
 def build_summary_payload(

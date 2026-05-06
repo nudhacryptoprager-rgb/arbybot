@@ -66,6 +66,10 @@
       <dt>Live executions today</dt><dd id="kv-le">—</dd>
       <dt>Exec blocked reason</dt><dd id="kv-br">—</dd>
       <dt>Last updated</dt><dd id="kv-lu">—</dd>
+      <dt>Hot cycle age</dt><dd id="kv-hca">—</dd>
+      <dt>Last event age</dt><dd id="kv-lea">—</dd>
+      <dt>Cold scan age</dt><dd id="kv-csa">—</dd>
+      <dt>Submit ready age</dt><dd id="kv-sra">—</dd>
     </div>
   </div>
 
@@ -75,9 +79,9 @@
     <div style="overflow-x:auto">
       <table id="opp-table">
         <thead><tr>
-          <th>Pair</th><th>Route</th><th>Amount In (USD)</th>
+          <th>Pair</th><th>Route</th><th>Optimal Size</th>
           <th class="num">Net Spread (bps)</th><th class="num">Expected Profit</th>
-          <th class="num">Gas (USD)</th><th class="num">Slippage (bps)</th>
+          <th class="num">Gas</th><th class="num">Slippage (bps)</th>
           <th>Gate Status</th><th>Submit Ready</th>
         </tr></thead>
         <tbody id="opp-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
@@ -120,6 +124,32 @@ function colorNum(v, invert=false) {
   if (isNaN(n)) return String(v);
   const cls = invert ? (n > 0 ? 'red' : 'green') : (n > 0 ? 'green' : n < 0 ? 'red' : 'muted');
   return `<span class="${cls}">${n.toFixed(4)}</span>`;
+}
+function fmtSize(o) {
+  if (o.amount_in_optimal_usd !== null && o.amount_in_optimal_usd !== undefined) {
+    const n = parseFloat(o.amount_in_optimal_usd);
+    if (!isNaN(n)) return `$${n.toFixed(2)}`;
+  }
+  if (o.amount_in_optimal_wei !== null && o.amount_in_optimal_wei !== undefined) {
+    return `<span title="${o.amount_in_optimal_wei} wei">${String(o.amount_in_optimal_wei).slice(0, 8)}вЂ¦ wei</span>`;
+  }
+  return '<span class="muted">вЂ”</span>';
+}
+function fmtProfit(o) {
+  if (o.expected_profit_usd !== null && o.expected_profit_usd !== undefined) {
+    return colorNum(o.expected_profit_usd);
+  }
+  if (o.expected_profit_wei !== null && o.expected_profit_wei !== undefined) {
+    const n = parseFloat(o.expected_profit_wei);
+    const cls = !isNaN(n) && n > 0 ? 'green' : 'red';
+    return `<span class="${cls}" title="${o.expected_profit_wei} wei">${String(o.expected_profit_wei).slice(0, 8)}вЂ¦ wei</span>`;
+  }
+  return '<span class="muted">вЂ”</span>';
+}
+function fmtGas(o) {
+  if (o.gas_usd !== null && o.gas_usd !== undefined) return colorNum(o.gas_usd, true);
+  if (o.total_gas_bps !== null && o.total_gas_bps !== undefined) return `${fmt(o.total_gas_bps, 4)} bps`;
+  return '<span class="muted">вЂ”</span>';
 }
 function kv(pairs) {
   return pairs.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
@@ -179,6 +209,18 @@ async function refresh() {
     ? `<span class="yellow">${blocked}</span>` : '<span class="green">none</span>';
   document.getElementById('kv-lu').textContent = data.last_updated ?? '—';
 
+  // Step 5: cycle age metrics
+  function ageStr(s) {
+    if (s === null || s === undefined) return '<span class="muted">—</span>';
+    const n = parseInt(s);
+    const cls = n > 300 ? 'red' : n > 120 ? 'yellow' : 'green';
+    return `<span class="${cls}">${n}s</span>`;
+  }
+  document.getElementById('kv-hca').innerHTML = ageStr(data.hot_cycle_age_s);
+  document.getElementById('kv-lea').innerHTML = ageStr(data.last_event_age_s);
+  document.getElementById('kv-csa').innerHTML = ageStr(data.cold_scan_age_s);
+  document.getElementById('kv-sra').innerHTML = ageStr(data.submit_ready_age_s);
+
   // Opportunities table
   const tbody = document.getElementById('opp-body');
   const opps = data.opportunities || [];
@@ -188,10 +230,10 @@ async function refresh() {
     tbody.innerHTML = opps.map(o => `<tr>
       <td class="mono">${o.pair ?? '—'}</td>
       <td class="muted">${o.route ?? '—'}</td>
-      <td class="num">${fmt(o.amount_in_optimal_usd, 2)}</td>
+      <td class="num">${fmtSize(o)}</td>
       <td class="num">${colorNum(o.net_spread_bps)}</td>
-      <td class="num">${colorNum(o.expected_profit_usd)}</td>
-      <td class="num">${colorNum(o.gas_usd, true)}</td>
+      <td class="num">${fmtProfit(o)}</td>
+      <td class="num">${fmtGas(o)}</td>
       <td class="num">${fmt(o.slippage_bps, 1)}</td>
       <td>${o.gate_status ?? '—'}</td>
       <td>${o.submit_ready

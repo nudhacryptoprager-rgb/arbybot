@@ -87,6 +87,30 @@ def _compute_rate_metrics(rollup: dict) -> dict:
     block["roundtrip_profitable_delta"] = rt_profitable_delta
     block["scoring_blackhole_windows_delta"] = wnd_blackhole_delta
     block["rate_basis"] = "current_worker_session_delta"
+    # Step 8: expose baseline + lifetime totals so operators understand
+    # why rate can be 0.0/h when totals are non-zero (prior-session accumulation).
+    block["rt_profitable_baseline"] = int(baseline.get("roundtrip_profitable_total", 0) or 0)
+    block["rt_attempted_baseline"] = int(baseline.get("roundtrip_attempted_total", 0) or 0)
+    block["rt_profitable_total_lifetime"] = int(
+        rollup.get("roundtrip_profitable_total", 0) or 0
+    )
+    block["rt_attempted_total_lifetime"] = int(
+        rollup.get("roundtrip_attempted_total", 0) or 0
+    )
+    # Lifetime rate (since session start, including baseline — useful when
+    # session_delta=0 because events arrived in a prior child process window).
+    if elapsed_hrs > 0:
+        _lifetime_delta_attempted = int(
+            rollup.get("roundtrip_attempted_total", 0) or 0
+        ) - int(baseline.get("roundtrip_attempted_total", 0) or 0)
+        _lifetime_delta_profitable = int(
+            rollup.get("roundtrip_profitable_total", 0) or 0
+        ) - int(baseline.get("roundtrip_profitable_total", 0) or 0)
+        block["lifetime_profitable_rate_per_hour"] = round(
+            max(0, _lifetime_delta_profitable) / elapsed_hrs, 4
+        )
+    else:
+        block["lifetime_profitable_rate_per_hour"] = None
     return block
 
 
@@ -1561,7 +1585,29 @@ def _update_hot_rollup(
         rollup["submit_ready_total"] = (
             rollup.get("submit_ready_total", 0) + gate_result.submit_ready
         )
+        _sr_count = int(getattr(gate_result, "submit_ready", 0) or 0)
+        if _sr_count > 0:
+            rollup.setdefault("last_submit_ready_utc", ts)
+            rollup["last_submit_ready_utc"] = ts
         rollup["sim_disabled"] = gate_result.sim_disabled
+        # Step 9: preflight / canary / live-submit lічильники в rollup.
+        # gate_result may carry these optional attrs if preflight was wired.
+        _pf_passed = int(getattr(gate_result, "preflight_passed", 0) or 0)
+        if _pf_passed > 0:
+            rollup["preflight_passed_total"] = (
+                int(rollup.get("preflight_passed_total", 0) or 0) + _pf_passed
+            )
+        _canary_passed = int(getattr(gate_result, "canary_rehearsal_passed", 0) or 0)
+        if _canary_passed > 0:
+            rollup["canary_rehearsal_passed_total"] = (
+                int(rollup.get("canary_rehearsal_passed_total", 0) or 0) + _canary_passed
+            )
+        _live_attempted = int(getattr(gate_result, "live_submit_attempted", 0) or 0)
+        if _live_attempted > 0:
+            rollup["live_submit_attempted_total"] = (
+                int(rollup.get("live_submit_attempted_total", 0) or 0) + _live_attempted
+            )
+            rollup["last_submit_ready_utc"] = ts
         # E1.56 Step 1: cold-immediate sim queue rollup totals.
         # Counters live in artifact["signal_counts"] (set by loop_runner
         # after queue_cold_executable_for_sim runs). Aggregate per-window

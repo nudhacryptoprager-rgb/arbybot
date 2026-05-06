@@ -83,6 +83,10 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m7_tier_map_linea.json",
             "m7_tier_map_scroll.json",
             "m7_tier_map_mantle.json",
+            # Live execution artifacts (run_live_canary.py and loop_runner)
+            "canary_latest.json",
+            "live_submit_latest.json",
+            "live_pnl_latest.json",
         }
         
         # Archive files are allowed (created on reset)

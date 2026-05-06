@@ -63,6 +63,62 @@ def _check_safety_gates(dry_run: bool) -> tuple[bool, str]:
     return True, "OK"
 
 
+def _check_sla_gates() -> tuple[bool, str]:
+    """Step 10: Pre-live canary SLA gate — must pass before any live signing.
+
+    Validates:
+    1. pool_price_state.updates > 0 (data plane alive)
+    2. hot rollup is fresh (last_heartbeat_utc < 300s ago)
+    3. submit_ready_total > 0 (funnel reached submit stage)
+
+    Returns (ok, reason).
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    rolling = Path("data/runs/_rolling")
+    now = datetime.now(timezone.utc)
+
+    # 1. Load hot rollup (production)
+    rollup_path = rolling / "m7_hot_rollup_latest.json"
+    rollup: dict = {}
+    if rollup_path.is_file():
+        try:
+            with open(rollup_path, encoding="utf-8") as f:
+                rollup = _json.load(f)
+        except Exception:
+            pass
+
+    # 2. pool_price_state.updates > 0
+    _ps = rollup.get("pool_price_state") or {}
+    _ps_updates = int(_ps.get("updates_total", 0) or 0)
+    if _ps_updates == 0:
+        return False, f"SLA_FAIL: pool_price_state.updates_total=0 (data plane not alive)"
+
+    # 3. Rollup freshness: last_heartbeat_utc < 300s
+    _hb = rollup.get("last_heartbeat_utc")
+    if _hb:
+        try:
+            _hb_dt = datetime.fromisoformat(_hb.replace("Z", "+00:00"))
+            if _hb_dt.tzinfo is None:
+                _hb_dt = _hb_dt.replace(tzinfo=timezone.utc)
+            _age = (now - _hb_dt).total_seconds()
+            if _age > 300:
+                return False, f"SLA_FAIL: rollup stale {_age:.0f}s > 300s threshold"
+        except Exception:
+            return False, "SLA_FAIL: cannot parse last_heartbeat_utc"
+    else:
+        return False, "SLA_FAIL: last_heartbeat_utc missing from rollup"
+
+    # 4. submit_ready_total > 0
+    _sr = int(rollup.get("submit_ready_total", 0) or 0)
+    if _sr == 0:
+        return False, "SLA_FAIL: submit_ready_total=0 (funnel never reached submit stage)"
+
+    return True, f"SLA_PASS (pool_updates={_ps_updates}, submit_ready={_sr})"
+
+
 async def _run_canary(chain: str, dry_run: bool) -> dict:
     """Execute one canary and return a result dict."""
     chain_id = _CHAIN_IDS.get(chain, 8453)
@@ -93,6 +149,20 @@ async def _run_canary(chain: str, dry_run: bool) -> dict:
     if not gate_ok:
         logger.error("Canary blocked by safety gate: %s", gate_reason)
         return result
+
+    # Step 10: SLA gate — only on live path (skip for dry-run)
+    if not dry_run:
+        sla_ok, sla_reason = _check_sla_gates()
+        result["sla_ok"] = sla_ok
+        result["sla_reason"] = sla_reason
+        if not sla_ok:
+            result["gate_ok"] = False
+            result["gate_reason"] = sla_reason
+            logger.error("Canary blocked by SLA gate: %s", sla_reason)
+            return result
+    else:
+        result["sla_ok"] = True
+        result["sla_reason"] = "SKIPPED_DRY_RUN"
 
     if dry_run:
         # Paper canary: prove the pipeline path without any signing

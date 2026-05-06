@@ -62,9 +62,9 @@ def parse_args():
     ap.add_argument("--m7-hot-max-events", type=int, default=500,
                     help="Max events per hot window (soak default 500; "
                          "loop-runner hot default is 5).")
-    ap.add_argument("--m7-hot-ws-timeout", type=int, default=600,
+    ap.add_argument("--m7-hot-ws-timeout", type=int, default=120,
                     help="Idle-window timeout in seconds for hot lane "
-                         "(soak default 600; loop-runner hot default is 30).")
+                         "(active-window default 120s; loop-runner hot default is 30).")
     ap.add_argument("--m7-cold-max-events", type=int, default=500,
                     help="Max events per cold window (soak default 500).")
     ap.add_argument("--m7-cold-ws-timeout", type=int, default=900,
