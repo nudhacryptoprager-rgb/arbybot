@@ -1203,6 +1203,35 @@ def _update_hot_rollup(
     _er["normal_windows"] = _er.get("normal_windows", 0) + (0 if _is_error_window else 1)
     rollup["error_counts"] = _er
 
+    # E1.63: Accumulate split routing + depth guard counters from scoring_parallel.
+    # When ARBY_SPLIT_ROUTE_ENABLE=1 but split_route_attempted=0, status is
+    # LANDED_NOT_RUNTIME_VALIDATED (hot frontier requires hot sim_pass first).
+    try:
+        from m7.orderflow.scoring_parallel import get_e163_session_counters as _get_e163
+        _e163c = _get_e163()
+        for _k163, _src_k in (
+            ("e163_split_route_attempted_total", "split_route_attempted_total"),
+            ("e163_split_route_win_total", "split_route_win_total"),
+            ("e163_depth_guard_attempted_total", "depth_guard_attempted_total"),
+            ("e163_price_impact_populated_total", "price_impact_populated_total"),
+        ):
+            rollup[_k163] = int(rollup.get(_k163, 0) or 0) + int(_e163c.get(_src_k, 0) or 0)
+        _split_env_on = os.environ.get("ARBY_SPLIT_ROUTE_ENABLE", "0").strip() == "1"
+        if _split_env_on:
+            _s_att = int(rollup.get("e163_split_route_attempted_total", 0) or 0)
+            _s_win = int(rollup.get("e163_split_route_win_total", 0) or 0)
+            rollup["e163_split_route_status"] = (
+                "LANDED_NOT_RUNTIME_VALIDATED" if _s_att == 0
+                else ("ATTEMPTED_NO_WIN_YET" if _s_win == 0 else "RUNTIME_VALIDATED")
+            )
+        _pi_total = int(rollup.get("e163_price_impact_populated_total", 0) or 0)
+        rollup["e163_depth_guard_status"] = (
+            "LANDED_NOT_RUNTIME_VALIDATED" if _pi_total == 0 else "RUNTIME_VALIDATED"
+        )
+    except Exception:
+        pass
+
+
     # M7.A.5.47k: Session-scoped counters вЂ” reset each supervisor start.
     # Uses _rio._SESSION_ID (generated at import time) to detect new sessions.
     _prev_sid = rollup.get("session", {}).get("session_id", "")
@@ -1654,6 +1683,8 @@ def _update_hot_rollup(
             # ARBY_PAPER_SIGNING=1 produces a non-zero submit_ready_total when
             # the cold_immediate path is the only producer of profitable sims.
             ("cold_immediate_submit_ready", "cold_immediate_submit_ready_total"),
+            # E1.63 step 5: USD_BASIS_MISSING — candidates with size_usd=0 + net_bps>0
+            ("cold_immediate_usd_basis_missing", "cold_immediate_usd_basis_missing_total"),
         ):
             rollup[_ci_total_k] = int(rollup.get(_ci_total_k, 0) or 0) + int(
                 _ci_sc.get(_ci_k, 0) or 0

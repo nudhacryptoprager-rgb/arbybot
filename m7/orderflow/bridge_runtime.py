@@ -208,6 +208,19 @@ def _write_cold_hot_bridge(
             pass
         _bsp = payload.get("bridge_selected_pools_top", [])
         payload["candidate_source_breakdown"]["bridge_selected_pools_count"] = len(_bsp)
+        # E1.63 step 5: embed E1.63 split/depth metrics from rolling rollup artifact.
+        try:
+            from m7.orderflow.runtime_io import _HOT_ROLLUP_PATH
+            if os.path.exists(_HOT_ROLLUP_PATH):
+                with open(_HOT_ROLLUP_PATH, "r", encoding="utf-8") as _rf:
+                    _r = json.load(_rf)
+                payload["e163_split_route_attempted"] = _r.get("e163_split_route_attempted_total", 0)
+                payload["e163_split_route_wins"] = _r.get("e163_split_route_win_total", 0)
+                payload["e163_depth_guard_attempted"] = _r.get("e163_depth_guard_attempted_total", 0)
+                payload["e163_price_impact_populated"] = _r.get("e163_price_impact_populated_total", 0)
+                payload["e163_split_route_status"] = _r.get("e163_split_route_status", "UNKNOWN")
+        except Exception:
+            pass
         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)
     except Exception as exc:
         logger.debug("Failed to write cold-hot bridge: %s", str(exc)[:80])

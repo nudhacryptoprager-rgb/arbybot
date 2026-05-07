@@ -442,3 +442,179 @@ def attempt_local_pricing(
         "pools_attempted": pools_attempted,
         "pools_succeeded": pools_succeeded,
     }
+
+
+def compute_v3_sqrt_price_after(
+    sqrt_price_x96: int,
+    liquidity: int,
+    amount_in: int,
+    fee_pips: int,
+    zero_for_one: bool,
+) -> Optional[int]:
+    """Compute sqrtPriceX96 after a V3 swap (price impact, no amount_out).
+
+    E1.63 step 8: depth guard — used to derive price_impact_bps from the
+    ratio (sqrtPriceAfter / sqrtPriceBefore)^2 without an extra RPC call.
+
+    Returns sqrtPriceNextX96, or None if the swap cannot be computed.
+    """
+    if liquidity <= 0 or sqrt_price_x96 <= 0 or amount_in <= 0:
+        return None
+    if sqrt_price_x96 < MIN_SQRT_RATIO or sqrt_price_x96 > MAX_SQRT_RATIO:
+        return None
+    if fee_pips < 0 or fee_pips >= FEE_DENOMINATOR:
+        return None
+
+    amount_in_after_fee = amount_in * (FEE_DENOMINATOR - fee_pips) // FEE_DENOMINATOR
+    if amount_in_after_fee <= 0:
+        return None
+
+    try:
+        if zero_for_one:
+            # Price decreases: sqrtPriceNext = ceil(L*Q96*sqrtP / (L*Q96 + amountIn*sqrtP))
+            numerator1 = liquidity * Q96
+            denominator = numerator1 + amount_in_after_fee * sqrt_price_x96
+            if denominator <= 0:
+                return None
+            sqrt_next = (numerator1 * sqrt_price_x96 + denominator - 1) // denominator
+            if sqrt_next <= MIN_SQRT_RATIO or sqrt_next >= sqrt_price_x96:
+                return None
+            return sqrt_next
+        else:
+            # Price increases: sqrtPriceNext = sqrtP + amountIn*Q96/L
+            quotient = (amount_in_after_fee * Q96) // liquidity
+            sqrt_next = sqrt_price_x96 + quotient
+            if sqrt_next >= MAX_SQRT_RATIO or sqrt_next <= sqrt_price_x96:
+                return None
+            return sqrt_next
+    except (OverflowError, ZeroDivisionError, ValueError):
+        return None
+
+
+def attempt_split_pricing(
+    candidate_pools: list,
+    local_sim_states: dict,
+    token_in_addr: str,
+    token_out_addr: str,
+    backrun_size_wei: int,
+    registry_entries: Optional[list] = None,
+) -> Optional[dict]:
+    """Try 50/50 split routing across the 2 best V3 buy pools.
+
+    E1.63 step 7: Splits ``backrun_size_wei`` evenly across the top-2 V3
+    buy pools (by output at half-size).  Only applies to V3/algebra adapters
+    (V2 pools use different concavity and are excluded).
+
+    Returns a result dict compatible with ``attempt_local_pricing`` output,
+    with ``pricing_path = "v3_split_local"`` and extra keys:
+        split_pool_b: str   (second buy pool address)
+        split_amount_a: int (buy output from pool A)
+        split_amount_b: int (buy output from pool B)
+
+    Returns None if fewer than 2 V3 pools are available with state.
+    """
+    if not candidate_pools or not local_sim_states or backrun_size_wei <= 1:
+        return None
+
+    _adapter_map: dict = {}
+    _dex_map: dict = {}
+    if registry_entries:
+        for re in registry_entries:
+            _adapter_map[re.address.lower()] = re.adapter_type
+            _dex_map[re.address.lower()] = re.dex
+
+    zero_for_one = token_in_addr.lower() < token_out_addr.lower()
+    half_size = backrun_size_wei // 2
+    if half_size <= 0:
+        return None
+
+    # Collect V3/algebra buy outputs at half_size (V2 excluded)
+    pool_outputs: list = []
+    for cp in candidate_pools:
+        addr = cp.get("address")
+        if not addr:
+            continue
+        state = local_sim_states.get(addr)
+        if state is None:
+            continue
+        adapter = _adapter_map.get(addr.lower(), "uniswap_v3")
+        if adapter in ("uniswap_v2", "ve33"):
+            continue  # V2 split not supported
+        sp = state.get("sqrt_price_x96", 0) or 0
+        liq = state.get("liquidity", 0) or 0
+        if sp <= 0 or liq <= 0:
+            continue
+        fee = cp.get("fee", 3000)
+        out = compute_v3_swap_amount_out(
+            sqrt_price_x96=sp,
+            liquidity=liq,
+            amount_in=half_size,
+            fee_pips=fee,
+            zero_for_one=zero_for_one,
+        )
+        if out is not None and out > 0:
+            pool_outputs.append((out, addr, fee, sp, liq, adapter))
+
+    pool_outputs.sort(reverse=True)
+    if len(pool_outputs) < 2:
+        return None
+
+    split_buy = pool_outputs[0][0] + pool_outputs[1][0]
+
+    # Sell pass: sell split_buy at the best single sell pool (V3 only)
+    best_sell = 0
+    best_sell_pool = None
+    best_sell_fee = 0
+    for cp in candidate_pools:
+        addr = cp.get("address")
+        if not addr:
+            continue
+        state = local_sim_states.get(addr)
+        if state is None:
+            continue
+        adapter = _adapter_map.get(addr.lower(), "uniswap_v3")
+        if adapter in ("uniswap_v2", "ve33"):
+            continue
+        sp = state.get("sqrt_price_x96", 0) or 0
+        liq = state.get("liquidity", 0) or 0
+        if sp <= 0 or liq <= 0:
+            continue
+        fee = cp.get("fee", 3000)
+        out = compute_v3_swap_amount_out(
+            sqrt_price_x96=sp,
+            liquidity=liq,
+            amount_in=split_buy,
+            fee_pips=fee,
+            zero_for_one=not zero_for_one,
+        )
+        if out is not None and out > best_sell:
+            best_sell = out
+            best_sell_pool = addr
+            best_sell_fee = fee
+
+    if best_sell <= 0 or best_sell_pool is None:
+        return None
+
+    addr_a = pool_outputs[0][1]
+    addr_b = pool_outputs[1][1]
+    out_a = pool_outputs[0][0]
+    out_b = pool_outputs[1][0]
+    dex_a = _dex_map.get(addr_a.lower(), "uniswap_v3")
+    sell_dex = _dex_map.get(best_sell_pool.lower(), "uniswap_v3")
+
+    return {
+        "buy_amount": split_buy,
+        "sell_amount": best_sell,
+        "buy_venue": addr_a,
+        "sell_venue": best_sell_pool,
+        "buy_dex": dex_a,
+        "sell_dex": sell_dex,
+        "buy_fee": pool_outputs[0][2],
+        "sell_fee": best_sell_fee,
+        "pricing_path": "v3_split_local",
+        "pools_attempted": len(pool_outputs),
+        "pools_succeeded": 2,
+        "split_pool_b": addr_b,
+        "split_amount_a": out_a,
+        "split_amount_b": out_b,
+    }

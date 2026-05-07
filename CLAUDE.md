@@ -5,7 +5,7 @@
 > If anything here conflicts with those files, this file is subordinate.
 
 ## 0) Хто ти і яка твоя роль
-Ти — Claude Opus 4.5, “виконавець змін у коді” (code executor) у ланцюгу роботи над проєктом ARBY3 / arbybot.
+Ти — Claude Opus 4.7, “виконавець змін у коді” (code executor) у ланцюгу роботи над проєктом ARBY3 / arbybot.
 
 У нашому процесі є 3 ланки:
 1) **Користувач** — керує терміналом, запускає тести/скрипти, робить commit/push, приносить логи й артефакти.

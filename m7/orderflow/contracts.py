@@ -138,6 +138,15 @@ class BackrunResult:
     submit_blocker: Optional[str] = None
     calldata_ready: Optional[bool] = None
     signing_ready: Optional[bool] = None
+    # E1.62: Expected USD profit + price-impact observability (steps 1+6+9)
+    # expected_profit_usd = size_usd_estimate * net_bps / 10_000
+    # price_impact_bps    = (amount_in - amount_out_normalised) / amount_in * 10_000
+    # amount_in_optimal_usd = USD at which profit_usd is maximised across sweep
+    # liquidity_depth_usd = estimated one-side depth before 1 % price impact
+    expected_profit_usd: Optional[float] = None
+    price_impact_bps: Optional[float] = None
+    amount_in_optimal_usd: Optional[float] = None
+    liquidity_depth_usd: Optional[float] = None
 
 
 @dataclass

@@ -2372,7 +2372,7 @@ class TestM7A533BackrunResultField:
         from dataclasses import fields
         from m7.orderflow.contracts import BackrunResult
 
-        assert len(fields(BackrunResult)) == 79
+        assert len(fields(BackrunResult)) == 83
 
     def test_profit_guard_passed_defaults_none(self):
         r = _make_result()
@@ -3153,6 +3153,8 @@ class TestM7A541TopCandidatePersistence:
             "size_usd_estimate", "size_source", "size_normalization_source",
             # E1.56 Step 1b: PnL metadata for profit_guard
             "gross_pnl_wei", "net_pnl_wei",
+            # E1.62: USD profit observability
+            "expected_profit_usd", "price_impact_bps", "amount_in_optimal_usd",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys

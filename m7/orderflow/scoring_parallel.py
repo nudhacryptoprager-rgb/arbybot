@@ -73,7 +73,7 @@ from m7.orderflow.coverage import (
     counter_venue_coverage_scan,
 )
 from m7.orderflow.pricing import check_oracle_sanity
-from m7.orderflow.v3_math import attempt_local_pricing
+from m7.orderflow.v3_math import attempt_local_pricing, compute_v3_sqrt_price_after, attempt_split_pricing
 
 from m7.shared.constants import (
     HOT_BUDGET_TOTAL_MS,
@@ -86,6 +86,47 @@ from m7.shared.constants import (
 
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
 
+# ── E1.63 module-level counters (thread-safe, reset per session) ──────────────
+import threading as _threading
+_e163_lock = _threading.Lock()
+_e163_split_route_attempted: int = 0
+_e163_split_route_win: int = 0
+_e163_depth_guard_attempted: int = 0
+_e163_price_impact_populated: int = 0
+
+
+def get_e163_session_counters() -> dict:
+    """Return a snapshot of E1.63 cumulative counters (never raises)."""
+    try:
+        with _e163_lock:
+            return {
+                "split_route_attempted_total": _e163_split_route_attempted,
+                "split_route_win_total": _e163_split_route_win,
+                "depth_guard_attempted_total": _e163_depth_guard_attempted,
+                "price_impact_populated_total": _e163_price_impact_populated,
+            }
+    except Exception:
+        return {
+            "split_route_attempted_total": 0,
+            "split_route_win_total": 0,
+            "depth_guard_attempted_total": 0,
+            "price_impact_populated_total": 0,
+        }
+
+
+def reset_e163_session_counters() -> None:
+    """Reset E1.63 counters — call at session boundary if needed (never raises)."""
+    global _e163_split_route_attempted, _e163_split_route_win
+    global _e163_depth_guard_attempted, _e163_price_impact_populated
+    try:
+        with _e163_lock:
+            _e163_split_route_attempted = 0
+            _e163_split_route_win = 0
+            _e163_depth_guard_attempted = 0
+            _e163_price_impact_populated = 0
+    except Exception:
+        pass
+# ─────────────────────────────────────────────────────────────────────────────
 
 _USD_STABLE_SYMBOLS = {"USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUSD", "FRAX"}
 _ETH_USD_SYMBOLS = {"WETH", "ETH"}
@@ -101,22 +142,33 @@ def _quote_implied_size_usd(
     symbol_out: Optional[str],
     eth_price_usd: Optional[float],
 ) -> Optional[float]:
-    """Estimate notional USD only from this candidate's quote and live anchors."""
+    """Estimate notional USD only from this candidate's quote and live anchors.
+
+    Step 3 (E1.62): Added token_out USD fallback for meme/unknown tokens.
+    When token_in is unknown (e.g. B3, FUN), use amount_out in the known
+    output token (USDC/WETH) as the USD basis.  This unblocks rescale for
+    B3/USDC where token_in=B3 has no oracle but token_out=USDC is always known.
+    """
     in_sym = (symbol_in or "").upper()
     out_sym = (symbol_out or "").upper()
     dec_in = decimals_in if decimals_in is not None else 18
     dec_out = decimals_out if decimals_out is not None else 18
 
+    # Primary path: token_in is known
     if in_sym in _USD_STABLE_SYMBOLS:
         return round(amount_in_wei / (10 ** dec_in), 6)
     if in_sym in _ETH_USD_SYMBOLS and eth_price_usd and eth_price_usd > 0:
         return round(amount_in_wei / (10 ** dec_in) * float(eth_price_usd), 6)
+
     if amount_out_wei is None or amount_out_wei <= 0:
         return None
+
+    # Secondary path: token_out is known (covers meme/unknown token_in)
     if out_sym in _USD_STABLE_SYMBOLS:
         return round(amount_out_wei / (10 ** dec_out), 6)
     if out_sym in _ETH_USD_SYMBOLS and eth_price_usd and eth_price_usd > 0:
         return round(amount_out_wei / (10 ** dec_out) * float(eth_price_usd), 6)
+
     return None
 
 
@@ -174,6 +226,62 @@ def _usd_target_rescaled_size_wei(
     if new_size <= amount_in_wei:
         return None
     return new_size
+
+
+# E1.62 step 2: size frontier — USD ladder instead of single target.
+# ENV: ARBY_SIZE_FRONTIER_USD (comma-separated, default "0.1,0.25,0.5,1,2,5,10,25,50")
+_DEFAULT_SIZE_FRONTIER_USD = "0.1,0.25,0.5,1,2,5,10,25,50"
+
+
+def _usd_frontier_sizes_wei(
+    *,
+    amount_in_wei: int,
+    current_size_usd: Optional[float],
+    token_in_decimals: int = 18,
+    max_scale: Optional[float] = None,
+) -> List[int]:
+    """Return sorted list of wei sizes corresponding to the USD frontier ladder.
+
+    Step 2 (E1.62): instead of rescaling to a single $10 target, probe a
+    range of USD notionals so the caller can pick the size that maximises
+    expected_profit_usd (absolute edge) rather than net_bps (relative edge).
+
+    Only returns sizes strictly larger than ``amount_in_wei``; the original
+    size is always kept in the calling sweep so it is not duplicated here.
+    Returns empty list when the USD basis is unavailable.
+    """
+    if amount_in_wei <= 0 or current_size_usd is None or current_size_usd <= 0:
+        return []
+
+    _env_frontier = os.getenv("ARBY_SIZE_FRONTIER_USD", "").strip()
+    try:
+        frontier_usd = [
+            float(x) for x in (_env_frontier or _DEFAULT_SIZE_FRONTIER_USD).split(",")
+            if x.strip()
+        ]
+    except Exception:
+        frontier_usd = [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0]
+
+    max_scale_val = (
+        float(max_scale)
+        if max_scale is not None
+        else _read_positive_float_env("ARBY_TARGET_TRADE_MAX_SCALE", 100000.0)
+    )
+
+    sizes: List[int] = []
+    for target_usd in frontier_usd:
+        if current_size_usd >= target_usd:
+            continue  # current size already covers this tier
+        scale = target_usd / current_size_usd
+        if scale <= 1:
+            continue
+        if max_scale_val > 0:
+            scale = min(scale, max_scale_val)
+        s = int(amount_in_wei * scale)
+        if s > amount_in_wei:
+            sizes.append(s)
+
+    return sorted(set(sizes))
 
 
 def score_backrun_live_parallel(
@@ -1036,6 +1144,7 @@ def score_backrun_live_parallel(
     best_sell_venue = None
     venues_quoted = 0
     _buy_fail_info: list = []  # M7.A.5.19: capture quote failure provenance
+    _price_impact_bps_computed: Optional[float] = None  # E1.63 step 8
 
     if _local_result is not None:
         # Local pricing produced a result — use it, skip remote quoter
@@ -1062,43 +1171,182 @@ def score_backrun_live_parallel(
                 symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
                 eth_price_usd=_local_eth_price_usd,
             )
-        _target_size_wei = _usd_target_rescaled_size_wei(
+        # E1.62 step 2: sweep a USD frontier to find the max-profit size.
+        # Falls back to single _usd_target_rescaled_size_wei when frontier is disabled.
+        _frontier_sizes = _usd_frontier_sizes_wei(
             amount_in_wei=int(backrun_size_wei),
             current_size_usd=_size_usd,
         )
-        if _target_size_wei is not None:
+        if not _frontier_sizes:
+            # Legacy single-target rescale (backward compat / when no USD basis)
+            _single = _usd_target_rescaled_size_wei(
+                amount_in_wei=int(backrun_size_wei),
+                current_size_usd=_size_usd,
+            )
+            _frontier_sizes = [_single] if _single is not None else []
+
+        # Pick the size from the frontier that maximises expected_profit_usd.
+        # expected_profit_usd = size_usd * net_bps / 10_000
+        # We approximate: for each candidate size, compute a price-implication
+        # by calling attempt_local_pricing, then pick best absolute edge.
+        _best_size_wei = None
+        _best_result = None
+        _best_profit_usd: float = -1.0
+        _best_is_split = False  # E1.63 step 7: tracks if split routing won
+        _split_route_enable = os.getenv("ARBY_SPLIT_ROUTE_ENABLE", "0") == "1"  # E1.63 step 7
+        for _candidate_size_wei in _frontier_sizes:
             try:
-                _target_result = attempt_local_pricing(
+                _cand_result = attempt_local_pricing(
                     candidate_pools=cand_pools,
                     local_sim_states=local_sim["pool_states"],
                     token_in_addr=token_in_addr,
                     token_out_addr=token_out_addr,
-                    backrun_size_wei=_target_size_wei,
+                    backrun_size_wei=_candidate_size_wei,
                     registry_entries=_registry_entries if _registry_entries else None,
                 )
             except Exception:
-                _target_result = None
-            if _target_result is not None:
-                backrun_size_wei = _target_size_wei
-                _local_result = _target_result
-                best_buy_amount = _local_result["buy_amount"]
-                best_sell_amount = _local_result["sell_amount"]
-                best_buy_venue = _local_result.get("buy_dex", _local_result["buy_venue"])
-                best_sell_venue = _local_result.get("sell_dex", _local_result["sell_venue"])
-                venues_quoted = _local_result["pools_succeeded"]
-                size_source = "usd_target_rescaled"
-                _out_dec_target_usd = get_cached_decimals(token_out_addr)
-                _target_usd = _quote_implied_size_usd(
-                    amount_in_wei=int(backrun_size_wei),
-                    decimals_in=_effective_dec,
-                    symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
-                    amount_out_wei=int(best_buy_amount) if best_buy_amount else None,
-                    decimals_out=_out_dec_target_usd,
-                    symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
-                    eth_price_usd=_local_eth_price_usd,
-                )
-                if _target_usd is not None:
-                    _size_usd = _target_usd
+                continue
+            if _cand_result is None:
+                continue
+            # Compute net_bps for this size
+            _cb = _cand_result.get("buy_amount")
+            _cs = _cand_result.get("sell_amount")
+            if not (_cb and _cs and _cs > 0):
+                continue
+            _cand_net_bps_num = int(_cb) - int(_cs)
+            _cand_net_bps = (_cand_net_bps_num * 10000.0) / int(_cs) if int(_cs) > 0 else 0.0
+            # Compute size_usd for candidate
+            _cand_size_usd = _quote_implied_size_usd(
+                amount_in_wei=int(_candidate_size_wei),
+                decimals_in=_effective_dec,
+                symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+                amount_out_wei=int(_cb) if _cb else None,
+                decimals_out=get_cached_decimals(token_out_addr),
+                symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+                eth_price_usd=_local_eth_price_usd,
+            )
+            if _cand_size_usd is None or _cand_size_usd <= 0:
+                # Frontier hit token without USD basis — skip, keep original size
+                continue
+            _cand_profit_usd = _cand_size_usd * _cand_net_bps / 10_000.0
+            _cand_is_split = False
+            # E1.63 step 7: optionally try 50/50 split routing at this size
+            if _split_route_enable:
+                # Track that split routing was attempted for this candidate
+                global _e163_split_route_attempted
+                try:
+                    with _e163_lock:
+                        _e163_split_route_attempted += 1
+                except Exception:
+                    pass
+                try:
+                    _sr = attempt_split_pricing(
+                        candidate_pools=cand_pools,
+                        local_sim_states=local_sim["pool_states"],
+                        token_in_addr=token_in_addr,
+                        token_out_addr=token_out_addr,
+                        backrun_size_wei=_candidate_size_wei,
+                        registry_entries=_registry_entries if _registry_entries else None,
+                    )
+                    if _sr is not None:
+                        _srb = _sr.get("buy_amount")
+                        _srs = _sr.get("sell_amount")
+                        if _srb and _srs and int(_srs) > 0:
+                            _sr_net = (int(_srb) - int(_srs)) * 10000.0 / int(_srs)
+                            _sr_usd = _quote_implied_size_usd(
+                                amount_in_wei=int(_candidate_size_wei),
+                                decimals_in=_effective_dec,
+                                symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+                                amount_out_wei=int(_srb),
+                                decimals_out=get_cached_decimals(token_out_addr),
+                                symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+                                eth_price_usd=_local_eth_price_usd,
+                            )
+                            if _sr_usd and _sr_usd > 0:
+                                _sr_profit = _sr_usd * _sr_net / 10_000.0
+                                if _sr_profit > _cand_profit_usd:
+                                    _cand_result = _sr
+                                    _cand_profit_usd = _sr_profit
+                                    _cand_is_split = True
+                                    # Track split win
+                                    global _e163_split_route_win
+                                    try:
+                                        with _e163_lock:
+                                            _e163_split_route_win += 1
+                                    except Exception:
+                                        pass
+                except Exception:
+                    pass  # split is best-effort
+            if _cand_profit_usd > _best_profit_usd:
+                _best_profit_usd = _cand_profit_usd
+                _best_size_wei = _candidate_size_wei
+                _best_result = _cand_result
+                _best_is_split = _cand_is_split
+
+        if _best_result is not None and _best_size_wei is not None:
+            backrun_size_wei = _best_size_wei
+            _local_result = _best_result
+            best_buy_amount = _local_result["buy_amount"]
+            best_sell_amount = _local_result["sell_amount"]
+            best_buy_venue = _local_result.get("buy_dex", _local_result["buy_venue"])
+            best_sell_venue = _local_result.get("sell_dex", _local_result["sell_venue"])
+            venues_quoted = _local_result["pools_succeeded"]
+            size_source = "usd_frontier_split" if _best_is_split else "usd_frontier_rescaled"
+            _out_dec_target_usd = get_cached_decimals(token_out_addr)
+            _target_usd = _quote_implied_size_usd(
+                amount_in_wei=int(backrun_size_wei),
+                decimals_in=_effective_dec,
+                symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+                amount_out_wei=int(best_buy_amount) if best_buy_amount else None,
+                decimals_out=_out_dec_target_usd,
+                symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+                eth_price_usd=_local_eth_price_usd,
+            )
+            if _target_usd is not None:
+                _size_usd = _target_usd
+        # E1.63 step 8: depth guard — compute price_impact_bps from best buy pool state.
+        # Uses sqrtPriceAfter vs sqrtPriceBefore from local V3 math (no extra RPC).
+        # price = sqrtP^2 → price_impact = |1 - (sqrtAfter/sqrtBefore)^2| * 10_000.
+        # ENV: ARBY_PRICE_IMPACT_MAX_BPS (default 1000 = 10%): when exceeded,
+        # sets liquidity_depth_usd=0 to signal thin pool to cold_immediate_sim.
+        if _local_result is not None and local_sim and local_sim.get("pool_states"):
+            _pi_pool = _local_result.get("buy_venue")
+            _pi_fee = _local_result.get("buy_fee") or 3000
+            if _pi_pool:
+                _pi_state = local_sim["pool_states"].get(_pi_pool)
+                if _pi_state:
+                    _pi_sp_before = _pi_state.get("sqrt_price_x96") or 0
+                    _pi_liq = _pi_state.get("liquidity") or 0
+                    if _pi_sp_before > 0 and _pi_liq > 0:
+                        # Track depth guard attempted
+                        global _e163_depth_guard_attempted
+                        try:
+                            with _e163_lock:
+                                _e163_depth_guard_attempted += 1
+                        except Exception:
+                            pass
+                        try:
+                            _pi_sp_after = compute_v3_sqrt_price_after(
+                                sqrt_price_x96=int(_pi_sp_before),
+                                liquidity=int(_pi_liq),
+                                amount_in=int(backrun_size_wei),
+                                fee_pips=int(_pi_fee),
+                                zero_for_one=(token_in_addr.lower() < token_out_addr.lower()),
+                            )
+                            if _pi_sp_after is not None:
+                                _pi_ratio = (_pi_sp_after / _pi_sp_before) ** 2
+                                _price_impact_bps_computed = round(
+                                    abs(1.0 - _pi_ratio) * 10_000.0, 2
+                                )
+                                # Track price_impact_bps populated
+                                global _e163_price_impact_populated
+                                try:
+                                    with _e163_lock:
+                                        _e163_price_impact_populated += 1
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass  # price impact is best-effort
         # ── N5: Accumulate dynamic_anchors sample from live pool state ──
         # Fire-and-forget; never fail the hot path if recording has issues.
         try:
@@ -1348,12 +1596,20 @@ def score_backrun_live_parallel(
         # Reviewer post-soak19 fix #6: ARBY_HOT_SWEEP_ENABLE=1 lifts the gate
         # so registry_direct events also run a bounded sweep, populating
         # ``size_sweep_metrics.events_with_sweep > 0`` for acceptance evidence.
-        # Default off keeps legacy hot-path latency budget intact.
+        # E1.62 step 4: sweep enabled for registry_direct by default to fix
+        # cold/proof lane missing sweep; only hot fast-path respects sweep-disable.
+        # Hot fast-path is identified by scoring_path == "registry_direct" AND
+        # the caller context is the hot-lane (not bridged from cold_immediate_sim).
+        # We approximate this by checking ARBY_HOT_SWEEP_ENABLE vs. hot_mode env.
+        _hot_sweep_enable = os.getenv("ARBY_HOT_SWEEP_ENABLE", "0") == "1"
+        _is_hot_fast_path = (
+            _scoring_path == "registry_direct"
+            and os.getenv("ARBY_COLD_IMMEDIATE_SIM", "0") != "1"
+        )
+        _sweep_allowed = (not _is_hot_fast_path) or _hot_sweep_enable
         sweep_results = None
         best_sweep_net = None
         best_sweep_size = None
-        _hot_sweep_enable = os.getenv("ARBY_HOT_SWEEP_ENABLE", "0") == "1"
-        _sweep_allowed = (_scoring_path != "registry_direct") or _hot_sweep_enable
         if _sweep_allowed:
             try:
                 sweep_results = _run_size_sweep(
@@ -1444,6 +1700,14 @@ def score_backrun_live_parallel(
             gas_floor_bps=_gas_floor_bps,
             pricing_path=_local_result.get("pricing_path") if _local_result else None,
             scoring_path=_scoring_path,
+            # E1.62 step 1: populate observability fields for cold_immediate_sim ranking
+            expected_profit_usd=(
+                round(_size_usd * net_bps / 10_000.0, 6)
+                if (_size_usd and _size_usd > 0 and "net_bps" in dir())
+                else None
+            ),
+            amount_in_optimal_usd=_size_usd,
+            price_impact_bps=_price_impact_bps_computed,
         )
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route

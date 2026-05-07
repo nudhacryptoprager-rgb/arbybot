@@ -1008,6 +1008,11 @@ def build_replay_summary(
             # if gross_pnl_wei=0 the guard always rejects (net_pnl_wei < 0).
             "gross_pnl_wei": getattr(r, "gross_pnl_wei", None),
             "net_pnl_wei": getattr(r, "net_pnl_wei", None),
+            # E1.62 step 1: expected_profit_usd propagation to bridge so
+            # cold_immediate_sim can rank by absolute USD edge (step 9).
+            "expected_profit_usd": getattr(r, "expected_profit_usd", None),
+            "price_impact_bps": getattr(r, "price_impact_bps", None),
+            "amount_in_optimal_usd": getattr(r, "amount_in_optimal_usd", None),
         }
 
     _TOP_N = 5

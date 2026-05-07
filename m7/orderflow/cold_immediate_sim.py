@@ -55,6 +55,54 @@ def _min_net_bps_threshold() -> float:
         return 10.0
 
 
+def _min_expected_profit_usd() -> float:
+    """Absolute USD profit floor — rejects dust-bps-on-dust-size entries.
+
+    Step 6 fix: +2500 bps on $0.00001 is not a real trade. Default 0.001 USD.
+    Disable by setting ARBY_COLD_MIN_EXPECTED_PROFIT_USD=0.
+    """
+    try:
+        v = float(os.getenv("ARBY_COLD_MIN_EXPECTED_PROFIT_USD", "0.001") or 0.001)
+        return max(0.0, v)
+    except Exception:
+        return 0.001
+
+
+def _entry_expected_profit_usd(entry: Dict[str, Any]) -> Optional[float]:
+    """Compute expected_profit_usd from bridge entry if size USD is known.
+
+    Returns None when USD basis is unavailable (e.g. meme tokens with
+    unknown oracle price) — callers must not reject those entries purely
+    on this field.
+    """
+    try:
+        size_usd = entry.get("size_usd_estimate")
+        net_bps = entry.get("net_bps")
+        if size_usd is None or net_bps is None:
+            return None
+        s = float(size_usd)
+        b = float(net_bps)
+        if s > 0 and b > 0:
+            return round(s * b / 10000, 6)
+    except Exception:
+        pass
+    return None
+
+
+def _entry_rank_key(entry: Dict[str, Any]) -> float:
+    """Ranking key for cold_executable entries.
+
+    Step 9 fix: rank by expected_profit_usd (absolute USD edge) when
+    available.  Fall back to net_bps scaled to a tiny value so that
+    USD-ranked entries always beat bps-only entries in the ordering.
+    """
+    p = _entry_expected_profit_usd(entry)
+    if p is not None:
+        return p
+    # Fallback: use net_bps as a tiebreaker (scaled down so USD entries win)
+    return float(entry.get("net_bps") or 0.0) * 1e-6
+
+
 def _top_n() -> int:
     try:
         n = int(os.getenv("ARBY_COLD_IMMEDIATE_TOP_N", "5") or 5)
@@ -213,6 +261,10 @@ def queue_cold_executable_for_sim(
         "cold_immediate_profit_guard_rejected": 0,
         "cold_immediate_pre_sim_skip": 0,
         "cold_immediate_sim_revert": 0,
+        # E1.63 step 5: track entries with no USD size basis (size_usd=0/None + net_bps>0)
+        # These are diagnostic candidates (meme tokens, unknown oracle) — not
+        # counted as "profitable" even when they pass the gate.
+        "cold_immediate_usd_basis_missing": 0,
     }
     if not is_enabled():
         return None, counters
@@ -249,14 +301,37 @@ def queue_cold_executable_for_sim(
     if not cold_exec:
         return None, counters
 
-    # Sort by net_bps desc, take top-N
+    # Step 6: absolute USD profit gate — +2500 bps on $0.00001 is not a real trade.
+    # Entries without USD basis (meme tokens) pass through unconditionally.
+    _min_profit_usd = _min_expected_profit_usd()
+
+    def _passes_profit_gate(e: Dict[str, Any]) -> bool:
+        if _min_profit_usd <= 0:
+            return True
+        p = _entry_expected_profit_usd(e)
+        if p is None:
+            return True  # No USD basis — let through (e.g. B3/meme tokens)
+        return p >= _min_profit_usd
+
+    # Step 9: rank by expected_profit_usd desc (max absolute edge first),
+    # fallback to net_bps for entries without USD oracle basis.
     ranked = sorted(
         [e for e in cold_exec if isinstance(e, dict)
-         and float(e.get("net_bps") or 0.0) >= min_bps],
-        key=lambda e: float(e.get("net_bps") or 0.0),
+         and float(e.get("net_bps") or 0.0) >= min_bps
+         and _passes_profit_gate(e)],
+        key=_entry_rank_key,
         reverse=True,
     )[:top_n]
     counters["cold_immediate_sim_input_count"] = len(ranked)
+    # E1.63 step 5: count entries where size_usd=0/None and net_bps>0
+    # (USD basis missing — meme/oracle gap tokens). These are diagnostic candidates.
+    for _e in ranked:
+        _susd = _e.get("size_usd_estimate")
+        _nbps = float(_e.get("net_bps") or 0.0)
+        if _nbps > 0 and (_susd is None or float(_susd) <= 0.0):
+            counters["cold_immediate_usd_basis_missing"] = (
+                counters.get("cold_immediate_usd_basis_missing", 0) + 1
+            )
     if not ranked:
         return None, counters
 
@@ -265,7 +340,12 @@ def queue_cold_executable_for_sim(
         ev = _build_synthetic_event(entry, chain=chain)
         if ev is None:
             continue
-        synthetic.append(_build_synthetic_result(entry, ev))
+        res = _build_synthetic_result(entry, ev)
+        # Step 1: populate expected_profit_usd on the synthetic result
+        _epusd = _entry_expected_profit_usd(entry)
+        if _epusd is not None:
+            res.expected_profit_usd = _epusd
+        synthetic.append(res)
 
     if not synthetic:
         return None, counters
