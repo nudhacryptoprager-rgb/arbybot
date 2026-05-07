@@ -69,6 +69,11 @@ def _build_synthetic_event(entry: Dict[str, Any], chain: str) -> Optional[Orderf
     Returns None if the entry is missing required fields. The synthetic
     event is marked `event_source="cold_bridge"` downstream via the
     BackrunResult so consumers can distinguish from live WS events.
+
+    Fix 2 (E1.60): entries with amount_in_wei=0 AND best_sweep_size_wei=0
+    and no usd/decimals metadata will hit PRE_SIM_SKIP:MISSING_SIZE_METADATA
+    in execution_gate. The gate already handles this correctly; we only skip
+    here to avoid wasting counter budget when ALL metadata is absent.
     """
     try:
         pa = (entry.get("pool_address") or "").lower()

@@ -164,6 +164,21 @@ def _write_cold_hot_bridge(
             "bridge_hit_trace_top", "cold_exec_pool_trace",
         )
         _has_cold_exec = bool(payload.get("cold_executable"))
+
+        # Fix 3 (E1.60): if cold lane restarted and produced no candidates yet
+        # (cold window still in PTT-accumulation phase), preserve the previous
+        # bridge's cold_executable/near_executable so the hot lane doesn't lose
+        # its sim targets for the duration of the warm-up window.
+        # Fix 4 (E1.60): add bridge_generation_status diagnostic field.
+        _bgen_status: str
+        if _has_cold_exec:
+            _bgen_status = "ready"
+        elif _ptt:
+            _bgen_status = "warming"
+        else:
+            _bgen_status = "empty_market"
+        payload["bridge_generation_status"] = _bgen_status
+
         try:
             if os.path.exists(_COLD_HOT_BRIDGE_PATH):
                 with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _epf:
@@ -172,6 +187,15 @@ def _write_cold_hot_bridge(
                     _existing_val = _existing.get(_hpk)
                     if _existing_val is not None and _hpk not in payload:
                         payload[_hpk] = _existing_val
+                # Fix 3: preserve previous cold_executable when current write has none.
+                if not _has_cold_exec:
+                    _prev_cold = _existing.get("cold_executable") or []
+                    _prev_near = _existing.get("near_executable") or []
+                    if _prev_cold:
+                        payload["cold_executable"] = _prev_cold
+                        payload["near_executable"] = _prev_near
+                        payload["bridge_generation_status"] = "ready_preserved"
+                        _has_cold_exec = True
                 if _has_cold_exec:
                     for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
                         _existing_val = _existing.get(_hpk)

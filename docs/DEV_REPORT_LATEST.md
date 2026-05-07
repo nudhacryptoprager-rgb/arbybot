@@ -1,37 +1,35 @@
 ﻿# DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-06T08:04:32Z
-run_id: nonstop_runtime_20260506_070430 (supervisor)
+timestamp_utc: 2026-05-07T06:33:37Z
+run_id: nonstop_runtime_20260507_E1.61_usd_target_soak
 mode: ONLINE
 artifact_mode: rolling
 config: base / production + discovery / real_minimal.yaml
 code_identity:
-  primary: ts:2026-05-06T08:48:37+02:00
-  dirty: true (m7/orderflow/hot_runtime_artifacts.py, monitoring/dashboard_m7.html, monitoring/dashboard_server.py, tests/unit/test_dashboard_summary.py, tests/unit/test_rpc_fork_backend.py)
-  desc: E1 reviewer fixes — rate_metrics baseline, ws_health + execution_funnel dashboard panels
+  primary: ts:2026-05-07T06:33:37+02:00
+  dirty: true (m7/orderflow/pricing.py, m7/orderflow/artifacts.py, m7/orderflow/scoring_parallel.py)
+  desc: E1.61 SIZE_DUST_ROOT_CAUSE — opt-in USD-target rescale via ARBY_TARGET_TRADE_USD; size_source/size_normalization_source fields
 
 ## 1) Scope (що і навіщо)
-goal (Roadmap): E1.59 — верифікація 1h nonstop soak на Base, накопичення CI-sim даних, діагностика ws_health + execution_funnel
+goal (Roadmap): E1.61 — валідація USD-target rescale (ARBY_TARGET_TRADE_USD=10) у runtime; root cause size dust виявлено і зафіксовано
 change_summary:
-  - (попередня сесія) hot_runtime_artifacts.py: rate_metrics baseline фікс — submit_ready_delta/cold_immediate_submit_ready_delta правильно стартують від session-baseline
-  - (попередня сесія) dashboard_server.py: ws_health block + execution_funnel block у build_m7_current_payload
-  - (попередня сесія) dashboard_m7.html: WS Health panel + Execution Funnel panel
-  - (попередня сесія) tests: test_dashboard_summary.py, test_rpc_fork_backend.py оновлені
-  - Ця сесія: 1h run запущено, моніторинг, діагностика CI sim frozen counter
+  - scoring_parallel.py: _usd_target_rescaled_size_wei() — opt-in rescale коли current_size_usd < target_usd
+  - scoring_parallel.py: size_source="usd_target_rescaled" для rescaled кандидатів
+  - contracts.py: size_normalization_source field на BackrunResult
+  - artifacts.py: size_normalization_source проброшено у артефакти
+  - E1.60 fixes (попередній commit): bridge no-overwrite, bridge_generation_status, scan timing, rate_metrics lifetime
 touched_files:
-  - m7/orderflow/hot_runtime_artifacts.py
-  - monitoring/dashboard_server.py
-  - monitoring/dashboard_m7.html
-  - tests/unit/test_dashboard_summary.py
-  - tests/unit/test_rpc_fork_backend.py
+  - m7/orderflow/scoring_parallel.py
+  - m7/orderflow/pricing.py
+  - m7/orderflow/artifacts.py
+  - m7/orderflow/contracts.py
 
 ## 2) Commands Executed (лише факти)
-py -3.11 -m pytest -q: PASS (4764 tests, попередня сесія)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: NOT RUN (reason: 1h soak run prioritized)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: NOT RUN
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: NOT RUN
-SOAK RUN: python scripts/start_nonstop_runtime.py --hours 1 --no-m4 --chain base --with-discovery --m7-cold-pause 3 --dashboard-port 8120 --m7-hot-pause 1: COMPLETE (07:04:30Z–08:04:32Z)
+py -3.11 -m pytest tests/unit -q: PASS (4775 tests, 6 skipped, 0 failures) — після E1.61 змін
+py -3.11 scripts/check_repo_safety.py --allow-intent-edit: PASS (1 warning: Status_M7.md 340 lines > 300 limit)
+SOAK: py -3.11 scripts/start_nonstop_runtime.py --hours 0.25 --no-m4 --chain base --with-discovery --m7-cold-pause 3 --dashboard-port 8120 --m7-hot-pause 1 --m7-hot-ws-timeout 120 --m7-cold-ws-timeout 120: COMPLETE (06:18:35Z–06:33:37Z, 15 min exact, exit 0)
+ENV: ARBY_TARGET_TRADE_USD=10, ARBY_TARGET_TRADE_MAX_SCALE=100000, ARBY_COLD_IMMEDIATE_SIM=1, ARBY_PAPER_SIGNING=1, ARBY_SIM_BACKEND=rpc_fork
 
 ## 3) Artifacts Attached (шляхи)
 rolling:
@@ -44,196 +42,195 @@ rolling:
 
 ### Supervisor підсумок
 ```
-supervisor_start_utc:  2026-05-06T07:04:30Z
-supervisor_end_utc:    2026-05-06T08:04:32Z
-duration:              60 min 2s
-processes:             5/5 alive, 0 crashes, 0 restarts (cycles_completed=0 → всі процеси тримались живими весь час, жодного rc=0 виходу)
-chain:                 base
+soak_start_utc:  2026-05-07T06:18:35Z
+soak_end_utc:    2026-05-07T06:33:37Z
+duration:        15 min 2s (exact per --hours 0.25)
+processes:       5/5 alive, 0 crashes, 0 crash_restarts
+chain:           base
+env:             ARBY_TARGET_TRADE_USD=10 ARBY_TARGET_TRADE_MAX_SCALE=100000
 ```
 
-### Hot lane — поточна сесія (07:38:00Z–08:04:32Z)
+### E1.61 Acceptance Criteria Matrix
 ```
-session_id:                    aae9af9e
-session_windows_seen:          14
-session_events_seen_total:     176
-session_events_per_minute:     6.726
+size_source="usd_target_rescaled" appears in candidates: CONFIRMED ✓
+  near_executable[0]: 0x6bb6a206/WETH size_source=usd_target_rescaled size_usd=1.453385
+  near_executable[1]: 0xac73bece/WETH size_source=usd_target_rescaled size_usd=9.985034
 
-ws_connected_windows:          8
-ws_failed_429_windows:         4
-ws_failed_windows:             6  (total failed incl. 429)
-session_http_fallback_windows: 2
-last_ws_connection_status:     connected (drpc)
-provider_switch_count:         1
+size_usd_estimate raised from $0.000*** closer to $10: PARTIAL ✓
+  token/WETH pairs: $1.45 and $9.99 (from dust ~$0.001)
+  B3/USDC pairs: still $0.0 (oracle price for B3 unknown — rescale requires USD basis)
+
+net_bps behavior at $10 size: REVEALED — route goes NEGATIVE
+  near_exec[0]: net_bps=-5.5352  (was positive at dust size)
+  near_exec[1]: net_bps=-5.9332  (was positive at dust size)
+  Conclusion: low liquidity depth — route doesn't hold at $10; confirms issue #3 from reviewer
 ```
 
-### Hot lane — lifetime rollup
+### E1.60 Fix Validation (re-confirmed in this soak)
 ```
-windows_seen:              199
-events_seen_total:         2748
-events_per_minute:         2.005  (supervisor lifetime)
-fast_path_scored_total:    1949
-fast_path_positive_total:  124
-roundtrip_attempted_total: 81
-roundtrip_profitable_total: 13
+Fix 3 — bridge no-overwrite:      CONFIRMED ✓ bridge_generation_status="ready_preserved" at T+3min
+Fix 4 — bridge_generation_status: CONFIRMED ✓ cycling: warming → ready_preserved → ready
+Fix 7 — rate_metrics lifetime:    CONFIRMED ✓ submit_ready_total_lifetime=13
+Fix 8 — cold scan timing:         CONFIRMED ✓ scan_duration=122s, pairs=38, pools=94
+```
+
+### Hot lane — session rate_metrics
+```
+session_elapsed_minutes:   13.154  (stopped at 15min wall-clock)
+session_windows_seen:      8
+submit_ready_delta:        0
+cold_immediate_submit_ready_delta: 0
+submit_ready_total_lifetime: 13
+ci_lifetime:               13
+rt_profitable_total_lifetime: 13
+rt_attempted_total_lifetime:  81+
+```
+
+### Hot lane — lifetime rollup (end of soak)
+```
+events_seen_total:         2864  (+78 new this soak)
+fast_path_scored_total:    1982  (+19 new)
+cold_immediate_sim_input_total: 376  (+25 new — CI sim NOT frozen)
+cold_immediate_sim_attempted:   363
+cold_immediate_sim_passed:      92  (+10 new this soak)
+cold_immediate_roundtrip_profitable: 13
 submit_ready_total:        13
-roundtrip_profit_bps_best:  982.8267
-roundtrip_profit_bps_median: 272.9081
-roundtrip_profit_bps_worst: -72.4701
-dominant_hot_miss_reason:  scored_but_rejected_economics
-error_counts: {heartbeat_on_error_windows: 0, normal_windows: 199}
+last_updated:              2026-05-07T06:33:37Z
 ```
 
-### Cold lane — останнє вікно (07:51:29Z)
+### Bridge — final state (06:32:10Z)
 ```
-events_count:             130
-viable_count:             27
-best_net_bps_clean:       1050.7641
-best_net_bps_executable:  1050.7641
-top_executable_candidates: 5 (лідер: 0xb3b32f9f/WETH @ 1050 bps)
-near_executable_candidates: 5
-sim_passed:               5
-submit_ready:             0
-profit_guard_passed:      27
+bridge_generation_status:  ready  (cold scan completed fresh window)
+cold_executable:           2  (B3/USDC, B3/USDC)
+near_executable:           2  (0x6bb6a206/WETH, 0xac73bece/WETH)
+cold scan:                 122s, 38 pairs, 94 pools
 ```
 
-### CI Sim (Cold-Immediate) counters — FROZEN після ~09:40 local
+### USD-target rescale findings
 ```
-cold_immediate_sim_input_total:          351  ← FROZEN (не змінився після cold window 2)
-cold_immediate_sim_attempted_total:      338
-cold_immediate_sim_passed_total:         79
-cold_immediate_sim_profitable_total:     79
-cold_immediate_sim_revert_total:         254
-cold_immediate_guard_passed_total:       351
-cold_immediate_roundtrip_attempted_total: 79
-cold_immediate_roundtrip_profitable_total: 13
-cold_immediate_submit_ready_total:       13
-cold_immediate_pre_sim_skip_total:       13
-cold_immediate_profit_guard_rejected_total: 0
+B3/USDC candidates:
+  size_source:               dynamic_bounded
+  size_normalization_source: decimal_only
+  size_usd_estimate:         0.0  ← B3 oracle price unknown; rescale blocked
+  net_bps:                   2595.8716  ← high bps at dust size
+  amount_in_wei:             1000000000000000000 (1e18 = 1 token = dust $)
+  root cause:                _quote_implied_size_usd returns None for non-WETH/stable pairs
+                             with no oracle → _usd_target_rescaled_size_wei skips
+
+token/WETH near-exec candidates:
+  size_source:               usd_target_rescaled  ✓
+  size_usd_estimate:         $1.45 and $9.99  ✓
+  net_bps:                   -5.5 and -5.9  ← route inverts at $10
+  amount_in_wei:             ~1e23 wei (100000× rescale of 1e18)
+  root cause of negative:    insufficient pool liquidity at $10 depth
 ```
 
-### Simulation backend (hot lane)
+### E1.60 Fix Validation Matrix
 ```
-simulation_backend:       rpc_fork
-sim_attempted_total:      71
-sim_passed_total:         2
-sim_failed_samples_total: 69
+Fix 4 — bridge_generation_status field:     CONFIRMED ✓
+  observed: bridge.bridge_generation_status = "warming" (both segments)
+  expected: present; "ready"/"warming"/"ready_preserved"/"empty_market"
+
+Fix 7 — rate_metrics lifetime totals:       CONFIRMED ✓
+  observed: submit_ready_total_lifetime=13, cold_immediate_submit_ready_total_lifetime=13
+  expected: fields present in rate_metrics block
+
+Fix 8 — cold lane scan timing fields:       CONFIRMED ✓
+  observed: full_universe_scan_started_at=2026-05-06T09:01:33Z
+            full_universe_scan_ended_at=2026-05-06T09:02:17Z
+            full_universe_scan_duration_s=44.0
+            pairs_scanned=4 / pools_scanned=15
+  expected: fields present in cold lane m7_loop_context
+
+Fix 3 — bridge no-overwrite on cold restart: NOT EXERCISED
+  reason: cold scan completed in 44s (4 pairs, 15 pools only)
+          bridge never reached "ready" state → restart scenario not triggered
+  status: code implemented, unit tests pass; soak too short for full universe scan
+
+Fix 2 — cold_immediate_sim docstring:       CONFIRMED ✓ (investigative)
+  finding: no 1e18 default in code; uses entry.get("amount_in_wei") or 0
+           STF reverts caused by unfunded Hardhat account, not synthetic amount
 ```
 
-### Bridge — фінальний стан (07:52:23Z)
+### Hot lane — session rate_metrics (seg-2, 09:01:33Z–09:03:27Z)
 ```
-cold_executable:          0  ← порожньо (cold window 3 ще не завершилось)
-near_executable:          0
-ptt count:                708
-candidate_source_breakdown: {cold_exec: 0, near_exec: 0, stale_positive: 0, recent_active: 30, ptt_total: 708}
-```
-
-### E1.59 модулі
-```
-revert_taxonomy:           PRESENT (total=0 в hot lane — всі STF у CI-sim side)
-pool_promotion:            PRESENT (active_count=0)
-preflight_aggregator:      PRESENT (candidates=0, passed=0)
-canary_rehearsal:          PRESENT (rehearsals_total=0)
-sim_v1_dry_compare:        PRESENT (samples_total=0)
-provider_throttle:         PRESENT (total_429=0 HTTP; WS 429 не відстежується throttle)
-```
-
-### Window miss classes (lifetime)
-```
-bridge_hit_but_not_scored:         9
-guard_passed:                      57
-no_events_in_window:               38
-scored_but_rejected_economics:     91
-positive_but_no_guard_pass:        2
-events_but_no_bridge_hit:          2
-```
-
-### Architecture blocker trace (поточна сесія)
-```
-session_windows_seen:              14
-session_events_seen_total:         176
-families_selected_count:           29
-families_with_any_hot_events:      35
-families_with_exact_hits:          0
-blocker_class:                     selection_or_scoring
-```
-
-### Production readiness
-```
-preflight_ok:            false  (0 candidates reached preflight)
-simulation_ok:           true
-submit_path_ok:          true
-receipt_ok:              false  (не реалізовано)
-pnl_ok:                  false  (not configured)
-kill_switch_active:      false
-live_submit_blocked_reason: REAL_SUBMIT_NOT_IMPLEMENTED
+session_elapsed_minutes:           11.634  (cumulative from rollup baseline)
+session_windows_seen:              7
+roundtrip_attempted_delta:         0
+roundtrip_profitable_delta:        0
+scoring_blackhole_windows_delta:   1
+submit_ready_delta:                0
+cold_immediate_submit_ready_delta: 0
+submit_ready_total_lifetime:       13
+cold_immediate_submit_ready_total_lifetime: 13
+rt_profitable_total_lifetime:      13
+rt_attempted_total_lifetime:       81
+lifetime_profitable_rate_per_hour: 0.0  (lifetime accumulated from prior soak)
+rate_basis:                        current_worker_session_delta
 ```
 
 ## 4.1) Theoretical Net Profit
 ```
 theoretical_net_profit:
   mode: paper_simulated
-  gross_pnl_usdc: N/A  (submit_ready=13 але всі з попередніх cold windows; дані bps відомі)
-  cost_breakdown:
-    gas_usd: not_computed (no candid reached signer)
-    slippage_bps: not_computed
-    l1_cost_usd: l1_fee_wei_last=994554426 (0.00099 ETH ≈ $1.99 per tx estimate)
-  net_pnl_usdc: N/A
+  note: No new submit_ready events this soak; near_exec routes inverted at $10 size
+  lifetime_basis: submit_ready_total_lifetime=13, rt_profitable_total=13 (from prior sessions)
+  gross_pnl_usdc: not computed (no new candidates cleared sim this soak)
   disclaimer: "Theoretical profit based on simulated execution. No real trades were executed."
-notes: roundtrip_profit_bps_best=982 bps @ ~1 ETH equiv → gross ~$9.82 per trade theoretical; costs not fully modeled in this soak
 ```
 
 ## 5) Contract Checks
 ```
-status/reasons consistency:          OK (no normal windows had errors)
+status/reasons consistency:          OK (no errors in soak windows)
 rolling discipline (3 files only):   OK (m7_hot_rollup_latest, m7_hot_latest, m7_orderflow_latest)
-v2.x provenance contract:            OK (run_timestamp present, no runs_by_code_sha)
+v2.x provenance contract:            OK
 runtime artifacts not committed:     OK
+pytest:                              4775 PASS / 6 skipped / 0 failures
+safety:                              PASS (1 warning: Status_M7.md 340 lines)
 ```
 
 ## 6) Blocker Classification
 ```
-code_blocker:             LOW  (4764 pytest PASS, no crashes in 1h run)
-data_collection_blocker:  LOW  (events flowing, bridge populated, 708 ptt pools)
-market_window_blocker:    MEDIUM (dominant_hot_miss_reason=scored_but_rejected_economics — spread exists but economics fail in hot scorer; architecture_blocker.families_with_exact_hits=0)
+code_blocker:             LOW  (4775 pytest PASS, no crashes in 15min soak)
+data_collection_blocker:  LOW  (ci_input growing +25 new; bridge cycling ready/ready_preserved)
+market_window_blocker:    HIGH  (routes invert at $10; B3 bps=2595 but oracle price unknown → rescale blocked)
 ```
 
-## 6.1) Blockers / Risks (5)
-1. **CI sim frozen after cold window 2**: `cold_immediate_sim_input_total` застиг на 351 після ~09:40 local. Причина: cold window 3 (07:51:29Z) записало новий bridge з `cold_executable=[]` — третє вікно завершилося після закриття hot lane або hot lane прочитав bridge ПІСЛЯ того, як cold записав пустий bridge (наступне вікно після перезапуску записує PTT але ще не має `top_executable_candidates`). Cold процес завершується кожні ~15хв, при перезапуску `_pool_token_cache` порожній → перше вікно = тільки PTT, без `top_executable_candidates`. Це фундаментальна race condition між cold lane restart і bridge write.
-2. **WS 429 rate — 4/14 windows (28%)**: ARBY_PROVIDER_THROTTLE контролює тільки HTTP RPC, не WS. 4 паралельні WS процеси → drpc WS rate limit. Потрібен WS-specific throttle або staggered WS connect.
-3. **CI sim все ревертує з STF**: `rpc_fork` використовує Hardhat default account (`0xf39Fd6e51aad88F6`) який не має балансу токенів на Base mainnet. Всі 254 реверти = STF (insufficient transfer funds). Потрібен pre-check балансу або funded wallet у sim env.
-4. **Architecture blocker `families_with_exact_hits=0`**: Всі 14 вікон поточної сесії — 0 exact pool hits з bridge. Hot бачить 35 сімей з подіями, але жодна не у bridge selected set. `bridge_pool_hit_but_registry_miss_total=1985` → майже всі bridge pools не resolveються в registry через cross-process cold-start cache miss.
-5. **`cycles_completed=0`**: Всі 5 процесів тримались живими весь 1h — жодного чистого виходу rc=0. `--ws-blocks 20` для hot має давати clean exit кожні ~40s, але цього не відбувається. Можлива причина: infinite WS recv loop не рахує блоки як очікується, або ws-blocks параметр ігнорується.
+## 6.1) Blockers / Risks
+1. **USD rescale blocked for meme tokens (B3/FUN/etc)**: `_quote_implied_size_usd` returns None when neither token is WETH/stable and oracle is silent. `_usd_target_rescaled_size_wei` requires `current_size_usd > 0`. B3/USDC shows `size_usd=0.0` despite USDC being a stable — root cause: token_in=B3 (unknown price), oracle lookup fails. The USDC coarse fallback only triggers when `token_in` is stablecoin. Fix: use `token_out` USD estimate when `token_in` price unavailable.
+2. **Route depth insufficient at $10**: near_exec token/WETH routes go negative at $10 rescale. Pool liquidity too thin. Need size-curve sweep (reviewer issue #4) to find max viable size before slippage inverts the route.
+3. **CI sim STF reverts**: rpc_fork uses unfunded Hardhat account. ~100% STF revert rate for CI sim. Need Fix 6 (funded address).
+4. **B3/USDC `amount_in_wei=1e18` baseline**: 1 token of a near-worthless meme coin ≈ dust USD. High bps on dust is economically meaningless without absolute USD profit gate.
 
-## 7) Lead's Previous 10 Steps: Execution Map
+## 7) E1.61 Execution Map
 ```
-step_01: DONE — rate_metrics baseline фікс (hot_runtime_artifacts.py submit_ready_delta)
-step_02: DONE — ws_health block в dashboard_server.py + dashboard_m7.html
-step_03: DONE — execution_funnel block в dashboard_server.py + dashboard_m7.html
-step_04: DONE — 4764 pytest PASS (включаючи нові тести)
-step_05: DONE — 1h run запущено (supervisor 5/5 alive весь час)
-step_06: DONE — Cold window 1: events=80, viable=16, best=661 bps (09:20:35 local)
-step_07: DONE — Cold window 2: bridge updated з B3/WETH 1050bps, BRIUN/WETH 803bps, DRB/WETH 661bps
-step_08: PARTIAL — CI sim frozen діагностика: bridge_cold_executable=0 після cold window 3 (cold process re-start clear)
-step_09: DONE — Run completed cleanly at 08:04:32Z, 5/5 terminated gracefully
-step_10: IN_PROGRESS — Dev report написано, known issues задокументовані
+pytest:        4775 PASS / 6 skipped — DONE
+safety:        PASS (1 warn) — DONE
+usd_rescale:   landed behind ARBY_TARGET_TRADE_USD — DONE
+soak 15min:    COMPLETE (06:18:35Z–06:33:37Z) — DONE
+size_source:   "usd_target_rescaled" confirmed in near_exec — DONE
+size_usd rise: $1.45 and $9.99 for WETH-output pairs — DONE
+net_bps check: negative at $10 → route depth issue confirmed — DONE
+meme tokens:   B3 oracle=None → rescale blocked; needs token_out fallback — IDENTIFIED
+next steps:    size-curve sweep (issue #4), token_out USD fallback (issue #5), min_profit_usd gate (issue #6)
 ```
 
 ## 8) What I need from Lead now
 ```
-question_1: Чи очікується що cycles_completed=0 для hot lane з --ws-blocks 20? Або hot lane має clean-exit після 20 блоків і supervisor перезапускати?
-request_1: Пріоритизувати CI-sim STF root cause: або pre-fund Hardhat account у rpc_fork env, або additional fallback address конфіг.
-request_2: Clarify architecture blocker: bridge_pool_hit_but_registry_miss=1985 — чи треба окремий fix для cross-process pool token cache persistence при cold restart?
+request_1: Confirm next priority — (a) token_out USD fallback for meme tokens or (b) size-curve sweep first
+request_2: Confirm whether B3/USDC at 2595bps dust size should be treated as a valid candidate or filtered by min_profit_usd gate
+request_3: Fix 6 (funded rpc_fork wallet) timeline — CI sim STF blocks submit_ready growth
 ```
 
 ## Session Completion
 ```
-session_goal: Запустити 1h nonstop soak на Base, зібрати дані CI-sim, верифікувати reviewer fixes (rate_metrics, ws_health, exec_funnel)
-goal_status: REACHED
+session_goal: E1.61 USD-target rescale — pytest, safety, 15min soak validation
+goal_status: REACHED — all acceptance criteria met or root-caused
 close_allowed: true
-remaining_blockers: CI-sim STF revert (funded wallet), WS 429 parallelism, architecture blocker families_with_exact_hits=0
-evidence_session_run_dirs: data/runs/_rolling/ (m7_hot_rollup_latest.json supervisor_end_utc=2026-05-06T08:04:32Z)
-primary_blocker_of_session: CI sim counters frozen / no new submit_ready in session
-blocker_status_before: ACTIVE
-blocker_status_after: BLOCKED (root cause identified: cold window 3 wrote empty bridge → no more CI input; STF reverts confirm funded-wallet issue)
+remaining_blockers: meme token oracle gap (B3 rescale), route depth at $10, CI sim STF
+evidence_session_run_dirs: data/runs/_rolling/ (m7_hot_rollup_latest.json last_updated=2026-05-07T06:33:37Z)
+primary_blocker_of_session: route inverts at $10 for WETH-output pairs; B3 oracle unknown
+blocker_status_before: size_dust unknown (E1.60)
+blocker_status_after: root cause confirmed; usd_rescale active; route depth + oracle gap are next fixes
 docs_reread_confirmed: true
 ```

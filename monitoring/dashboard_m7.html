@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ARBY — M7 Live Dashboard</title>
+<title>ARBY - M7 Live Dashboard</title>
 <style>
   :root {
     --bg: #0e1117; --panel: #161b22; --border: #30363d;
@@ -26,7 +26,7 @@
   .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 10px; }
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; color: var(--muted); font-size: 11px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 5px 8px; border-bottom: 1px solid #1c2128; font-size: 12px; }
+  td { padding: 5px 8px; border-bottom: 1px solid #1c2128; font-size: 12px; vertical-align: top; }
   tr:hover td { background: #1c2128; }
   .mono { font-family: monospace; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -34,17 +34,19 @@
   .red { color: var(--red); }
   .yellow { color: var(--yellow); }
   .muted { color: var(--muted); }
+  .small { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
   .kv dt { color: var(--muted); font-size: 11px; white-space: nowrap; }
   .kv dd { font-size: 12px; word-break: break-all; }
   #stale-warning { display: none; background: #3a2a00; border: 1px solid var(--yellow); color: var(--yellow); padding: 8px 16px; border-radius: 6px; }
   .pulse { animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  @media (max-width: 900px) { .row2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <header>
-  <h1>⚡ ARBY M7 Live</h1>
+  <h1>ARBY M7 Live</h1>
   <span id="ks-badge" class="badge badge-yellow">kill-switch: ?</span>
   <span id="fresh-badge" class="badge badge-yellow">stale</span>
   <span id="exec-badge" class="badge badge-yellow">exec: blocked</span>
@@ -52,71 +54,70 @@
     <option value="production">production</option>
     <option value="discovery">discovery</option>
   </select>
-  <span id="last-refresh">—</span>
+  <span id="last-refresh">-</span>
 </header>
 <main>
-  <div id="stale-warning">⚠ Data is stale — scanner may not be running</div>
+  <div id="stale-warning">Data is stale - scanner may not be running</div>
 
-  <!-- Row 1: Operator decision line -->
   <div class="panel">
     <h2>Operator Decision Line</h2>
     <div class="kv" id="decision-kv">
-      <dt>Kill switch</dt><dd id="kv-ks">—</dd>
-      <dt>Submit ready (this scan)</dt><dd id="kv-sr">—</dd>
-      <dt>Live executions today</dt><dd id="kv-le">—</dd>
-      <dt>Exec blocked reason</dt><dd id="kv-br">—</dd>
-      <dt>Last updated</dt><dd id="kv-lu">—</dd>
-      <dt>Hot cycle age</dt><dd id="kv-hca">—</dd>
-      <dt>Last event age</dt><dd id="kv-lea">—</dd>
-      <dt>Cold scan age</dt><dd id="kv-csa">—</dd>
-      <dt>Submit ready age</dt><dd id="kv-sra">—</dd>
+      <dt>Kill switch</dt><dd id="kv-ks">-</dd>
+      <dt>Submit ready (this scan)</dt><dd id="kv-sr">-</dd>
+      <dt>Live executions today</dt><dd id="kv-le">-</dd>
+      <dt>Exec blocked reason</dt><dd id="kv-br">-</dd>
+      <dt>Last updated</dt><dd id="kv-lu">-</dd>
+      <dt>Hot cycle age</dt><dd id="kv-hca">-</dd>
+      <dt>Last event age</dt><dd id="kv-lea">-</dd>
+      <dt>Cold scan age</dt><dd id="kv-csa">-</dd>
+      <dt>Submit ready age</dt><dd id="kv-sra">-</dd>
     </div>
   </div>
 
-  <!-- Row 2: Opportunities table -->
+  <div class="panel">
+    <h2>USD Coverage / Metric Audit</h2>
+    <dl class="kv" id="usd-audit-kv"><dt class="muted">Loading...</dt><dd>-</dd></dl>
+  </div>
+
   <div class="panel">
     <h2>Active Opportunities (latest scan)</h2>
     <div style="overflow-x:auto">
       <table id="opp-table">
         <thead><tr>
-          <th>Pair</th><th>Route</th><th>Optimal Size</th>
-          <th class="num">Net Spread (bps)</th><th class="num">Expected Profit</th>
-          <th class="num">Gas</th><th class="num">Slippage (bps)</th>
+          <th>Pair</th><th>Route</th><th>Optimal Size $</th>
+          <th class="num">Net Edge $</th><th class="num">Expected Profit $</th>
+          <th class="num">Gas $</th><th class="num">Slippage $</th>
           <th>Gate Status</th><th>Submit Ready</th>
         </tr></thead>
-        <tbody id="opp-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+        <tbody id="opp-body"><tr><td colspan="9" class="muted">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
 
   <div class="row2">
-    <!-- Live submit artifact -->
     <div class="panel">
       <h2>Last Live Submit</h2>
-      <dl class="kv" id="submit-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
+      <dl class="kv" id="submit-kv"><dt class="muted">No data</dt><dd>-</dd></dl>
     </div>
-    <!-- Live PnL artifact -->
     <div class="panel">
       <h2>Last Live PnL</h2>
-      <dl class="kv" id="pnl-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
+      <dl class="kv" id="pnl-kv"><dt class="muted">No data</dt><dd>-</dd></dl>
     </div>
   </div>
 
-  <!-- Canary -->
   <div class="panel">
     <h2>Last Canary</h2>
-    <dl class="kv" id="canary-kv"><dt class="muted">No data</dt><dd>—</dd></dl>
+    <dl class="kv" id="canary-kv"><dt class="muted">No data</dt><dd>-</dd></dl>
   </div>
 
-  <!-- Row: WS Health + Execution Funnel -->
   <div class="row2">
     <div class="panel">
       <h2>WS Health</h2>
-      <dl class="kv" id="ws-health-kv"><dt class="muted">Loading…</dt><dd>—</dd></dl>
+      <dl class="kv" id="ws-health-kv"><dt class="muted">Loading...</dt><dd>-</dd></dl>
     </div>
     <div class="panel">
       <h2>Execution Funnel</h2>
-      <dl class="kv" id="exec-funnel-kv"><dt class="muted">Loading…</dt><dd>—</dd></dl>
+      <dl class="kv" id="exec-funnel-kv"><dt class="muted">Loading...</dt><dd>-</dd></dl>
     </div>
   </div>
 </main>
@@ -126,12 +127,18 @@ const REFRESH_MS = 10_000;
 let profile = 'production';
 
 function fmt(v, digits=4) {
-  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  if (v === null || v === undefined) return '<span class="muted">-</span>';
   if (typeof v === 'number') return v.toFixed(digits);
   return String(v);
 }
+function fmtUsd(v, digits=2) {
+  if (v === null || v === undefined) return '<span class="muted">$--</span>';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '<span class="muted">$--</span>';
+  return '$' + n.toLocaleString(undefined, {minimumFractionDigits: digits, maximumFractionDigits: digits});
+}
 function colorNum(v, invert=false) {
-  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  if (v === null || v === undefined) return '<span class="muted">-</span>';
   const n = parseFloat(v);
   if (isNaN(n)) return String(v);
   const cls = invert ? (n > 0 ? 'red' : 'green') : (n > 0 ? 'green' : n < 0 ? 'red' : 'muted');
@@ -139,32 +146,52 @@ function colorNum(v, invert=false) {
 }
 function fmtSize(o) {
   if (o.amount_in_optimal_usd !== null && o.amount_in_optimal_usd !== undefined) {
-    const n = parseFloat(o.amount_in_optimal_usd);
-    if (!isNaN(n)) return `$${n.toFixed(2)}`;
+    return fmtUsd(o.amount_in_optimal_usd);
   }
   if (o.amount_in_optimal_wei !== null && o.amount_in_optimal_wei !== undefined) {
-    return `<span title="${o.amount_in_optimal_wei} wei">${String(o.amount_in_optimal_wei).slice(0, 8)}вЂ¦ wei</span>`;
+    return `<span class="yellow" title="${o.amount_in_optimal_wei} wei; runtime did not provide USD notional">$--</span><span class="small">USD unavailable</span>`;
   }
-  return '<span class="muted">вЂ”</span>';
+  return '<span class="muted">$--</span>';
 }
 function fmtProfit(o) {
   if (o.expected_profit_usd !== null && o.expected_profit_usd !== undefined) {
-    return colorNum(o.expected_profit_usd);
+    const n = parseFloat(o.expected_profit_usd);
+    const cls = !isNaN(n) && n > 0 ? 'green' : n < 0 ? 'red' : 'muted';
+    return `<span class="${cls}">${fmtUsd(o.expected_profit_usd)}</span>`;
   }
   if (o.expected_profit_wei !== null && o.expected_profit_wei !== undefined) {
     const n = parseFloat(o.expected_profit_wei);
-    const cls = !isNaN(n) && n > 0 ? 'green' : 'red';
-    return `<span class="${cls}" title="${o.expected_profit_wei} wei">${String(o.expected_profit_wei).slice(0, 8)}вЂ¦ wei</span>`;
+    const cls = !isNaN(n) && n > 0 ? 'yellow' : 'red';
+    return `<span class="${cls}" title="${o.expected_profit_wei} wei; runtime did not provide USD price basis">$--</span><span class="small">USD unavailable</span>`;
   }
-  return '<span class="muted">вЂ”</span>';
+  return '<span class="muted">$--</span>';
 }
 function fmtGas(o) {
-  if (o.gas_usd !== null && o.gas_usd !== undefined) return colorNum(o.gas_usd, true);
-  if (o.total_gas_bps !== null && o.total_gas_bps !== undefined) return `${fmt(o.total_gas_bps, 4)} bps`;
-  return '<span class="muted">вЂ”</span>';
+  if (o.gas_usd !== null && o.gas_usd !== undefined) {
+    return `<span class="red">${fmtUsd(o.gas_usd, 4)}</span>`;
+  }
+  if (o.total_gas_bps !== null && o.total_gas_bps !== undefined) {
+    return `<span class="yellow" title="${o.total_gas_bps} bps">$--</span><span class="small">USD unavailable</span>`;
+  }
+  return '<span class="muted">$--</span>';
+}
+function fmtSlip(o) {
+  if (o.slippage_usd !== null && o.slippage_usd !== undefined) {
+    return `<span class="red">${fmtUsd(o.slippage_usd, 4)}</span>`;
+  }
+  if (o.slippage_bps !== null && o.slippage_bps !== undefined) {
+    return `<span class="yellow" title="${o.slippage_bps} bps">$--</span><span class="small">USD unavailable</span>`;
+  }
+  return '<span class="muted">$--</span>';
 }
 function kv(pairs) {
   return pairs.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+function ageStr(s) {
+  if (s === null || s === undefined) return '<span class="muted">-</span>';
+  const n = parseInt(s);
+  const cls = n > 300 ? 'red' : n > 120 ? 'yellow' : 'green';
+  return `<span class="${cls}">${n}s</span>`;
 }
 
 async function refresh() {
@@ -178,13 +205,11 @@ async function refresh() {
 
   document.getElementById('last-refresh').textContent = 'refreshed ' + new Date().toLocaleTimeString();
 
-  // Kill switch badge
   const ks = data.kill_switch_active;
   const ksBadge = document.getElementById('ks-badge');
   ksBadge.textContent = ks ? 'kill-switch: ON' : 'kill-switch: OFF';
   ksBadge.className = 'badge ' + (ks ? 'badge-red' : 'badge-green');
 
-  // Freshness
   const freshBadge = document.getElementById('fresh-badge');
   const staleWarn = document.getElementById('stale-warning');
   if (data.is_fresh) {
@@ -197,7 +222,6 @@ async function refresh() {
     staleWarn.style.display = '';
   }
 
-  // Exec badge
   const execBadge = document.getElementById('exec-badge');
   const blocked = data.live_exec_blocked_reason || data.live_submit_blocked_reason;
   if (!blocked && !ks && data.live_executions_total > 0) {
@@ -211,90 +235,98 @@ async function refresh() {
     execBadge.className = 'badge badge-yellow';
   }
 
-  // Decision KV
   document.getElementById('kv-ks').innerHTML = ks
-    ? '<span class="red">ACTIVE — no live trading</span>'
-    : '<span class="green">OFF — trading allowed</span>';
-  document.getElementById('kv-sr').textContent = data.submit_ready_total ?? '—';
-  document.getElementById('kv-le').textContent = data.live_executions_total ?? '—';
+    ? '<span class="red">ACTIVE - no live trading</span>'
+    : '<span class="green">OFF - trading allowed</span>';
+  document.getElementById('kv-sr').textContent = data.submit_ready_total ?? '-';
+  document.getElementById('kv-le').textContent = data.live_executions_total ?? '-';
   document.getElementById('kv-br').innerHTML = blocked
     ? `<span class="yellow">${blocked}</span>` : '<span class="green">none</span>';
-  document.getElementById('kv-lu').textContent = data.last_updated ?? '—';
-
-  // Step 5: cycle age metrics
-  function ageStr(s) {
-    if (s === null || s === undefined) return '<span class="muted">—</span>';
-    const n = parseInt(s);
-    const cls = n > 300 ? 'red' : n > 120 ? 'yellow' : 'green';
-    return `<span class="${cls}">${n}s</span>`;
-  }
+  document.getElementById('kv-lu').textContent = data.last_updated ?? '-';
   document.getElementById('kv-hca').innerHTML = ageStr(data.hot_cycle_age_s);
   document.getElementById('kv-lea').innerHTML = ageStr(data.last_event_age_s);
   document.getElementById('kv-csa').innerHTML = ageStr(data.cold_scan_age_s);
   document.getElementById('kv-sra').innerHTML = ageStr(data.submit_ready_age_s);
 
-  // Opportunities table
+  const uc = data.usd_coverage || {};
+  const ma = data.metric_audit || {};
+  const cs = data.candidate_sources || {};
+  function sourceState(name) {
+    const s = cs[name] || {};
+    const state = s.is_fresh ? 'green' : 'yellow';
+    const age = s.age_s === null || s.age_s === undefined ? '-' : `${s.age_s}s`;
+    return `<span class="${state}">${s.is_fresh ? 'fresh' : 'stale'}</span> <span class="muted">(${age})</span>`;
+  }
+  document.getElementById('usd-audit-kv').innerHTML = kv([
+    ['Profit USD coverage', `${uc.profit_usd_available ?? 0}/${uc.opportunities_total ?? 0}`],
+    ['Amount USD coverage', `${uc.amount_usd_available ?? 0}/${uc.opportunities_total ?? 0}`],
+    ['Gas USD coverage', `${uc.gas_usd_available ?? 0}/${uc.opportunities_total ?? 0}`],
+    ['USD basis', uc.conversion_contract ?? 'dynamic only'],
+    ['Candidate source: orderflow', sourceState('orderflow')],
+    ['Candidate source: bridge', sourceState('bridge')],
+    ['Candidate source: hot', sourceState('hot')],
+    ['Synthetic 1e18 rows', ma.synthetic_amount_1e18_rows ?? 0],
+    ['L1 fee source', ma.l1_fee_source_last ?? 'unavailable'],
+    ['Rate baseline warning', ma.rate_metrics_zero_delta_with_nonzero_totals ? '<span class="yellow">YES</span>' : '<span class="green">no</span>'],
+  ]);
+
   const tbody = document.getElementById('opp-body');
   const opps = data.opportunities || [];
   if (!opps.length) {
     tbody.innerHTML = '<tr><td colspan="9" class="muted">No opportunities in current scan</td></tr>';
   } else {
     tbody.innerHTML = opps.map(o => `<tr>
-      <td class="mono">${o.pair ?? '—'}</td>
-      <td class="muted">${o.route ?? '—'}</td>
+      <td class="mono">${o.pair ?? '-'}</td>
+      <td class="muted">${o.route ?? '-'}</td>
       <td class="num">${fmtSize(o)}</td>
-      <td class="num">${colorNum(o.net_spread_bps)}</td>
+      <td class="num" title="${o.net_spread_bps ?? 'no bps'} bps; ${o.usd_basis ?? 'unknown USD basis'}">${fmtProfit(o)}</td>
       <td class="num">${fmtProfit(o)}</td>
       <td class="num">${fmtGas(o)}</td>
-      <td class="num">${fmt(o.slippage_bps, 1)}</td>
-      <td>${o.gate_status ?? '—'}</td>
+      <td class="num">${fmtSlip(o)}</td>
+      <td>${o.gate_status ?? '-'}</td>
       <td>${o.submit_ready
-        ? '<span class="badge badge-green">✓ ready</span>'
+        ? '<span class="badge badge-green">ready</span>'
         : `<span class="badge badge-yellow">${o.submit_blocker ?? 'blocked'}</span>`
       }</td>
     </tr>`).join('');
   }
 
-  // Live submit
   const ls = data.live_submit;
   document.getElementById('submit-kv').innerHTML = ls ? kv([
-    ['Spread ID', ls.spread_id ?? '—'],
-    ['TX Hash', ls.tx_hash ? `<span class="mono">${ls.tx_hash.slice(0,20)}…</span>` : '—'],
-    ['Relay', ls.relay ?? '—'],
+    ['Spread ID', ls.spread_id ?? '-'],
+    ['TX Hash', ls.tx_hash ? `<span class="mono">${ls.tx_hash.slice(0,20)}...</span>` : '-'],
+    ['Relay', ls.relay ?? '-'],
     ['Included', ls.included ? '<span class="green">YES</span>' : '<span class="red">NO</span>'],
-    ['Receipt status', ls.receipt_status ?? '—'],
-    ['State', ls.state ?? '—'],
-    ['Gas used', ls.gas_used ?? '—'],
+    ['Receipt status', ls.receipt_status ?? '-'],
+    ['State', ls.state ?? '-'],
+    ['Gas used', ls.gas_used ?? '-'],
     ['Canary only', ls.canary_only ? 'yes' : 'no'],
-    ['Timestamp', ls.timestamp ?? '—'],
-  ]) : '<dt class="muted">No live submit yet</dt><dd>—</dd>';
+    ['Timestamp', ls.timestamp ?? '-'],
+  ]) : '<dt class="muted">No live submit yet</dt><dd>-</dd>';
 
-  // PnL
   const lp = data.live_pnl;
   document.getElementById('pnl-kv').innerHTML = lp ? kv([
     ['Net PnL USD', colorNum(lp.net_pnl_usd)],
     ['Realized PnL USD', colorNum(lp.realized_pnl_usd)],
     ['Gas cost USD', colorNum(lp.total_gas_cost_usd, true)],
-    ['Gas used', lp.gas_used ?? '—'],
-    ['L1 fee wei', lp.l1_fee_wei ?? '—'],
-    ['ETH price USD', fmt(lp.eth_price_usd, 2)],
-    ['Timestamp', lp.timestamp ?? '—'],
-  ]) : '<dt class="muted">No live PnL yet</dt><dd>—</dd>';
+    ['Gas used', lp.gas_used ?? '-'],
+    ['L1 fee USD', lp.l1_fee_usd !== undefined ? fmtUsd(lp.l1_fee_usd, 6) : '<span class="muted">$--</span>'],
+    ['ETH price USD', fmtUsd(lp.eth_price_usd)],
+    ['Timestamp', lp.timestamp ?? '-'],
+  ]) : '<dt class="muted">No live PnL yet</dt><dd>-</dd>';
 
-  // Canary
   const cn = data.canary;
   document.getElementById('canary-kv').innerHTML = cn ? kv([
-    ['Chain', cn.chain ?? '—'],
-    ['Dry run', cn.dry_run ? 'yes' : '<span class="yellow">NO — REAL TX</span>'],
+    ['Chain', cn.chain ?? '-'],
+    ['Dry run', cn.dry_run ? 'yes' : '<span class="yellow">NO - REAL TX</span>'],
     ['Gate ok', cn.gate_ok ? '<span class="green">PASS</span>' : `<span class="red">FAIL: ${cn.gate_reason}</span>`],
-    ['TX Hash', cn.tx_hash ? `<span class="mono">${cn.tx_hash.slice(0,20)}…</span>` : '—'],
+    ['TX Hash', cn.tx_hash ? `<span class="mono">${cn.tx_hash.slice(0,20)}...</span>` : '-'],
     ['Included', cn.included ? '<span class="green">YES</span>' : '<span class="red">NO</span>'],
-    ['Receipt status', cn.receipt_status ?? '—'],
-    ['Gas used', cn.gas_used ?? '—'],
-    ['Timestamp', cn.timestamp ?? '—'],
-  ]) : '<dt class="muted">No canary run yet</dt><dd>—</dd>';
+    ['Receipt status', cn.receipt_status ?? '-'],
+    ['Gas used', cn.gas_used ?? '-'],
+    ['Timestamp', cn.timestamp ?? '-'],
+  ]) : '<dt class="muted">No canary run yet</dt><dd>-</dd>';
 
-  // WS Health
   const wsh = data.ws_health || {};
   function pctCls(p) {
     if (p === null || p === undefined) return 'muted';
@@ -302,21 +334,20 @@ async function refresh() {
   }
   const pct429 = wsh.pct_429;
   const pctStr = pct429 !== null && pct429 !== undefined
-    ? `<span class="${pctCls(pct429)}">${pct429}%</span>` : '<span class="muted">—</span>';
+    ? `<span class="${pctCls(pct429)}">${pct429}%</span>` : '<span class="muted">-</span>';
   document.getElementById('ws-health-kv').innerHTML = kv([
-    ['Status', wsh.last_status ? `<span class="${wsh.last_status === 'connected' ? 'green' : 'red'}">${wsh.last_status}</span>` : '—'],
-    ['Provider', wsh.last_provider ?? '—'],
-    ['Windows total', wsh.total_windows ?? '—'],
-    ['Connected windows', wsh.connected_windows ?? '—'],
-    ['Failed 429 windows', `${wsh.failed_429_windows ?? '—'} (${pctStr})`],
-    ['Other failed windows', wsh.failed_windows ?? '—'],
+    ['Status', wsh.last_status ? `<span class="${wsh.last_status === 'connected' ? 'green' : 'red'}">${wsh.last_status}</span>` : '-'],
+    ['Provider', wsh.last_provider ?? '-'],
+    ['Windows total', wsh.total_windows ?? '-'],
+    ['Connected windows', wsh.connected_windows ?? '-'],
+    ['Failed 429 windows', `${wsh.failed_429_windows ?? '-'} (${pctStr})`],
+    ['Other failed windows', wsh.failed_windows ?? '-'],
     ['HTTP fallback active', wsh.http_fallback_active ? '<span class="green">YES</span>' : '<span class="muted">no</span>'],
   ]);
 
-  // Execution Funnel
   const ef = data.execution_funnel || {};
   function funnelNum(n, color='green') {
-    if (n === null || n === undefined) return '<span class="muted">—</span>';
+    if (n === null || n === undefined) return '<span class="muted">-</span>';
     const cls = parseInt(n) > 0 ? color : 'muted';
     return `<span class="${cls}">${n}</span>`;
   }

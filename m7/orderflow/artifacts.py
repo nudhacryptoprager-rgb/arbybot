@@ -998,6 +998,8 @@ def build_replay_summary(
             "backrun_token_in_address": getattr(r, "backrun_token_in_address", None),
             "backrun_token_out_address": getattr(r, "backrun_token_out_address", None),
             "token_in_decimals": getattr(r, "token_in_decimals", None),
+            "size_source": getattr(r, "size_source", None),
+            "size_normalization_source": getattr(r, "size_normalization_source", None),
             "amount_in_wei": getattr(r, "amount_in_wei", None),
             "best_sweep_size_wei": getattr(r, "best_sweep_size_wei", None),
             "size_usd_estimate": getattr(r, "size_usd_estimate", None),

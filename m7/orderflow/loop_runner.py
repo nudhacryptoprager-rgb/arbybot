@@ -1115,12 +1115,29 @@ def run_loop(cli_args) -> None:
                             _accumulated_pairs[pk] = dict(p)
 
             # Inject loop runtime fields
+            # Fix 8 (E1.60): add scan timing + coverage counts so reviewers
+            # can see per-window cold scan duration and universe coverage.
+            _reg_stats = artifact.get("registry_session_stats") or {}
+            _duration_s: float = 0.0
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                _ts_a = _dt.strptime(window_started_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc)
+                _ts_b = _dt.strptime(window_ended_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_tz.utc)
+                _duration_s = round((_ts_b - _ts_a).total_seconds(), 1)
+            except Exception:
+                pass
             artifact["m7_loop_context"] = {
                 "lane": lane,
                 "loop_iteration": iteration,
                 "window_started_at": window_started_at,
                 "window_ended_at": window_ended_at,
                 "window_empty": window_empty,
+                # Fix 8: scan coverage/timing fields (meaningful for cold lane)
+                "full_universe_scan_started_at": window_started_at if lane == "cold" else None,
+                "full_universe_scan_ended_at": window_ended_at if lane == "cold" else None,
+                "full_universe_scan_duration_s": _duration_s if lane == "cold" else None,
+                "pairs_scanned": _reg_stats.get("unique_pairs_queried") if lane == "cold" else None,
+                "pools_scanned": _reg_stats.get("pools_active") if lane == "cold" else None,
             }
 
             # M7.A.5.31: Run profit guard on hot lane results

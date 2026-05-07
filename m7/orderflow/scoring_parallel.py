@@ -86,6 +86,96 @@ from m7.shared.constants import (
 
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
 
+
+_USD_STABLE_SYMBOLS = {"USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUSD", "FRAX"}
+_ETH_USD_SYMBOLS = {"WETH", "ETH"}
+
+
+def _quote_implied_size_usd(
+    *,
+    amount_in_wei: int,
+    decimals_in: Optional[int],
+    symbol_in: Optional[str],
+    amount_out_wei: Optional[int],
+    decimals_out: Optional[int],
+    symbol_out: Optional[str],
+    eth_price_usd: Optional[float],
+) -> Optional[float]:
+    """Estimate notional USD only from this candidate's quote and live anchors."""
+    in_sym = (symbol_in or "").upper()
+    out_sym = (symbol_out or "").upper()
+    dec_in = decimals_in if decimals_in is not None else 18
+    dec_out = decimals_out if decimals_out is not None else 18
+
+    if in_sym in _USD_STABLE_SYMBOLS:
+        return round(amount_in_wei / (10 ** dec_in), 6)
+    if in_sym in _ETH_USD_SYMBOLS and eth_price_usd and eth_price_usd > 0:
+        return round(amount_in_wei / (10 ** dec_in) * float(eth_price_usd), 6)
+    if amount_out_wei is None or amount_out_wei <= 0:
+        return None
+    if out_sym in _USD_STABLE_SYMBOLS:
+        return round(amount_out_wei / (10 ** dec_out), 6)
+    if out_sym in _ETH_USD_SYMBOLS and eth_price_usd and eth_price_usd > 0:
+        return round(amount_out_wei / (10 ** dec_out) * float(eth_price_usd), 6)
+    return None
+
+
+def _read_positive_float_env(name: str, default: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _usd_target_rescaled_size_wei(
+    *,
+    amount_in_wei: int,
+    current_size_usd: Optional[float],
+    target_usd: Optional[float] = None,
+    max_scale: Optional[float] = None,
+    max_size_wei: Optional[int] = None,
+) -> Optional[int]:
+    """Return a larger test size when a dynamic USD basis is far too small.
+
+    This is deliberately opt-in via ``ARBY_TARGET_TRADE_USD``. The legacy
+    decimal-normalized bounds cap 18-decimal inputs at 1 whole token, which is
+    reasonable for WETH but pathological for low-price ERC20s. This helper only
+    scales when a live quote/oracle-derived USD basis exists.
+    """
+    if amount_in_wei <= 0 or current_size_usd is None or current_size_usd <= 0:
+        return None
+    target = (
+        float(target_usd)
+        if target_usd is not None
+        else _read_positive_float_env("ARBY_TARGET_TRADE_USD", 0.0)
+    )
+    if target <= 0 or current_size_usd >= target:
+        return None
+    scale = target / float(current_size_usd)
+    if scale <= 1:
+        return None
+    max_scale_val = (
+        float(max_scale)
+        if max_scale is not None
+        else _read_positive_float_env("ARBY_TARGET_TRADE_MAX_SCALE", 100000.0)
+    )
+    if max_scale_val > 0:
+        scale = min(scale, max_scale_val)
+    new_size = int(amount_in_wei * scale)
+    max_size_val = max_size_wei
+    if max_size_val is None:
+        try:
+            max_size_val = int(os.getenv("ARBY_TARGET_TRADE_MAX_WEI", "0") or "0")
+        except (TypeError, ValueError):
+            max_size_val = 0
+    if max_size_val and max_size_val > 0:
+        new_size = min(new_size, max_size_val)
+    if new_size <= amount_in_wei:
+        return None
+    return new_size
+
+
 def score_backrun_live_parallel(
     event: OrderflowEvent,
     rpc_url: str,
@@ -415,7 +505,7 @@ def score_backrun_live_parallel(
     try:
         in_sym = admission.get("token_in_symbol")
         out_sym = admission.get("token_out_symbol")
-        oracle_result = check_oracle_sanity(in_sym, out_sym, rpc_url, current_block)
+        oracle_result = check_oracle_sanity(in_sym, out_sym, rpc_url, current_block, chain=chain)
     except Exception:
         pass  # oracle guard is best-effort
     _oracle_ms = round((time.monotonic() - _oracle_start) * 1000, 2)
@@ -826,6 +916,23 @@ def score_backrun_live_parallel(
             _mid_stage_latency["local_pricing_used"] = _local_result is not None
         # If local pricing produced amounts, compute net for diagnostic
         if _local_result is not None:
+            if _size_usd is None:
+                _mid_eth_price_usd: Optional[float] = None
+                if oracle_result:
+                    if (in_sym or "").upper() in _ETH_USD_SYMBOLS:
+                        _mid_eth_price_usd = oracle_result.get("token_in_oracle_usd")
+                    elif (out_sym or "").upper() in _ETH_USD_SYMBOLS:
+                        _mid_eth_price_usd = oracle_result.get("token_out_oracle_usd")
+                _mid_out_dec_usd = get_cached_decimals(token_out_addr)
+                _size_usd = _quote_implied_size_usd(
+                    amount_in_wei=int(backrun_size_wei),
+                    decimals_in=_effective_dec,
+                    symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+                    amount_out_wei=int(_local_result.get("buy_amount") or 0),
+                    decimals_out=_mid_out_dec_usd,
+                    symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+                    eth_price_usd=_mid_eth_price_usd,
+                )
             _mid_buy = _local_result["buy_amount"]
             _mid_sell = _local_result["sell_amount"]
             _mid_gross = _mid_sell - backrun_size_wei
@@ -938,6 +1045,60 @@ def score_backrun_live_parallel(
         best_buy_venue = _local_result.get("buy_dex", _local_result["buy_venue"])
         best_sell_venue = _local_result.get("sell_dex", _local_result["sell_venue"])
         venues_quoted = _local_result["pools_succeeded"]
+        _local_eth_price_usd: Optional[float] = None
+        if oracle_result:
+            if (in_sym or "").upper() in _ETH_USD_SYMBOLS:
+                _local_eth_price_usd = oracle_result.get("token_in_oracle_usd")
+            elif (out_sym or "").upper() in _ETH_USD_SYMBOLS:
+                _local_eth_price_usd = oracle_result.get("token_out_oracle_usd")
+        if _size_usd is None:
+            _out_dec_local_usd = get_cached_decimals(token_out_addr)
+            _size_usd = _quote_implied_size_usd(
+                amount_in_wei=int(backrun_size_wei),
+                decimals_in=_effective_dec,
+                symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+                amount_out_wei=int(best_buy_amount) if best_buy_amount else None,
+                decimals_out=_out_dec_local_usd,
+                symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+                eth_price_usd=_local_eth_price_usd,
+            )
+        _target_size_wei = _usd_target_rescaled_size_wei(
+            amount_in_wei=int(backrun_size_wei),
+            current_size_usd=_size_usd,
+        )
+        if _target_size_wei is not None:
+            try:
+                _target_result = attempt_local_pricing(
+                    candidate_pools=cand_pools,
+                    local_sim_states=local_sim["pool_states"],
+                    token_in_addr=token_in_addr,
+                    token_out_addr=token_out_addr,
+                    backrun_size_wei=_target_size_wei,
+                    registry_entries=_registry_entries if _registry_entries else None,
+                )
+            except Exception:
+                _target_result = None
+            if _target_result is not None:
+                backrun_size_wei = _target_size_wei
+                _local_result = _target_result
+                best_buy_amount = _local_result["buy_amount"]
+                best_sell_amount = _local_result["sell_amount"]
+                best_buy_venue = _local_result.get("buy_dex", _local_result["buy_venue"])
+                best_sell_venue = _local_result.get("sell_dex", _local_result["sell_venue"])
+                venues_quoted = _local_result["pools_succeeded"]
+                size_source = "usd_target_rescaled"
+                _out_dec_target_usd = get_cached_decimals(token_out_addr)
+                _target_usd = _quote_implied_size_usd(
+                    amount_in_wei=int(backrun_size_wei),
+                    decimals_in=_effective_dec,
+                    symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+                    amount_out_wei=int(best_buy_amount) if best_buy_amount else None,
+                    decimals_out=_out_dec_target_usd,
+                    symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+                    eth_price_usd=_local_eth_price_usd,
+                )
+                if _target_usd is not None:
+                    _size_usd = _target_usd
         # ── N5: Accumulate dynamic_anchors sample from live pool state ──
         # Fire-and-forget; never fail the hot path if recording has issues.
         try:
@@ -1131,7 +1292,7 @@ def score_backrun_live_parallel(
     # Separate WETH oracle call if not already available
     if _eth_price_usd is None:
         try:
-            _eth_orc = check_oracle_sanity("WETH", None, rpc_url, current_block)
+            _eth_orc = check_oracle_sanity("WETH", None, rpc_url, current_block, chain=chain)
             _eth_price_usd = _eth_orc.get("token_in_oracle_usd")
         except Exception:
             pass
@@ -1140,6 +1301,17 @@ def score_backrun_live_parallel(
         token_price_usd=_tok_price_usd,
         eth_price_usd=_eth_price_usd,
     )
+    if _size_usd is None and best_buy_amount is not None:
+        _out_dec_for_usd = get_cached_decimals(token_out_addr)
+        _size_usd = _quote_implied_size_usd(
+            amount_in_wei=int(backrun_size_wei),
+            decimals_in=_effective_dec,
+            symbol_in=in_sym or _ats.get(token_in_addr.lower(), ""),
+            amount_out_wei=int(best_buy_amount),
+            decimals_out=_out_dec_for_usd,
+            symbol_out=out_sym or _ats.get(token_out_addr.lower(), ""),
+            eth_price_usd=_eth_price_usd,
+        )
 
     if best_buy_amount is not None and best_sell_amount is not None:
         gross_wei = best_sell_amount - backrun_size_wei
@@ -1656,12 +1828,11 @@ def score_backrun_fast(
     # gate's MISSING_SIZE_METADATA check sees at least one non-None field.
     _size_usd_fast: Optional[float] = None
     _in_sym_upper_fast = tin_sym.upper()
-    if _in_sym_upper_fast in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUSD", "FRAX"):
+    if _in_sym_upper_fast in _USD_STABLE_SYMBOLS:
         try:
             _size_usd_fast = round(backrun_size_wei / (10 ** _effective_dec) * 1.0, 2)
         except Exception:
             _size_usd_fast = None
-
     return BackrunResult(
         event_id=event.event_id,
         event_source="live",

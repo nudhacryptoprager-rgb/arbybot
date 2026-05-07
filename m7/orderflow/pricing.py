@@ -36,6 +36,7 @@ from m7.shared.constants import (
     get_victim_min_size_usd,
     get_victim_min_impact_bps,
     get_chain_stale_blocks,
+    get_chainlink_feeds,
 )
 from m7.orderflow.contracts import BackrunResult, OrderflowEvent
 
@@ -640,6 +641,7 @@ def check_oracle_sanity(
     token_out_symbol: Optional[str],
     rpc_url: str,
     block_num: int,
+    chain: str = "arbitrum_one",
 ) -> Dict[str, Any]:
     """Check Chainlink price feeds as sanity guardrail (not execution truth).
 
@@ -662,16 +664,21 @@ def check_oracle_sanity(
         "oracle_staleness_seconds": None,
     }
 
-    # M7.A.5.37: Check cache before RPC
-    _cache_key = f"{token_in_symbol or ''}|{token_out_symbol or ''}"
+    # M7.A.5.37: Check cache before RPC. Keep the legacy Arbitrum key shape
+    # because older tests and callers seed the cache directly.
+    if str(chain or "").lower() in {"", "arbitrum", "arbitrum_one"}:
+        _cache_key = f"{token_in_symbol or ''}|{token_out_symbol or ''}"
+    else:
+        _cache_key = f"{chain}|{token_in_symbol or ''}|{token_out_symbol or ''}"
     _cached = _oracle_cache.get(_cache_key)
     if _cached is not None:
         _cached_block, _cached_result = _cached
         if abs(block_num - _cached_block) <= _ORACLE_CACHE_STALE_BLOCKS:
             return dict(_cached_result)  # return copy
 
-    feed_in = CHAINLINK_FEEDS_ARBITRUM.get(token_in_symbol or "") if token_in_symbol else None
-    feed_out = CHAINLINK_FEEDS_ARBITRUM.get(token_out_symbol or "") if token_out_symbol else None
+    chainlink_feeds = get_chainlink_feeds(chain)
+    feed_in = chainlink_feeds.get(token_in_symbol or "") if token_in_symbol else None
+    feed_out = chainlink_feeds.get(token_out_symbol or "") if token_out_symbol else None
 
     if not feed_in and not feed_out:
         return result

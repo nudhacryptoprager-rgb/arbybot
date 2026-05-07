@@ -365,6 +365,27 @@ def _parse_iso_utc(value):
     return dt.astimezone(timezone.utc)
 
 
+def _artifact_timestamp(artifact: dict):
+    if not isinstance(artifact, dict):
+        return None
+    return (
+        artifact.get("last_updated")
+        or artifact.get("timestamp_utc")
+        or artifact.get("timestamp")
+    )
+
+
+def _candidate_source_status(artifact: dict, now_utc: datetime, threshold_s: int) -> dict:
+    ts = _artifact_timestamp(artifact)
+    if not ts:
+        return {"timestamp": None, "age_s": None, "is_fresh": True}
+    dt = _parse_iso_utc(str(ts))
+    if dt is None:
+        return {"timestamp": str(ts), "age_s": None, "is_fresh": False}
+    age_s = max(0, int((now_utc - dt).total_seconds()))
+    return {"timestamp": str(ts), "age_s": age_s, "is_fresh": age_s <= threshold_s}
+
+
 def _top_hist(hist, n: int = 8):
     if not isinstance(hist, dict):
         return []
@@ -498,6 +519,103 @@ def _expected_profit_usd(size_usd, net_bps):
     return float((size_dec * bps_dec / Decimal("10000")).quantize(Decimal("0.000001")))
 
 
+def _usd_from_bps(size_usd, bps):
+    size_dec = _safe_decimal(size_usd)
+    bps_dec = _safe_decimal(bps)
+    if size_dec is None or bps_dec is None:
+        return None
+    return float((size_dec * bps_dec / Decimal("10000")).quantize(Decimal("0.000001")))
+
+
+def _first_decimal_field(source: dict, keys: tuple[str, ...]):
+    for key in keys:
+        value = source.get(key)
+        dec = _safe_decimal(value)
+        if dec is not None:
+            return dec
+    return None
+
+
+def _candidate_size_usd(candidate: dict, optimal_wei):
+    """Return USD notional only from artifact-provided USD fields.
+
+    The dashboard deliberately does not hardcode token prices. If the runtime
+    did not write a USD notional, the UI must say USD unavailable.
+    """
+    base_dec = _first_decimal_field(
+        candidate,
+        (
+            "amount_in_optimal_usd",
+            "size_usd_estimate",
+            "amount_in_usd",
+            "notional_usd",
+            "paper_size_usd",
+        ),
+    )
+    if base_dec is None:
+        return None
+    amount_dec = _safe_decimal(candidate.get("amount_in_wei"))
+    optimal_dec = _safe_decimal(optimal_wei)
+    if amount_dec is not None and amount_dec > 0 and optimal_dec is not None:
+        base_dec = base_dec * optimal_dec / amount_dec
+    return float(base_dec.quantize(Decimal("0.000001")))
+
+
+def _candidate_expected_profit_usd(candidate: dict, size_usd, net_bps):
+    explicit = _first_decimal_field(
+        candidate,
+        (
+            "expected_profit_usd",
+            "expected_pnl_usd",
+            "net_pnl_usd",
+            "profit_usd",
+            "expected_profit_usdc",
+            "net_pnl_usdc",
+        ),
+    )
+    if explicit is not None:
+        return float(explicit.quantize(Decimal("0.000001")))
+    return _usd_from_bps(size_usd, net_bps)
+
+
+def _candidate_gas_usd(candidate: dict, size_usd):
+    explicit = _first_decimal_field(
+        candidate,
+        ("gas_cost_usd", "total_gas_cost_usd", "gas_paid_usd", "gas_paid_usdc"),
+    )
+    if explicit is not None:
+        return float(explicit.quantize(Decimal("0.000001")))
+    return _usd_from_bps(size_usd, candidate.get("total_gas_bps"))
+
+
+def _candidate_slippage_usd(candidate: dict, size_usd):
+    explicit = _first_decimal_field(candidate, ("slippage_usd", "slippage_usdc"))
+    if explicit is not None:
+        return float(explicit.quantize(Decimal("0.000001")))
+    return _usd_from_bps(size_usd, candidate.get("slippage_bps"))
+
+
+def _candidate_usd_basis(candidate: dict, size_usd, profit_usd, gas_usd) -> str:
+    if size_usd is None and profit_usd is None and gas_usd is None:
+        return "unavailable"
+    explicit_usd_keys = {
+        "amount_in_optimal_usd",
+        "size_usd_estimate",
+        "amount_in_usd",
+        "notional_usd",
+        "paper_size_usd",
+        "expected_profit_usd",
+        "expected_pnl_usd",
+        "net_pnl_usd",
+        "profit_usd",
+        "gas_cost_usd",
+        "total_gas_cost_usd",
+    }
+    if any(candidate.get(key) is not None for key in explicit_usd_keys):
+        return "artifact_usd_fields"
+    return "derived_from_artifact_usd_notional"
+
+
 def _build_m7_opportunity_rows(
     *,
     hot: dict,
@@ -529,21 +647,23 @@ def _build_m7_opportunity_rows(
             seen.add(key)
             micro = _candidate_micro(candidate, micro_by_key)
             net_bps = _candidate_net_bps(candidate, micro)
-            size_usd = candidate.get("size_usd_estimate")
             optimal_wei = (
                 micro.get("best_submit_size")
                 or candidate.get("best_sweep_size_wei")
                 or candidate.get("amount_in_wei")
             )
+            size_usd = _candidate_size_usd(candidate, optimal_wei)
             route = (
                 f"{candidate.get('best_buy_venue') or candidate.get('venue') or '?'}"
                 f" -> {candidate.get('best_sell_venue') or '?'}"
                 f" / {candidate.get('best_buy_fee') or '?'}:{candidate.get('best_sell_fee') or '?'}"
                 f" / {_short_pool(candidate.get('pool_address'))}"
             )
-            expected_profit_usd = candidate.get("expected_profit_usd")
-            if expected_profit_usd is None:
-                expected_profit_usd = _expected_profit_usd(size_usd, net_bps)
+            expected_profit_usd = _candidate_expected_profit_usd(
+                candidate, size_usd, net_bps
+            )
+            gas_usd = _candidate_gas_usd(candidate, size_usd)
+            slippage_usd = _candidate_slippage_usd(candidate, size_usd)
             gate_status = _candidate_gate_status(candidate)
             pnl_wei = (
                 candidate.get("net_pnl_wei")
@@ -561,11 +681,16 @@ def _build_m7_opportunity_rows(
                 "amount_in_wei": _string_or_none(candidate.get("amount_in_wei")),
                 "best_sweep_size_wei": _string_or_none(candidate.get("best_sweep_size_wei")),
                 "net_spread_bps": net_bps,
+                "net_edge_usd": expected_profit_usd,
                 "expected_profit_usd": expected_profit_usd,
                 "expected_profit_wei": _string_or_none(pnl_wei),
-                "profit_basis": "usd" if expected_profit_usd is not None else "token_wei",
-                "gas_usd": candidate.get("gas_cost_usd"),
+                "profit_basis": "usd" if expected_profit_usd is not None else "unpriced_token_wei",
+                "usd_basis": _candidate_usd_basis(
+                    candidate, size_usd, expected_profit_usd, gas_usd
+                ),
+                "gas_usd": gas_usd,
                 "total_gas_bps": candidate.get("total_gas_bps"),
+                "slippage_usd": slippage_usd,
                 "slippage_bps": candidate.get("slippage_bps"),
                 "gate_status": gate_status,
                 "submit_ready": bool(
@@ -583,6 +708,51 @@ def _build_m7_opportunity_rows(
             rows.append(row)
     rows.sort(key=_candidate_priority, reverse=True)
     return rows[:limit]
+
+
+def _m7_usd_coverage(rows: list[dict]) -> dict:
+    total = len(rows)
+    return {
+        "opportunities_total": total,
+        "amount_usd_available": sum(
+            1 for row in rows if row.get("amount_in_optimal_usd") is not None
+        ),
+        "profit_usd_available": sum(
+            1 for row in rows if row.get("expected_profit_usd") is not None
+        ),
+        "gas_usd_available": sum(1 for row in rows if row.get("gas_usd") is not None),
+        "conversion_contract": "dynamic_artifact_usd_only_no_price_hardcode",
+    }
+
+
+def _m7_metric_audit(rollup: dict, rows: list[dict]) -> dict:
+    rate_metrics = rollup.get("rate_metrics") if isinstance(rollup.get("rate_metrics"), dict) else {}
+    session = rollup.get("session") if isinstance(rollup.get("session"), dict) else {}
+    rate_baseline = (
+        session.get("rate_baseline")
+        if isinstance(session.get("rate_baseline"), dict)
+        else {}
+    )
+    submit_ready_delta = _safe_int(rate_metrics.get("submit_ready_delta"))
+    rt_profit_delta = _safe_int(rate_metrics.get("roundtrip_profitable_delta"))
+    submit_ready_total = _safe_int(rollup.get("submit_ready_total"))
+    rt_profit_total = _safe_int(rollup.get("roundtrip_profitable_total"))
+    return {
+        "usd_conversion_basis": "dynamic_artifact_usd_only_no_price_hardcode",
+        "synthetic_amount_1e18_rows": sum(
+            1 for row in rows if row.get("amount_in_wei") == "1000000000000000000"
+        ),
+        "l1_fee_source_last": rollup.get("l1_fee_source_last"),
+        "l1_fee_wei_last": _string_or_none(rollup.get("l1_fee_wei_last")),
+        "rate_metrics_basis": rate_metrics.get("rate_basis"),
+        "rate_baseline_present": bool(rate_baseline),
+        "rate_metrics_zero_delta_with_nonzero_totals": bool(
+            (submit_ready_total > 0 and submit_ready_delta == 0)
+            or (rt_profit_total > 0 and rt_profit_delta == 0)
+        ),
+        "rate_submit_ready_delta": submit_ready_delta,
+        "rate_roundtrip_profitable_delta": rt_profit_delta,
+    }
 
 
 def build_m7_current_payload(
@@ -678,6 +848,22 @@ def build_m7_current_payload(
         ),
     }
 
+    threshold = (
+        FRESHNESS_THRESHOLD_S_DISCOVERY
+        if profile == "discovery"
+        else FRESHNESS_THRESHOLD_S
+    )
+    candidate_sources = {
+        "hot": _candidate_source_status(hot, now_utc, threshold),
+        "orderflow": _candidate_source_status(orderflow, now_utc, threshold),
+        "bridge": _candidate_source_status(bridge, now_utc, threshold),
+    }
+    opportunity_rows = _build_m7_opportunity_rows(
+        hot=hot if candidate_sources["hot"]["is_fresh"] else {},
+        orderflow=orderflow if candidate_sources["orderflow"]["is_fresh"] else {},
+        bridge=bridge if candidate_sources["bridge"]["is_fresh"] else {},
+    )
+
     return {
         "schema_version": "m7_current_v1",
         "now": now_utc.isoformat(),
@@ -698,11 +884,10 @@ def build_m7_current_payload(
         ),
         "ws_health": ws_health,
         "execution_funnel": execution_funnel,
-        "opportunities": _build_m7_opportunity_rows(
-            hot=hot,
-            orderflow=orderflow,
-            bridge=bridge,
-        ),
+        "candidate_sources": candidate_sources,
+        "usd_coverage": _m7_usd_coverage(opportunity_rows),
+        "metric_audit": _m7_metric_audit(rollup, opportunity_rows),
+        "opportunities": opportunity_rows,
         "live_submit": live_submit,
         "live_pnl": live_pnl,
         "canary": canary,

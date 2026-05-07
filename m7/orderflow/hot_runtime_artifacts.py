@@ -94,6 +94,15 @@ def _compute_rate_metrics(rollup: dict) -> dict:
     block["scoring_blackhole_windows_delta"] = wnd_blackhole_delta
     block["submit_ready_delta"] = _delta_int("submit_ready_total")
     block["cold_immediate_submit_ready_delta"] = _delta_int("cold_immediate_submit_ready_total")
+    # Fix 7 (E1.60): expose lifetime (cumulative) totals alongside session deltas
+    # so operators can distinguish "zero this session from prior-run accumulation"
+    # from "truly zero across all sessions".
+    block["submit_ready_total_lifetime"] = int(
+        rollup.get("submit_ready_total", 0) or 0
+    )
+    block["cold_immediate_submit_ready_total_lifetime"] = int(
+        rollup.get("cold_immediate_submit_ready_total", 0) or 0
+    )
     block["rate_basis"] = "current_worker_session_delta"
     # Step 8: expose baseline + lifetime totals so operators understand
     # why rate can be 0.0/h when totals are non-zero (prior-session accumulation).

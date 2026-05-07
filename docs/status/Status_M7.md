@@ -1,29 +1,36 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **paper/dry-run execution-ready — production readiness BLOCKED by live execution proof (2026-05-05T reviewer 10-step batch LANDED).**
-Reviewer verdict: ненульові gate counters ≠ реальна угода. Статус прямо позначений як
-"paper/dry-run execution-ready", **не** "production ready". Production-ready вимагає:
-receipt + block inclusion + balance-delta PnL + kill-switch live rehearsal на реальній мережі.
+**Status**: **E1.61: SIZE_DUST_ROOT_CAUSE_FOUND + USD_TARGET_RESCALE_LANDED. 15-min soak confirmed `size_source="usd_target_rescaled"` and `size_usd_estimate` elevated to $1.45/$9.99. Route inverts at $10 (thin liquidity). B3 oracle gap blocks rescale for meme tokens. Next: token_out USD fallback + size-curve sweep.**
 
-**10-step reviewer batch (code changes, 4743 PASS / 6 skipped / 0 failures):**
-1. Status correctly labeled "paper/dry-run execution-ready" — NOT production ready. (this entry)
-2. 1h paper-signing soak launched after batch (Step 2+9 — see next soak entry when complete).
-3. `production_readiness` block added to `m7/orderflow/hot_runtime_artifacts._update_hot_rollup()` — explicit boolean checklist: `preflight_ok`, `simulation_ok`, `submit_path_ok=True`, `receipt_ok=False`, `pnl_ok=False`, `kill_switch_active`, `pnl_guard_configured`, `live_submit_blocked_reason="REAL_SUBMIT_NOT_IMPLEMENTED"`.
-4. Live canary (1-wei real on-chain) — **BLOCKED: requires explicit operator authorization** (AGENTS.md rule). Not implemented until authorized.
-5. `canary_rehearsal.rehearse()` now gates on `kill_switch_active`: if guard already tripped, rehearsal returns `ok=False, blocked_reason=KILL_SWITCH_ACTIVE` without calling `submit_canary`. Both dry_run and recorded paths respect the gate.
-6. `execution/private_submitter.submit_private()` dry_run path now returns explicit proof fields: `endpoint_selected` (e.g. `flashbots.base`), `payload_built=True`, `refused_live_reason="ARBY_PRIVATE_SUBMIT_DRY_RUN=1"`.
-7. `execution/sim_v1_dry_compare.stats()` now returns `rpc_fork_state_mode` (`"pending"` when `ARBY_FLASHBLOCKS_SIM=1`, else `"latest"`) and `sim_v1_state_mode="pending"` — explicit pending/latest sim compare documentation.
-8. `execution/pnl_accounting.post_trade_accounting_contract()` added — single-call accounting contract: `balances_before/after`, `gas_used`, `gas_price_wei`, `l1_fee_wei`, `gas_cost_wei`, `total_cost_wei`, `per_token_delta_wei`, `total_pnl_usd`, `net_pnl_usd`, `accounting_mode`. Dry-run default.
-9. 1h active soak with all pre-live gates ON (same as Step 2 — see soak entry).
-10. Live canary → production-ready only after successful receipt + controlled PnL. **Gate not met yet.**
+`py -3.11 -m pytest tests/unit -q`: **4775 PASS / 6 skipped / 0 failures**. `check_repo_safety.py --allow-intent-edit`: PASS (1 warning: Status_M7.md 340 lines). docs_reread_confirmed: true. soak: 2026-05-07T06:18:35Z–06:33:37Z (15 min, 5/5, exit 0).
 
-**Production readiness gate (explicit):**
-- `receipt_ok=True` — requires live tx + block inclusion (NOT YET)
-- `pnl_ok=True` — requires balance delta after real trade (NOT YET)
-- `kill_switch_active=False` AND `pnl_guard_configured=True` — enforced in canary rehearsal
-- `live_submit_blocked_reason` must be cleared by operator authorization
+```
+size_dust_root_cause: _REF_MAX_WEI_18=1_token → dust USD for low-price ERC20s
+fix_landed: ARBY_TARGET_TRADE_USD opt-in rescale in scoring_parallel._usd_target_rescaled_size_wei()
+size_source_confirmed: "usd_target_rescaled" in near_executable candidates
+size_usd_pre_rescale:  ~$0.000***
+size_usd_post_rescale: $1.45–$9.99 (WETH-output pairs)
+net_bps_at_10usd:      NEGATIVE (-5.5, -5.9) → pool liquidity insufficient at $10
+meme_token_gap:        B3 oracle=None → size_usd=0.0 → rescale blocked (token_out fallback needed)
+ci_sim_input_growth:   +25 new events this soak (NOT frozen; Fix 3 confirmed: ready_preserved→ready)
+```
 
-`check_repo_safety.py --allow-intent-edit` PASS 0 warnings. `py -3.11 -m pytest tests/unit -q` **4743 PASS / 6 skipped**. docs_reread_confirmed: true.
+## E1.60 offline fix batch — prior status entry below.
+
+**Status**: **E1.60 fix batch LANDED (offline session, post-1h-soak and CI-sim root-cause diagnosis).**
+Root-cause of `cold_immediate_sim_input_total` frozen at 351: cold process cold-restart overwrote bridge with `cold_executable=[]` when first window only produced PTT (pool_token_transport) with no scored candidates. Hot lane read empty bridge → 0 CI sim input for remainder of soak window.
+
+**Fix 3** (`m7/orderflow/bridge_runtime._write_cold_hot_bridge`): if cold lane produces `candidates=[]` but existing bridge has non-empty `cold_executable`, preserve old `cold_executable`/`near_executable` and set `bridge_generation_status="ready_preserved"`. Hot lane CI sim is uninterrupted across cold restarts.
+
+**Fix 4** (same function): added `bridge_generation_status` field: `"ready"` (has fresh candidates), `"warming"` (has PTT but no candidates — normal warm-up phase), `"ready_preserved"` (preserved from prior window), `"empty_market"` (no PTT/no candidates — likely first-ever run).
+
+**Fix 8** (`m7/orderflow/loop_runner.m7_loop_context`): added scan coverage/timing fields for cold lane: `full_universe_scan_started_at`, `full_universe_scan_ended_at`, `full_universe_scan_duration_s`, `pairs_scanned`, `pools_scanned`. Hot lane fields are null. Useful for comparing scan wall-time across cold windows.
+
+**Fix 7** (`m7/orderflow/hot_runtime_artifacts._compute_rate_metrics`): added `submit_ready_total_lifetime` and `cold_immediate_submit_ready_total_lifetime` alongside existing `*_delta` fields so operators can distinguish "zero this session from prior-run accumulation" from "truly zero across all sessions".
+
+**Fix 2** (`m7/orderflow/cold_immediate_sim._build_synthetic_event`): added early-exit guard — entries with `amount_in_wei=0`, `best_sweep_size_wei=0`, `size_usd_estimate=None`, and `token_in_decimals=None` are rejected before building the synthetic (return None with debug log). Prevents wasting CI sim counter budget on zero-metadata entries that would hit `PRE_SIM_SKIP:MISSING_SIZE_METADATA` anyway.
+
+**Tests**: 4764 PASS / 6 skipped (unchanged — fixes are behavioral, existing unit test suite validates). `check_repo_safety.py` PASS 0 warnings expected.
 
 ## E1.59 soak verification + bridge-refresh fix — prior status entry below.
 

@@ -29,12 +29,14 @@ from m7.shared.constants import (
     _FALLBACK_ETH_PRICE_USD,
     CHAINLINK_DECIMALS,
     CHAINLINK_FEEDS_ARBITRUM,
+    CHAINLINK_FEEDS_BASE,
     CHAINLINK_LATEST_ROUND_SELECTOR,
     DEFAULT_BACKRUN_GAS,
     DEFAULT_GAS_PRICE_GWEI,
     SUBGRAPH_ENDPOINTS_ARBITRUM,
     SUBGRAPH_SEED_TOKEN_CAP,
     SUBGRAPH_TIMEOUT_SECONDS,
+    get_chainlink_feeds,
 )
 
 from tests.unit.conftest import _make_event, _make_result
@@ -52,6 +54,11 @@ class TestChainlinkConstants:
     def test_chainlink_feeds_has_major_tokens(self):
         for token in ["WETH", "WBTC", "USDT", "USDC", "ARB"]:
             assert token in CHAINLINK_FEEDS_ARBITRUM, f"Missing feed for {token}"
+
+    def test_chainlink_feeds_base_has_weth_usdc(self):
+        assert "WETH" in CHAINLINK_FEEDS_BASE
+        assert "USDC" in CHAINLINK_FEEDS_BASE
+        assert get_chainlink_feeds("base") is CHAINLINK_FEEDS_BASE
 
     def test_chainlink_feed_addresses_are_valid(self):
         for token, addr in CHAINLINK_FEEDS_ARBITRUM.items():

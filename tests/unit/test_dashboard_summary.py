@@ -736,7 +736,7 @@ def test_m7_current_stream_uses_orderflow_candidates_when_sim_samples_absent():
         },
     }
     orderflow = {
-        "timestamp": "2026-05-05T21:49:12Z",
+        "timestamp": "2026-05-05T22:01:12Z",
         "top_executable_candidates": [{
             "event_id": "live_swap_1",
             "actual_pair": "AAA/WETH",
@@ -804,6 +804,140 @@ def test_m7_current_stream_falls_back_to_hot_candidates():
     assert len(payload["opportunities"]) == 1
     assert payload["opportunities"][0]["source"] == "hot_recent"
     assert payload["opportunities"][0]["gate_status"] == "GAS_EXCEEDS_GROSS"
+
+
+# ===========================================================================
+# M7 dashboard USD display contract
+# ===========================================================================
+
+
+def test_m7_current_usd_values_are_derived_from_artifact_notional():
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    payload = build_m7_current_payload(
+        rollup={"last_updated": "2026-05-06T07:59:55Z", "production_readiness": {}},
+        hot={},
+        orderflow={
+            "top_executable_candidates": [{
+                "event_id": "usd_1",
+                "pair": "AAA/WETH",
+                "net_bps": 100,
+                "size_usd_estimate": 1000,
+                "amount_in_wei": 1_000_000_000_000_000_000,
+                "total_gas_bps": 4,
+                "slippage_bps": 2,
+            }],
+            "micro_refinement": [{
+                "event_id": "usd_1",
+                "best_submit_size": 500_000_000_000_000_000,
+            }],
+        },
+        bridge={},
+        profile="production",
+        now_utc=now,
+    )
+
+    opp = payload["opportunities"][0]
+    assert opp["amount_in_optimal_usd"] == 500.0
+    assert opp["expected_profit_usd"] == 5.0
+    assert opp["gas_usd"] == 0.2
+    assert opp["slippage_usd"] == 0.1
+    assert opp["usd_basis"] == "artifact_usd_fields"
+    assert payload["usd_coverage"]["profit_usd_available"] == 1
+    assert payload["usd_coverage"]["conversion_contract"] == (
+        "dynamic_artifact_usd_only_no_price_hardcode"
+    )
+
+
+def test_m7_current_does_not_invent_usd_without_dynamic_basis():
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    payload = build_m7_current_payload(
+        rollup={"last_updated": "2026-05-06T07:59:55Z", "production_readiness": {}},
+        hot={},
+        orderflow={
+            "top_executable_candidates": [{
+                "event_id": "no_usd",
+                "pair": "BBB/WETH",
+                "net_bps": 1050,
+                "amount_in_wei": 1_000_000_000_000_000_000,
+                "net_pnl_wei": 105_000_000_000_000_000,
+            }],
+        },
+        bridge={},
+        profile="production",
+        now_utc=now,
+    )
+
+    opp = payload["opportunities"][0]
+    assert opp["amount_in_optimal_usd"] is None
+    assert opp["expected_profit_usd"] is None
+    assert opp["gas_usd"] is None
+    assert opp["usd_basis"] == "unavailable"
+    assert payload["usd_coverage"]["profit_usd_available"] == 0
+    assert payload["metric_audit"]["synthetic_amount_1e18_rows"] == 1
+
+
+def test_m7_current_excludes_stale_orderflow_candidates_from_live_stream():
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    payload = build_m7_current_payload(
+        rollup={"last_updated": "2026-05-06T07:59:55Z", "production_readiness": {}},
+        hot={},
+        orderflow={
+            "timestamp": "2026-05-06T07:30:00Z",
+            "top_executable_candidates": [{
+                "event_id": "stale",
+                "pair": "OLD/WETH",
+                "net_bps": 100,
+            }],
+        },
+        bridge={
+            "timestamp": "2026-05-06T07:59:40Z",
+            "cold_executable": [{
+                "event_id": "fresh",
+                "pair": "NEW/WETH",
+                "net_bps": 50,
+                "size_usd_estimate": 100,
+            }],
+        },
+        profile="production",
+        now_utc=now,
+    )
+
+    assert payload["candidate_sources"]["orderflow"]["is_fresh"] is False
+    assert payload["candidate_sources"]["bridge"]["is_fresh"] is True
+    assert [row["event_id"] for row in payload["opportunities"]] == ["fresh"]
+
+
+def test_m7_current_metric_audit_flags_zero_delta_with_nonzero_totals():
+    now = datetime(2026, 5, 6, 8, 0, 0, tzinfo=timezone.utc)
+    payload = build_m7_current_payload(
+        rollup={
+            "last_updated": "2026-05-06T07:59:55Z",
+            "submit_ready_total": 13,
+            "roundtrip_profitable_total": 13,
+            "rate_metrics": {
+                "rate_basis": "current_worker_session_delta",
+                "submit_ready_delta": 0,
+                "roundtrip_profitable_delta": 0,
+            },
+            "session": {
+                "rate_baseline": {
+                    "submit_ready_total": 13,
+                    "roundtrip_profitable_total": 13,
+                }
+            },
+            "production_readiness": {},
+        },
+        hot={},
+        orderflow={},
+        bridge={},
+        profile="production",
+        now_utc=now,
+    )
+
+    audit = payload["metric_audit"]
+    assert audit["rate_metrics_basis"] == "current_worker_session_delta"
+    assert audit["rate_baseline_present"] is True
+    assert audit["rate_metrics_zero_delta_with_nonzero_totals"] is True
 
 
 # ===========================================================================

@@ -3150,7 +3150,7 @@ class TestM7A541TopCandidatePersistence:
             "best_buy_fee", "best_sell_fee", "best_buy_venue", "best_sell_venue",
             "backrun_token_in_address", "backrun_token_out_address",
             "token_in_decimals", "amount_in_wei", "best_sweep_size_wei",
-            "size_usd_estimate",
+            "size_usd_estimate", "size_source", "size_normalization_source",
             # E1.56 Step 1b: PnL metadata for profit_guard
             "gross_pnl_wei", "net_pnl_wei",
         }
