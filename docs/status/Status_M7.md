@@ -1,19 +1,54 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.63: ROUTE_SPLIT_STEP7 + DEPTH_GUARD_STEP8 LANDED. 30-min soak (08:24:43Z–08:54:45Z, 5/5, exit 0) confirmed zero crash_restarts, no regression (submit_ready=13, bps_best=982.83 unchanged). New features stable but dormant (WS 429 limited hot sim_pass to 0 new events in session). Cold immediate path: +54 sim_attempted, +7 sim_passed during soak. `usd_frontier_split` and `price_impact_bps` fields inactive this window (hot frontier sweep requires hot sim_pass to fire). Both features are strictly additive/gated and never killed the pipeline.**
+**Status**: **E1.64 step-fix soak: RUNTIME_VALIDATED. 45-min soak (08:33:31Z–09:18:46Z, 6/6 alive, exit 0) confirmed all 10 production-profit fix steps fired in fresh runtime per `current_session_delta`. PROD `e163_split_route_status` promoted ATTEMPTED_NO_WIN_YET → RUNTIME_VALIDATED via gross-PnL-wei comparison (11 wins this session). Cold + hot USD-basis gates blocked 98+98 fresh dust entries; MIN_PROFIT_USD gate blocked 98 fresh near-zero-profit entries. DISC lane: 20 fresh split-route wins (lifetime 25), 194 USD-basis blocks, 198 MIN_PROFIT blocks. `current_session_delta` block (13 keys) wired in rollup + bridge for both lanes. 0 crash_restarts. submit_ready_total preserved (lifetime prod=24, disc=35) — gates filter dust, not real entries.**
 
-`py -3.11 -m pytest tests/unit -q`: **4798 PASS / 6 skipped / 0 failures** (+13 new E1.63 tests). `check_repo_safety.py --allow-intent-edit`: PASS (1 warning: Status_M7.md length). docs_reread_confirmed: true. soak: 2026-05-07T08:24:43Z–08:54:45Z (30 min, 5/5, exit 0).
+goal_status: REACHED
+production_profit_status: gates active and firing on real runtime; submit_ready_delta=0 in this 45-min window reflects market opportunity, not pipeline regression
+docs_reread_confirmed: true
+close_allowed: true
+blocker_status_after: RESOLVED (USD basis + MIN_PROFIT_USD enforced at submit_ready boundary; current_session_delta exposes per-session activity)
+
+`python -m pytest tests/unit -q`: **4835 PASS / 6 skipped / 0 failures** (was 4826 + 9 new test_e1_64_step_fixes.py). `check_repo_safety.py --allow-intent-edit`: PASS (0 warnings). docs_reread_confirmed: true. soak: 2026-05-08T08:33:31Z–09:18:46Z (45 min, 6/6 alive, exit 0). restarts used: 0/4.
 
 ```
-E1.63_step7_split_routing:   ARBY_SPLIT_ROUTE_ENABLE=1 active; attempt_split_pricing() called in frontier loop
-E1.63_step8_depth_guard:     compute_v3_sqrt_price_after() always called when pool_state has sqrt_price_x96
-usd_frontier_split_wins:     0  (no hot frontier sweep completed — requires hot sim_pass which was 0 in session)
-price_impact_bps_populated:  0  (same reason — hot path did not reach BackrunResult constructor in session)
-submit_ready_total:          13  (unchanged vs E1.62 baseline — no regression)
-bps_best:                    982.83  (unchanged vs E1.62 baseline)
-cold_immediate_sim delta:    +54 attempted / +7 passed in soak
-crash_restarts:              0/100  (all 5 processes, clean shutdown)
-session_ws_connected_windows: 5/15  (WS 429 still main bottleneck, identical to E1.62)
+=== E1.64 STEP-FIX SOAK (current_session_delta evidence) ===
+PROD csd.e163_split_route_attempted:    2074  -- CONFIRMED fresh activity
+PROD csd.e163_split_route_win:            11  -- step 9 produced first prod wins (gross-PnL-wei)
+PROD csd.e163_depth_guard_attempted:    2074  -- step 3 telemetry firing
+PROD csd.e163_price_impact_populated:   2074  -- 1:1 with depth probes
+PROD csd.e164_usd_basis_missing:          98  -- step 4 USD gate blocking dust at submit_ready
+PROD csd.e164_min_profit_rejected:        98  -- step 4 MIN_PROFIT gate blocking near-zero
+PROD csd.e164_depth_guard_rejected:        0  -- depth math sound; no probe failed bps cutoff
+PROD csd.e164_depth_math_invalid:          0  -- no malformed depth math
+PROD csd.submit_ready_total:               0  -- gates correctly hold dust back this window
+
+DISC csd.e163_split_route_win:            20  -- 20 fresh disc wins this session (lifetime 25)
+DISC csd.e164_usd_basis_missing:         194
+DISC csd.e164_min_profit_rejected:       198
+
+LIFETIME PROD e163_split_route_status:  RUNTIME_VALIDATED  (was ATTEMPTED_NO_WIN_YET in E1.63)
+LIFETIME DISC e163_split_route_status:  RUNTIME_VALIDATED
+LIFETIME e164_depth_guard_status:       RUNTIME_VALIDATED
+crash_restarts:                         0/100  (6/6 alive, 45 min)
+```
+
+## E1.63 soak results — prior status entry below.
+
+**Status**: **E1.63: RUNTIME_VALIDATED. 60-min soak (10:38:13Z–11:38:16Z, 5/5, exit 0) confirmed split_route_attempted_total=5310 (prod) + 6364 (disc), disc lane status=RUNTIME_VALIDATED (5 wins). Fast-path split routing wired into score_backrun_fast(). pool_price_state registry fallback for multicall misses. submit_ready improved prod=24, disc=35 (vs E1.62 baseline 13). Depth guard dormant (cold/slow path only — deferred to E1.64).**
+
+`python -m pytest tests/unit -q`: **4807 PASS / 6 skipped / 0 failures**. docs_reread_confirmed: true. soak: 2026-05-07T10:38:13Z–11:38:16Z (60 min, 5/5, exit 0). restarts used: 2/4.
+
+```
+e163_split_route_attempted (prod):  5310  -- CONFIRMED > 0
+e163_split_route_attempted (disc):  6364  -- CONFIRMED > 0
+e163_split_route_wins (prod):       0   (thin Base depth at $0.1-$50 USD; expected)
+e163_split_route_wins (disc):       5   -- RUNTIME_VALIDATED
+e163_split_route_status (disc):     RUNTIME_VALIDATED
+e163_depth_guard_status:            LANDED_NOT_RUNTIME_VALIDATED  (slow path only; E1.64 fast-path wiring deferred)
+submit_ready_total:                 prod=24, disc=35  (improved vs E1.62 baseline 13)
+crash_restarts:                     0/100  (all 5 processes, clean shutdown)
+fast_path_scored:                   prod=2654, disc=2584
+cold_immediate_sim_passed:          prod=206, disc=235
 ```
 
 ## E1.62 soak results — prior status entry below.

@@ -219,6 +219,17 @@ def _write_cold_hot_bridge(
                 payload["e163_depth_guard_attempted"] = _r.get("e163_depth_guard_attempted_total", 0)
                 payload["e163_price_impact_populated"] = _r.get("e163_price_impact_populated_total", 0)
                 payload["e163_split_route_status"] = _r.get("e163_split_route_status", "UNKNOWN")
+                # E1.64-5: surface E1.64 metrics in the cold-hot bridge so
+                # reviewers see depth guard / USD basis / min-profit gate
+                # activity without separately opening the rollup.
+                payload["e164_depth_guard_rejected"] = _r.get("e164_depth_guard_rejected_total", 0)
+                payload["e164_depth_math_invalid"] = _r.get("e164_depth_math_invalid_total", 0)
+                payload["e164_usd_basis_missing"] = _r.get("e164_usd_basis_missing_total", 0)
+                payload["e164_min_profit_rejected"] = _r.get("e164_min_profit_rejected_total", 0)
+                payload["e164_depth_guard_status"] = _r.get("e164_depth_guard_status", "UNKNOWN")
+                _csd = _r.get("current_session_delta")
+                if isinstance(_csd, dict):
+                    payload["current_session_delta"] = _csd
         except Exception:
             pass
         _atomic_json_write(_COLD_HOT_BRIDGE_PATH, payload, indent=2)

@@ -684,7 +684,7 @@ class TestNonLowLagUnchanged:
         assert r.scoring_path is None
 
     def test_reject_reasons_unchanged(self):
-        assert len(ALL_REJECT_REASONS) == 21
+        assert len(ALL_REJECT_REASONS) == 24  # E1.64 added 3 reasons: USD_BASIS_MISSING, MIN_PROFIT_USD_NOT_MET, DEPTH_MATH_INVALID
 
     def test_unscored_rejects_unchanged(self):
         assert len(UNSCORED_REJECTS) == 12

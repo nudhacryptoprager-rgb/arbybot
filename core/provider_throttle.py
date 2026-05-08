@@ -45,12 +45,19 @@ _DEFAULT_BUDGETS: Dict[str, Dict[str, int]] = {
 # After N consecutive 408/429s, the breaker stays open for at least
 # ``_BACKOFF_SCHEDULE[min(N-1, len-1)]`` seconds.
 _BACKOFF_SCHEDULE: tuple = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
+# E1.64-7: HTTP 408 (request timeout) is server-side flakiness, not a hard
+# rate-limit signal like WS 429.  Use a softer ladder so a single 408 burst
+# from a slow upstream does not collapse the per-method bucket for a full
+# minute.  WS 429 keeps the original schedule.
+_BACKOFF_SCHEDULE_408: tuple = (0.25, 0.5, 1.0, 2.0, 5.0, 15.0)
 
 
 class _MethodState:
     __slots__ = (
         "limiter",
         "consec_failures",
+        "consec_failures_408",
+        "consec_failures_429",
         "cooldown_until",
         "total_408",
         "total_429",
@@ -62,6 +69,8 @@ class _MethodState:
     def __init__(self, rps: int, burst: int) -> None:
         self.limiter = TokenBucketRateLimiter(rps=rps, burst=burst)
         self.consec_failures = 0
+        self.consec_failures_408 = 0
+        self.consec_failures_429 = 0
         self.cooldown_until = 0.0
         self.total_408 = 0
         self.total_429 = 0
@@ -128,22 +137,35 @@ class ProviderThrottle:
         with self._lock:
             if status_code == 408:
                 st.total_408 += 1
-                self._open_breaker(st)
+                self._open_breaker(st, kind=408)
             elif status_code == 429:
                 st.total_429 += 1
-                self._open_breaker(st)
+                self._open_breaker(st, kind=429)
             elif ok:
                 st.total_ok += 1
                 st.consec_failures = 0
+                st.consec_failures_408 = 0
+                st.consec_failures_429 = 0
                 st.cooldown_until = 0.0
             else:
                 st.total_other_errors += 1
 
-    def _open_breaker(self, st: _MethodState) -> None:
+    def _open_breaker(self, st: _MethodState, *, kind: int = 429) -> None:
+        # E1.64-7: 408 (server timeout) and 429 (rate-limit) accumulate on
+        # separate counters and use separate ladders.  The breaker fires off
+        # the larger of the two cooldowns so explicit 429 still dominates.
         st.consec_failures += 1
-        idx = min(st.consec_failures - 1, len(_BACKOFF_SCHEDULE) - 1)
-        cooldown = _BACKOFF_SCHEDULE[idx]
-        st.cooldown_until = time.monotonic() + cooldown
+        if kind == 408:
+            st.consec_failures_408 += 1
+            idx = min(st.consec_failures_408 - 1, len(_BACKOFF_SCHEDULE_408) - 1)
+            cooldown = _BACKOFF_SCHEDULE_408[idx]
+        else:
+            st.consec_failures_429 += 1
+            idx = min(st.consec_failures_429 - 1, len(_BACKOFF_SCHEDULE) - 1)
+            cooldown = _BACKOFF_SCHEDULE[idx]
+        new_until = time.monotonic() + cooldown
+        if new_until > st.cooldown_until:
+            st.cooldown_until = new_until
 
     def snapshot(self) -> Dict[str, Dict[str, object]]:
         out: Dict[str, Dict[str, object]] = {}
@@ -153,6 +175,8 @@ class ProviderThrottle:
                 cooldown_remaining = max(0.0, st.cooldown_until - now)
                 out[method] = {
                     "consec_failures": st.consec_failures,
+                    "consec_failures_408": st.consec_failures_408,
+                    "consec_failures_429": st.consec_failures_429,
                     "cooldown_remaining_s": round(cooldown_remaining, 3),
                     "breaker_open": cooldown_remaining > 0.0,
                     "total_408": st.total_408,
@@ -169,6 +193,8 @@ class ProviderThrottle:
         with self._lock:
             for st in self._states.values():
                 st.consec_failures = 0
+                st.consec_failures_408 = 0
+                st.consec_failures_429 = 0
                 st.cooldown_until = 0.0
                 st.total_408 = 0
                 st.total_429 = 0

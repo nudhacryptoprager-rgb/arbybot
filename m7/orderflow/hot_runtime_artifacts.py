@@ -1203,9 +1203,9 @@ def _update_hot_rollup(
     _er["normal_windows"] = _er.get("normal_windows", 0) + (0 if _is_error_window else 1)
     rollup["error_counts"] = _er
 
-    # E1.63: Accumulate split routing + depth guard counters from scoring_parallel.
-    # When ARBY_SPLIT_ROUTE_ENABLE=1 but split_route_attempted=0, status is
-    # LANDED_NOT_RUNTIME_VALIDATED (hot frontier requires hot sim_pass first).
+    # E1.63/E1.64: Accumulate split routing + depth guard + profit gate counters
+    # from scoring_parallel.  When ARBY_SPLIT_ROUTE_ENABLE=1 but
+    # split_route_attempted=0, status is LANDED_NOT_RUNTIME_VALIDATED.
     try:
         from m7.orderflow.scoring_parallel import get_e163_session_counters as _get_e163
         _e163c = _get_e163()
@@ -1214,6 +1214,11 @@ def _update_hot_rollup(
             ("e163_split_route_win_total", "split_route_win_total"),
             ("e163_depth_guard_attempted_total", "depth_guard_attempted_total"),
             ("e163_price_impact_populated_total", "price_impact_populated_total"),
+            # E1.64 counters
+            ("e164_depth_guard_rejected_total", "depth_guard_rejected_total"),
+            ("e164_depth_math_invalid_total", "depth_math_invalid_total"),
+            ("e164_usd_basis_missing_total", "usd_basis_missing_total"),
+            ("e164_min_profit_rejected_total", "min_profit_rejected_total"),
         ):
             rollup[_k163] = int(rollup.get(_k163, 0) or 0) + int(_e163c.get(_src_k, 0) or 0)
         _split_env_on = os.environ.get("ARBY_SPLIT_ROUTE_ENABLE", "0").strip() == "1"
@@ -1227,6 +1232,12 @@ def _update_hot_rollup(
         _pi_total = int(rollup.get("e163_price_impact_populated_total", 0) or 0)
         rollup["e163_depth_guard_status"] = (
             "LANDED_NOT_RUNTIME_VALIDATED" if _pi_total == 0 else "RUNTIME_VALIDATED"
+        )
+        # E1.64 depth guard status (rejected > 0 means guard is actually filtering)
+        _dg_rejected = int(rollup.get("e164_depth_guard_rejected_total", 0) or 0)
+        rollup["e164_depth_guard_status"] = (
+            "RUNTIME_VALIDATED_WITH_REJECTS" if _dg_rejected > 0
+            else ("RUNTIME_VALIDATED" if _pi_total > 0 else "LANDED_NOT_RUNTIME_VALIDATED")
         )
     except Exception:
         pass
@@ -1254,6 +1265,32 @@ def _update_hot_rollup(
                 ),
                 "cold_immediate_submit_ready_total": int(
                     rollup.get("cold_immediate_submit_ready_total", 0) or 0
+                ),
+                # E1.64-5: E1.63 + E1.64 counters baselined per session so
+                # session_delta = lifetime - baseline is meaningful.
+                "e163_split_route_attempted_total": int(
+                    rollup.get("e163_split_route_attempted_total", 0) or 0
+                ),
+                "e163_split_route_win_total": int(
+                    rollup.get("e163_split_route_win_total", 0) or 0
+                ),
+                "e163_depth_guard_attempted_total": int(
+                    rollup.get("e163_depth_guard_attempted_total", 0) or 0
+                ),
+                "e163_price_impact_populated_total": int(
+                    rollup.get("e163_price_impact_populated_total", 0) or 0
+                ),
+                "e164_depth_guard_rejected_total": int(
+                    rollup.get("e164_depth_guard_rejected_total", 0) or 0
+                ),
+                "e164_depth_math_invalid_total": int(
+                    rollup.get("e164_depth_math_invalid_total", 0) or 0
+                ),
+                "e164_usd_basis_missing_total": int(
+                    rollup.get("e164_usd_basis_missing_total", 0) or 0
+                ),
+                "e164_min_profit_rejected_total": int(
+                    rollup.get("e164_min_profit_rejected_total", 0) or 0
                 ),
             },
         }
@@ -1328,6 +1365,34 @@ def _update_hot_rollup(
         # expose it under historical_window so the new naming is clear.
         if "supervisor_window" in rollup:
             rollup["historical_window"] = rollup["supervisor_window"]
+    except Exception:
+        pass
+    # E1.64-5: explicit current_session_delta block with E1.63 + E1.64
+    # session-scoped deltas so reviewer can distinguish lifetime from
+    # current-session activity at a glance.
+    try:
+        _baseline = _sess.get("rate_baseline", {}) or {}
+        _delta_keys = [
+            "submit_ready_total",
+            "cold_immediate_submit_ready_total",
+            "roundtrip_attempted_total",
+            "roundtrip_profitable_total",
+            "windows_events_without_fast_score_total",
+            "e163_split_route_attempted_total",
+            "e163_split_route_win_total",
+            "e163_depth_guard_attempted_total",
+            "e163_price_impact_populated_total",
+            "e164_depth_guard_rejected_total",
+            "e164_depth_math_invalid_total",
+            "e164_usd_basis_missing_total",
+            "e164_min_profit_rejected_total",
+        ]
+        _csd = {}
+        for _k in _delta_keys:
+            _life = int(rollup.get(_k, 0) or 0)
+            _base = int(_baseline.get(_k, 0) or 0)
+            _csd[_k] = max(_life - _base, 0)
+        rollup["current_session_delta"] = _csd
     except Exception:
         pass
     _sess["session_bridge_pool_hit_total"] = (

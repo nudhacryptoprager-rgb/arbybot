@@ -36,6 +36,9 @@ from m7.shared.constants import (
     REJECT_ALL_POOLS_TRULY_INACTIVE,
     REJECT_GAS_FLOOR_EXCEEDED,
     REJECT_PRICING_ANOMALY,
+    REJECT_USD_BASIS_MISSING,
+    REJECT_MIN_PROFIT_USD_NOT_MET,
+    REJECT_DEPTH_MATH_INVALID,
     ALL_REJECT_REASONS,
     UNSCORED_REJECTS,
     ADMISSION_CANONICAL,
@@ -86,17 +89,22 @@ from m7.shared.constants import (
 
 logger = logging.getLogger("m7.orderflow.scoring_parallel")
 
-# ── E1.63 module-level counters (thread-safe, reset per session) ──────────────
+# ── E1.63/E1.64 module-level counters (thread-safe, reset per session) ────────
 import threading as _threading
 _e163_lock = _threading.Lock()
 _e163_split_route_attempted: int = 0
 _e163_split_route_win: int = 0
 _e163_depth_guard_attempted: int = 0
 _e163_price_impact_populated: int = 0
+# E1.64 additional counters
+_e164_depth_guard_rejected: int = 0   # guard triggered (price_impact > max_bps)
+_e164_depth_math_invalid: int = 0     # compute_v3_sqrt_price_after gave absurd result
+_e164_usd_basis_missing: int = 0      # net_bps>0 but no USD truth available
+_e164_min_profit_rejected: int = 0    # expected_profit_usd < ARBY_MIN_EXPECTED_PROFIT_USD
 
 
 def get_e163_session_counters() -> dict:
-    """Return a snapshot of E1.63 cumulative counters (never raises)."""
+    """Return a snapshot of E1.63/E1.64 cumulative counters (never raises)."""
     try:
         with _e163_lock:
             return {
@@ -104,6 +112,11 @@ def get_e163_session_counters() -> dict:
                 "split_route_win_total": _e163_split_route_win,
                 "depth_guard_attempted_total": _e163_depth_guard_attempted,
                 "price_impact_populated_total": _e163_price_impact_populated,
+                # E1.64
+                "depth_guard_rejected_total": _e164_depth_guard_rejected,
+                "depth_math_invalid_total": _e164_depth_math_invalid,
+                "usd_basis_missing_total": _e164_usd_basis_missing,
+                "min_profit_rejected_total": _e164_min_profit_rejected,
             }
     except Exception:
         return {
@@ -111,19 +124,29 @@ def get_e163_session_counters() -> dict:
             "split_route_win_total": 0,
             "depth_guard_attempted_total": 0,
             "price_impact_populated_total": 0,
+            "depth_guard_rejected_total": 0,
+            "depth_math_invalid_total": 0,
+            "usd_basis_missing_total": 0,
+            "min_profit_rejected_total": 0,
         }
 
 
 def reset_e163_session_counters() -> None:
-    """Reset E1.63 counters — call at session boundary if needed (never raises)."""
+    """Reset E1.63/E1.64 counters — call at session boundary if needed (never raises)."""
     global _e163_split_route_attempted, _e163_split_route_win
     global _e163_depth_guard_attempted, _e163_price_impact_populated
+    global _e164_depth_guard_rejected, _e164_depth_math_invalid
+    global _e164_usd_basis_missing, _e164_min_profit_rejected
     try:
         with _e163_lock:
             _e163_split_route_attempted = 0
             _e163_split_route_win = 0
             _e163_depth_guard_attempted = 0
             _e163_price_impact_populated = 0
+            _e164_depth_guard_rejected = 0
+            _e164_depth_math_invalid = 0
+            _e164_usd_basis_missing = 0
+            _e164_min_profit_rejected = 0
     except Exception:
         pass
 # ─────────────────────────────────────────────────────────────────────────────
@@ -762,6 +785,23 @@ def score_backrun_live_parallel(
                             _pool_states[p["address"]] = p["pool_state"]
             except Exception:
                 pass  # fallback to liquidity-only state from candidate_pools
+            # E1.63 step 7: supplement pool states from pool_price_state registry
+            # (populated by WS Swap events + HTTP feed). This makes price-impact and
+            # split routing available even when multicall fails for a pool.
+            try:
+                from m7.orderflow.pool_price_state import get_registry as _get_pps_reg
+                _pps_reg = _get_pps_reg()
+                _chain_for_pps = chain if chain else "base"
+                for _pa_k, _ps_v in _pool_states.items():
+                    if _ps_v.get("sqrt_price_x96") is None:
+                        _cached_v3 = _pps_reg.get(_chain_for_pps, _pa_k)
+                        if _cached_v3 is not None and _cached_v3.sqrt_price_x96:
+                            _pool_states[_pa_k]["sqrt_price_x96"] = _cached_v3.sqrt_price_x96
+                            _pool_states[_pa_k]["tick"] = _cached_v3.tick
+                            if _pool_states[_pa_k].get("liquidity") is None:
+                                _pool_states[_pa_k]["liquidity"] = _cached_v3.liquidity
+            except Exception:
+                pass
             if _pool_states:
                 local_sim = {
                     "pools_queried": len(cand_pools),
@@ -1194,6 +1234,11 @@ def score_backrun_live_parallel(
         _best_profit_usd: float = -1.0
         _best_is_split = False  # E1.63 step 7: tracks if split routing won
         _split_route_enable = os.getenv("ARBY_SPLIT_ROUTE_ENABLE", "0") == "1"  # E1.63 step 7
+        # E1.64-3: depth curve — capture (size_usd, price_impact_bps, net_bps,
+        # expected_profit_usd) per probed size so reviewer can verify where the
+        # pool starts to be liquidity-bound.  Attached to result via setattr
+        # for runtime telemetry; not part of the persisted contract.
+        _depth_curve: List[Dict[str, Any]] = []
         for _candidate_size_wei in _frontier_sizes:
             try:
                 _cand_result = attempt_local_pricing(
@@ -1229,6 +1274,19 @@ def score_backrun_live_parallel(
                 # Frontier hit token without USD basis — skip, keep original size
                 continue
             _cand_profit_usd = _cand_size_usd * _cand_net_bps / 10_000.0
+            # E1.64-3: capture depth-curve point (single-route, pre-split).
+            # price_impact_bps is computed below the frontier loop for the
+            # winning size; here we expose net_bps + size_usd which is enough
+            # to plot expected_profit(size) and detect cliff behaviour.
+            try:
+                _depth_curve.append({
+                    "size_wei": int(_candidate_size_wei),
+                    "size_usd": round(float(_cand_size_usd), 6),
+                    "net_bps": round(float(_cand_net_bps), 3),
+                    "expected_profit_usd": round(float(_cand_profit_usd), 6),
+                })
+            except Exception:
+                pass
             _cand_is_split = False
             # E1.63 step 7: optionally try 50/50 split routing at this size
             if _split_route_enable:
@@ -1630,7 +1688,7 @@ def score_backrun_live_parallel(
         # M7.A.5.8: Gas decomposition
         gas_decomp = estimate_gas_decomposition_bps(backrun_size_wei, gas_cost_wei)
 
-        return BackrunResult(
+        _slow_result = BackrunResult(
             event_id=event.event_id,
             event_source="live",
             event_type=event.event_type,
@@ -1709,6 +1767,15 @@ def score_backrun_live_parallel(
             amount_in_optimal_usd=_size_usd,
             price_impact_bps=_price_impact_bps_computed,
         )
+        # E1.64-3: attach depth curve via setattr (runtime telemetry; not in
+        # the persisted BackrunResult schema).  Consumers (hot rollup, bridge
+        # writer) can pick it up via getattr.
+        try:
+            if _depth_curve:
+                setattr(_slow_result, "depth_curve", list(_depth_curve))
+        except Exception:
+            pass
+        return _slow_result
 
     # M7.A.5.6: Split QUOTE_FAILURE — distinguish RPC failure from no-route
     fail_reason = REJECT_RPC_QUOTE_FAIL if venues_quoted == 0 else REJECT_PAIR_RESOLVED_UNTRADEABLE
@@ -1947,8 +2014,99 @@ def score_backrun_fast(
     if pricing_result is None:
         return None
 
+    # E1.63 fast-path split routing: try 50/50 split across top-2 V3 pools.
+    # Pure local math — zero-RPC, same pool states already loaded above.
+    # Increments shared E1.63 session counters so the hot lane contributes to
+    # the soak validation metric (split_route_attempted_total > 0).
+    _split_route_enable_fast = os.getenv("ARBY_SPLIT_ROUTE_ENABLE", "0") == "1"
+    if _split_route_enable_fast and local_sim_states:
+        try:
+            global _e163_split_route_attempted, _e163_split_route_win
+            with _e163_lock:
+                _e163_split_route_attempted += 1
+            _sr_fast = attempt_split_pricing(
+                candidate_pools=candidate_pools,
+                local_sim_states=local_sim_states,
+                token_in_addr=token_in_addr,
+                token_out_addr=token_out_addr,
+                backrun_size_wei=backrun_size_wei,
+                registry_entries=active_entries if active_entries else None,
+            )
+            if _sr_fast is not None:
+                _srb = _sr_fast.get("buy_amount")
+                _srs = _sr_fast.get("sell_amount")
+                if _srb and _srs and int(_srs) > 0 and int(_srb) > int(_srs):
+                    # E1.64-9: rank split-route win by gross PnL in
+                    # output-token wei (== expected_profit_usd at fixed input).
+                    # Previously used net_bps which, while equivalent for fixed
+                    # input, hides direct PnL magnitude.  Comparing gross-pnl
+                    # wei is the strictly-correct economic measure when sizes
+                    # match, and aligns with the slow-path frontier sweep
+                    # which already compares expected_profit_usd.
+                    _sr_gross_wei = int(_srb) - int(_srs)
+                    _pr_buy = int(pricing_result.get("buy_amount") or 0)
+                    _pr_sell = int(pricing_result.get("sell_amount") or 0)
+                    _pr_gross_wei = (_pr_buy - _pr_sell) if _pr_sell > 0 else -1
+                    if _sr_gross_wei > _pr_gross_wei:
+                        pricing_result = _sr_fast
+                        with _e163_lock:
+                            _e163_split_route_win += 1
+        except Exception:
+            pass  # split is best-effort; never fail the fast path
+
     buy_amount = pricing_result["buy_amount"]
     sell_amount = pricing_result["sell_amount"]
+
+    # E1.64: depth guard in fast path — compute price_impact_bps from best buy
+    # pool's local V3 state (zero-RPC, same pool states already loaded above).
+    _price_impact_bps_fast: Optional[float] = None
+    _depth_math_invalid_fast: bool = False
+    _depth_guard_rejected_fast: bool = False
+    if local_sim_states:
+        try:
+            import math as _math_mod
+            _pi_venue = pricing_result.get("buy_venue")
+            if _pi_venue:
+                _pi_state = local_sim_states.get(_pi_venue)
+                if _pi_state:
+                    _pi_sp = int(_pi_state.get("sqrt_price_x96") or 0)
+                    _pi_liq = int(_pi_state.get("liquidity") or 0)
+                    _pi_fee = int(pricing_result.get("buy_fee") or 3000)
+                    if _pi_sp > 0 and _pi_liq > 0:
+                        global _e163_depth_guard_attempted
+                        with _e163_lock:
+                            _e163_depth_guard_attempted += 1
+                        _zero_for_one = token_in_addr.lower() < token_out_addr.lower()
+                        _pi_sp_after = compute_v3_sqrt_price_after(
+                            sqrt_price_x96=_pi_sp,
+                            liquidity=_pi_liq,
+                            amount_in=int(backrun_size_wei),
+                            fee_pips=_pi_fee,
+                            zero_for_one=_zero_for_one,
+                        )
+                        if _pi_sp_after is not None:
+                            _pi_ratio = (_pi_sp_after / _pi_sp) ** 2
+                            _pi_bps_raw = abs(1.0 - _pi_ratio) * 10_000.0
+                            if not _math_mod.isfinite(_pi_bps_raw) or _pi_bps_raw > 1_000_000:
+                                _depth_math_invalid_fast = True
+                                global _e164_depth_math_invalid
+                                with _e163_lock:
+                                    _e164_depth_math_invalid += 1
+                            else:
+                                _price_impact_bps_fast = round(_pi_bps_raw, 2)
+                                global _e163_price_impact_populated
+                                with _e163_lock:
+                                    _e163_price_impact_populated += 1
+                                _max_pi_fast = int(
+                                    os.getenv("ARBY_PRICE_IMPACT_MAX_BPS", "1000")
+                                )
+                                if _price_impact_bps_fast > _max_pi_fast:
+                                    _depth_guard_rejected_fast = True
+                                    global _e164_depth_guard_rejected
+                                    with _e163_lock:
+                                        _e164_depth_guard_rejected += 1
+        except Exception:
+            pass  # depth guard is best-effort; never fail the fast path
 
     # ── N5: Accumulate dynamic_anchors sample (fast path) ──────────────
     # Fire-and-forget; mirrors the hook in score_backrun_live_parallel.
@@ -2088,15 +2246,68 @@ def score_backrun_fast(
     tout_sym = _ats.get(token_out_addr.lower(), token_out_addr[:10] if token_out_addr else "??")
     actual_pair = f"{tin_sym}/{tout_sym}"
 
-    # post-1h-soak P0: compute size_usd_estimate for stablecoin inputs so the
-    # gate's MISSING_SIZE_METADATA check sees at least one non-None field.
-    _size_usd_fast: Optional[float] = None
+    # E1.64: USD basis — expand beyond stablecoin inputs to cover WETH and
+    # dynamic-anchor fallback so expected_profit_usd is populated more often.
     _in_sym_upper_fast = tin_sym.upper()
+    _out_sym_upper_fast = tout_sym.upper()
+    _size_usd_fast: Optional[float] = None
     if _in_sym_upper_fast in _USD_STABLE_SYMBOLS:
         try:
             _size_usd_fast = round(backrun_size_wei / (10 ** _effective_dec) * 1.0, 2)
         except Exception:
             _size_usd_fast = None
+    elif _in_sym_upper_fast in _ETH_USD_SYMBOLS:
+        try:
+            _eth_px_fast = _get_eth_price_usd(chain) if "_get_eth_price_usd" in dir() else None
+            if not _eth_px_fast:
+                # fallback to module-level constant
+                from m7.shared.constants import _FALLBACK_ETH_PRICE_USD
+                _eth_px_fast = _FALLBACK_ETH_PRICE_USD
+            if _eth_px_fast and _eth_px_fast > 0:
+                _size_usd_fast = round(backrun_size_wei / 1e18 * float(_eth_px_fast), 4)
+        except Exception:
+            _size_usd_fast = None
+    else:
+        # Best-effort: try token_out if it is a stable (receive-side basis).
+        try:
+            _out_dec_fast: Optional[int] = None
+            if _out_sym_upper_fast in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC"):
+                _out_dec_fast = 6
+            elif _out_sym_upper_fast in ("DAI", "PYUSD", "FRAX"):
+                _out_dec_fast = 18
+            if _out_dec_fast is not None and buy_amount and buy_amount > 0:
+                _size_usd_fast = round(buy_amount / (10 ** _out_dec_fast), 4)
+        except Exception:
+            _size_usd_fast = None
+
+    # E1.64: compute expected_profit_usd from size_usd * net_bps.
+    _expected_profit_usd_fast: Optional[float] = None
+    if _size_usd_fast and _size_usd_fast > 0 and net_bps > 0:
+        _expected_profit_usd_fast = round(_size_usd_fast * net_bps / 10_000.0, 6)
+
+    # E1.64: USD_BASIS_MISSING gate — only active when net_bps > 0.
+    # Counts opportunities we *cannot* rank in USD terms.
+    if _route_viable and net_bps > 0 and _expected_profit_usd_fast is None:
+        global _e164_usd_basis_missing
+        with _e163_lock:
+            _e164_usd_basis_missing += 1
+
+    # E1.64: ARBY_MIN_EXPECTED_PROFIT_USD gate.
+    _min_profit_usd_gate = float(os.getenv("ARBY_MIN_EXPECTED_PROFIT_USD", "0.0") or "0.0")
+    if _min_profit_usd_gate > 0.0 and _route_viable:
+        if _expected_profit_usd_fast is None:
+            # USD basis unavailable — treat as not meeting the gate.
+            _route_viable = False
+            _reject_reason = _reject_reason or REJECT_USD_BASIS_MISSING
+            global _e164_min_profit_rejected
+            with _e163_lock:
+                _e164_min_profit_rejected += 1
+        elif _expected_profit_usd_fast < _min_profit_usd_gate:
+            _route_viable = False
+            _reject_reason = _reject_reason or REJECT_MIN_PROFIT_USD_NOT_MET
+            with _e163_lock:
+                _e164_min_profit_rejected += 1
+
     return BackrunResult(
         event_id=event.event_id,
         event_source="live",
@@ -2138,9 +2349,6 @@ def score_backrun_fast(
         backrun_token_out_address=token_out_addr,
         size_source="dynamic_bounded",
         size_valid_for_token=True,
-        # post-1h-soak P0 fix: propagate decimal and USD estimate so
-        # execution_gate MISSING_SIZE_METADATA check passes for fast-path
-        # candidates (previously token_in_decimals was not set here).
         token_in_decimals=_effective_dec,
         size_normalization_source=("heuristic" if _in_sym else "default_18_inferred"),
         size_usd_estimate=_size_usd_fast,
@@ -2152,8 +2360,9 @@ def score_backrun_fast(
         gas_floor_bps=gas_bps,
         scoring_path="registry_fast",
         profit_guard_passed=_profit_guard_passed,
+        # E1.64: new observability fields
+        expected_profit_usd=_expected_profit_usd_fast,
+        price_impact_bps=_price_impact_bps_fast,
+        amount_in_optimal_usd=_size_usd_fast,
     )
-    if _guard_reject_reason is not None:
-        setattr(result, "guard_reject_reason", _guard_reject_reason)
-    return result
 

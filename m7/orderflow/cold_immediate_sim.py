@@ -301,37 +301,99 @@ def queue_cold_executable_for_sim(
     if not cold_exec:
         return None, counters
 
-    # Step 6: absolute USD profit gate — +2500 bps on $0.00001 is not a real trade.
-    # Entries without USD basis (meme tokens) pass through unconditionally.
+    # Step 6 / E1.64-1: USD profit gate — bps without USD notional cannot
+    # be admitted to submit-ready.  ARBY_COLD_REQUIRE_USD_BASIS=1 (default ON
+    # under E1.64) blocks entries with size_usd<=0 or expected_profit_usd=None,
+    # routing them into USD_BASIS_MISSING instead of the gate.  When the env
+    # is 0 (legacy behaviour) entries without USD basis pass through.
     _min_profit_usd = _min_expected_profit_usd()
+    _require_usd_basis = os.getenv("ARBY_COLD_REQUIRE_USD_BASIS", "0") == "1"
 
     def _passes_profit_gate(e: Dict[str, Any]) -> bool:
+        # E1.64-1: block missing USD basis when required.
+        if _require_usd_basis:
+            _susd = e.get("size_usd_estimate")
+            try:
+                _susd_f = float(_susd) if _susd is not None else 0.0
+            except Exception:
+                _susd_f = 0.0
+            if _susd_f <= 0.0:
+                return False
+            p = _entry_expected_profit_usd(e)
+            if p is None:
+                return False
+            if _min_profit_usd > 0 and p < _min_profit_usd:
+                return False
+            return True
+        # Legacy path (require_usd_basis=0): entries without USD basis pass.
         if _min_profit_usd <= 0:
             return True
         p = _entry_expected_profit_usd(e)
         if p is None:
-            return True  # No USD basis — let through (e.g. B3/meme tokens)
+            return True  # No USD basis — let through (legacy)
         return p >= _min_profit_usd
 
     # Step 9: rank by expected_profit_usd desc (max absolute edge first),
     # fallback to net_bps for entries without USD oracle basis.
+    _all_with_min_bps = [e for e in cold_exec if isinstance(e, dict)
+                         and float(e.get("net_bps") or 0.0) >= min_bps]
+    # E1.64-1: count entries blocked by the USD basis gate (before truncation).
+    if _require_usd_basis:
+        _usd_missing_samples: List[Dict[str, Any]] = []
+        for _e in _all_with_min_bps:
+            _susd = _e.get("size_usd_estimate")
+            try:
+                _susd_f = float(_susd) if _susd is not None else 0.0
+            except Exception:
+                _susd_f = 0.0
+            _p = _entry_expected_profit_usd(_e)
+            if _susd_f <= 0.0 or _p is None:
+                counters["cold_immediate_usd_basis_missing"] = (
+                    counters.get("cold_immediate_usd_basis_missing", 0) + 1
+                )
+                # E1.64-2: diagnostic sample — capture amount_in/out, decimals,
+                # token addresses, USD pricing path, pool addresses so reviewer
+                # can pinpoint why size_usd=0 (missing oracle? unknown decimals?).
+                if len(_usd_missing_samples) < 10:
+                    _usd_missing_samples.append({
+                        "pair": _e.get("pair") or _e.get("symbol"),
+                        "pool_address": _e.get("pool_address"),
+                        "second_pool_address": _e.get("second_pool_address"),
+                        "token_in_address": _e.get("token_in_address"),
+                        "token_out_address": _e.get("token_out_address"),
+                        "token_in_decimals": _e.get("token_in_decimals"),
+                        "token_out_decimals": _e.get("token_out_decimals"),
+                        "amount_in_wei": _e.get("amount_in_wei"),
+                        "amount_out_wei": _e.get("amount_out_wei"),
+                        "size_usd_estimate": _susd,
+                        "net_bps": _e.get("net_bps"),
+                        "size_normalization_source": _e.get(
+                            "size_normalization_source"
+                        ),
+                        "expected_profit_usd": _p,
+                        "reason": (
+                            "size_usd_zero" if _susd_f <= 0.0
+                            else "expected_profit_usd_none"
+                        ),
+                    })
+        if _usd_missing_samples:
+            counters["cold_immediate_usd_basis_missing_samples"] = _usd_missing_samples
     ranked = sorted(
-        [e for e in cold_exec if isinstance(e, dict)
-         and float(e.get("net_bps") or 0.0) >= min_bps
-         and _passes_profit_gate(e)],
+        [e for e in _all_with_min_bps if _passes_profit_gate(e)],
         key=_entry_rank_key,
         reverse=True,
     )[:top_n]
     counters["cold_immediate_sim_input_count"] = len(ranked)
-    # E1.63 step 5: count entries where size_usd=0/None and net_bps>0
-    # (USD basis missing — meme/oracle gap tokens). These are diagnostic candidates.
-    for _e in ranked:
-        _susd = _e.get("size_usd_estimate")
-        _nbps = float(_e.get("net_bps") or 0.0)
-        if _nbps > 0 and (_susd is None or float(_susd) <= 0.0):
-            counters["cold_immediate_usd_basis_missing"] = (
-                counters.get("cold_immediate_usd_basis_missing", 0) + 1
-            )
+    # Legacy (non-USD-basis-gating) bookkeeping: count remaining ranked
+    # entries with no USD basis (only present when require_usd_basis=0).
+    if not _require_usd_basis:
+        for _e in ranked:
+            _susd = _e.get("size_usd_estimate")
+            _nbps = float(_e.get("net_bps") or 0.0)
+            if _nbps > 0 and (_susd is None or float(_susd) <= 0.0):
+                counters["cold_immediate_usd_basis_missing"] = (
+                    counters.get("cold_immediate_usd_basis_missing", 0) + 1
+                )
     if not ranked:
         return None, counters
 

@@ -278,9 +278,37 @@ def _build_submit_blockers(
     scored_net_bps: Any,
     calldata_ready: Any,
     signing_ready: Any,
+    *,
+    expected_profit_usd: Any = None,
+    size_usd_estimate: Any = None,
 ) -> List[str]:
     """Return terminal blockers for submit readiness."""
     blockers: List[str] = []
+    # E1.64-4: USD-only profit gate — submit_ready requires positive USD basis
+    # AND expected_profit_usd >= ARBY_MIN_EXPECTED_PROFIT_USD.  bps without USD
+    # notional cannot produce submit_ready.  ENV ARBY_REQUIRE_USD_BASIS=0
+    # disables this check (legacy behaviour).
+    if os.environ.get("ARBY_REQUIRE_USD_BASIS", "0") == "1":
+        try:
+            _s = float(size_usd_estimate) if size_usd_estimate is not None else 0.0
+        except (TypeError, ValueError):
+            _s = 0.0
+        if _s <= 0.0:
+            blockers.append("USD_BASIS_MISSING")
+        else:
+            try:
+                _p = float(expected_profit_usd) if expected_profit_usd is not None else None
+            except (TypeError, ValueError):
+                _p = None
+            if _p is None:
+                blockers.append("USD_BASIS_MISSING")
+            else:
+                try:
+                    _min_p = float(os.environ.get("ARBY_MIN_EXPECTED_PROFIT_USD", "0") or "0")
+                except (TypeError, ValueError):
+                    _min_p = 0.0
+                if _min_p > 0.0 and _p < _min_p:
+                    blockers.append(f"MIN_PROFIT_USD_NOT_MET:{_p:.6f}<{_min_p:.6f}")
     if getattr(sim_result, "freshness_violation", False):
         blockers.append("SIM_FRESHNESS_VIOLATION")
     if sim_result.roundtrip_attempted:
@@ -1528,6 +1556,23 @@ def run_execution_gate(
             # E1.35 P1.1 step 3: classify Aerodrome Slipstream fees under
             # SLIPSTREAM_PENDING_LOOKUP when adapter+config are verified.
             _AERODROME_CL_KNOWN = {150, 445, 600, 1000, 1570, 2105, 2600, 2655, 3024, 5000, 7500, 9500, 20000}
+            # E1.64-6: Aerodrome Slipstream / dynamic-fee venues exhibit fee
+            # tails outside the canonical CL set (e.g. 400/418/3159/3036/80).
+            # Classify these as UNSUPPORTED_DYNAMIC_FEE_TIER so the histogram
+            # separates them from the bulk of unknown-fee pools and we can
+            # decide on adapter-side support per pool family.
+            _DYNAMIC_FEE_VENUES = {
+                "aerodrome_slipstream", "aerodrome_cl", "aerodrome",
+                "slipstream", "velodrome_cl", "velodrome_slipstream",
+                "ramses_cl", "thena_fusion",
+            }
+            _adapter_type = (
+                getattr(r, "adapter_type_used", None)
+                or getattr(r, "pricing_path", None)
+                or ""
+            )
+            _adapter_type_l = str(_adapter_type).strip().lower()
+            _is_dynamic_venue = any(_v in _adapter_type_l for _v in _DYNAMIC_FEE_VENUES)
             _skip_key = f"PRE_SIM_SKIP:UNSUPPORTED_FEE_TIER:{_fee_hint_int}"
             if _fee_hint_int in _AERODROME_CL_KNOWN:
                 # E1.56 fix: unconditional routing for known Aerodrome CL fees.
@@ -1537,6 +1582,14 @@ def run_execution_gate(
                 # where the config import occasionally raises a non-(KeyError,
                 # ImportError) exception that was silently swallowing the slip_cfg.
                 _skip_key = f"PRE_SIM_SKIP:SLIPSTREAM_PENDING_LOOKUP:{_fee_hint_int}"
+            elif _is_dynamic_venue:
+                # E1.64-6: dynamic-fee tail (e.g. Aerodrome Slipstream variable
+                # fee curve) — adapter present but specific fee tier not yet
+                # whitelisted.
+                _skip_key = (
+                    f"PRE_SIM_SKIP:UNSUPPORTED_DYNAMIC_FEE_TIER:"
+                    f"{_adapter_type_l}:{_fee_hint_int}"
+                )
             gate.sim_errors.append(_skip_key)
             if hasattr(r, "sim_attempted"):
                 r.sim_attempted = False
@@ -1597,7 +1650,9 @@ def run_execution_gate(
             # E1.35/soak13 economics guard: a passed calldata simulation is
             # not submit-ready if same-token roundtrip proves negative PnL.
             _submit_blockers = _build_submit_blockers(
-                sim_result, _net_bps_scored, _calldata_ready, _signing_ready
+                sim_result, _net_bps_scored, _calldata_ready, _signing_ready,
+                expected_profit_usd=getattr(r, "expected_profit_usd", None),
+                size_usd_estimate=getattr(r, "size_usd_estimate", None),
             )
 
             # Reviewer post-soak21 P0: structured reproducer for
@@ -1746,6 +1801,25 @@ def run_execution_gate(
                     "buy_fee": getattr(r, "best_buy_fee", None),
                     "sell_fee": getattr(r, "best_sell_fee", None),
                     "amount_in_wei": getattr(r, "amount_in_wei", 0) or 0,
+                    # E1.64-8: expand revert sample so reviewer can split
+                    # stale-bridge reverts from real liquidity failures.
+                    "amount_out_wei": (
+                        getattr(r, "best_buy_amount", None)
+                        or getattr(r, "amount_out_wei", None)
+                    ),
+                    "size_usd_estimate": getattr(r, "size_usd_estimate", None),
+                    "expected_profit_usd": getattr(r, "expected_profit_usd", None),
+                    "buy_pool_address": (
+                        getattr(r, "buy_pool_address", None)
+                        or getattr(r, "pool_address", None)
+                        or getattr(r, "sim_pool", None)
+                        or getattr(r, "event_pool_address", None)
+                    ),
+                    "sell_pool_address": getattr(r, "sell_pool_address", None),
+                    "adapter_type_used": getattr(r, "adapter_type_used", None),
+                    "pricing_path": getattr(r, "pricing_path", None),
+                    "buy_calldata_full": _buy_calldata,
+                    "sell_calldata_full": _sell_calldata,
                     "backrun_direction": getattr(r, "backrun_direction", None),
                     "event_block": getattr(r, "event_block", None),
                     "quote_block": getattr(r, "quote_block", None),

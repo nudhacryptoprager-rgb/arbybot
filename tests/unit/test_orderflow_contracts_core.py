@@ -95,7 +95,7 @@ class TestContractCoreInvariants:
         assert len(fields(BackrunResult)) == 83
 
     def test_all_reject_reasons_count_is_21(self):
-        assert len(ALL_REJECT_REASONS) == 21
+        assert len(ALL_REJECT_REASONS) == 24  # E1.64 added 3 reasons: USD_BASIS_MISSING, MIN_PROFIT_USD_NOT_MET, DEPTH_MATH_INVALID
 
     def test_unscored_rejects_count_is_12(self):
         assert len(UNSCORED_REJECTS) == 12

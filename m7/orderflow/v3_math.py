@@ -499,17 +499,21 @@ def attempt_split_pricing(
     backrun_size_wei: int,
     registry_entries: Optional[list] = None,
 ) -> Optional[dict]:
-    """Try 50/50 split routing across the 2 best V3 buy pools.
+    """Try split routing across the 2 best V3 buy pools using multiple split ratios.
 
-    E1.63 step 7: Splits ``backrun_size_wei`` evenly across the top-2 V3
-    buy pools (by output at half-size).  Only applies to V3/algebra adapters
-    (V2 pools use different concavity and are excluded).
+    E1.63 step 7 / E1.64 expansion: Tries 25/75, 50/50, and 75/25 splits across
+    the top-2 V3 buy pools and keeps the best combined buy output.  Top-3 pool
+    combinations are also evaluated when ≥ 3 V3 pools have valid state.
+
+    Only applies to V3/algebra adapters (V2 pools use different concavity and
+    are excluded).
 
     Returns a result dict compatible with ``attempt_local_pricing`` output,
     with ``pricing_path = "v3_split_local"`` and extra keys:
-        split_pool_b: str   (second buy pool address)
-        split_amount_a: int (buy output from pool A)
-        split_amount_b: int (buy output from pool B)
+        split_pool_b: str         (second buy pool address)
+        split_amount_a: int       (buy output from pool A)
+        split_amount_b: int       (buy output from pool B)
+        split_ratio_pct_a: int    (percentage allocated to pool A)
 
     Returns None if fewer than 2 V3 pools are available with state.
     """
@@ -524,12 +528,12 @@ def attempt_split_pricing(
             _dex_map[re.address.lower()] = re.dex
 
     zero_for_one = token_in_addr.lower() < token_out_addr.lower()
-    half_size = backrun_size_wei // 2
-    if half_size <= 0:
-        return None
 
-    # Collect V3/algebra buy outputs at half_size (V2 excluded)
-    pool_outputs: list = []
+    # Step 1: gather per-pool outputs for each candidate split size.
+    # We need outputs at various fractions of backrun_size_wei.
+    # Pre-compute outputs at 25%, 50%, 75% for each pool.
+    _RATIOS = (25, 50, 75)  # percent allocated to pool A; pool B gets (100 - ratio)%
+    pool_data: list = []  # (address, fee, adapter, dex, {size_wei: amount_out})
     for cp in candidate_pools:
         addr = cp.get("address")
         if not addr:
@@ -545,26 +549,82 @@ def attempt_split_pricing(
         if sp <= 0 or liq <= 0:
             continue
         fee = cp.get("fee", 3000)
-        out = compute_v3_swap_amount_out(
-            sqrt_price_x96=sp,
-            liquidity=liq,
-            amount_in=half_size,
-            fee_pips=fee,
-            zero_for_one=zero_for_one,
-        )
-        if out is not None and out > 0:
-            pool_outputs.append((out, addr, fee, sp, liq, adapter))
+        _out_by_size: dict = {}
+        for _r in _RATIOS:
+            _sz = backrun_size_wei * _r // 100
+            if _sz <= 0:
+                continue
+            _out = compute_v3_swap_amount_out(
+                sqrt_price_x96=sp,
+                liquidity=liq,
+                amount_in=_sz,
+                fee_pips=fee,
+                zero_for_one=zero_for_one,
+            )
+            if _out is not None and _out > 0:
+                _out_by_size[_r] = _out
+        # Also pre-compute complement ratios (100 - r)
+        for _r in _RATIOS:
+            _r2 = 100 - _r
+            if _r2 in _RATIOS:
+                continue  # already computed
+            _sz2 = backrun_size_wei * _r2 // 100
+            if _sz2 <= 0:
+                continue
+            _out2 = compute_v3_swap_amount_out(
+                sqrt_price_x96=sp,
+                liquidity=liq,
+                amount_in=_sz2,
+                fee_pips=fee,
+                zero_for_one=zero_for_one,
+            )
+            if _out2 is not None and _out2 > 0:
+                _out_by_size[_r2] = _out2
+        if _out_by_size:
+            pool_data.append((addr, fee, adapter, _out_by_size))
 
-    pool_outputs.sort(reverse=True)
-    if len(pool_outputs) < 2:
+    if len(pool_data) < 2:
         return None
 
-    split_buy = pool_outputs[0][0] + pool_outputs[1][0]
+    # Step 2: try all 2-pool combinations across all split ratios; keep best.
+    best_combined: int = 0
+    best_a_addr: Optional[str] = None
+    best_b_addr: Optional[str] = None
+    best_a_fee: int = 0
+    best_out_a: int = 0
+    best_out_b: int = 0
+    best_ratio_a: int = 50
 
-    # Sell pass: sell split_buy at the best single sell pool (V3 only)
-    best_sell = 0
-    best_sell_pool = None
-    best_sell_fee = 0
+    pool_indices = range(min(len(pool_data), 3))  # top-3 pool combinations
+    for i in pool_indices:
+        for j in pool_indices:
+            if j <= i:
+                continue
+            addr_i, fee_i, _, out_map_i = pool_data[i]
+            addr_j, fee_j, _, out_map_j = pool_data[j]
+            for _r in _RATIOS:
+                _r2 = 100 - _r
+                _out_i = out_map_i.get(_r, 0)
+                _out_j = out_map_j.get(_r2, 0)
+                if _out_i <= 0 or _out_j <= 0:
+                    continue
+                _combined = _out_i + _out_j
+                if _combined > best_combined:
+                    best_combined = _combined
+                    best_a_addr = addr_i
+                    best_b_addr = addr_j
+                    best_a_fee = fee_i
+                    best_out_a = _out_i
+                    best_out_b = _out_j
+                    best_ratio_a = _r
+
+    if best_combined <= 0 or best_a_addr is None or best_b_addr is None:
+        return None
+
+    # Sell pass: sell best_combined at the best single sell pool (V3 only)
+    best_sell: int = 0
+    best_sell_pool: Optional[str] = None
+    best_sell_fee: int = 0
     for cp in candidate_pools:
         addr = cp.get("address")
         if not addr:
@@ -583,7 +643,7 @@ def attempt_split_pricing(
         out = compute_v3_swap_amount_out(
             sqrt_price_x96=sp,
             liquidity=liq,
-            amount_in=split_buy,
+            amount_in=best_combined,
             fee_pips=fee,
             zero_for_one=not zero_for_one,
         )
@@ -595,26 +655,23 @@ def attempt_split_pricing(
     if best_sell <= 0 or best_sell_pool is None:
         return None
 
-    addr_a = pool_outputs[0][1]
-    addr_b = pool_outputs[1][1]
-    out_a = pool_outputs[0][0]
-    out_b = pool_outputs[1][0]
-    dex_a = _dex_map.get(addr_a.lower(), "uniswap_v3")
+    dex_a = _dex_map.get(best_a_addr.lower(), "uniswap_v3")
     sell_dex = _dex_map.get(best_sell_pool.lower(), "uniswap_v3")
 
     return {
-        "buy_amount": split_buy,
+        "buy_amount": best_combined,
         "sell_amount": best_sell,
-        "buy_venue": addr_a,
+        "buy_venue": best_a_addr,
         "sell_venue": best_sell_pool,
         "buy_dex": dex_a,
         "sell_dex": sell_dex,
-        "buy_fee": pool_outputs[0][2],
+        "buy_fee": best_a_fee,
         "sell_fee": best_sell_fee,
         "pricing_path": "v3_split_local",
-        "pools_attempted": len(pool_outputs),
+        "pools_attempted": len(pool_data),
         "pools_succeeded": 2,
-        "split_pool_b": addr_b,
-        "split_amount_a": out_a,
-        "split_amount_b": out_b,
+        "split_pool_b": best_b_addr,
+        "split_amount_a": best_out_a,
+        "split_amount_b": best_out_b,
+        "split_ratio_pct_a": best_ratio_a,
     }
