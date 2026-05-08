@@ -242,6 +242,24 @@ def _read_positive_float_env(name: str, default: float = 0.0) -> float:
         return default
 
 
+def _roundtrip_gross_wei(amount_in_wei: int, sell_amount_wei: int) -> int:
+    """Return roundtrip gross PnL in token_in units.
+
+    ``attempt_local_pricing`` returns buy_amount in token_out units and
+    sell_amount in token_in units.  Profit math must therefore compare
+    sell_amount to the original amount_in, never buy_amount to sell_amount.
+    """
+    return int(sell_amount_wei) - int(amount_in_wei)
+
+
+def _roundtrip_net_bps_from_sell(amount_in_wei: int, sell_amount_wei: int) -> float:
+    """Return roundtrip net bps before gas, measured in token_in units."""
+    amount_in = int(amount_in_wei)
+    if amount_in <= 0:
+        return 0.0
+    return (_roundtrip_gross_wei(amount_in, int(sell_amount_wei)) * 10000.0) / amount_in
+
+
 def _usd_target_rescaled_size_wei(
     *,
     amount_in_wei: int,
@@ -1297,8 +1315,9 @@ def score_backrun_live_parallel(
             _cs = _cand_result.get("sell_amount")
             if not (_cb and _cs and _cs > 0):
                 continue
-            _cand_net_bps_num = int(_cb) - int(_cs)
-            _cand_net_bps = (_cand_net_bps_num * 10000.0) / int(_cs) if int(_cs) > 0 else 0.0
+            _cand_net_bps = _roundtrip_net_bps_from_sell(
+                int(_candidate_size_wei), int(_cs)
+            )
             # Compute size_usd for candidate
             _cand_size_usd = _quote_implied_size_usd(
                 amount_in_wei=int(_candidate_size_wei),
@@ -1349,7 +1368,9 @@ def score_backrun_live_parallel(
                         _srb = _sr.get("buy_amount")
                         _srs = _sr.get("sell_amount")
                         if _srb and _srs and int(_srs) > 0:
-                            _sr_net = (int(_srb) - int(_srs)) * 10000.0 / int(_srs)
+                            _sr_net = _roundtrip_net_bps_from_sell(
+                                int(_candidate_size_wei), int(_srs)
+                            )
                             _sr_usd = _quote_implied_size_usd(
                                 amount_in_wei=int(_candidate_size_wei),
                                 decimals_in=_effective_dec,
@@ -2082,18 +2103,18 @@ def score_backrun_fast(
             if _sr_fast is not None:
                 _srb = _sr_fast.get("buy_amount")
                 _srs = _sr_fast.get("sell_amount")
-                if _srb and _srs and int(_srs) > 0 and int(_srb) > int(_srs):
-                    # E1.64-9: rank split-route win by gross PnL in
-                    # output-token wei (== expected_profit_usd at fixed input).
-                    # Previously used net_bps which, while equivalent for fixed
-                    # input, hides direct PnL magnitude.  Comparing gross-pnl
-                    # wei is the strictly-correct economic measure when sizes
-                    # match, and aligns with the slow-path frontier sweep
-                    # which already compares expected_profit_usd.
-                    _sr_gross_wei = int(_srb) - int(_srs)
-                    _pr_buy = int(pricing_result.get("buy_amount") or 0)
+                if _srb and _srs and int(_srs) > 0:
+                    # E1.67: buy_amount is token_out, sell_amount is token_in.
+                    # Split-route wins must compare token_in roundtrip PnL:
+                    # sell_amount - original amount_in.
+                    _sr_gross_wei = _roundtrip_gross_wei(
+                        int(backrun_size_wei), int(_srs)
+                    )
                     _pr_sell = int(pricing_result.get("sell_amount") or 0)
-                    _pr_gross_wei = (_pr_buy - _pr_sell) if _pr_sell > 0 else -1
+                    _pr_gross_wei = (
+                        _roundtrip_gross_wei(int(backrun_size_wei), _pr_sell)
+                        if _pr_sell > 0 else -1
+                    )
                     if _sr_gross_wei > _pr_gross_wei:
                         pricing_result = _sr_fast
                         with _e163_lock:

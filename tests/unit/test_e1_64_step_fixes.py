@@ -171,3 +171,22 @@ class TestSplitRouteGrossPnlWin:
     def test_module_imports_cleanly(self):
         # Smoke: make sure the edited module still imports.
         from m7.orderflow import scoring_parallel  # noqa: F401
+
+    def test_roundtrip_gross_uses_sell_amount_minus_input(self):
+        """buy_amount is token_out; sell_amount is token_in and must drive PnL."""
+        from m7.orderflow.scoring_parallel import _roundtrip_gross_wei
+
+        amount_in = 1_000_000
+        buy_amount_token_out = 42
+        sell_amount_token_in = 1_050_000
+
+        assert _roundtrip_gross_wei(amount_in, sell_amount_token_in) == 50_000
+        assert buy_amount_token_out - sell_amount_token_in != 50_000
+
+    def test_roundtrip_net_bps_uses_input_denominator(self):
+        """Protect frontier sizing from comparing buy_amount to sell_amount."""
+        from m7.orderflow.scoring_parallel import _roundtrip_net_bps_from_sell
+
+        assert _roundtrip_net_bps_from_sell(1_000_000, 1_050_000) == 500.0
+        assert _roundtrip_net_bps_from_sell(1_000_000, 950_000) == -500.0
+        assert _roundtrip_net_bps_from_sell(0, 1_000_000) == 0.0

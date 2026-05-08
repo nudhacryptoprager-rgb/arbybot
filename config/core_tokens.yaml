@@ -419,12 +419,12 @@ base:
     address: "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452"
     decimals: 18
     name: "Wrapped stETH"
-    note: "Lido wstETH bridged to Base"
+    note: "E1.67: Lido wstETH bridged to Base — promoted productive after depth verification (Aerodrome CL + Uniswap V3, ~$20M TVL across pools)"
     volatility_tier: low
-    liquidity_tier: medium
-    cross_dex_expected: 1
+    liquidity_tier: high
+    cross_dex_expected: 2
     accounting_sensitive: true
-    productive_default: false
+    productive_default: true
 
   rETH:
     address: "0xB6fe221Fe9EeF5aBa221c348bA20A1Bf5e73624c"

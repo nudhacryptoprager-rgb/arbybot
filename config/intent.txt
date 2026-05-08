@@ -47,7 +47,7 @@ arbitrum_one:WETH/USDT
 arbitrum_one:WETH/WBTC
 
 # ============================================================
-# BASE (24 pairs, 11 productive tokens) [E1.48: +BRETT/DEGEN/TOSHI block] [E1.66: +AERO/WETH, VIRTUAL/WETH]
+# BASE (23 pairs, 12 productive tokens) [E1.48: +BRETT/DEGEN/TOSHI] [E1.67: +wstETH/WETH; -phantom dupes]
 # ============================================================
 # Expansion notes (2026-04-17, verified via core_tokens.yaml + known Base DEX state):
 #   cbETH/WETH — Uniswap V3 0.05% + Aerodrome vAMM+sAMM, $8M+ TVL, blue-chip LST.
@@ -62,12 +62,16 @@ arbitrum_one:WETH/WBTC
 #   DEGEN/WETH, DEGEN/USDC — Farcaster-native, Aerodrome + Uniswap V3 multi-DEX.
 #   TOSHI/WETH, TOSHI/USDC — Coinbase-themed, Aerodrome + Uniswap V3.
 #   VIRTUAL/cbBTC — cross-quote diversification on existing productive tokens.
-# E1.66 additions (2026-05-08, depth-expansion after soak3 dust-only finding):
-#   AERO/WETH — Aerodrome CL + Uniswap V3, $50M+ AERO TVL, deep AMM pool.
-#   VIRTUAL/WETH — Uniswap V3 + Aerodrome CL, $20M+ TVL, AI token with real DEX depth.
+# E1.67 changes (2026-05-08, depth-truth corrections after soak3):
+#   FIX: removed AERO/WETH and VIRTUAL/WETH (E1.66) — phantom duplicates;
+#        intent_loader dedupes by canonical_key (sorted token pair) so
+#        these collided with existing WETH/AERO and WETH/VIRTUAL entries.
+#        Real pair count stayed at 22 despite intent.txt showing 24.
+#   ADD: wstETH/WETH — Lido bridged wstETH on Base, Aerodrome CL + Uniswap V3,
+#        ~$20M TVL across pools, top-tier ETH-LST AMM depth, genuinely new
+#        canonical key (no collision). Productive flag bumped on wstETH.
 
 base:AERO/USDC
-base:AERO/WETH
 base:BRETT/USDC
 base:BRETT/WETH
 base:DEGEN/USDC
@@ -78,7 +82,6 @@ base:TOSHI/WETH
 base:USDC/DAI
 base:USDC/USDT
 base:VIRTUAL/USDC
-base:VIRTUAL/WETH
 base:VIRTUAL/cbBTC
 base:WETH/AERO
 base:WETH/DAI
@@ -90,6 +93,7 @@ base:cbBTC/WETH
 base:cbBTC/cbETH
 base:cbETH/USDC
 base:cbETH/WETH
+base:wstETH/WETH
 
 # ============================================================
 # LINEA (5 pairs, 2 productive tokens)
