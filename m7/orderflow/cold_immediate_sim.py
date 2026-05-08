@@ -143,7 +143,12 @@ def _build_synthetic_event(entry: Dict[str, Any], chain: str) -> Optional[Orderf
             token_in=token_in_sym,
             token_out=token_out_sym,
             amount_in_wei=int(entry.get("amount_in_wei") or 0),
-            amount_out_wei=int(entry.get("amount_out_wei") or 0),
+            # E1.65: prefer best_buy_amount_wei (actual USDC/WETH output from
+            # the pricing result) over amount_out_wei (often 0 in bridge entries
+            # for token_out=USDC pairs like FUN/USDC, B3/USDC).
+            amount_out_wei=int(
+                entry.get("best_buy_amount_wei") or entry.get("amount_out_wei") or 0
+            ),
             dex=str(entry.get("dex") or "cold_bridge"),
             pool_address=pa,
             fee_tier=int(entry.get("fee_tier") or 0),
@@ -337,6 +342,68 @@ def queue_cold_executable_for_sim(
     # fallback to net_bps for entries without USD oracle basis.
     _all_with_min_bps = [e for e in cold_exec if isinstance(e, dict)
                          and float(e.get("net_bps") or 0.0) >= min_bps]
+
+    # E1.65 Step 3: USDC/WETH token_out fallback — for entries where
+    # size_usd_estimate=0 but best_buy_amount_wei>0 and token_out is a
+    # known stable (USDC/USDT) or WETH, compute size_usd directly.
+    # This fixes FUN/USDC, B3/USDC etc. where the token_in oracle is absent
+    # but the scoring path DID produce a USDC buy amount.
+    _USDC_STABLE_ADDRS = {
+        # Base USDC
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        # Base USDbC (bridged)
+        "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+        # Arbitrum USDC
+        "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        # Arbitrum USDT
+        "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+        # Optimism USDC
+        "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+    }
+    _WETH_ADDRS = {
+        # Base WETH
+        "0x4200000000000000000000000000000000000006",
+        # Arbitrum WETH
+        "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+    }
+    _USD_PAIR_SUFFIXES = ("/USDC", "/USDT", "/USDBC", "/DAI")
+
+    def _enrich_usd_from_buy_amount(e: Dict[str, Any]) -> Dict[str, Any]:
+        """Return enriched copy of entry when USDC/WETH fallback is possible."""
+        _susd = e.get("size_usd_estimate")
+        try:
+            _susd_f = float(_susd) if _susd is not None else 0.0
+        except Exception:
+            _susd_f = 0.0
+        if _susd_f > 0:
+            return e  # already has USD basis, skip
+        _ba_wei = int(e.get("best_buy_amount_wei") or 0)
+        if _ba_wei <= 0:
+            return e  # no buy amount to fall back from
+        _tok_out = (e.get("backrun_token_out_address") or "").lower()
+        _pair = e.get("actual_pair") or e.get("pair") or ""
+        # Check if token_out is a known 6-decimal stable
+        if _tok_out in _USDC_STABLE_ADDRS or any(_pair.upper().endswith(sfx) for sfx in _USD_PAIR_SUFFIXES):
+            _computed = round(_ba_wei / 10**6, 6)
+            if _computed > 0:
+                e = dict(e)  # shallow copy — never mutate bridge dict
+                e["size_usd_estimate"] = _computed
+                e["usd_basis_source"] = "token_out_stable_fallback"
+                return e
+        # Check if token_out is WETH — use 18 decimals
+        if _tok_out in _WETH_ADDRS:
+            _eth_price = float(os.getenv("ARBY_ETH_PRICE_USD", "0") or 0)
+            if _eth_price > 0:
+                _computed = round(_ba_wei / 10**18 * _eth_price, 6)
+                if _computed > 0:
+                    e = dict(e)
+                    e["size_usd_estimate"] = _computed
+                    e["usd_basis_source"] = "token_out_weth_fallback"
+                    return e
+        return e
+
+    _all_with_min_bps = [_enrich_usd_from_buy_amount(e) for e in _all_with_min_bps]
+
     # E1.64-1: count entries blocked by the USD basis gate (before truncation).
     if _require_usd_basis:
         _usd_missing_samples: List[Dict[str, Any]] = []
@@ -355,26 +422,42 @@ def queue_cold_executable_for_sim(
                 # token addresses, USD pricing path, pool addresses so reviewer
                 # can pinpoint why size_usd=0 (missing oracle? unknown decimals?).
                 if len(_usd_missing_samples) < 10:
+                    # E1.65 Step 4: distinguish "we had buy amount but token_out unknown"
+                    # from "scoring never produced buy amount at all"
+                    _ba_wei_diag = int(_e.get("best_buy_amount_wei") or 0)
+                    _pair_diag = _e.get("actual_pair") or _e.get("pair") or ""
+                    _has_usdc_out = (
+                        any(_pair_diag.upper().endswith(sfx) for sfx in _USD_PAIR_SUFFIXES)
+                        or (_e.get("backrun_token_out_address") or "").lower()
+                        in _USDC_STABLE_ADDRS
+                    )
+                    if _ba_wei_diag > 0 and _has_usdc_out:
+                        _reason_diag = "USD_BASIS_MISSING:missing_buy_amount"
+                    elif _susd_f <= 0.0:
+                        _reason_diag = "size_usd_zero"
+                    else:
+                        _reason_diag = "expected_profit_usd_none"
                     _usd_missing_samples.append({
                         "pair": _e.get("pair") or _e.get("symbol"),
+                        "actual_pair": _e.get("actual_pair"),
                         "pool_address": _e.get("pool_address"),
                         "second_pool_address": _e.get("second_pool_address"),
                         "token_in_address": _e.get("token_in_address"),
                         "token_out_address": _e.get("token_out_address"),
+                        "backrun_token_out_address": _e.get("backrun_token_out_address"),
                         "token_in_decimals": _e.get("token_in_decimals"),
                         "token_out_decimals": _e.get("token_out_decimals"),
                         "amount_in_wei": _e.get("amount_in_wei"),
                         "amount_out_wei": _e.get("amount_out_wei"),
+                        "best_buy_amount_wei": _e.get("best_buy_amount_wei"),
                         "size_usd_estimate": _susd,
                         "net_bps": _e.get("net_bps"),
                         "size_normalization_source": _e.get(
                             "size_normalization_source"
                         ),
+                        "usd_basis_source": _e.get("usd_basis_source"),
                         "expected_profit_usd": _p,
-                        "reason": (
-                            "size_usd_zero" if _susd_f <= 0.0
-                            else "expected_profit_usd_none"
-                        ),
+                        "reason": _reason_diag,
                     })
         if _usd_missing_samples:
             counters["cold_immediate_usd_basis_missing_samples"] = _usd_missing_samples

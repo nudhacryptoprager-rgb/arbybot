@@ -82,6 +82,8 @@ def _write_cold_hot_bridge(
         payload = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "cold_executable": candidates,
+            # E1.65 Step 5: entries excluded from cold_executable due to USD basis gate
+            "cold_usd_basis_missing": artifact.get("top_cold_usd_basis_missing", []),
             "cold_stale_positive": stale_pos,
             "cold_recoverable_stale": recoverable_stale,
             "cold_recoverable_stale_route_viable": recoverable_stale_viable,

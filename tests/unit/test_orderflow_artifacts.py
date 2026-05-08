@@ -1,4 +1,4 @@
-﻿"""
+"""
 Artifact schema tests for M7 orderflow.
 
 Locks artifact-level contracts produced by build_replay_summary(),
@@ -303,7 +303,7 @@ class TestWsLowLagStaleSummary:
 
 
 # ===========================================================================
-# M7.A.5.5: Artifact Fields вЂ” Pair Resolution & M4/M7 comparison
+# M7.A.5.5: Artifact Fields — Pair Resolution & M4/M7 comparison
 # ===========================================================================
 
 
@@ -793,7 +793,7 @@ class TestM7A527AnomalyCleanHeadlines:
         events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
         results = self._make_mixed_results()
         art = build_replay_summary(events, results, mode="test")
-        # best_net_bps_any is the unfiltered diagnostic вЂ” includes anomaly (moved to diagnostic_raw in M7.A.5.42)
+        # best_net_bps_any is the unfiltered diagnostic — includes anomaly (moved to diagnostic_raw in M7.A.5.42)
         assert art["diagnostic_raw"]["best_net_bps_any"] == 47322.0
 
     def test_best_net_bps_executable_unchanged(self):
@@ -812,7 +812,7 @@ class TestM7A527AnomalyCleanHeadlines:
         events = [_make_event(eid=f"a{i}") for i in range(1, 5)]
         results = self._make_mixed_results()
         art = build_replay_summary(events, results, mode="test")
-        # Stale-clean = stale + anomaly-free + size-valid в†’ best is 12.0
+        # Stale-clean = stale + anomaly-free + size-valid → best is 12.0
         assert art["best_net_bps_stale_clean"] == 12.0
 
     def test_positive_net_count_clean_excludes_anomaly(self):
@@ -824,7 +824,7 @@ class TestM7A527AnomalyCleanHeadlines:
 
     def test_beats_two_leg_baseline_uses_clean(self):
         events = [_make_event(eid="a1")]
-        # Only an anomaly result в†’ clean is empty в†’ should not beat baseline
+        # Only an anomaly result → clean is empty → should not beat baseline
         from m7.shared.constants import REJECT_PRICING_ANOMALY
         results = [_make_result(
             event_id="a1", best_backrun_net_bps=50000.0, block_lag=5,
@@ -931,7 +931,7 @@ class TestM7A528StaleKPIContract:
         """Simulate mid-pipeline abort: same_state_class=stale, block_lag=1."""
         return [
             # Mid-pipeline aborted: detected low-lag (block_lag=1) but wall-clock
-            # exceeded budget в†’ same_state_class="stale", reject=STALE_POSITIVE
+            # exceeded budget → same_state_class="stale", reject=STALE_POSITIVE
             _make_result(
                 event_id="mp1", best_backrun_net_bps=5.0, block_lag=1,
                 same_state_class="stale", route_viable=False,
@@ -964,7 +964,7 @@ class TestM7A528StaleKPIContract:
         results = self._make_mid_pipeline_abort_results()
         art = build_replay_summary(events, results, mode="test")
         hist_stale = art["reject_histogram"].get("STALE_POSITIVE", 0)
-        # All 3 STALE_POSITIVE results have positive net_bps в†’ must agree
+        # All 3 STALE_POSITIVE results have positive net_bps → must agree
         assert art["stale_positive_count"] == 3
         assert art["stale_positive_count"] == hist_stale
 
@@ -983,7 +983,7 @@ class TestM7A528StaleKPIContract:
         assert art["best_net_bps_stale_clean"] == 8.0
 
     def test_mid_pipeline_abort_low_lag_stale_classified(self):
-        """block_lag=1 + same_state_class=stale в†’ result is stale, not low-lag fresh."""
+        """block_lag=1 + same_state_class=stale → result is stale, not low-lag fresh."""
         events = [_make_event(eid="mp1")]
         results = [_make_result(
             event_id="mp1", best_backrun_net_bps=5.0, block_lag=1,
@@ -1035,7 +1035,7 @@ class TestM7A528DashboardM7Artifact:
 
 
 # ===========================================================================
-# M7.A.5.29: Continuous Loop вЂ” Anti-Bad-Overwrite + Blocker Rename
+# M7.A.5.29: Continuous Loop — Anti-Bad-Overwrite + Blocker Rename
 # ===========================================================================
 
 
@@ -1160,7 +1160,7 @@ class TestM7A529CompletionLatencyBlocker:
         assert BLOCKER_LOW_LAG_COMPLETION_LATENCY not in active_tags
 
 
-# в”Ђв”Ђ M7.A.5.31 Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── M7.A.5.31 Tests ─────────────────────────────────────────────────
 
 class TestM7A531SubgraphJsonImport:
     """M7.A.5.31: seed_tokens_from_subgraph has working json import."""
@@ -1253,7 +1253,7 @@ class TestM7A531ProfitGuardTimeboost:
             sell_amount_wei=10**18 + 10**15,
             backrun_size_wei=10**18,
         )
-        # No pipeline_latency_ms в†’ not eligible
+        # No pipeline_latency_ms → not eligible
         assert guard.timeboost_eligible is False
 
     def test_guard_latency_ms_field_present(self):
@@ -1661,7 +1661,7 @@ class TestM7A531ExternalRegistry:
     def test_run_ws_live_records_reconnect_failure_cleanly(self, monkeypatch):
         """M7.E1.34n (soak8): when every reconnect attempt fails within the
         ws_timeout budget, the scan must record
-        exit_reason=recv_error_reconnect_failed and return normally вЂ” never
+        exit_reason=recv_error_reconnect_failed and return normally — never
         raise, which would produce the reviewer-blocked
         `[m7_hot] Clean cycle exit rc=0` pattern driven by an outer
         exception handler."""
@@ -1858,7 +1858,7 @@ class TestM7A532ScoreBackrunFast:
             current_block=100,
             addr_to_symbol={"0x" + "11" * 20: "WETH", "0x" + "22" * 20: "USDC"},
         )
-        assert result is None  # No pools in registry в†’ None
+        assert result is None  # No pools in registry → None
 
     def test_score_backrun_fast_with_active_pool(self):
         """With an active pool in registry, should return a BackrunResult."""
@@ -1921,7 +1921,7 @@ class TestM7A532ScoreBackrunFast:
         """E1.13: gas_cost_wei must be in token denomination, not ETH wei.
 
         Regression: previously gas_cost_wei = DEFAULT_BACKRUN_GAS * GWEI * 1e9
-        which is ETH-denominated (2e13 wei) вЂ” absurdly large for USDC (6-dec).
+        which is ETH-denominated (2e13 wei) — absurdly large for USDC (6-dec).
         Fix derives gas_cost from gas_bps so it stays in token denomination.
         """
         from m7.shared.constants import DEFAULT_BACKRUN_GAS, DEFAULT_GAS_PRICE_GWEI, GAS_FLOOR_BPS_BASE
@@ -1933,7 +1933,7 @@ class TestM7A532ScoreBackrunFast:
         gas_cost_token = int(backrun_size_wei * gas_bps / 10000)
         assert gas_cost_token == 15_000, f"Expected 15000 (0.015 USDC), got {gas_cost_token}"
 
-        # Old buggy formula: ETH-denominated вЂ” must be much larger
+        # Old buggy formula: ETH-denominated — must be much larger
         gas_cost_eth_wei = int(DEFAULT_BACKRUN_GAS * DEFAULT_GAS_PRICE_GWEI * 1e9)
         assert gas_cost_eth_wei > 1e12, "ETH gas cost should be ~2e13 wei"
 
@@ -2046,7 +2046,7 @@ class TestM7A532RollingCanonicalSet:
             "reviewer_soak_baseline_latest.json",
             "reviewer_soak_baseline_latest_discovery.json",
             "reviewer_soak_delta_latest.json",
-            # soak16: persistent poolв†’token cache survives supervisor
+            # soak16: persistent pool→token cache survives supervisor
             # restart so DISC fast_path doesn't hit cold registry on
             # session restart.
             "_pool_token_cache.json",
@@ -2066,6 +2066,8 @@ class TestM7A532RollingCanonicalSet:
             "canary_latest.json",
             "live_submit_latest.json",
             "live_pnl_latest.json",
+            # M7.E1.65 Step 6: WS cross-process cooldown file (written on 429, read by next session)
+            "ws_cooldown.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):
@@ -2359,7 +2361,7 @@ class TestM7A533ProfitGuardFieldFix:
             gross_pnl_wei=10**16,  # sell = input + 10**16
             size_valid_for_token=True,
             quote_pipeline_latency_ms=50.0,
-            route_viable=True,  # M7.E1.34d: invariant вЂ” guard requires viable route
+            route_viable=True,  # M7.E1.34d: invariant — guard requires viable route
         )
         passed = _run_profit_guard_on_results([r])
         assert len(passed) == 1
@@ -2372,7 +2374,7 @@ class TestM7A533BackrunResultField:
         from dataclasses import fields
         from m7.orderflow.contracts import BackrunResult
 
-        assert len(fields(BackrunResult)) == 83
+        assert len(fields(BackrunResult)) == 86
 
     def test_profit_guard_passed_defaults_none(self):
         r = _make_result()
@@ -2414,7 +2416,7 @@ class TestM7A533HotModeFastPath:
         assert callable(sbf)
 
 
-# в”Ђв”Ђ M7.A.5.34 Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── M7.A.5.34 Tests ───────────────────────────────────────────────────────
 
 
 class TestM7A534HotModeNoParallelFallback:
@@ -2525,9 +2527,9 @@ class TestM7A534RawResultsInArtifact:
         assert "sign_or_bundle_prep_ms" in source
 
 
-# в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ──────────────────────────────────────────────────────────────────────────
 # M7.A.5.35: Promoted watchlist + stale KPI contract fix
-# в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ──────────────────────────────────────────────────────────────────────────
 
 class TestM7A535PromotedWatchlist:
     """M7.A.5.35: Dynamic promoted watchlist from cold lane."""
@@ -2551,7 +2553,7 @@ class TestM7A535PromotedWatchlist:
         promoted = _promote_pairs_from_cold(cold_artifact, stats)
         # M7.A.5.39: now returns dict with candidate/execution
         assert "WETH/USDC" in promoted["execution"]
-        # RAIN/WETH has size_valid=False в†’ candidate only, not execution
+        # RAIN/WETH has size_valid=False → candidate only, not execution
         assert "RAIN/WETH" not in promoted["execution"]
         assert "RAIN/WETH" in promoted["candidate"]
 
@@ -2624,9 +2626,9 @@ class TestM7A535StaleKPIContract:
             assert best_stale_clean is None or best_stale_clean <= 0
 
 
-# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-# M7.A.5.36 вЂ” Per-stage hard budget abort + p50/p90 + promotion rules
-# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+# ═══════════════════════════════════════════════════════════════════════
+# M7.A.5.36 — Per-stage hard budget abort + p50/p90 + promotion rules
+# ═══════════════════════════════════════════════════════════════════════
 
 
 class TestM7A536PerStageBudgetConstants:
@@ -2967,7 +2969,7 @@ class TestM7A537ResolveCaching:
         mock_batcher.batch_token_info.return_value = {pool_addr: (token0, token1, fee)}
 
         with patch("core.multicall.get_multicall_batcher", return_value=mock_batcher):
-            # First call вЂ” should hit RPC
+            # First call — should hit RPC
             result1 = resolve_mod._resolve_event_tokens(
                 pool_addr, "token0_in", "http://rpc", 100, addr_to_sym,
             )
@@ -2976,13 +2978,13 @@ class TestM7A537ResolveCaching:
             assert result1["fee"] == fee
             assert mock_batcher.batch_token_info.call_count == 1
 
-            # Second call вЂ” should use cache, NOT call RPC again
+            # Second call — should use cache, NOT call RPC again
             result2 = resolve_mod._resolve_event_tokens(
                 pool_addr, "token1_in", "http://rpc", 200, addr_to_sym,
             )
             assert result2 is not None
             assert result2["token_in_symbol"] == "USDC"
-            assert mock_batcher.batch_token_info.call_count == 1  # still 1 вЂ” cache hit
+            assert mock_batcher.batch_token_info.call_count == 1  # still 1 — cache hit
 
         # Cleanup
         resolve_mod._pool_token_cache.clear()
@@ -3021,7 +3023,7 @@ class TestM7A537OracleCaching:
              "oracle_guard_triggered": False, "oracle_staleness_seconds": 10},
         )
 
-        # Call within 50 blocks вЂ” should return cache, no RPC
+        # Call within 50 blocks — should return cache, no RPC
         result = pricing_mod.check_oracle_sanity("WETH", "USDC", "http://rpc", 120)
         assert result["oracle_price_available"] is True
         assert result["token_in_oracle_usd"] == 3500.0
@@ -3155,6 +3157,8 @@ class TestM7A541TopCandidatePersistence:
             "gross_pnl_wei", "net_pnl_wei",
             # E1.62: USD profit observability
             "expected_profit_usd", "price_impact_bps", "amount_in_optimal_usd",
+            # E1.65: Best trade amounts for USD basis fallback in bridge/cold lane
+            "best_buy_amount_wei", "best_sell_amount_wei", "usd_basis_source",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys
@@ -3211,7 +3215,7 @@ class TestM7A541HotLaneTokenResolution:
         token1_addr = "0x" + "22" * 20  # higher address = token1
         pool_addr = "0x" + "ab" * 20
 
-        # Populate _pool_token_cache with the pool в†’ (token0, token1, fee)
+        # Populate _pool_token_cache with the pool → (token0, token1, fee)
         resolve_mod._pool_token_cache[pool_addr.lower()] = (token0_addr, token1_addr, 3000)
 
         # Create event with direction tags (like real events from normalize_swap_log)
@@ -3464,7 +3468,7 @@ class TestM7A537ColdRegistryPersistence:
 
 
 # ---------------------------------------------------------------------------
-# M7.A.5.38 вЂ” Latency contour: enrichment cache, oracle 500-block, registry stale threshold
+# M7.A.5.38 — Latency contour: enrichment cache, oracle 500-block, registry stale threshold
 # ---------------------------------------------------------------------------
 
 class TestM7A538EnrichmentCaching:
@@ -3490,13 +3494,13 @@ class TestM7A538EnrichmentCaching:
         mock_batcher.batch_decimals.return_value = {addr: 18}
 
         with patch("core.multicall.get_multicall_batcher", return_value=mock_batcher):
-            # First call вЂ” RPC
+            # First call — RPC
             r1 = resolve_mod.enrich_tokens_batch([addr], "http://rpc", 100)
             assert r1[addr.lower()]["enriched"] is True
             assert r1[addr.lower()]["symbol"] == "WETH"
             assert mock_batcher.batch_symbol.call_count == 1
 
-            # Second call вЂ” cache hit, no RPC
+            # Second call — cache hit, no RPC
             r2 = resolve_mod.enrich_tokens_batch([addr], "http://rpc", 200)
             assert r2[addr.lower()]["enriched"] is True
             assert r2[addr.lower()]["symbol"] == "WETH"
@@ -3573,9 +3577,9 @@ class TestM7A538RegistryStaleThreshold:
         assert "self.stale_threshold_blocks" in source
 
 
-# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-# M7.A.5.39 вЂ” Two-level promotion + hot prewarm + cold lane registry fix
-# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+# ═══════════════════════════════════════════════════════════════════════
+# M7.A.5.39 — Two-level promotion + hot prewarm + cold lane registry fix
+# ═══════════════════════════════════════════════════════════════════════
 
 
 class TestM7A539TwoLevelPromotion:
@@ -3788,7 +3792,7 @@ class TestM7A539StdoutDrainFix:
         assert "drain_output()" in source
 
 
-# в”Ђв”Ђ M7.A.5.40 Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── M7.A.5.40 Tests ─────────────────────────────────────────────────────
 
 
 class TestM7A540BatchPreResolve:
@@ -4176,14 +4180,14 @@ class TestM7A544ExecutionFunnel:
                 assert isinstance(val, int), f"{key} should be int, got {type(val)}"
 
     def test_execution_funnel_hot_scored_default_zero(self):
-        """Cold lane cannot compute hot_scored вЂ” defaults to 0."""
+        """Cold lane cannot compute hot_scored — defaults to 0."""
         events = build_fixture_events()
         results = [score_backrun_offline(e) for e in events]
         artifact = build_replay_summary(events, results, mode="offline")
         assert artifact["execution_funnel"]["hot_scored"] == 0
 
     def test_execution_funnel_realized_onchain_default_zero(self):
-        """M7.B not implemented вЂ” realized_onchain_profit always 0."""
+        """M7.B not implemented — realized_onchain_profit always 0."""
         events = build_fixture_events()
         results = [score_backrun_offline(e) for e in events]
         artifact = build_replay_summary(events, results, mode="offline")
@@ -4341,7 +4345,7 @@ class TestM7A544DashboardFunnelSection:
 
 
 # ===========================================================================
-# M7.A.5.45 вЂ” Bridge execution queue, hot intents, headline enforcement
+# M7.A.5.45 — Bridge execution queue, hot intents, headline enforcement
 # ===========================================================================
 
 
@@ -4515,13 +4519,13 @@ class TestM7A545DashboardHeadlineLevel:
 
 
 class TestM7A545DashboardIntentsEndpoint:
-    """M7.A.5.45в†’47e: Intents served via /api/hot (not standalone /api/intents)."""
+    """M7.A.5.45→47e: Intents served via /api/hot (not standalone /api/intents)."""
 
     def test_intents_served_via_api_hot(self):
         import pathlib
         src = pathlib.Path("monitoring/dashboard_server.py").read_text(encoding="utf-8")
         assert "/api/hot" in src
-        # M7.A.5.47e: /api/intents removed вЂ” redundant with /api/hot
+        # M7.A.5.47e: /api/intents removed — redundant with /api/hot
         assert "/api/intents" not in src
 
     def test_intents_artifact_in_files(self):
@@ -4911,7 +4915,7 @@ class TestPreSimSizeOverCap:
         assert gate.sim_attempted == 1
 
 # ===========================================================================
-# Reviewer post-soak21 fix #4 (PARTIAL в†’ FULL): rollup-level latency_budget
+# Reviewer post-soak21 fix #4 (PARTIAL → FULL): rollup-level latency_budget
 # ===========================================================================
 
 
@@ -4979,7 +4983,7 @@ class TestScorerSimDivergenceGuard:
 
     Reviewer post-soak21 acceptance: when fast-path scorer predicts a
     profitable trade (>0 bps) but the rpc_fork roundtrip simulation
-    returns negative bps with magnitude в‰Ґ ARBY_SCORER_SIM_DIVERGENCE_BPS
+    returns negative bps with magnitude ≥ ARBY_SCORER_SIM_DIVERGENCE_BPS
     (default 500), the candidate must be classified as
     SCORER_SIM_DIVERGENCE (NOT verified_profitable, NOT submit_ready),
     AND a structured reproducer sample must be captured.
@@ -5068,7 +5072,7 @@ class TestScorerSimDivergenceGuard:
 
     def test_fast_positive_sim_slightly_negative_below_threshold(self, monkeypatch):
         # Fast bps small + sim slightly negative => gap below threshold (500 bps).
-        # Should NOT classify as DIVERGENCE вЂ” only ROUNDTRIP_NOT_PROFITABLE.
+        # Should NOT classify as DIVERGENCE — only ROUNDTRIP_NOT_PROFITABLE.
         from m7.orderflow.execution_gate import run_execution_gate
         from m7.orderflow.simulation import SimulationResult
 
@@ -5290,5 +5294,59 @@ class TestScorerSimInputMismatchDetector:
         s = gate.scorer_sim_divergence_samples[0]
         assert s["input_mismatch_detected"] is True
         assert s["input_mismatch_ratio"] > 0.4
+
+
+# ---------------------------------------------------------------------------
+# E1.65 Step 5 fix: USD gate filter includes best_buy_amount_wei > 0
+# ---------------------------------------------------------------------------
+
+
+class TestM7A546E165UsdGateFilter:
+    """E1.65 soak fix: artifacts.py USD gate must route slow-path entries with
+    best_buy_amount_wei > 0 to cold_executable even when size_usd_estimate == 0."""
+
+    def _build_result(self, size_usd=0.0, buy_wei=None, *, viable=True):
+        return _make_result(
+            route_viable=viable,
+            size_valid_for_token=True,
+            best_backrun_net_bps=100.0,
+            size_usd_estimate=size_usd,
+            best_buy_amount_wei=buy_wei,
+        )
+
+    def _run(self, results, monkeypatch, *, require=True):
+        from m7.orderflow.artifacts import build_replay_summary
+        from m7.orderflow.events import build_fixture_events
+        monkeypatch.setenv("ARBY_COLD_REQUIRE_USD_BASIS", "1" if require else "0")
+        events = build_fixture_events()
+        return build_replay_summary(events, results, "ws_live")
+
+    def test_buy_wei_qualifies_for_cold_executable(self, monkeypatch):
+        """Entry with best_buy_amount_wei > 0 but size_usd=0 goes to cold_executable."""
+        results = [self._build_result(size_usd=0.0, buy_wei=1_000_000)]
+        art = self._run(results, monkeypatch, require=True)
+        assert len(art["top_executable_candidates"]) == 1
+        assert len(art["top_cold_usd_basis_missing"]) == 0
+
+    def test_no_basis_at_all_goes_to_missing(self, monkeypatch):
+        """Entry with size_usd=0 AND buy_wei=None goes to top_cold_usd_basis_missing."""
+        results = [self._build_result(size_usd=0.0, buy_wei=None)]
+        art = self._run(results, monkeypatch, require=True)
+        assert len(art["top_executable_candidates"]) == 0
+        assert len(art["top_cold_usd_basis_missing"]) == 1
+
+    def test_size_usd_alone_qualifies(self, monkeypatch):
+        """Entry with size_usd > 0 and buy_wei=None goes to cold_executable (original path)."""
+        results = [self._build_result(size_usd=1.5, buy_wei=None)]
+        art = self._run(results, monkeypatch, require=True)
+        assert len(art["top_executable_candidates"]) == 1
+        assert len(art["top_cold_usd_basis_missing"]) == 0
+
+    def test_gate_off_no_missing_list(self, monkeypatch):
+        """When ARBY_COLD_REQUIRE_USD_BASIS=0, top_cold_usd_basis_missing is empty."""
+        results = [self._build_result(size_usd=0.0, buy_wei=None)]
+        art = self._run(results, monkeypatch, require=False)
+        assert len(art["top_executable_candidates"]) == 1
+        assert len(art["top_cold_usd_basis_missing"]) == 0
 
 

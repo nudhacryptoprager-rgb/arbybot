@@ -147,6 +147,18 @@ class BackrunResult:
     price_impact_bps: Optional[float] = None
     amount_in_optimal_usd: Optional[float] = None
     liquidity_depth_usd: Optional[float] = None
+    # E1.65: Best trade amounts from pricing result — used for USD basis
+    # fallback in bridge artifacts when token_in has no oracle but token_out
+    # is a known stable (USDC/USDT) or WETH.
+    best_buy_amount_wei: Optional[int] = None
+    best_sell_amount_wei: Optional[int] = None
+    # usd_basis_source: how size_usd_estimate was derived:
+    #   "token_in_stable"       — token_in is USDC/USDT/DAI
+    #   "token_in_weth"         — token_in is WETH/ETH with oracle
+    #   "token_out_stable_fallback" — meme token_in; USDC/USDT token_out used
+    #   "token_out_weth_fallback"   — meme token_in; WETH token_out + oracle
+    #   None                    — no USD basis available
+    usd_basis_source: Optional[str] = None
 
 
 @dataclass

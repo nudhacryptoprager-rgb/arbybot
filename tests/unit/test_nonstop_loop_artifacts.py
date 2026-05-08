@@ -87,6 +87,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "canary_latest.json",
             "live_submit_latest.json",
             "live_pnl_latest.json",
+            # M7.E1.65 Step 6: WS cross-process cooldown file (written on 429, read by next session)
+            "ws_cooldown.json",
         }
         
         # Archive files are allowed (created on reset)

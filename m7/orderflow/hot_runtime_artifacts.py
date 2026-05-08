@@ -1395,6 +1395,25 @@ def _update_hot_rollup(
         rollup["current_session_delta"] = _csd
     except Exception:
         pass
+    # E1.65 Step 10: ws_provider_health block — surface WS subscription
+    # health metrics for reviewer to quickly assess WS pressure and 429 risk.
+    try:
+        from m7.orderflow.mode_ws_live import _check_ws_cooldown as _ws_cool_check
+        _chain_key = (ws_live_stats or {}).get("chain", "base")
+        _cooldown_remaining = _ws_cool_check(_chain_key)
+        _cooldown_active = _cooldown_remaining > 0
+    except Exception:
+        _cooldown_active = False
+    rollup["ws_provider_health"] = {
+        "provider": (ws_live_stats or {}).get("ws_provider", "unknown"),
+        "subscribe_attempts": int(_sess.get("session_ws_subscribe_total", 0) or 0),
+        "ws_429_count": int(_sess.get("session_ws_failed_429_windows", 0) or 0),
+        "fallback_used": int(_sess.get("session_ws_fallback_windows", 0) or 0),
+        "cooldown_active": _cooldown_active,
+        "active_ws_lanes": int(os.getenv("ARBY_ACTIVE_WS_LANES", "0") or 0),
+        "http_blocks_mode": os.getenv("ARBY_WS_HTTP_BLOCKS", "0") == "1",
+        "global_lease_enabled": os.getenv("ARBY_WS_GLOBAL_LEASE", "0") == "1",
+    }
     _sess["session_bridge_pool_hit_total"] = (
         _sess.get("session_bridge_pool_hit_total", 0)
         + _bd.get("bridge_pool_address_hit_count", 0)

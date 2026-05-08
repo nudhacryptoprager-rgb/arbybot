@@ -5,6 +5,7 @@ assessments, and the main replay summary aggregator.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -1013,17 +1014,46 @@ def build_replay_summary(
             "expected_profit_usd": getattr(r, "expected_profit_usd", None),
             "price_impact_bps": getattr(r, "price_impact_bps", None),
             "amount_in_optimal_usd": getattr(r, "amount_in_optimal_usd", None),
+            # E1.65: best trade amounts for USD basis recovery in cold_immediate_sim.
+            # Without these, token_out=USDC pairs (e.g. FUN/USDC, B3/USDC) cannot
+            # compute size_usd_estimate in the cold lane since token_in lacks oracle.
+            "best_buy_amount_wei": getattr(r, "best_buy_amount_wei", None),
+            "best_sell_amount_wei": getattr(r, "best_sell_amount_wei", None),
+            "usd_basis_source": getattr(r, "usd_basis_source", None),
         }
 
     _TOP_N = 5
+    # E1.65 Step 5: when ARBY_COLD_REQUIRE_USD_BASIS=1, split exec candidates
+    # into USD-valid (has size_usd_estimate > 0) and USD-missing sets.
+    # Only USD-valid entries enter cold_executable; USD-missing go to a
+    # diagnostic cold_usd_basis_missing list so the cold lane can inspect them.
+    _require_exec_usd_basis = os.getenv("ARBY_COLD_REQUIRE_USD_BASIS", "0") == "1"
     # M7.E1.6: Strict executable = route_viable AND size_valid_for_token.
     # Loose route_viable set preserved as top_route_viable_candidates for diagnostics.
-    _exec_candidates = sorted(
+    _exec_candidates_all = sorted(
         [r for r in results if r.route_viable and r.size_valid_for_token],
         key=lambda r: r.best_backrun_net_bps or 0,
         reverse=True,
-    )[:_TOP_N]
+    )
+    if _require_exec_usd_basis:
+        # E1.65 fix: accept entries that have best_buy_amount_wei > 0 even when
+        # size_usd_estimate is still 0 at this point.  cold_immediate_sim will
+        # enrich them via _enrich_usd_from_buy_amount().  Entries with NEITHER
+        # a positive size_usd_estimate NOR a positive best_buy_amount_wei are
+        # truly missing USD basis and go to the diagnostic list.
+        def _has_usd_basis(r: object) -> bool:
+            if (getattr(r, "size_usd_estimate", None) or 0) > 0:
+                return True
+            if (getattr(r, "best_buy_amount_wei", None) or 0) > 0:
+                return True
+            return False
+        _exec_candidates = [r for r in _exec_candidates_all if _has_usd_basis(r)][:_TOP_N]
+        _exec_usd_missing = [r for r in _exec_candidates_all if not _has_usd_basis(r)][:_TOP_N]
+    else:
+        _exec_candidates = _exec_candidates_all[:_TOP_N]
+        _exec_usd_missing = []
     top_executable_candidates = [_compact_candidate(r) for r in _exec_candidates]
+    top_cold_usd_basis_missing = [_compact_candidate(r) for r in _exec_usd_missing]
     _route_viable_candidates = sorted(
         [r for r in results if r.route_viable],
         key=lambda r: r.best_backrun_net_bps or 0,
@@ -1566,6 +1596,8 @@ def build_replay_summary(
         },
         # M7.A.5.41: Compact top-candidate rows (survive _ROLLING_EXCLUDE_KEYS)
         "top_executable_candidates": top_executable_candidates,
+        # E1.65 Step 5: entries excluded from cold_executable due to USD gate
+        "top_cold_usd_basis_missing": top_cold_usd_basis_missing,
         # M7.E1.6: Looser set — route_viable only (may include size_valid=false)
         "top_route_viable_candidates": top_route_viable_candidates,
         "top_stale_positive_candidates": top_stale_positive_candidates,

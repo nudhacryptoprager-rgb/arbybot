@@ -155,6 +155,31 @@ _USD_STABLE_SYMBOLS = {"USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUS
 _ETH_USD_SYMBOLS = {"WETH", "ETH"}
 
 
+def _usd_basis_source(
+    symbol_in: Optional[str],
+    symbol_out: Optional[str],
+    size_usd: Optional[float],
+) -> Optional[str]:
+    """Return a canonical string describing how size_usd was derived.
+
+    E1.65: Used to populate BackrunResult.usd_basis_source for reviewer
+    diagnosis and cold_immediate_sim routing.
+    """
+    if size_usd is None or size_usd <= 0:
+        return None
+    in_sym = (symbol_in or "").upper()
+    out_sym = (symbol_out or "").upper()
+    if in_sym in _USD_STABLE_SYMBOLS:
+        return "token_in_stable"
+    if in_sym in _ETH_USD_SYMBOLS:
+        return "token_in_weth"
+    if out_sym in _USD_STABLE_SYMBOLS:
+        return "token_out_stable_fallback"
+    if out_sym in _ETH_USD_SYMBOLS:
+        return "token_out_weth_fallback"
+    return None
+
+
 def _quote_implied_size_usd(
     *,
     amount_in_wei: int,
@@ -1766,6 +1791,14 @@ def score_backrun_live_parallel(
             ),
             amount_in_optimal_usd=_size_usd,
             price_impact_bps=_price_impact_bps_computed,
+            # E1.65: best trade amounts for USD basis fallback in bridge/cold lane
+            best_buy_amount_wei=int(best_buy_amount) if best_buy_amount else None,
+            best_sell_amount_wei=int(best_sell_amount) if best_sell_amount else None,
+            usd_basis_source=_usd_basis_source(
+                in_sym or _ats.get(token_in_addr.lower(), ""),
+                out_sym or _ats.get(token_out_addr.lower(), ""),
+                _size_usd,
+            ),
         )
         # E1.64-3: attach depth curve via setattr (runtime telemetry; not in
         # the persisted BackrunResult schema).  Consumers (hot rollup, bridge

@@ -71,6 +71,18 @@ def parse_args():
                     help="Idle-window timeout in seconds for cold lane.")
     ap.add_argument("--no-m4", action="store_true", help="Skip M4/M5 scan orchestrator")
     ap.add_argument("--no-m7-cold", action="store_true", help="Skip M7 cold lane")
+    # E1.65 Step 7: HTTP block polling for cold lanes — reduces WS connections
+    # from 4 (hot_prod + cold_prod + hot_disc + cold_disc) to 2 (hot lanes only).
+    ap.add_argument(
+        "--cold-http-only",
+        action="store_true",
+        dest="cold_http_only",
+        help=(
+            "Use HTTP block polling instead of WS subscription for cold lanes "
+            "(sets ARBY_WS_HTTP_BLOCKS=1 for cold subprocesses). "
+            "Reduces WS connections from 4 to 2 under 4-lane supervisor mode."
+        ),
+    )
     ap.add_argument("--chain", type=str, default="arbitrum_one",
                     help="Chain for M7 lanes (default: arbitrum_one)")
     ap.add_argument("--m7-profile", type=str, default="production",
@@ -79,6 +91,19 @@ def parse_args():
                     help="M7 pair profile: production (narrow) or discovery (wider contour)")
     ap.add_argument("--with-discovery", action="store_true",
                     help="Also launch parallel discovery hot+cold lanes alongside production")
+    # E1.65 Step 9: delay discovery lanes after production is warm.
+    # Default 600s (10 min) avoids WS 429 storms from 4 simultaneous
+    # WS subscriptions on startup. Set to 0 to disable (legacy behaviour).
+    ap.add_argument(
+        "--discovery-warmup-delay-s",
+        type=int,
+        default=600,
+        dest="discovery_warmup_delay_s",
+        help=(
+            "Seconds to wait after production lanes start before starting "
+            "discovery lanes (default: 600). Set to 0 for immediate start."
+        ),
+    )
     ap.add_argument("--with-anvil", action="store_true",
                     help="P4: Start local Anvil fork and route sim backend to anvil (x5 speed)")
     ap.add_argument("--anvil-port", type=int, default=8545,
@@ -218,6 +243,7 @@ def main():
     args = parse_args()
     py = sys.executable
     deadline = time.monotonic() + args.hours * 3600
+    _supervisor_start = time.monotonic()  # E1.65: used for discovery warmup delay
 
     print(f"=== Nonstop Runtime Supervisor ===")
     print(f"  Started: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
@@ -305,6 +331,11 @@ def main():
 
     # 4. M7 cold lane
     if not args.no_m7_cold:
+        # E1.65 Step 7: pass ARBY_WS_HTTP_BLOCKS=1 when --cold-http-only
+        _cold_env: dict[str, str] | None = None
+        if getattr(args, "cold_http_only", False):
+            _cold_env = {"ARBY_WS_HTTP_BLOCKS": "1"}
+            print("  [cold lane] ARBY_WS_HTTP_BLOCKS=1 (HTTP block polling mode)")
         processes.append(ManagedProcess(
             "m7_cold",
             [
@@ -319,9 +350,14 @@ def main():
             ],
             restart_delay=args.restart_delay,
             max_restarts=args.max_restarts,
+            env=_cold_env,
         ))
 
     # 5. Discovery lanes (parallel to production)
+    # E1.65 Step 9: discovery processes are deferred by --discovery-warmup-delay-s
+    # (default 600s) to avoid WS 429 storms on startup. When warmup delay = 0,
+    # discovery starts immediately (legacy behaviour).
+    _discovery_processes: list[ManagedProcess] = []  # deferred until warmup elapsed
     if args.with_discovery and args.m7_profile == "production":
         # E1.35 P0.1-wiring: promote ARBY_SIM_BACKEND_DISC (set on the supervisor)
         # into the DISC subprocess as its effective ARBY_SIM_BACKEND.
@@ -337,7 +373,7 @@ def main():
                 "injected into DISC subprocesses as ARBY_SIM_BACKEND"
             )
 
-        processes.append(ManagedProcess(
+        _discovery_processes.append(ManagedProcess(
             "m7_hot_discovery",
             [
                 py, "scripts/m7a_orderflow_loop.py",
@@ -354,7 +390,11 @@ def main():
             env=_disc_env,
         ))
         if not args.no_m7_cold:
-            processes.append(ManagedProcess(
+            # E1.65: merge cold-http-only into disc env if both flags set
+            _disc_cold_env = _disc_env
+            if getattr(args, "cold_http_only", False):
+                _disc_cold_env = {**(_disc_env or {}), "ARBY_WS_HTTP_BLOCKS": "1"}
+            _discovery_processes.append(ManagedProcess(
                 "m7_cold_discovery",
                 [
                     py, "scripts/m7a_orderflow_loop.py",
@@ -368,12 +408,34 @@ def main():
                 ],
                 restart_delay=args.restart_delay,
                 max_restarts=args.max_restarts,
-                env=_disc_env,
+                env=_disc_cold_env,
             ))
 
-    # Start all
+    # Start production processes immediately
     for p in processes:
         p.start()
+
+    # E1.65 Step 9: Discovery processes are deferred by warmup delay.
+    # When warmup_delay=0, start immediately and merge into processes list.
+    _discovery_warmup_delay_s = getattr(args, "discovery_warmup_delay_s", 600)
+    _discovery_started = False
+    if _discovery_processes:
+        if _discovery_warmup_delay_s <= 0:
+            # Legacy mode — immediate start
+            for p in _discovery_processes:
+                p.start()
+            processes.extend(_discovery_processes)
+            _discovery_processes = []
+            _discovery_started = True
+            print(
+                f"  [supervisor] discovery lanes started immediately "
+                f"(warmup_delay=0, {len(processes)} total processes)"
+            )
+        else:
+            print(
+                f"  [supervisor] discovery lanes deferred {_discovery_warmup_delay_s}s "
+                f"({len(_discovery_processes)} processes queued)"
+            )
 
     # E1.59 step #1: stamp soak baseline + clear stale supervisor_end_utc
     # on BOTH PROD and DISC rollups so the reviewer can compute deltas
@@ -403,6 +465,22 @@ def main():
 
     try:
         while not _shutdown and time.monotonic() < deadline:
+            # E1.65 Step 9: start deferred discovery processes after warmup delay
+            if (
+                _discovery_processes
+                and not _discovery_started
+                and (time.monotonic() - _supervisor_start) >= _discovery_warmup_delay_s
+            ):
+                for p in _discovery_processes:
+                    p.start()
+                processes.extend(_discovery_processes)
+                _discovery_processes = []
+                _discovery_started = True
+                print(
+                    f"  [supervisor] discovery lanes started after "
+                    f"{_discovery_warmup_delay_s}s warmup "
+                    f"({len(processes)} total processes)"
+                )
             # Health check
             all_ok = True
             for p in processes:

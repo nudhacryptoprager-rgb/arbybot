@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
@@ -36,6 +37,96 @@ from m7.orderflow.scoring_parallel import score_backrun_live_parallel, score_bac
 from m7.orderflow.contracts import BackrunResult
 
 logger = logging.getLogger("m7.orderflow.cli")
+
+
+# ---------------------------------------------------------------------------
+# E1.65 Steps 6+8: Cross-process WS lease + 429 cooldown file.
+#
+# ws_cooldown.json  — written by any process that detects a WS 429 storm.
+#   Format: {"cooldown_until": <unix_ts>, "chain": <str>, "set_by_pid": <int>}
+#   All processes check this file before attempting a reconnect.
+#
+# ws_lease.json     — written by a process when it opens a WS subscription.
+#   Format: {"pid": <int>, "chain": <str>, "provider": <str>, "acquired_at": <unix_ts>}
+#   Lease TTL = ARBY_WS_LEASE_TTL_S (default 600s = 10 min).
+#   When ARBY_WS_GLOBAL_LEASE=1, a second process SHARING the same chain
+#   and provider skips WS open and polls the lease for block signals instead
+#   of opening its own WS connection. Use for cold lanes only.
+# ---------------------------------------------------------------------------
+_ROLLING_DIR = Path("data/runs/_rolling")
+_WS_COOLDOWN_PATH = _ROLLING_DIR / "ws_cooldown.json"
+_WS_LEASE_PATH = _ROLLING_DIR / "ws_lease.json"
+_WS_LEASE_TTL_S = int(os.getenv("ARBY_WS_LEASE_TTL_S", "600") or "600")
+
+
+def _check_ws_cooldown(chain: str) -> float:
+    """Return seconds remaining in cross-process WS 429 cooldown (0 = no cooldown)."""
+    try:
+        data = json.loads(_WS_COOLDOWN_PATH.read_text())
+        if data.get("chain") == chain:
+            remaining = float(data.get("cooldown_until", 0)) - time.time()
+            if remaining > 0:
+                return remaining
+    except Exception:
+        pass
+    return 0.0
+
+
+def _write_ws_cooldown(chain: str, cooldown_s: float) -> None:
+    """Write cross-process WS 429 cooldown file (Step 8)."""
+    try:
+        _ROLLING_DIR.mkdir(parents=True, exist_ok=True)
+        _WS_COOLDOWN_PATH.write_text(json.dumps({
+            "cooldown_until": time.time() + cooldown_s,
+            "chain": chain,
+            "set_by_pid": os.getpid(),
+        }))
+    except Exception:
+        pass
+
+
+def _acquire_ws_lease(chain: str, provider: str) -> bool:
+    """Try to acquire cross-process WS lease (Step 6).
+
+    Returns True (lease acquired or no competition), False (another process
+    already holds a fresh lease for the same chain+provider).
+    Only enforced when ARBY_WS_GLOBAL_LEASE=1.
+    """
+    if os.getenv("ARBY_WS_GLOBAL_LEASE", "0") != "1":
+        return True  # feature off by default — all processes open WS freely
+    try:
+        _ROLLING_DIR.mkdir(parents=True, exist_ok=True)
+        if _WS_LEASE_PATH.exists():
+            data = json.loads(_WS_LEASE_PATH.read_text())
+            # Lease held by another process for the same (chain, provider)?
+            if (
+                data.get("pid") != os.getpid()
+                and data.get("chain") == chain
+                and data.get("provider") == provider
+                and (time.time() - float(data.get("acquired_at", 0))) < _WS_LEASE_TTL_S
+            ):
+                return False  # another process holds it
+        # Write/overwrite our own lease
+        _WS_LEASE_PATH.write_text(json.dumps({
+            "pid": os.getpid(),
+            "chain": chain,
+            "provider": provider,
+            "acquired_at": time.time(),
+        }))
+        return True
+    except Exception:
+        return True  # fail open — never block WS due to I/O error
+
+
+def _release_ws_lease() -> None:
+    """Release WS lease on clean exit. No-op when lease file absent."""
+    try:
+        if _WS_LEASE_PATH.exists():
+            data = json.loads(_WS_LEASE_PATH.read_text())
+            if data.get("pid") == os.getpid():
+                _WS_LEASE_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +523,32 @@ def run_ws_live(
     _session_low_lag_pairs: Dict[str, Dict] = {}  # pair -> tracking info
 
     try:
+        # E1.65 Step 6: Check cross-process WS lease before opening connection.
+        # When ARBY_WS_GLOBAL_LEASE=1, cold lanes skip WS open if another
+        # process already holds a lease for the same chain+provider.
+        _chain_for_lease = getattr(args, "chain", "base")
+        if not _acquire_ws_lease(_chain_for_lease, ws_provider):
+            logger.info(
+                "WS lease held by another process for chain=%s provider=%s; "
+                "skipping WS subscription this window.",
+                _chain_for_lease, ws_provider,
+            )
+            # Emit a minimal result dict as a "skipped" window so the
+            # rolling artifact writer still runs and the bridge is refreshed.
+            return {
+                "window_skipped": True,
+                "skip_reason": "ws_lease_held_by_other_process",
+                "ws_provider": ws_provider,
+            }
+        # E1.65 Step 8: Check cross-process cooldown before connecting.
+        _pre_cool = _check_ws_cooldown(_chain_for_lease)
+        if _pre_cool > 0:
+            logger.info(
+                "Cross-process WS cooldown active (%.0fs remaining) for chain=%s; "
+                "pausing before connect.",
+                _pre_cool, _chain_for_lease,
+            )
+            time.sleep(min(_pre_cool, 30.0))
         # M7.E1.10: WS connection with automatic fallback on 429/connection failure
         _ws_tried_urls = [(ws_url, ws_provider)]
         # M7.E1.34d: reject the window immediately if the resolved primary
@@ -575,7 +692,26 @@ def run_ws_live(
             )
             return _conn
 
-        ws_conn = _open_ws_subscription("initial")
+        # E1.65 Step 7: HTTP-only block polling mode. When ARBY_WS_HTTP_BLOCKS=1
+        # (or set via supervisor for cold lanes), skip the WS subscription and
+        # instead poll eth_getBlockByNumber("latest") via HTTP every 2 seconds.
+        # This reduces WS connections from 4 to 2 (prod hot+cold use WS;
+        # disc hot+cold use HTTP polling). Requires no WS endpoint at all.
+        _http_blocks_mode = os.getenv("ARBY_WS_HTTP_BLOCKS", "0") == "1"
+        _last_http_polled_block: int = 0
+        _http_poll_interval_s = max(
+            0.5,
+            float(os.getenv("ARBY_HTTP_BLOCK_POLL_S", "2.0") or "2.0"),
+        )
+        if _http_blocks_mode:
+            ws_conn = None  # type: ignore[assignment]
+            logger.info(
+                "HTTP block polling mode active (ARBY_WS_HTTP_BLOCKS=1); "
+                "WS subscription skipped (poll interval=%.1fs)",
+                _http_poll_interval_s,
+            )
+        else:
+            ws_conn = _open_ws_subscription("initial")
 
         # M7.A.5.39: Reuse single Web3 instance for all blocks (was per-block)
         from web3 import Web3 as _W3_loop
@@ -673,158 +809,185 @@ def run_ws_live(
                     )
                 _last_bridge_refresh_monotonic = time.monotonic()
 
-            try:
-                msg = ws_conn.recv()
-            except Exception as _recv_exc:
-                _recv_err = str(_recv_exc)[:200]
-                _recv_err_l = _recv_err.lower()
-                _ws_last_recv_error = _recv_err
-                if "timed out" in _recv_err_l or isinstance(_recv_exc, TimeoutError):
-                    _ws_recv_timeout_count += 1
-                    _exit_reason = "recv_timeout"
-                    logger.debug(
-                        "WebSocket recv timeout after %d blocks; keeping session alive",
-                        blocks_processed,
-                    )
-                    time.sleep(0.05)
-                    continue
-
-                _ws_recv_error_count += 1
-                _ws_reconnect_count += 1
-                _exit_reason = "recv_error_reconnecting"
-                _backoff_s = min(8, 2 ** min(_ws_reconnect_count - 1, 3))
-                _remaining_s = max(0.0, args.ws_timeout - (time.monotonic() - ws_start_time))
-                if _remaining_s <= 0:
-                    _exit_reason = "ws_timeout"
-                    break
-                logger.warning(
-                    "WebSocket recv error after %d blocks: %s; reconnecting in %.1fs",
-                    blocks_processed, _recv_err[:120], min(_backoff_s, _remaining_s),
-                )
+            # E1.65 Step 7: HTTP block polling alternative to WS recv.
+            if _http_blocks_mode:
+                # Poll latest block number via HTTP; skip if same block
+                time.sleep(_http_poll_interval_s)
                 try:
-                    ws_conn.close()
-                except Exception:
-                    pass
-                time.sleep(min(_backoff_s, _remaining_s))
-                if time.monotonic() - ws_start_time > args.ws_timeout:
-                    _exit_reason = "ws_timeout"
-                    break
-                # M7.E1.34n (soak8): bounded reconnect-retry loop. Previously
-                # a single resubscribe failure re-raised and killed the whole
-                # child process, producing the `recv_error_reconnect_failed`
-                # clean-exit pattern the reviewer flagged. We now retry up to
-                # _MAX_RECONNECT_ATTEMPTS with exponential cooldown while the
-                # ws_timeout budget still allows; only if every attempt fails
-                # do we record `recv_error_reconnect_failed` and leave the
-                # loop — but cleanly via break, not via raise, so the outer
-                # except does not repaint exit_reason as `ws_exception`.
-                _MAX_RECONNECT_ATTEMPTS = int(
-                    os.environ.get("ARBY_WS_MAX_RECONNECT_ATTEMPTS", "4") or 4
-                )
-                _reconnect_attempt = 0
-                _reconnected = False
-                while _reconnect_attempt < _MAX_RECONNECT_ATTEMPTS:
-                    _reconnect_attempt += 1
-                    _cool_remaining = max(
-                        0.0, args.ws_timeout - (time.monotonic() - ws_start_time)
+                    _http_cur_block = int(_w3_loop.eth.block_number)
+                except Exception as _hpoll_exc:
+                    logger.debug(
+                        "HTTP block poll failed: %s", str(_hpoll_exc)[:80]
                     )
-                    if _cool_remaining <= 0:
+                    continue
+                if _http_cur_block <= _last_http_polled_block:
+                    continue  # no new block yet
+                _last_http_polled_block = _http_cur_block
+                detected_block = _http_cur_block
+                blocks_processed += 1
+                logger.info(
+                    "HTTP-polled block #%d (processed %d/%d)",
+                    detected_block, blocks_processed, args.ws_blocks,
+                    extra={"context": {"block": detected_block}},
+                )
+            else:
+                # WS recv path (existing code)
+                try:
+                    msg = ws_conn.recv()
+                except Exception as _recv_exc:
+                    _recv_err = str(_recv_exc)[:200]
+                    _recv_err_l = _recv_err.lower()
+                    _ws_last_recv_error = _recv_err
+                    if "timed out" in _recv_err_l or isinstance(_recv_exc, TimeoutError):
+                        _ws_recv_timeout_count += 1
+                        _exit_reason = "recv_timeout"
+                        logger.debug(
+                            "WebSocket recv timeout after %d blocks; keeping session alive",
+                            blocks_processed,
+                        )
+                        time.sleep(0.05)
+                        continue
+
+                    _ws_recv_error_count += 1
+                    _ws_reconnect_count += 1
+                    _exit_reason = "recv_error_reconnecting"
+                    _backoff_s = min(8, 2 ** min(_ws_reconnect_count - 1, 3))
+                    _remaining_s = max(0.0, args.ws_timeout - (time.monotonic() - ws_start_time))
+                    if _remaining_s <= 0:
                         _exit_reason = "ws_timeout"
                         break
+                    logger.warning(
+                        "WebSocket recv error after %d blocks: %s; reconnecting in %.1fs",
+                        blocks_processed, _recv_err[:120], min(_backoff_s, _remaining_s),
+                    )
                     try:
-                        ws_conn = _open_ws_subscription(
-                            f"recv_error_retry{_reconnect_attempt}"
-                        )
-                        _reconnected = True
-                        _exit_reason = "reconnected_after_recv_error"
+                        ws_conn.close()
+                    except Exception:
+                        pass
+                    time.sleep(min(_backoff_s, _remaining_s))
+                    if time.monotonic() - ws_start_time > args.ws_timeout:
+                        _exit_reason = "ws_timeout"
                         break
-                    except Exception as _reconn_exc:
-                        _reconn_err = str(_reconn_exc)[:200]
-                        _ws_last_recv_error = f"reconnect_fail:{_reconn_err}"
-                        # M7.E1.34n-soak9: rate-limit-aware cooldown. Public
-                        # Base preconf / blastapi return JSON-RPC code 15
-                        # ("Too many request") or HTTP 429 inside a wide rate
-                        # window. The default 1.5^n cap of 8s burns the whole
-                        # reconnect budget before the window clears. When we
-                        # detect a rate-limit signature we extend cooldown to
-                        # ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S (default 30s)
-                        # so exponential backoff meets the provider's actual
-                        # reset window.
-                        _rl_lower = _reconn_err.lower()
-                        _is_rate_limited = (
-                            "too many request" in _rl_lower
-                            or "'code': 15" in _rl_lower
-                            or "\"code\": 15" in _rl_lower
-                            or "429" in _rl_lower
-                            or "rate limit" in _rl_lower
+                    # M7.E1.34n (soak8): bounded reconnect-retry loop. Previously
+                    # a single resubscribe failure re-raised and killed the whole
+                    # child process, producing the `recv_error_reconnect_failed`
+                    # clean-exit pattern the reviewer flagged. We now retry up to
+                    # _MAX_RECONNECT_ATTEMPTS with exponential cooldown while the
+                    # ws_timeout budget still allows; only if every attempt fails
+                    # do we record `recv_error_reconnect_failed` and leave the
+                    # loop — but cleanly via break, not via raise, so the outer
+                    # except does not repaint exit_reason as `ws_exception`.
+                    _MAX_RECONNECT_ATTEMPTS = int(
+                        os.environ.get("ARBY_WS_MAX_RECONNECT_ATTEMPTS", "4") or 4
+                    )
+                    _reconnect_attempt = 0
+                    _reconnected = False
+                    while _reconnect_attempt < _MAX_RECONNECT_ATTEMPTS:
+                        _reconnect_attempt += 1
+                        _cool_remaining = max(
+                            0.0, args.ws_timeout - (time.monotonic() - ws_start_time)
                         )
-                        if _is_rate_limited:
-                            try:
-                                _rl_cool_env = float(
-                                    os.environ.get(
-                                        "ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S",
-                                        "30",
+                        if _cool_remaining <= 0:
+                            _exit_reason = "ws_timeout"
+                            break
+                        try:
+                            ws_conn = _open_ws_subscription(
+                                f"recv_error_retry{_reconnect_attempt}"
+                            )
+                            _reconnected = True
+                            _exit_reason = "reconnected_after_recv_error"
+                            break
+                        except Exception as _reconn_exc:
+                            _reconn_err = str(_reconn_exc)[:200]
+                            _ws_last_recv_error = f"reconnect_fail:{_reconn_err}"
+                            # M7.E1.34n-soak9: rate-limit-aware cooldown. Public
+                            # Base preconf / blastapi return JSON-RPC code 15
+                            # ("Too many request") or HTTP 429 inside a wide rate
+                            # window. The default 1.5^n cap of 8s burns the whole
+                            # reconnect budget before the window clears. When we
+                            # detect a rate-limit signature we extend cooldown to
+                            # ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S (default 30s)
+                            # so exponential backoff meets the provider's actual
+                            # reset window.
+                            _rl_lower = _reconn_err.lower()
+                            _is_rate_limited = (
+                                "too many request" in _rl_lower
+                                or "'code': 15" in _rl_lower
+                                or "\"code\": 15" in _rl_lower
+                                or "429" in _rl_lower
+                                or "rate limit" in _rl_lower
+                            )
+                            if _is_rate_limited:
+                                try:
+                                    _rl_cool_env = float(
+                                        os.environ.get(
+                                            "ARBY_WS_RECONNECT_RATE_LIMIT_COOLDOWN_S",
+                                            "30",
+                                        )
                                     )
+                                except Exception:
+                                    _rl_cool_env = 30.0
+                                _cool = min(_rl_cool_env, _cool_remaining)
+                                # E1.65 Step 8: write cross-process cooldown file so
+                                # other WS lanes on the same chain back off too.
+                                _write_ws_cooldown(
+                                    getattr(args, "chain", "base"), _rl_cool_env
                                 )
-                            except Exception:
-                                _rl_cool_env = 30.0
-                            _cool = min(_rl_cool_env, _cool_remaining)
-                        else:
-                            _cool = min(8.0, 1.5 ** _reconnect_attempt)
-                            _cool = min(_cool, _cool_remaining)
-                        logger.warning(
-                            "WS reconnect attempt %d/%d failed: %s; cooling %.1fs%s",
-                            _reconnect_attempt, _MAX_RECONNECT_ATTEMPTS,
-                            _reconn_err[:120], _cool,
-                            " (rate-limit)" if _is_rate_limited else "",
-                        )
-                        if _cool > 0:
-                            time.sleep(_cool)
-                if not _reconnected:
-                    _exit_reason = "recv_error_reconnect_failed"
-                    # E1.46 reviewer fix #4: classify rate-limit-driven
-                    # reconnect storms as failed_429 so
-                    # session_ws_failed_429_windows actually counts
-                    # dRPC code 15 / "Too many request" / HTTP 429
-                    # cascades on reconnect (previously only HTTP 429
-                    # on the very first connect was tagged 429).
-                    _last_err_lower = (_ws_last_recv_error or "").lower()
-                    if (
-                        "too many request" in _last_err_lower
-                        or "'code': 15" in _last_err_lower
-                        or "\"code\": 15" in _last_err_lower
-                        or "code\":15" in _last_err_lower
-                        or "code': 15" in _last_err_lower
-                        or " 429" in _last_err_lower
-                        or ":429" in _last_err_lower
-                        or "rate limit" in _last_err_lower
-                        or "rate-limit" in _last_err_lower
-                    ):
-                        _ws_connection_status = "failed_429"
-                        _ws_error_detail = (
-                            "WS reconnect storm rate-limited; last="
-                            f"{(_ws_last_recv_error or '')[:120]}"
-                        )
-                    break
-                continue
+                            else:
+                                _cool = min(8.0, 1.5 ** _reconnect_attempt)
+                                _cool = min(_cool, _cool_remaining)
+                            logger.warning(
+                                "WS reconnect attempt %d/%d failed: %s; cooling %.1fs%s",
+                                _reconnect_attempt, _MAX_RECONNECT_ATTEMPTS,
+                                _reconn_err[:120], _cool,
+                                " (rate-limit)" if _is_rate_limited else "",
+                            )
+                            if _cool > 0:
+                                time.sleep(_cool)
+                    if not _reconnected:
+                        _exit_reason = "recv_error_reconnect_failed"
+                        # E1.46 reviewer fix #4: classify rate-limit-driven
+                        # reconnect storms as failed_429 so
+                        # session_ws_failed_429_windows actually counts
+                        # dRPC code 15 / "Too many request" / HTTP 429
+                        # cascades on reconnect (previously only HTTP 429
+                        # on the very first connect was tagged 429).
+                        _last_err_lower = (_ws_last_recv_error or "").lower()
+                        if (
+                            "too many request" in _last_err_lower
+                            or "'code': 15" in _last_err_lower
+                            or "\"code\": 15" in _last_err_lower
+                            or "code\":15" in _last_err_lower
+                            or "code': 15" in _last_err_lower
+                            or " 429" in _last_err_lower
+                            or ":429" in _last_err_lower
+                            or "rate limit" in _last_err_lower
+                            or "rate-limit" in _last_err_lower
+                        ):
+                            _ws_connection_status = "failed_429"
+                            _ws_error_detail = (
+                                "WS reconnect storm rate-limited; last="
+                                f"{(_ws_last_recv_error or '')[:120]}"
+                            )
+                        break
+                    continue
 
-            data = json.loads(msg)
-            params = data.get("params", {})
-            result = params.get("result", {})
-            block_hex = result.get("number")
-            if not block_hex:
-                continue
-
-            detected_block = int(block_hex, 16)
-            blocks_processed += 1
-            logger.info(
-                "newHead #%d: block=%d (processed %d/%d)",
-                detected_block,
-                detected_block,
-                blocks_processed,
-                args.ws_blocks,
-                extra={"context": {"block": detected_block}},
-            )
+                data = json.loads(msg)
+                params = data.get("params", {})
+                result = params.get("result", {})
+                block_hex = result.get("number")
+                if not block_hex:
+                    continue
+                detected_block = int(block_hex, 16)
+                blocks_processed += 1
+                logger.info(
+                    "newHead #%d: block=%d (processed %d/%d)",
+                    detected_block,
+                    detected_block,
+                    blocks_processed,
+                    args.ws_blocks,
+                    extra={"context": {"block": detected_block}},
+                )
 
             # Fetch swap logs for THIS block only
             # M7.A.5.47: Hybrid hot intake — focused + periodic broad fallback.
@@ -1131,7 +1294,13 @@ def run_ws_live(
             )
     finally:
         try:
-            ws_conn.close()
+            if ws_conn is not None:
+                ws_conn.close()
+        except Exception:
+            pass
+        # E1.65 Step 6: release WS lease on clean exit
+        try:
+            _release_ws_lease()
         except Exception:
             pass
 
