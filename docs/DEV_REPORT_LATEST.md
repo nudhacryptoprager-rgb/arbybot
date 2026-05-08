@@ -1,15 +1,42 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-09T00:00:00Z
-run_id: nonstop_runtime_20260509_E1.65_step_fixes_UNIT_VALIDATED
+timestamp_utc: 2026-05-08T19:30:00Z
+run_id: nonstop_runtime_20260508_E1.66_depth_universe_UNIT_VALIDATED
 mode: ONLINE
 artifact_mode: rolling
 config: base / production + discovery / real_minimal.yaml
 code_identity:
-  primary: ts:2026-05-09T00:00:00Z
-  dirty: true (10 E1.65 step-fixes: USD basis data propagation, WS 429 pressure reduction, observability)
-  desc: E1.65 step-fixes UNIT_VALIDATED -- USD best_buy_amount_wei chain BackrunResult→compact→bridge→cold_sim, cross-process WS cooldown/lease, cold-lane HTTP-only polling, discovery warmup delay, ws_provider_health rollup block
+  primary: ts:2026-05-08T19:30:00Z
+  dirty: true (E1.66: depth-aware universe expansion, ARBY_MIN_PRODUCTION_SIZE_USD gate, discovery depth guard, 13 new tests)
+  desc: E1.66 UNIT_VALIDATED -- E1.65 closed REACHED; depth-aware promotion guard (min_size_usd in PromotionThresholds); AERO/WETH + VIRTUAL/WETH added to Base universe; production_sized_profitable_total + pipeline_ready + production_profit_ready in dashboard; max_profitable_size_usd tracked in discovery scoreboard
+
+## 1) Scope
+goal (Roadmap): E1.66 — depth-aware universe expansion + production-sized profitability gate
+change_summary:
+  E1.65 closed as REACHED (dashboard/depth truth confirmed; prod=0 is market reality, not code bug)
+  10-step E1.66 change set:
+  1. docs/status/Status_M7.md: E1.65 → REACHED; goal_status=REACHED; pipeline_ready=true; production_profit_ready=false
+  2. monitoring/dashboard_server.py: ARBY_MIN_PRODUCTION_SIZE_USD env ($50 default); is_serious_production_sized field on rows
+  3. monitoring/dashboard_server.py: production_sized_profitable_total in usd_coverage
+  4. monitoring/dashboard_server.py: pipeline_ready + production_profit_ready flags in usd_coverage
+  5. monitoring/dashboard_server.py: min_production_size_usd in usd_coverage
+  6. config/intent.txt: Base +2 pairs (AERO/WETH, VIRTUAL/WETH); 22→24 Base productive pairs
+  7. m7/orderflow/runtime_io.py: _update_discovery_scoreboard tracks max_profitable_size_usd per family
+  8. m7/orderflow/disc_to_prod_promotion.py: PromotionThresholds.min_size_usd (depth guard, default 0.0=off)
+  9. tests/unit/test_e1_47_p2_disc_to_prod.py: +4 depth guard tests
+  10. tests/unit/test_e1_9_discovery_lane.py: +4 max_profitable_size_usd scoreboard tests
+  +6 tests/unit/test_dashboard_summary.py: TestM7A566UsdCoverageE166 (pipeline_ready, production_profit_ready, production_sized_profitable_total)
+
+touched_files:
+  - docs/status/Status_M7.md              (E1.65 → REACHED)
+  - monitoring/dashboard_server.py        (ARBY_MIN_PRODUCTION_SIZE_USD + new fields)
+  - config/intent.txt                     (AERO/WETH + VIRTUAL/WETH)
+  - m7/orderflow/runtime_io.py            (max_profitable_size_usd tracking)
+  - m7/orderflow/disc_to_prod_promotion.py (PromotionThresholds.min_size_usd)
+  - tests/unit/test_e1_47_p2_disc_to_prod.py (+4 tests)
+  - tests/unit/test_e1_9_discovery_lane.py (+4 tests)
+  - tests/unit/test_dashboard_summary.py (+6 tests)
 
 ## 1) Scope
 goal (Roadmap): E1.65 -- fix USD basis data propagation gap (FUN/USDC, B3/USDC size_usd=0); reduce WS subscription pressure (4→2 effective lanes via HTTP polling + global lease + discovery delay); add ws_provider_health observability
@@ -41,9 +68,76 @@ touched_files:
   - tests/unit/test_orderflow_status_metrics.py   (field count 83→86 x6)
 
 ## 2) Commands Executed
-python -m pytest tests/unit -q: PASS (4835 tests, 6 skipped, 0 failures)
+python -m pytest tests/unit -q: PASS (4863 tests, 6 skipped, 0 failures) [+13 new vs E1.65 baseline 4850]
 py -3.11 scripts/check_repo_safety.py --allow-intent-edit: PASS (0 warnings)
-SOAK: PENDING — not yet run (unit tests PASS; soak validation required for RUNTIME_VALIDATED status)
+
+## 3) New Fields Summary (E1.66)
+
+### usd_coverage (dashboard `/api/m7/current`)
+```
+production_profitable_total        — profit>0 and size >= $10  (research gate, unchanged)
+production_sized_profitable_total  — profit>0 and size >= $50  (NEW: serious-production gate)
+research_profitable_total          — profit>0 and size < $10
+dust_only_total                    — size < $1
+pipeline_ready                     — True when any candidates present (scanning works)
+production_profit_ready            — True when production_sized_profitable_total > 0 (market found)
+min_executable_size_usd            — $10 (ARBY_MIN_EXECUTABLE_SIZE_USD)
+min_production_size_usd            — $50 (ARBY_MIN_PRODUCTION_SIZE_USD, NEW)
+```
+
+### Discovery scoreboard (per family)
+```
+max_profitable_size_usd  — max size_usd_estimate seen when best_net_bps > 0 (NEW: depth tracking)
+```
+
+### PromotionThresholds (disc_to_prod_promotion.py)
+```
+min_size_usd  — depth guard; family blocked if max_profitable_size_usd < threshold (NEW, default 0.0=off)
+               Set ARBY_DISC_PROMOTE_MIN_SIZE_USD in loop_runner to enable
+```
+
+### intent.txt (Base)
+```
+base:AERO/WETH    — NEW: Aerodrome CL + Uniswap V3, $50M+ AERO TVL
+base:VIRTUAL/WETH — NEW: Uniswap V3 + Aerodrome CL, $20M+ TVL
+Total Base: 22 → 24 pairs
+```
+
+## 4) Soak 4 Launch Command (E1.66 acceptance gate)
+
+```powershell
+# E1.66 Soak 4 — production_sized_profitable_total > 0 target
+$env:ARBY_REQUIRE_USD_BASIS="1"
+$env:ARBY_COLD_REQUIRE_USD_BASIS="1"
+$env:ARBY_MIN_EXPECTED_PROFIT_USD="0.01"
+$env:ARBY_COLD_IMMEDIATE_SIM="1"
+$env:ARBY_COLD_IMMEDIATE_NEAR="1"
+$env:ARBY_PAPER_SIGNING="1"
+$env:ARBY_SPLIT_ROUTE_ENABLE="1"
+$env:ARBY_POOL_STATE_HTTP_FEED="1"
+$env:ARBY_ACTIVE_WS_LANES="2"
+$env:ARBY_MIN_EXECUTABLE_SIZE_USD="10.0"
+$env:ARBY_MIN_PRODUCTION_SIZE_USD="50.0"
+py -3.11 scripts/start_nonstop_runtime.py --chain base --hours 6 --no-m4 --with-discovery --dashboard-port 8099 --cold-http-only --discovery-warmup-delay-s 600 --m7-hot-ws-timeout 120 --m7-cold-ws-timeout 900
+```
+
+**Success criterion (E1.66):** `production_sized_profitable_total > 0` in any cold cycle during the soak (any pair with confirmed $50+ profitable depth).  
+**Fallback accept criterion:** `production_profitable_total > 0` ($10 depth) in ≥2 cold cycles.
+
+## 5) Contract Checks (E1.66)
+```
+pytest:      4863 PASS / 6 skipped / 0 failures
+repo safety: PASS (0 warnings)
+stability:   SOAK3 confirmed E1.65 (prod=0 market-reality); Soak 4 pending
+```
+
+## Session Completion (E1.66)
+session_goal: E1.66 — depth-aware universe expansion, ARBY_MIN_PRODUCTION_SIZE_USD gate, discovery depth guard, production_sized_profitable_total metric
+goal_status: UNIT_VALIDATED
+close_allowed: false
+blocker_status_after: UNIT_VALIDATED (4863 tests pass; Soak 4 needed to confirm production_sized_profitable_total > 0 with expanded universe)
+remaining_blockers: Soak 4 runtime (6h, new pairs AERO/WETH + VIRTUAL/WETH, new success metric)
+docs_reread_confirmed: true
 
 ## 3) Artifacts Attached
 rolling:
@@ -163,11 +257,77 @@ Repo safety:                                           PASS (0 warnings)
 - **REQUIRED**: Confirm `candidate_source_breakdown.cold_exec_with_usd_basis > 0`
 - Consider raising ARBY_WS_LEASE_TTL_S default beyond 600s if reconnect storms persist
 
+## 9) Soak 3 Results (3h depth-sweep, 2026-05-08T13:53:11Z → 16:53:13Z)
+
+### Run configuration
+- ENV: `ARBY_REQUIRE_USD_BASIS=1 ARBY_COLD_REQUIRE_USD_BASIS=1 ARBY_MIN_EXPECTED_PROFIT_USD=0.01 ARBY_COLD_IMMEDIATE_SIM=1 ARBY_COLD_IMMEDIATE_NEAR=1 ARBY_PAPER_SIGNING=1 ARBY_SPLIT_ROUTE_ENABLE=1 ARBY_POOL_STATE_HTTP_FEED=1 ARBY_ACTIVE_WS_LANES=2 ARBY_MIN_EXECUTABLE_SIZE_USD=10.0`
+- Flags: `--chain base --hours 3 --no-m4 --with-discovery --dashboard-port 8099 --cold-http-only --discovery-warmup-delay-s 600 --m7-hot-ws-timeout 120 --m7-cold-ws-timeout 900`
+- Stability: **5/5 processes alive, 0 crash_restarts, exit code 0** — CLEAN
+
+### Monitor log (every 5 min via `data/tmp/soak3_monitor.ps1`)
+```
+T+1  15:55Z | prod=0 res=4 dust=7  opp=10 | ws_conn=0  ws_429=0  ws_fail=1  pct429=0.0 | hot_age=109s cold_age=5670s bridge_fresh=True
+T+2  16:00Z | prod=0 res=4 dust=7  opp=15 | ws_conn=2  ws_429=0  ws_fail=1  pct429=0.0 | hot_age=80s  cold_age=5970s (5 hot pairs WS connect)
+T+4  16:10Z | prod=0 res=3 dust=6  opp=10 | ws_conn=5  ws_429=1  ws_fail=2  pct429=0.2 | cold_age=85s ← COLD CYCLE 1 (14:09Z)
+T+7  16:25Z | prod=0 res=5 dust=10 opp=15 | ws_conn=10 ws_429=2  ws_fail=4  pct429=0.5 | cold_age=60s ← COLD CYCLE 2 (14:24Z)
+T+10 16:40Z | prod=0 res=5 dust=10 opp=14 | ws_conn=12 ws_429=6  ws_fail=10 pct429=1.4 | cold_age=40s ← COLD CYCLE 3 (14:39Z) + discovery started
+T+14 17:00Z | prod=0 res=5 dust=10 opp=15 | ws_conn=15 ws_429=11 ws_fail=16 pct429=2.6 | cold_age=320s WS recovered
+T+26 18:00Z | prod=0 res=5 dust=10 opp=15 | ws_conn=28 ws_429=22 ws_fail=33 pct429=4.8 | cold_age=183s stable
+T+34 18:40Z | prod=0 res=5 dust=10 opp=10 | ws_conn=37 ws_429=29 ws_fail=42 pct429=6.1 | stable
+T+36 18:50Z | prod=0 res=6 dust=9  opp=15 | ws_conn=41 ws_429=29 ws_fail=43 pct429=6.1 | final
+```
+
+### Final state at soak end
+```
+production_profitable_total:  0  (no pair reached $10 depth with positive profit)
+research_profitable_total:    6  (dust/micro < $1)
+dust_only_total:              9
+opportunities_total:          15
+tier_map (base, 16:44Z):  hot=173, warm=164, cold=0
+bridge (16:44Z): cold_exec=5 (FUN/USDC ×4 + 0x16ee7eca/USDC ×1)
+bridge_fresh: True throughout (mtime fix confirmed working)
+ws_status at end: connected (drpc)
+ws_429_total: 29 windows | pct429=6.1 (ARBY_WS_TIMEOUT 429 recovery working)
+discovery_cold: B3/WETH $0.0015 (even smaller than main lane)
+crash_restarts: 0/100 all 5 processes — CLEAN shutdown
+```
+
+### Pair depth findings
+| Pair | Max size USD | Profit @ size | Net bps | Size source | Verdict |
+|---|---|---|---|---|---|
+| FUN/USDC | $0.075–$0.10 | $0.031 | 3102 | usd_frontier_split | dust_only |
+| 0x16ee7eca/USDC | $0.10 | $0.031 | 3102 | usd_frontier_split | dust_only |
+| PENGACHU/WETH | $0.0004 | $0.00008 | — | dynamic_bounded | dust_only |
+| B3/WETH (disc) | $0.0015 | $0.00008 | 524 | dynamic_bounded | dust_only |
+| WETH/USDC (hot) | unpriced | 0 | — | — | depth_unknown |
+
+**Key finding**: `usd_frontier_split` is Base AMM depth limit — FUN/USDC maxes at $0.075 (not a system error). To achieve production_profitable_total > 0, need pairs with deeper AMM liquidity (WETH/USDC, WBTC/USDC) where $10+ input is viable.
+
+### Dashboard fix confirmed (via soak 3)
+- `bridge_cold_executable_priced` rows appeared correctly at T+4 (after first cold cycle)
+- `DUST_PROFIT_ONLY:artifact_usd_fields` tag correctly applied to all sub-$1 rows
+- `depth_verdict=dust_only` correctly classified all profitable rows
+- `profit_size_buckets_est` populating (linear extrapolation — real AMM depth degrades faster)
+- `production_profitable_total` correctly reporting 0 (honest, not a bug)
+
+### E1.65 acceptance criteria (final)
+| Criterion | Status | Evidence |
+|---|---|---|
+| Dashboard shows priced bridge rows | ✅ SOAK3_CONFIRMED | bridge_cold_executable_priced at T+4 with usd>0 |
+| DUST_PROFIT_ONLY tag | ✅ SOAK3_CONFIRMED | Applied to all sub-$1 rows |
+| depth_verdict classification | ✅ SOAK3_CONFIRMED | dust_only for all profitable pairs |
+| profit_size_buckets_est | ✅ SOAK3_CONFIRMED | Populated at all buckets |
+| production_profitable_total | ⚠️ SOAK3_RESULT=0 | No Base pair has $10+ AMM depth at current spread |
+| bridge_fresh throughout | ✅ SOAK3_CONFIRMED | mtime fix kept bridge fresh |
+| 5/5 processes, 0 crashes | ✅ SOAK3_CONFIRMED | Clean 3h shutdown |
+| discovery finds new pairs | ✅ SOAK3_CONFIRMED | tier_warm grew 23→164 |
+
 ## Session Completion
-session_goal: E1.65 dashboard fix: priced bridge rows visible in /api/m7/current; usd_basis_source propagation
-goal_status: IN_PROGRESS
+session_goal: E1.65 soak 3 (3h depth-sweep): production_profitable_total measurement, dashboard validation, discovery monitoring
+goal_status: SOAK_COMPLETE
 close_allowed: false
-blocker_status_after: PARTIAL (dashboard fix coded + 4844 tests pass; 10-min control soak pending to confirm /api/m7/current shows bridge priced rows)
-remaining_blockers: 10-min control soak — verify opportunity rows include source=bridge_cold_executable_priced with amount_in_optimal_usd > 0
-docs_reread_confirmed: true (AGENTS.md, Roadmap.md, docs/status/INDEX.md, docs/DEV_REPORT_CANONICAL_UA.md)
+soak3_result: production_profitable_total=0 — honest result: all current profitable Base arb pairs are dust-depth (AMM frontier < $1). Dashboard + classification correct.
+blocker_status_after: E1.65 FEATURE_COMPLETE (all code + tests done; dashboard confirmed). production_profitable_total=0 is market reality, not a code bug. Close requires decision: either (a) accept prod=0 as valid finding and close E1.65 with "depth confirmed dust-only on current Base pairs", or (b) expand pair universe to include deeper AMM pools (WETH/USDC, WBTC/USDC) and run soak 4.
+remaining_blockers: decision — accept dust-only finding vs expand pair universe
+docs_reread_confirmed: true
 

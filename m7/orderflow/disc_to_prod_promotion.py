@@ -28,6 +28,10 @@ class PromotionThresholds:
     min_positive: int = 1
     min_viable: int = 2
     min_sessions: int = 1
+    # E1.66 step 8: depth guard — only promote if max profitable size seen
+    # exceeds this threshold. Default 0.0 (no guard, backwards-compatible).
+    # Set ARBY_DISC_PROMOTE_MIN_SIZE_USD to enable (e.g. 1.0 filters dust-only).
+    min_size_usd: float = 0.0
 
 
 def families_qualifying_from_scoreboard(
@@ -55,6 +59,11 @@ def families_qualifying_from_scoreboard(
         sessions = rec.get("sessions_with_signal") or []
         if not isinstance(sessions, list) or len(sessions) < th.min_sessions:
             continue
+        # E1.66 step 8: depth guard — skip families where best observed size < threshold.
+        if th.min_size_usd > 0:
+            max_size = float(rec.get("max_profitable_size_usd") or 0.0)
+            if max_size < th.min_size_usd:
+                continue
         if isinstance(fam, str) and fam:
             out.add(fam)
     return out

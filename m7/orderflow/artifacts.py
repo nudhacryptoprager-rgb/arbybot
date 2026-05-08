@@ -1020,6 +1020,17 @@ def build_replay_summary(
             "best_buy_amount_wei": getattr(r, "best_buy_amount_wei", None),
             "best_sell_amount_wei": getattr(r, "best_sell_amount_wei", None),
             "usd_basis_source": getattr(r, "usd_basis_source", None),
+            # E1.65 step 7/10: depth verdict based on size_usd_estimate.
+            # dust_only    < $1  — proof-of-pricing; not economically executable
+            # micro        $1-$10 — research-grade; depth unverified at production size
+            # viable       >= $10 — meets MIN_EXECUTABLE_SIZE_USD; verify with depth sweep
+            # unpriced     — no USD basis available
+            "depth_verdict": (
+                "viable" if (getattr(r, "size_usd_estimate", None) or 0) >= 10.0
+                else "micro" if (getattr(r, "size_usd_estimate", None) or 0) >= 1.0
+                else "dust_only" if (getattr(r, "size_usd_estimate", None) or 0) > 0
+                else "unpriced"
+            ),
         }
 
     _TOP_N = 5

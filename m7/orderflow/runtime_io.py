@@ -219,6 +219,7 @@ def _update_discovery_scoreboard(
             "guard_passed": 0,
             "sessions_with_signal": [],
             "last_iteration": 0,
+            "max_profitable_size_usd": 0.0,
         })
 
         rec["total_scored"] = rec.get("total_scored", 0) + 1
@@ -231,6 +232,17 @@ def _update_discovery_scoreboard(
             if iteration not in sessions:
                 sessions.append(iteration)
             rec["sessions_with_signal"] = sessions[-20:]
+
+        # E1.66 step 7: track max profitable size seen per family for depth guard.
+        size_usd = r.get("size_usd_estimate") or r.get("amount_in_optimal_usd") or 0.0
+        try:
+            size_usd = float(size_usd)
+        except (TypeError, ValueError):
+            size_usd = 0.0
+        if best_net is not None and best_net > 0 and size_usd > 0:
+            rec["max_profitable_size_usd"] = max(
+                float(rec.get("max_profitable_size_usd") or 0.0), size_usd
+            )
 
         reject = r.get("reject_reason", "")
         if not reject or reject in ("GAS_EXCEEDS_GROSS", "SLIPPAGE_EXCEEDS_GROSS",

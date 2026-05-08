@@ -223,6 +223,54 @@ class TestDiscoveryScoreboard:
         degen = sb["families"]["DEGEN"]
         assert degen["sessions_with_signal"].count(1) == 1
 
+    def test_max_profitable_size_usd_tracked(self):
+        """E1.66 step 7: max_profitable_size_usd is tracked per family."""
+        _, update = self._import_scoreboard_funcs()
+        sb = {"families": {}, "updated_at": None}
+        artifact = {
+            "results": [
+                {
+                    "pair_key": "WETH/USDC", "best_net_bps": 5.0,
+                    "size_usd_estimate": 12.5,
+                },
+                {
+                    "pair_key": "WETH/USDC", "best_net_bps": 3.0,
+                    "size_usd_estimate": 8.0,  # smaller — should not override max
+                },
+            ]
+        }
+        result = update(sb, artifact, 1)
+        weth = result["families"]["WETH"]
+        assert weth["max_profitable_size_usd"] == 12.5
+
+    def test_max_profitable_size_usd_not_updated_on_negative_bps(self):
+        """Size must not update max when bps <= 0 (not profitable)."""
+        _, update = self._import_scoreboard_funcs()
+        sb = {"families": {}, "updated_at": None}
+        artifact = {
+            "results": [
+                {
+                    "pair_key": "FUN/USDC", "best_net_bps": -1.0,
+                    "size_usd_estimate": 100.0,  # large but unprofitable
+                },
+            ]
+        }
+        result = update(sb, artifact, 1)
+        fun = result["families"]["FUN"]
+        assert fun.get("max_profitable_size_usd", 0.0) == 0.0
+
+    def test_max_profitable_size_usd_accumulates_across_iterations(self):
+        """max_profitable_size_usd must take the running maximum."""
+        _, update = self._import_scoreboard_funcs()
+        sb = {"families": {}, "updated_at": None}
+        a1 = {"results": [{"pair_key": "AERO/WETH", "best_net_bps": 2.0, "size_usd_estimate": 5.0}]}
+        a2 = {"results": [{"pair_key": "AERO/WETH", "best_net_bps": 1.0, "size_usd_estimate": 30.0}]}
+        a3 = {"results": [{"pair_key": "AERO/WETH", "best_net_bps": 3.0, "size_usd_estimate": 15.0}]}
+        sb = update(sb, a1, 1)
+        sb = update(sb, a2, 2)
+        sb = update(sb, a3, 3)
+        assert sb["families"]["AERO"]["max_profitable_size_usd"] == 30.0
+
 
 # ---------------------------------------------------------------------------
 # 6. M7.E1.9.1 — Artifact namespace isolation

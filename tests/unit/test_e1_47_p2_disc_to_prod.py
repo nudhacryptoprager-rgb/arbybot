@@ -117,3 +117,71 @@ def test_handles_malformed_promoted():
 def test_merge_with_empty_existing_prod():
     out = merge_into_prod_candidates({}, ["X/Y"])
     assert out == {"candidate": ["X/Y"], "execution": []}
+
+
+# ------------------------------------------------------------------ E1.66 --
+# Depth guard: min_size_usd threshold in PromotionThresholds (step 8).
+# Scoreboard tracking: max_profitable_size_usd (step 7).
+# ------------------------------------------------------------------ E1.66 --
+
+def test_depth_guard_blocks_dust_family():
+    """Families with max_profitable_size_usd < min_size_usd must not qualify."""
+    sb = _sb({
+        "FUN": {
+            "scored_positive": 5, "route_viable": 5,
+            "sessions_with_signal": [1, 2, 3], "total_scored": 10,
+            "max_profitable_size_usd": 0.10,  # dust depth
+        },
+    })
+    # Without depth guard: qualifies
+    assert families_qualifying_from_scoreboard(sb) == {"FUN"}
+    # With depth guard $1: blocked
+    out = families_qualifying_from_scoreboard(
+        sb, thresholds=PromotionThresholds(min_size_usd=1.0)
+    )
+    assert out == set()
+
+
+def test_depth_guard_allows_deep_family():
+    """Families with max_profitable_size_usd >= min_size_usd must qualify."""
+    sb = _sb({
+        "WETH": {
+            "scored_positive": 3, "route_viable": 5,
+            "sessions_with_signal": [1, 2, 3], "total_scored": 10,
+            "max_profitable_size_usd": 25.0,  # production-worthy depth
+        },
+    })
+    out = families_qualifying_from_scoreboard(
+        sb, thresholds=PromotionThresholds(min_size_usd=10.0)
+    )
+    assert out == {"WETH"}
+
+
+def test_depth_guard_zero_means_no_filter():
+    """min_size_usd=0.0 (default) must not gate on size — backwards-compatible."""
+    sb = _sb({
+        "FUN": {
+            "scored_positive": 2, "route_viable": 3,
+            "sessions_with_signal": [1, 2], "total_scored": 5,
+            "max_profitable_size_usd": 0.05,  # dust
+        },
+    })
+    out = families_qualifying_from_scoreboard(
+        sb, thresholds=PromotionThresholds(min_size_usd=0.0)
+    )
+    assert out == {"FUN"}
+
+
+def test_depth_guard_missing_field_treated_as_zero():
+    """Families without max_profitable_size_usd must be blocked when guard is active."""
+    sb = _sb({
+        "LEGACY": {
+            "scored_positive": 3, "route_viable": 5,
+            "sessions_with_signal": [1, 2, 3], "total_scored": 10,
+            # no max_profitable_size_usd field (old scoreboard entry)
+        },
+    })
+    out = families_qualifying_from_scoreboard(
+        sb, thresholds=PromotionThresholds(min_size_usd=1.0)
+    )
+    assert out == set()  # missing == 0 < 1.0 → blocked

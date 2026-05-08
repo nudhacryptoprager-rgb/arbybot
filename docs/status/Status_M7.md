@@ -1,14 +1,36 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.65 UNIT_VALIDATED + SOAK2_RUNTIME_VALIDATED + DASHBOARD_FIX_APPLIED. 10 WS-pressure / USD-basis fix steps (BackrunResult +3 fields, stable-coin decimal override, WS 429 cooldown, HTTP-only cold lane, discovery warmup 600s). Soak 1 (1h, 2026-05-08T10:15–11:15, 5/5 alive, exit 0): ws_429 -80%, usd_basis_missing -76%. Soak 2 (30min, 2026-05-08T12:04–12:34, 5/5, exit 0): USD-size confirmed in bridge — USDe/USDC $1.07957, FUN/USDC $0.099806 (size_usd_estimate > 0 runtime-proven). GPT review 2: dashboard fix applied — (1) bridge freshness 2× threshold (240s), (2) file mtime injected as fallback timestamp, (3) `_candidate_size_usd` returns None for 0.0, (4) priced bridge rows prioritized first in opportunity table, (5) `usd_basis_source` propagated to rows, +3 dashboard unit tests. Remaining: 10-min control soak to confirm dashboard shows priced rows from bridge.**
+**Status**: **E1.65 REACHED (2026-05-08). USD-size/dashboard/depth truth validated. 3h soak clean (5/5 alive, 0 crashes). production_profitable_total=0 is ACCEPTED as dust-depth market reality: all profitable Base arb pairs (FUN/USDC, 0x16ee7eca/USDC) cap at AMM frontier < $1. pipeline_ready=true. production_profit_ready=false (no pair ≥$10 depth). Next: E1.66 depth-aware universe expansion + production-sized profitability gate.**
 
-goal_status: IN_PROGRESS
-production_profit_status: USD basis runtime-proven (soak 2); dashboard fix applied — needs control soak to confirm /api/m7/current shows priced bridge rows
+goal_status: REACHED
+pipeline_ready: true
+production_profit_ready: false
+close_allowed: true
+reason_for_prod_zero: dust-depth AMM frontier — market reality, not code bug; all dashboard/gate logic confirmed correct
+next_milestone: E1.66 — depth-aware universe promotion + production_sized_profitable_total > 0
 docs_reread_confirmed: true
-close_allowed: false
-blocker_status_after: PARTIAL (dashboard fix coded + 4844 tests pass; control soak pending)
 
-`python -m pytest tests/unit -q`: **4844 PASS / 6 skipped / 0 failures** (was 4841 + 3 new dashboard tests). `check_repo_safety.py --allow-intent-edit`: PASS (0 warnings).
+`python -m pytest tests/unit -q`: **4850 PASS / 6 skipped / 0 failures**. `check_repo_safety.py --allow-intent-edit`: PASS (0 warnings).
+
+```
+=== SOAK 3 EVIDENCE (3h, 2026-05-08T13:53Z→16:53Z) ===
+5/5 alive, 0 crash_restarts, clean shutdown (exit 0)
+production_profitable_total:  0 (stable throughout)
+research_profitable_total:    5-6 (dust/micro)
+dust_only_total:              8-10
+opportunities_total:          10-15
+cold_cycles:                  ~every 15min; cold_exec=5 (FUN/USDC ×4 + 0x16ee7eca/USDC ×1)
+max_pair_size_usd:            FUN/USDC $0.075 (usd_frontier_split)
+tier_map at end:              hot=173, warm=164, cold=0 (discovery found 164 warm pairs, none cold-confirmed)
+ws_pct429:                    6.1 (peak; stable in last hour)
+bridge_fresh:                 True throughout (mtime fix confirmed)
+dashboard_bridge_rows:        CONFIRMED — bridge_cold_executable_priced appeared at T+4 (first cold cycle)
+DUST_PROFIT_ONLY_tag:         CONFIRMED — all sub-$1 profitable rows tagged correctly
+depth_verdict:                dust_only for all profitable pairs — CORRECT
+profit_size_buckets_est:      populating (linear extrapolation only — real AMM degrades faster at >$1)
+```
+
+`python -m pytest tests/unit -q`: **4850 PASS / 6 skipped / 0 failures** (was 4844 + 6 new size/depth tests). `check_repo_safety.py --allow-intent-edit`: PASS (0 warnings).
 
 ```
 === E1.64 STEP-FIX SOAK (current_session_delta evidence) ===

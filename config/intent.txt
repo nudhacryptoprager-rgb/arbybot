@@ -47,7 +47,7 @@ arbitrum_one:WETH/USDT
 arbitrum_one:WETH/WBTC
 
 # ============================================================
-# BASE (22 pairs, 11 productive tokens) [E1.48: +BRETT/DEGEN/TOSHI block]
+# BASE (24 pairs, 11 productive tokens) [E1.48: +BRETT/DEGEN/TOSHI block] [E1.66: +AERO/WETH, VIRTUAL/WETH]
 # ============================================================
 # Expansion notes (2026-04-17, verified via core_tokens.yaml + known Base DEX state):
 #   cbETH/WETH — Uniswap V3 0.05% + Aerodrome vAMM+sAMM, $8M+ TVL, blue-chip LST.
@@ -62,8 +62,12 @@ arbitrum_one:WETH/WBTC
 #   DEGEN/WETH, DEGEN/USDC — Farcaster-native, Aerodrome + Uniswap V3 multi-DEX.
 #   TOSHI/WETH, TOSHI/USDC — Coinbase-themed, Aerodrome + Uniswap V3.
 #   VIRTUAL/cbBTC — cross-quote diversification on existing productive tokens.
+# E1.66 additions (2026-05-08, depth-expansion after soak3 dust-only finding):
+#   AERO/WETH — Aerodrome CL + Uniswap V3, $50M+ AERO TVL, deep AMM pool.
+#   VIRTUAL/WETH — Uniswap V3 + Aerodrome CL, $20M+ TVL, AI token with real DEX depth.
 
 base:AERO/USDC
+base:AERO/WETH
 base:BRETT/USDC
 base:BRETT/WETH
 base:DEGEN/USDC
@@ -74,6 +78,7 @@ base:TOSHI/WETH
 base:USDC/DAI
 base:USDC/USDT
 base:VIRTUAL/USDC
+base:VIRTUAL/WETH
 base:VIRTUAL/cbBTC
 base:WETH/AERO
 base:WETH/DAI

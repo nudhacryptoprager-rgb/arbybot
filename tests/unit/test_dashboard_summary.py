@@ -1190,3 +1190,212 @@ def test_bridge_freshness_uses_mtime_fallback():
                                  "_file_mtime_utc": "2026-05-08T12:05:00Z"}) == "2026-05-08T12:05:00Z"
     assert _artifact_timestamp({"last_updated": "2026-05-08T12:08:00Z",
                                  "_file_mtime_utc": "2026-05-08T12:05:00Z"}) == "2026-05-08T12:08:00Z"
+
+
+# E1.65 steps 1-10: size bucket / depth verdict / production sizing tests
+def test_size_category_buckets():
+    """Steps 1-2: _size_category returns correct bucket for each range."""
+    from monitoring.dashboard_server import _size_category
+    assert _size_category(None) == "unknown"
+    assert _size_category(0.0) == "dust"
+    assert _size_category(0.099) == "dust"
+    assert _size_category(1.0) == "micro"
+    assert _size_category(5.5) == "micro"
+    assert _size_category(10.0) == "small"
+    assert _size_category(99.9) == "small"
+    assert _size_category(100.0) == "medium"
+    assert _size_category(1000.0) == "medium"
+
+
+def test_profit_at_buckets_linear_estimate():
+    """Step 3: _profit_at_buckets extrapolates linearly from current size."""
+    from monitoring.dashboard_server import _profit_at_buckets
+    # $1.08 size, $0.085 profit → profit_per_usd ≈ 0.07870
+    result = _profit_at_buckets(1.08, 0.085)
+    assert result is not None
+    assert "$0.01" in result
+    assert "$10.00" in result
+    assert result["$1.00"] == round(0.085 / 1.08 * 1.0, 6)
+    assert result["$10.00"] == round(0.085 / 1.08 * 10.0, 6)
+    # None input returns None
+    assert _profit_at_buckets(None, 0.085) is None
+    assert _profit_at_buckets(1.0, None) is None
+    assert _profit_at_buckets(0.0, 0.085) is None
+
+
+def test_depth_verdict_classification():
+    """Steps 7-8: _depth_verdict returns correct verdict string."""
+    from monitoring.dashboard_server import _depth_verdict
+    assert _depth_verdict(None, 100) == "depth_unknown"
+    assert _depth_verdict(0.0, 100) == "depth_unknown"
+    assert _depth_verdict(0.5, 100) == "dust_only"
+    assert _depth_verdict(1.07, 787) == "micro_unverified"
+    assert _depth_verdict(9.99, 100) == "micro_unverified"
+    assert _depth_verdict(10.0, 100) == "viable_probe_needed"
+    assert _depth_verdict(100.0, 50) == "viable_probe_needed"
+
+
+def test_usd_basis_dust_profit_only_tag():
+    """Step 4: usd_basis must be prefixed with DUST_PROFIT_ONLY when size < $1 and profit > 0."""
+    from monitoring.dashboard_server import _candidate_usd_basis
+    # Sub-$1 with profit → DUST_PROFIT_ONLY tag
+    basis = _candidate_usd_basis(
+        {"size_usd_estimate": 0.1, "expected_profit_usd": 0.032},
+        size_usd=0.1, profit_usd=0.032, gas_usd=None
+    )
+    assert basis.startswith("DUST_PROFIT_ONLY:"), f"Expected DUST_PROFIT_ONLY prefix, got {basis!r}"
+    # >= $1 with profit → NO dust tag
+    basis_micro = _candidate_usd_basis(
+        {"size_usd_estimate": 1.08, "expected_profit_usd": 0.085},
+        size_usd=1.08, profit_usd=0.085, gas_usd=None
+    )
+    assert not basis_micro.startswith("DUST_PROFIT_ONLY:"), f"Should not have DUST tag, got {basis_micro!r}"
+    # unavailable when all None
+    assert _candidate_usd_basis({}, None, None, None) == "unavailable"
+
+
+def test_usd_coverage_production_research_split():
+    """Steps 5-6: usd_coverage must split production_profitable vs research_profitable."""
+    from monitoring.dashboard_server import build_m7_current_payload, MIN_EXECUTABLE_SIZE_USD
+    now = datetime(2026, 5, 8, 12, 10, 0, tzinfo=timezone.utc)
+    bridge = {
+        "timestamp": "2026-05-08T12:09:00Z",
+        "cold_executable": [
+            # dust size ($0.10)
+            {
+                "event_id": "fun_usdc_1",
+                "actual_pair": "FUN/USDC",
+                "net_bps": 320.0,
+                "route_viable": True,
+                "size_usd_estimate": 0.0998,
+                "amount_in_optimal_usd": 0.0998,
+                "expected_profit_usd": 0.032,
+                "usd_basis_source": "token_out_stable_fallback",
+            },
+            # micro size ($1.08)
+            {
+                "event_id": "usde_usdc_1",
+                "actual_pair": "USDe/USDC",
+                "net_bps": 787.4,
+                "route_viable": True,
+                "size_usd_estimate": 1.07957,
+                "amount_in_optimal_usd": 1.07957,
+                "expected_profit_usd": 0.085,
+                "usd_basis_source": "token_out_stable_fallback",
+            },
+        ],
+    }
+    payload = build_m7_current_payload(
+        rollup={"last_updated": now.isoformat(), "production_readiness": {}},
+        hot={}, orderflow={}, bridge=bridge,
+        profile="production", now_utc=now,
+    )
+    usd_cov = payload["usd_coverage"]
+    # Neither candidate >= MIN_EXECUTABLE_SIZE_USD ($10) → production_profitable = 0
+    assert usd_cov["production_profitable_total"] == 0, (
+        f"Expected 0 production profitable, got {usd_cov}"
+    )
+    # Both have profit > 0 but below threshold → research_profitable = 2
+    assert usd_cov["research_profitable_total"] == 2, (
+        f"Expected 2 research profitable, got {usd_cov}"
+    )
+    # dust_only_total: FUN/USDC size=$0.0998 < $1
+    assert usd_cov["dust_only_total"] >= 1, f"Expected at least 1 dust row, got {usd_cov}"
+    # min_executable_size_usd present
+    assert usd_cov["min_executable_size_usd"] == MIN_EXECUTABLE_SIZE_USD
+
+
+def test_row_has_size_classification_fields():
+    """Steps 1-8: opportunity rows must carry size_category, is_production_sized,
+    depth_verdict, and profit_size_buckets_est."""
+    from monitoring.dashboard_server import build_m7_current_payload
+    now = datetime(2026, 5, 8, 12, 10, 0, tzinfo=timezone.utc)
+    bridge = {
+        "timestamp": "2026-05-08T12:09:00Z",
+        "cold_executable": [{
+            "event_id": "fun_test",
+            "actual_pair": "FUN/USDC",
+            "net_bps": 320.0,
+            "route_viable": True,
+            "size_usd_estimate": 0.0998,
+            "amount_in_optimal_usd": 0.0998,
+            "expected_profit_usd": 0.032,
+        }],
+    }
+    payload = build_m7_current_payload(
+        rollup={"last_updated": now.isoformat(), "production_readiness": {}},
+        hot={}, orderflow={}, bridge=bridge,
+        profile="production", now_utc=now,
+    )
+    row = payload["opportunities"][0]
+    assert row["size_category"] == "dust"  # 0.0998 < $1
+    assert row["is_production_sized"] is False  # < MIN_EXECUTABLE_SIZE_USD ($10)
+    assert row["depth_verdict"] == "dust_only"
+    assert row["profit_size_buckets_est"] is not None
+    assert "$10.00" in row["profit_size_buckets_est"]
+
+
+# ------------------------------------------------------------------ E1.66 --
+# pipeline_ready / production_profit_ready / production_sized_profitable_total
+# ARBY_MIN_PRODUCTION_SIZE_USD = $50 (serious gate).
+# ------------------------------------------------------------------ E1.66 --
+
+class TestM7A566UsdCoverageE166:
+    """E1.66: production_sized_profitable_total, pipeline_ready, production_profit_ready."""
+
+    def _make_payload(self, cold_exec):
+        from monitoring.dashboard_server import build_m7_current_payload
+        now = datetime(2026, 5, 8, 12, 10, 0, tzinfo=timezone.utc)
+        bridge = {"timestamp": "2026-05-08T12:09:00Z", "cold_executable": cold_exec}
+        return build_m7_current_payload(
+            rollup={"last_updated": now.isoformat(), "production_readiness": {}},
+            hot={}, orderflow={}, bridge=bridge,
+            profile="production", now_utc=now,
+        )
+
+    def test_pipeline_ready_true_when_candidates_present(self):
+        payload = self._make_payload([{
+            "event_id": "e1", "actual_pair": "FUN/USDC",
+            "size_usd_estimate": 0.10, "expected_profit_usd": 0.01,
+        }])
+        assert payload["usd_coverage"]["pipeline_ready"] is True
+
+    def test_pipeline_ready_false_when_no_candidates(self):
+        payload = self._make_payload([])
+        assert payload["usd_coverage"]["pipeline_ready"] is False
+
+    def test_production_profit_ready_false_when_only_research(self):
+        """$10 size → production_profitable=1 but not serious ($50) → prod_profit_ready=False."""
+        payload = self._make_payload([{
+            "event_id": "e1", "actual_pair": "WETH/USDC",
+            "size_usd_estimate": 15.0, "expected_profit_usd": 0.5,
+        }])
+        cov = payload["usd_coverage"]
+        assert cov["production_profitable_total"] == 1
+        assert cov["production_sized_profitable_total"] == 0
+        assert cov["production_profit_ready"] is False
+
+    def test_production_profit_ready_true_when_serious_size(self):
+        """$60 size >= $50 (MIN_PRODUCTION_SIZE_USD) → production_profit_ready=True."""
+        payload = self._make_payload([{
+            "event_id": "e1", "actual_pair": "WETH/USDC",
+            "size_usd_estimate": 60.0, "expected_profit_usd": 1.5,
+        }])
+        cov = payload["usd_coverage"]
+        assert cov["production_sized_profitable_total"] == 1
+        assert cov["production_profit_ready"] is True
+
+    def test_is_serious_production_sized_field_on_rows(self):
+        """Row dict must carry is_serious_production_sized."""
+        payload = self._make_payload([{
+            "event_id": "e1", "actual_pair": "WETH/USDC",
+            "size_usd_estimate": 60.0, "expected_profit_usd": 1.5,
+        }])
+        row = payload["opportunities"][0]
+        assert row.get("is_serious_production_sized") is True
+
+    def test_min_production_size_usd_in_coverage(self):
+        """usd_coverage must expose min_production_size_usd for clients."""
+        from monitoring.dashboard_server import MIN_PRODUCTION_SIZE_USD
+        payload = self._make_payload([])
+        assert payload["usd_coverage"]["min_production_size_usd"] == MIN_PRODUCTION_SIZE_USD

@@ -3159,6 +3159,8 @@ class TestM7A541TopCandidatePersistence:
             "expected_profit_usd", "price_impact_bps", "amount_in_optimal_usd",
             # E1.65: Best trade amounts for USD basis fallback in bridge/cold lane
             "best_buy_amount_wei", "best_sell_amount_wei", "usd_basis_source",
+            # E1.65 step 7/10: depth verdict based on size_usd_estimate
+            "depth_verdict",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys

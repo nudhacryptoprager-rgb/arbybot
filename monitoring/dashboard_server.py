@@ -70,6 +70,31 @@ FRESHNESS_THRESHOLD_S_DISCOVERY = _read_threshold_env(
     "ARBY_DASHBOARD_FRESHNESS_S_DISCOVERY", FRESHNESS_THRESHOLD_S
 )
 
+# E1.65 step 5/10: Minimum trade size for production-ready classification.
+# Candidates below this threshold are classified as research_profitable only.
+# Set via ARBY_MIN_EXECUTABLE_SIZE_USD env var.
+try:
+    MIN_EXECUTABLE_SIZE_USD: float = float(
+        os.environ.get("ARBY_MIN_EXECUTABLE_SIZE_USD", "10.0")
+    )
+except (TypeError, ValueError):
+    MIN_EXECUTABLE_SIZE_USD = 10.0
+
+# E1.66 step 3/10: Separate "serious production" size threshold.
+# pipeline_ready uses MIN_EXECUTABLE_SIZE_USD ($10, research gate).
+# production_profit_ready uses MIN_PRODUCTION_SIZE_USD ($50, serious gate).
+# Set via ARBY_MIN_PRODUCTION_SIZE_USD env var.
+try:
+    MIN_PRODUCTION_SIZE_USD: float = float(
+        os.environ.get("ARBY_MIN_PRODUCTION_SIZE_USD", "50.0")
+    )
+except (TypeError, ValueError):
+    MIN_PRODUCTION_SIZE_USD = 50.0
+    MIN_EXECUTABLE_SIZE_USD = 10.0
+
+# Standard size buckets used for linear profit extrapolation.
+_SIZE_BUCKETS_USD = (0.01, 0.10, 1.0, 10.0, 50.0, 100.0)
+
 ARTIFACT_FILES = {
     "run_summary": ROLLING_DIR / "run_summary_latest.json",
     "stability_agg": ROLLING_DIR / "m4_stability_agg.json",
@@ -626,6 +651,59 @@ def _candidate_slippage_usd(candidate: dict, size_usd):
     return _usd_from_bps(size_usd, candidate.get("slippage_bps"))
 
 
+def _size_category(size_usd) -> str:
+    """Classify trade size into research/operational buckets.
+
+    dust   < $1    — proof-of-pricing only; not economically executable
+    micro  $1–$10  — research-grade; real AMM spread may not survive size increase
+    small  $10–$100 — potentially production-sized; verify depth before execution
+    medium $100+   — production-grade if spread holds at size
+    """
+    if size_usd is None:
+        return "unknown"
+    if size_usd < 1.0:
+        return "dust"
+    if size_usd < 10.0:
+        return "micro"
+    if size_usd < 100.0:
+        return "small"
+    return "medium"
+
+
+def _profit_at_buckets(size_usd, expected_profit_usd) -> dict | None:
+    """Estimate expected_profit_usd at standard size buckets via linear extrapolation.
+
+    WARNING: This is a ROUGH UPPER-BOUND ESTIMATE only.
+    Real AMM profit degrades non-linearly with size due to price impact.
+    Always verify with a depth sweep (QuoterV2 multi-size probe) before execution.
+    """
+    if size_usd is None or size_usd <= 0 or expected_profit_usd is None:
+        return None
+    profit_per_usd = expected_profit_usd / size_usd
+    return {
+        f"${b:.2f}": round(profit_per_usd * b, 6)
+        for b in _SIZE_BUCKETS_USD
+    }
+
+
+def _depth_verdict(size_usd, net_bps) -> str:
+    """Classify depth confidence based on known trade size.
+
+    depth_unknown   — no USD size available (can't assess)
+    dust_only       — size < $1: profitable only at dust level
+    micro_unverified — size $1-$10: promising but depth unverified at $10+
+    viable_probe_needed — size >= $10: meets MIN threshold; needs depth sweep
+    depth_curve_pending — placeholder for future QuoterV2 multi-size probe
+    """
+    if size_usd is None or size_usd <= 0:
+        return "depth_unknown"
+    if size_usd < 1.0:
+        return "dust_only"
+    if size_usd < MIN_EXECUTABLE_SIZE_USD:
+        return "micro_unverified"
+    return "viable_probe_needed"
+
+
 def _candidate_usd_basis(candidate: dict, size_usd, profit_usd, gas_usd) -> str:
     if size_usd is None and profit_usd is None and gas_usd is None:
         return "unavailable"
@@ -642,9 +720,21 @@ def _candidate_usd_basis(candidate: dict, size_usd, profit_usd, gas_usd) -> str:
         "gas_cost_usd",
         "total_gas_cost_usd",
     }
-    if any(candidate.get(key) is not None for key in explicit_usd_keys):
-        return "artifact_usd_fields"
-    return "derived_from_artifact_usd_notional"
+    artifact_basis = (
+        "artifact_usd_fields"
+        if any(candidate.get(key) is not None for key in explicit_usd_keys)
+        else "derived_from_artifact_usd_notional"
+    )
+    # E1.65 step 4/10: tag DUST_PROFIT_ONLY when profitable only at sub-$1 size.
+    # This lets the operator filter research-grade from production-grade candidates.
+    if (
+        size_usd is not None
+        and size_usd < 1.0
+        and profit_usd is not None
+        and profit_usd > 0
+    ):
+        return f"DUST_PROFIT_ONLY:{artifact_basis}"
+    return artifact_basis
 
 
 def _build_m7_opportunity_rows(
@@ -714,6 +804,13 @@ def _build_m7_opportunity_rows(
                 if candidate.get("net_pnl_wei") is not None
                 else candidate.get("gross_pnl_wei")
             )
+            _size_cat = _size_category(size_usd)
+            _is_prod_sized = (
+                size_usd is not None and size_usd >= MIN_EXECUTABLE_SIZE_USD
+            )
+            _is_serious_prod_sized = (
+                size_usd is not None and size_usd >= MIN_PRODUCTION_SIZE_USD
+            )
             row = {
                 "source": source,
                 "event_id": candidate.get("event_id"),
@@ -732,9 +829,15 @@ def _build_m7_opportunity_rows(
                 "usd_basis": _candidate_usd_basis(
                     candidate, size_usd, expected_profit_usd, gas_usd
                 ),
-                # E1.65 fix step 4/5: propagate usd_basis_source to dashboard rows
-                # so UI can show token_out_stable_fallback / oracle_token_in etc.
                 "usd_basis_source": candidate.get("usd_basis_source"),
+                # E1.65 steps 1-8: size classification, production readiness, depth verdict
+                "size_category": _size_cat,
+                "is_production_sized": _is_prod_sized,
+                "is_serious_production_sized": _is_serious_prod_sized,
+                "depth_verdict": _depth_verdict(size_usd, net_bps),
+                # Linear profit extrapolation at standard size buckets.
+                # ESTIMATE ONLY — real AMM impact is non-linear. Use for triage.
+                "profit_size_buckets_est": _profit_at_buckets(size_usd, expected_profit_usd),
                 "gas_usd": gas_usd,
                 "total_gas_bps": candidate.get("total_gas_bps"),
                 "slippage_usd": slippage_usd,
@@ -758,7 +861,38 @@ def _build_m7_opportunity_rows(
 
 
 def _m7_usd_coverage(rows: list[dict]) -> dict:
+    """USD coverage + production-vs-research split.
+
+    production_profitable_total       — rows where profit>0 and size >= MIN_EXECUTABLE_SIZE_USD ($10)
+    production_sized_profitable_total — rows where profit>0 and size >= MIN_PRODUCTION_SIZE_USD ($50)
+    research_profitable_total         — rows where profit>0 but size < MIN_EXECUTABLE_SIZE_USD
+    dust_only_total                   — rows where size < $1
+
+    pipeline_ready         — True when system is scanning + bridge is populating (code works)
+    production_profit_ready — True when production_sized_profitable_total > 0 (market found)
+    """
     total = len(rows)
+    research_profitable = sum(
+        1 for r in rows
+        if (r.get("expected_profit_usd") or 0) > 0 and not r.get("is_production_sized", False)
+    )
+    production_profitable = sum(
+        1 for r in rows
+        if (r.get("expected_profit_usd") or 0) > 0 and r.get("is_production_sized", False)
+    )
+    production_sized_profitable = sum(
+        1 for r in rows
+        if (r.get("expected_profit_usd") or 0) > 0 and r.get("is_serious_production_sized", False)
+    )
+    dust_only = sum(
+        1 for r in rows
+        if (r.get("amount_in_optimal_usd") or 0) > 0
+        and (r.get("amount_in_optimal_usd") or 0) < 1.0
+    )
+    # pipeline_ready: True when we have candidates at all (scanning is working)
+    pipeline_ready = total > 0
+    # production_profit_ready: True when any pair has confirmed $50+ profitable depth
+    production_profit_ready = production_sized_profitable > 0
     return {
         "opportunities_total": total,
         "amount_usd_available": sum(
@@ -768,6 +902,16 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
             1 for row in rows if row.get("expected_profit_usd") is not None
         ),
         "gas_usd_available": sum(1 for row in rows if row.get("gas_usd") is not None),
+        # E1.65/E1.66: production vs research split
+        "production_profitable_total": production_profitable,
+        "production_sized_profitable_total": production_sized_profitable,
+        "research_profitable_total": research_profitable,
+        "dust_only_total": dust_only,
+        "min_executable_size_usd": MIN_EXECUTABLE_SIZE_USD,
+        "min_production_size_usd": MIN_PRODUCTION_SIZE_USD,
+        # E1.66 step 2: explicit pipeline/profit readiness flags
+        "pipeline_ready": pipeline_ready,
+        "production_profit_ready": production_profit_ready,
         "conversion_contract": "dynamic_artifact_usd_only_no_price_hardcode",
     }
 
