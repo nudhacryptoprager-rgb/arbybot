@@ -278,20 +278,33 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         """
         files = DISCOVERY_ARTIFACT_FILES if profile == "discovery" else ARTIFACT_FILES
 
-        def _load(key):
+        def _load(key, inject_mtime: bool = False):
             path = files.get(key)
             if path is None or not path.is_file():
                 return None
             try:
                 with open(path, encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if inject_mtime and isinstance(data, dict):
+                    # E1.65 fix step 1/2: inject file mtime as _file_mtime_utc so
+                    # _candidate_source_status() can use mtime as freshness fallback
+                    # when the internal artifact timestamp was not updated this cycle.
+                    import os as _os
+                    try:
+                        mtime = _os.path.getmtime(path)
+                        from datetime import timezone as _tz
+                        mtime_iso = datetime.fromtimestamp(mtime, tz=_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        data["_file_mtime_utc"] = mtime_iso
+                    except Exception:
+                        pass
+                return data
             except (json.JSONDecodeError, OSError):
                 return None
 
         rollup = _load("m7_hot_rollup") or {}
         hot = _load("m7_hot") or {}
         orderflow = _load("m7_orderflow") or {}
-        bridge = _load("m7_cold_hot_bridge") or {}
+        bridge = _load("m7_cold_hot_bridge", inject_mtime=True) or {}
 
         # Live submit + PnL artifacts (may not exist yet)
         live_submit = None
@@ -368,11 +381,23 @@ def _parse_iso_utc(value):
 def _artifact_timestamp(artifact: dict):
     if not isinstance(artifact, dict):
         return None
-    return (
-        artifact.get("last_updated")
-        or artifact.get("timestamp_utc")
-        or artifact.get("timestamp")
-    )
+    candidates = [
+        artifact.get("last_updated"),
+        artifact.get("timestamp_utc"),
+        artifact.get("timestamp"),
+        # E1.65 fix step 1/2: file mtime injected by _load(inject_mtime=True).
+        # Use the newest valid timestamp because cold bridge files can be
+        # rewritten with an unchanged internal timestamp.
+        artifact.get("_file_mtime_utc"),
+    ]
+    parsed = []
+    for value in candidates:
+        dt = _parse_iso_utc(str(value)) if value else None
+        if dt is not None:
+            parsed.append((dt, value))
+    if parsed:
+        return max(parsed, key=lambda item: item[0])[1]
+    return next((value for value in candidates if value), None)
 
 
 def _candidate_source_status(artifact: dict, now_utc: datetime, threshold_s: int) -> dict:
@@ -554,10 +579,16 @@ def _candidate_size_usd(candidate: dict, optimal_wei):
     )
     if base_dec is None:
         return None
+    # E1.65 fix step 2/5: a value of 0.0 means USD basis is unknown (not computed).
+    # Return None so dashboard correctly marks USD as unavailable for this candidate.
+    if base_dec <= 0:
+        return None
     amount_dec = _safe_decimal(candidate.get("amount_in_wei"))
     optimal_dec = _safe_decimal(optimal_wei)
     if amount_dec is not None and amount_dec > 0 and optimal_dec is not None:
         base_dec = base_dec * optimal_dec / amount_dec
+    if base_dec <= 0:
+        return None
     return float(base_dec.quantize(Decimal("0.000001")))
 
 
@@ -625,10 +656,23 @@ def _build_m7_opportunity_rows(
 ) -> list[dict]:
     """Build M7 live dashboard rows from the artifacts that actually carry candidates."""
     micro_by_key = _micro_index(orderflow, bridge, hot)
+    # E1.65 fix step 3/5: bridge_cold_executable with valid USD must come first.
+    # Previously this list came after orderflow (which was hot-path unpriced rows).
+    # Re-order so priced bridge candidates are visible even when hot rows are present.
+    _bridge_cold_all = bridge.get("cold_executable") or []
+    _bridge_cold_priced = [c for c in _bridge_cold_all
+                           if isinstance(c, dict) and (
+                               (c.get("size_usd_estimate") or 0) > 0
+                               or (c.get("amount_in_optimal_usd") or 0) > 0
+                           )]
+    _bridge_cold_unpriced = [c for c in _bridge_cold_all if c not in _bridge_cold_priced]
     sources = [
+        # Priced bridge candidates first (have real USD size from stable-dec fix)
+        ("bridge_cold_executable_priced", _bridge_cold_priced),
         ("cold_executable", orderflow.get("top_executable_candidates") or []),
         ("cold_route_viable", orderflow.get("top_route_viable_candidates") or []),
-        ("bridge_cold_executable", bridge.get("cold_executable") or []),
+        # Unpriced bridge candidates after orderflow
+        ("bridge_cold_executable", _bridge_cold_unpriced),
         ("near_executable", orderflow.get("near_executable_candidates") or []),
         ("bridge_near_executable", bridge.get("near_executable") or []),
         ("bridge_stale_positive", bridge.get("stale_positive") or []),
@@ -688,6 +732,9 @@ def _build_m7_opportunity_rows(
                 "usd_basis": _candidate_usd_basis(
                     candidate, size_usd, expected_profit_usd, gas_usd
                 ),
+                # E1.65 fix step 4/5: propagate usd_basis_source to dashboard rows
+                # so UI can show token_out_stable_fallback / oracle_token_in etc.
+                "usd_basis_source": candidate.get("usd_basis_source"),
                 "gas_usd": gas_usd,
                 "total_gas_bps": candidate.get("total_gas_bps"),
                 "slippage_usd": slippage_usd,
@@ -853,10 +900,14 @@ def build_m7_current_payload(
         if profile == "discovery"
         else FRESHNESS_THRESHOLD_S
     )
+    # E1.65 fix step 1/2: bridge is written by the cold lane (slow path, ~8-30s cycles).
+    # Use a 2× threshold for bridge freshness so a single cold cycle gap doesn't
+    # evict priced candidates that are still operationally relevant.
+    _bridge_threshold = threshold * 2
     candidate_sources = {
         "hot": _candidate_source_status(hot, now_utc, threshold),
         "orderflow": _candidate_source_status(orderflow, now_utc, threshold),
-        "bridge": _candidate_source_status(bridge, now_utc, threshold),
+        "bridge": _candidate_source_status(bridge, now_utc, _bridge_threshold),
     }
     opportunity_rows = _build_m7_opportunity_rows(
         hot=hot if candidate_sources["hot"]["is_fresh"] else {},

@@ -1126,3 +1126,67 @@ def test_m7_current_execution_funnel_zeros_when_no_artifacts():
     assert ef["canary_ready"] == 0
     assert ef["live_receipt_ok"] == 0
     assert ef["live_pnl_ok"] == 0
+
+
+# E1.65 dashboard fix tests
+def test_bridge_priced_candidate_shows_usd(monkeypatch):
+    """Fix step 2+3: bridge cold_executable with size_usd_estimate > 0 must produce
+    amount_usd_available > 0 in /api/m7/current, even if hot rows have no USD."""
+    from monitoring.dashboard_server import build_m7_current_payload, _m7_usd_coverage
+    now = datetime(2026, 5, 8, 12, 10, 0, tzinfo=timezone.utc)
+    # Bridge has a fresh timestamp and a priced candidate (USDe/USDC from soak)
+    bridge = {
+        "timestamp": "2026-05-08T12:09:00Z",
+        "cold_executable": [
+            {
+                "event_id": "live_swap_1",
+                "actual_pair": "USDe/USDC",
+                "net_bps": 787.4,
+                "route_viable": True,
+                "size_valid_for_token": True,
+                "size_usd_estimate": 1.07957,
+                "amount_in_optimal_usd": 1.07957,
+                "expected_profit_usd": 0.08499,
+                "usd_basis_source": "token_out_stable_fallback",
+                "amount_in_wei": "1000000000000000000",
+            }
+        ],
+    }
+    payload = build_m7_current_payload(
+        rollup={"last_updated": now.isoformat(), "production_readiness": {}},
+        hot={}, orderflow={}, bridge=bridge,
+        profile="production", now_utc=now,
+    )
+    rows = payload["opportunities"]
+    usd_cov = payload["usd_coverage"]
+    assert usd_cov["amount_usd_available"] >= 1, (
+        f"Expected amount_usd_available >= 1, got {usd_cov}"
+    )
+    assert usd_cov["profit_usd_available"] >= 1, (
+        f"Expected profit_usd_available >= 1, got {usd_cov}"
+    )
+    # Row must carry usd_basis_source
+    priced = [r for r in rows if (r.get("amount_in_optimal_usd") or 0) > 0]
+    assert len(priced) >= 1, f"No priced rows, got {rows}"
+    assert priced[0].get("usd_basis_source") == "token_out_stable_fallback"
+
+
+def test_candidate_size_usd_zero_returns_none():
+    """Fix step 2: size_usd_estimate=0.0 must yield None from _candidate_size_usd,
+    so dashboard does not claim USD coverage for unpriced fast-path rows."""
+    from monitoring.dashboard_server import _candidate_size_usd
+    assert _candidate_size_usd({"size_usd_estimate": 0.0, "amount_in_wei": "1000"}, None) is None
+    assert _candidate_size_usd({"amount_in_optimal_usd": 0.0}, None) is None
+    assert _candidate_size_usd({"size_usd_estimate": 1.5}, None) == 1.5
+    assert _candidate_size_usd({}, None) is None
+
+
+def test_bridge_freshness_uses_mtime_fallback():
+    """Fix step 1: _artifact_timestamp uses mtime when it is newer."""
+    from monitoring.dashboard_server import _artifact_timestamp
+    assert _artifact_timestamp({"_file_mtime_utc": "2026-05-08T12:05:00Z"}) == "2026-05-08T12:05:00Z"
+    # Cold bridge files may be rewritten with an unchanged internal timestamp.
+    assert _artifact_timestamp({"timestamp": "2026-05-08T12:03:00Z",
+                                 "_file_mtime_utc": "2026-05-08T12:05:00Z"}) == "2026-05-08T12:05:00Z"
+    assert _artifact_timestamp({"last_updated": "2026-05-08T12:08:00Z",
+                                 "_file_mtime_utc": "2026-05-08T12:05:00Z"}) == "2026-05-08T12:08:00Z"

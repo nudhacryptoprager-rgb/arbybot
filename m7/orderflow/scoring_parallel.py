@@ -153,6 +153,16 @@ def reset_e163_session_counters() -> None:
 
 _USD_STABLE_SYMBOLS = {"USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "DAI", "PYUSD", "FRAX"}
 _ETH_USD_SYMBOLS = {"WETH", "ETH"}
+# E1.65 fix step 4/7: stable-coin-specific decimal overrides.
+# get_cached_decimals() returns None on cache miss → falls back to 18 by default,
+# causing a 10^12 underestimate for 6-decimal stables (USDC/USDT etc.) and
+# rounding size_usd to 0.0.  This map provides the correct decimal count
+# for known stablecoins so _quote_implied_size_usd() is correct even on cache miss.
+_STABLE_DEC_OVERRIDE: dict = {
+    "USDC": 6, "USDT": 6, "USDC.E": 6, "USDT.E": 6,
+    "USDBC": 6, "PYUSD": 6,
+    "DAI": 18, "FRAX": 18,
+}
 
 
 def _usd_basis_source(
@@ -213,7 +223,11 @@ def _quote_implied_size_usd(
 
     # Secondary path: token_out is known (covers meme/unknown token_in)
     if out_sym in _USD_STABLE_SYMBOLS:
-        return round(amount_out_wei / (10 ** dec_out), 6)
+        # E1.65 fix step 4/7: use symbol-aware decimal override to guard against
+        # cache miss (decimals_out=None → dec_out=18 → 10^12 underestimate → 0.0).
+        # Check original decimals_out param, not derived dec_out (always 18 on miss).
+        _dec_out_stable = decimals_out if decimals_out is not None else _STABLE_DEC_OVERRIDE.get(out_sym, 6)
+        return round(amount_out_wei / (10 ** _dec_out_stable), 6)
     if out_sym in _ETH_USD_SYMBOLS and eth_price_usd and eth_price_usd > 0:
         return round(amount_out_wei / (10 ** dec_out) * float(eth_price_usd), 6)
 

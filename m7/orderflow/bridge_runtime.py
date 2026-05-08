@@ -84,6 +84,15 @@ def _write_cold_hot_bridge(
             "cold_executable": candidates,
             # E1.65 Step 5: entries excluded from cold_executable due to USD basis gate
             "cold_usd_basis_missing": artifact.get("top_cold_usd_basis_missing", []),
+            # E1.65 fix step 5: diagnostic list — entries that PASSED the USD gate but
+            # still have size_usd_estimate=0 AND best_buy_amount_wei=None/0.
+            # These are fast-path (registry_direct) entries that lack any enrichable basis.
+            # Shown separately so dashboards don't mix priced and unpriced candidates.
+            "cold_executable_without_usd_basis": [
+                c for c in candidates
+                if not ((c.get("size_usd_estimate") or 0) > 0
+                        or (c.get("best_buy_amount_wei") or 0) > 0)
+            ],
             "cold_stale_positive": stale_pos,
             "cold_recoverable_stale": recoverable_stale,
             "cold_recoverable_stale_route_viable": recoverable_stale_viable,
@@ -95,6 +104,16 @@ def _write_cold_hot_bridge(
             "recent_active_pools_top": _rap_top,
             "candidate_source_breakdown": {
                 "cold_exec": len(candidates),
+                "cold_exec_with_usd_basis": sum(
+                    1 for c in candidates
+                    if (c.get("size_usd_estimate") or 0) > 0
+                    or (c.get("best_buy_amount_wei") or 0) > 0
+                ),
+                "cold_exec_without_usd_basis": sum(
+                    1 for c in candidates
+                    if not ((c.get("size_usd_estimate") or 0) > 0
+                            or (c.get("best_buy_amount_wei") or 0) > 0)
+                ),
                 "near_exec": len(near_exec),
                 "stale_positive": len(stale_pos),
                 "recent_active": len(_rap_top),

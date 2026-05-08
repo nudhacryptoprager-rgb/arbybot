@@ -128,15 +128,46 @@ Repo safety:                                           PASS (0 warnings)
 - ws_429_count: 15 | fallback_used: 0 | cooldown_active: true
 - usd_basis_missing_total (PROD delta): 23 | min_profit_rejected_total (PROD delta): 168
 
+### GPT post-soak review issues identified (current session)
+- **Issue #1 (root cause)**: `_quote_implied_size_usd` secondary path used `dec_out = decimals_out if not None else 18`. For USDC on cache miss, `get_cached_decimals` → None → dec_out=18 → `round(1000/1e18, 6) = 0.0`. This caused ALL FUN/USDC and similar pairs to show `size_usd_estimate=0.0` in the bridge.
+- **Fix applied**: `_STABLE_DEC_OVERRIDE` dict in `scoring_parallel.py` + stable-coin-aware `_dec_out_stable` in `_quote_implied_size_usd` secondary path (2 new unit tests)
+- **Issue #2 (SOAK 2 CONFIRMED)**: Soak 2 (2026-05-08T12:04–12:34, 5/5 alive) confirmed `size_usd_estimate > 0` in live bridge: USDe/USDC $1.07957, FUN/USDC $0.099806. `cold_executable_without_usd_basis=0` confirmed.
+- **Issue #3 (dashboard fix — current session)**: Dashboard `/api/m7/current` was NOT showing priced bridge rows because: (a) bridge internal timestamp may be > 120s old at API call time → `is_fresh=False` → `bridge={}`; (b) `_candidate_size_usd` returned `0.0` (not None) for `size_usd=0.0` rows.
+- **Dashboard fixes applied (2026-05-08 current session)**:
+  1. Bridge freshness threshold doubled to 240s (cold lane writes ~30s cycles)
+  2. `_load(inject_mtime=True)` injects `_file_mtime_utc` into bridge dict → `_artifact_timestamp()` uses mtime as fallback when internal timestamp is old
+  3. `_candidate_size_usd` returns None when base_dec <= 0 (previously returned Decimal(0) / float 0.0)
+  4. Priced bridge rows (`bridge_cold_executable_priced`) placed first in opportunity sources
+  5. `usd_basis_source` field propagated to dashboard row dict
+  6. +3 dashboard unit tests (4841 → 4844 PASS)
+
+### Acceptance criteria update post-GPT-review
+| Criterion | Status | Evidence |
+|---|---|---|
+| ws_provider_health in rollup | ✅ CONFIRMED | Block appeared at first hot window (10:17Z) |
+| discovery warmup 600s | ✅ CONFIRMED | Supervisor log "deferred 600s → started after warmup" |
+| cold HTTP polling ARBY_WS_HTTP_BLOCKS=1 | ✅ CONFIRMED | Supervisor log confirmed for cold lane |
+| 5/5 alive, 0 crashes | ✅ CONFIRMED | All 60 min |
+| ws_429 reduced | ✅ CONFIRMED | 15/hr vs ~80+/45min in E1.64 (80%+ reduction) |
+| usd_basis_missing reduced | ✅ CONFIRMED | PROD delta 23 vs 98 in E1.64 (76% reduction) |
+| Bridge usd_basis_missing fix (Step 3) | ✅ CONFIRMED | Bridge PROD delta=15 (enrichment working) |
+| active_ws_lanes=2 | ✅ CONFIRMED | ws_provider_health.active_ws_lanes=2 |
+| cooldown_active on 429 storm | ✅ CONFIRMED | cooldown_active=true at 60min mark |
+| artifacts.py USD gate fix | ✅ CODED+TESTED | 4 tests PASS |
+| size_usd_estimate > 0 for FUN/USDC in live bridge | ✅ SOAK2_CONFIRMED | USDe/USDC $1.07957, FUN/USDC $0.099806 (soak 2 2026-05-08T12:04–12:34) |
+| cold_executable_without_usd_basis = 0 in bridge | ✅ SOAK2_CONFIRMED | bridge diagnostic confirmed = 0 in soak 2 |
+| Dashboard shows priced bridge rows | ❌ PENDING CONTROL SOAK | Code fix applied (4844 tests); 10-min control soak needed |
+
 ## 8) Outstanding work / next iteration
-- Optional: follow-up 30-min soak post-Step-5-fix to confirm slow-path USDC entries now appear in cold_executable with buy_wei populated
+- **REQUIRED (final E1.65 blocker)**: Run 10-min control soak with `--dashboard-port 8099`; verify `/api/m7/current` returns ≥1 row with `amount_in_optimal_usd > 0` from `source=bridge_cold_executable_priced`
+- **REQUIRED**: Confirm `candidate_source_breakdown.cold_exec_with_usd_basis > 0`
 - Consider raising ARBY_WS_LEASE_TTL_S default beyond 600s if reconnect storms persist
 
 ## Session Completion
-session_goal: Implement E1.65 10-step fix set (USD basis data propagation, WS 429 pressure reduction, ws_provider_health observability)
-goal_status: RUNTIME_VALIDATED (1-hour soak PASS; Step-5 soak-fix coded + 4 tests PASS; 4839 unit tests total)
-close_allowed: true
-blocker_status_after: RESOLVED
-remaining_blockers: none
+session_goal: E1.65 dashboard fix: priced bridge rows visible in /api/m7/current; usd_basis_source propagation
+goal_status: IN_PROGRESS
+close_allowed: false
+blocker_status_after: PARTIAL (dashboard fix coded + 4844 tests pass; 10-min control soak pending to confirm /api/m7/current shows bridge priced rows)
+remaining_blockers: 10-min control soak — verify opportunity rows include source=bridge_cold_executable_priced with amount_in_optimal_usd > 0
 docs_reread_confirmed: true (AGENTS.md, Roadmap.md, docs/status/INDEX.md, docs/DEV_REPORT_CANONICAL_UA.md)
 

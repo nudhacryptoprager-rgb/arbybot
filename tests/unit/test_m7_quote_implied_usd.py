@@ -70,3 +70,36 @@ def test_usd_target_rescaled_size_wei_respects_max_scale():
         max_scale=1000.0,
     )
     assert new_size == 1000 * 10**18
+
+
+# E1.65 fix step 4/7: stable-coin decimal override tests
+def test_quote_implied_size_usd_usdc_output_cache_miss_dec_none():
+    """FUN/USDC: buy_amount=1000 USDC-raw (6dec), dec_out=None (cache miss).
+    Old code: round(1000 / 10^18, 6) = 0.0.  Fixed: use STABLE_DEC_OVERRIDE → 6.
+    """
+    usd = _quote_implied_size_usd(
+        amount_in_wei=1_000_000_000_000_000_000,
+        decimals_in=18,
+        symbol_in="FUN",
+        amount_out_wei=1000,
+        decimals_out=None,        # cache miss → must use override
+        symbol_out="USDC",
+        eth_price_usd=None,
+    )
+    # 1000 / 10^6 = 0.001 USDC
+    assert usd == 0.001
+
+
+def test_quote_implied_size_usd_usdc_output_correct_dec():
+    """FUN/USDC: dec_out=6 (from cache) must still work unchanged."""
+    usd = _quote_implied_size_usd(
+        amount_in_wei=1_000_000_000_000_000_000,
+        decimals_in=18,
+        symbol_in="FUN",
+        amount_out_wei=5_000_000,
+        decimals_out=6,
+        symbol_out="USDC",
+        eth_price_usd=None,
+    )
+    # 5_000_000 / 10^6 = 5.0 USDC
+    assert usd == 5.0

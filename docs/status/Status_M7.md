@@ -1,14 +1,14 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.64 step-fix soak: RUNTIME_VALIDATED. 45-min soak (08:33:31Z–09:18:46Z, 6/6 alive, exit 0) confirmed all 10 production-profit fix steps fired in fresh runtime per `current_session_delta`. PROD `e163_split_route_status` promoted ATTEMPTED_NO_WIN_YET → RUNTIME_VALIDATED via gross-PnL-wei comparison (11 wins this session). Cold + hot USD-basis gates blocked 98+98 fresh dust entries; MIN_PROFIT_USD gate blocked 98 fresh near-zero-profit entries. DISC lane: 20 fresh split-route wins (lifetime 25), 194 USD-basis blocks, 198 MIN_PROFIT blocks. `current_session_delta` block (13 keys) wired in rollup + bridge for both lanes. 0 crash_restarts. submit_ready_total preserved (lifetime prod=24, disc=35) — gates filter dust, not real entries.**
+**Status**: **E1.65 UNIT_VALIDATED + SOAK2_RUNTIME_VALIDATED + DASHBOARD_FIX_APPLIED. 10 WS-pressure / USD-basis fix steps (BackrunResult +3 fields, stable-coin decimal override, WS 429 cooldown, HTTP-only cold lane, discovery warmup 600s). Soak 1 (1h, 2026-05-08T10:15–11:15, 5/5 alive, exit 0): ws_429 -80%, usd_basis_missing -76%. Soak 2 (30min, 2026-05-08T12:04–12:34, 5/5, exit 0): USD-size confirmed in bridge — USDe/USDC $1.07957, FUN/USDC $0.099806 (size_usd_estimate > 0 runtime-proven). GPT review 2: dashboard fix applied — (1) bridge freshness 2× threshold (240s), (2) file mtime injected as fallback timestamp, (3) `_candidate_size_usd` returns None for 0.0, (4) priced bridge rows prioritized first in opportunity table, (5) `usd_basis_source` propagated to rows, +3 dashboard unit tests. Remaining: 10-min control soak to confirm dashboard shows priced rows from bridge.**
 
-goal_status: REACHED
-production_profit_status: gates active and firing on real runtime; submit_ready_delta=0 in this 45-min window reflects market opportunity, not pipeline regression
+goal_status: IN_PROGRESS
+production_profit_status: USD basis runtime-proven (soak 2); dashboard fix applied — needs control soak to confirm /api/m7/current shows priced bridge rows
 docs_reread_confirmed: true
-close_allowed: true
-blocker_status_after: RESOLVED (USD basis + MIN_PROFIT_USD enforced at submit_ready boundary; current_session_delta exposes per-session activity)
+close_allowed: false
+blocker_status_after: PARTIAL (dashboard fix coded + 4844 tests pass; control soak pending)
 
-`python -m pytest tests/unit -q`: **4835 PASS / 6 skipped / 0 failures** (was 4826 + 9 new test_e1_64_step_fixes.py). `check_repo_safety.py --allow-intent-edit`: PASS (0 warnings). docs_reread_confirmed: true. soak: 2026-05-08T08:33:31Z–09:18:46Z (45 min, 6/6 alive, exit 0). restarts used: 0/4.
+`python -m pytest tests/unit -q`: **4844 PASS / 6 skipped / 0 failures** (was 4841 + 3 new dashboard tests). `check_repo_safety.py --allow-intent-edit`: PASS (0 warnings).
 
 ```
 === E1.64 STEP-FIX SOAK (current_session_delta evidence) ===
