@@ -196,6 +196,24 @@ def run_ws_live(
         args.ws_timeout,
     )
 
+    # E1.69 reviewer fix step 8: WS 429 cooldown.  When the previous WS
+    # window hit a 429, honour ARBY_WS_COOLDOWN_AFTER_429_S before
+    # attempting a new subscribe so we don't pile-on rate limits.
+    try:
+        _cool = float(os.environ.get("ARBY_WS_COOLDOWN_AFTER_429_S", "0") or 0)
+    except (TypeError, ValueError):
+        _cool = 0.0
+    if _cool > 0:
+        _last_429 = getattr(run_ws_live, "_last_429_ts", 0.0)
+        _delta = time.time() - _last_429
+        if _last_429 and _delta < _cool:
+            _wait = _cool - _delta
+            logger.info(
+                "WS cooldown active: sleeping %.1fs after recent 429 (cool=%.1fs)",
+                _wait, _cool,
+            )
+            time.sleep(_wait)
+
     chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
 
     # Resolve HTTP RPC for quoting
@@ -1277,6 +1295,10 @@ def run_ws_live(
             _ws_connection_status = "failed_429"
             _ws_error_detail = "Alchemy WS rate limit (429 Too Many Requests)"
             _exit_reason = "ws_429"
+            try:
+                run_ws_live._last_429_ts = time.time()  # type: ignore[attr-defined]
+            except Exception:
+                pass
             logger.error(
                 "WebSocket 429 rate limit: %s (scored %d events from %d blocks). "
                 "This makes events_count=0 UNRELIABLE — it's a connection failure, not market state.",

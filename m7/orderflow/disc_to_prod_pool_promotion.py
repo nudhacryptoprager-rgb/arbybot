@@ -178,6 +178,52 @@ def reset() -> None:
         _PROMOTIONS.clear()
 
 
+def seed_from_env(now: Optional[float] = None) -> int:
+    """Pre-populate promotion registry from ARBY_POOL_PROMOTION_SEED_JSON.
+
+    E1.70 fix 6: operators can supply a JSON array of known profitable
+    DISC pools (e.g. VIRTUAL/WETH discovered in the 30-min soak) so PROD
+    lane immediately includes them as prewarm targets without waiting for
+    the DISC → PROD feedback loop to re-observe them.
+
+    JSON format: list of {"pool": "0x...", "pair": "VIRTUAL/WETH",
+                          "profit_bps": 703, "chain": "base"} dicts.
+    Returns the number of entries seeded.
+    """
+    seed_json = os.environ.get("ARBY_POOL_PROMOTION_SEED_JSON", "").strip()
+    if not seed_json or not is_enabled():
+        return 0
+    try:
+        import json
+        entries = json.loads(seed_json)
+        if not isinstance(entries, list):
+            return 0
+    except Exception:
+        return 0
+    count = 0
+    if now is None:
+        now = time.monotonic()
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("pool"):
+            continue
+        try:
+            observe_profitable(
+                pool=entry["pool"],
+                pair=entry.get("pair"),
+                router=entry.get("router"),
+                token_in=entry.get("token_in"),
+                token_out=entry.get("token_out"),
+                chain=entry.get("chain"),
+                profit_bps=float(entry.get("profit_bps") or 0) or None,
+                session_id="env_seed",
+                now=now,
+            )
+            count += 1
+        except Exception:
+            continue
+    return count
+
+
 reset_for_tests = reset
 
 

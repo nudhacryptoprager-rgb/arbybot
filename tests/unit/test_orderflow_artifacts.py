@@ -2068,6 +2068,8 @@ class TestM7A532RollingCanonicalSet:
             "live_pnl_latest.json",
             # M7.E1.65 Step 6: WS cross-process cooldown file (written on 429, read by next session)
             "ws_cooldown.json",
+            # E1.69 Wave D: TVL scout rolling artifact (production pool ranking)
+            "m7_tvl_scout_latest.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):

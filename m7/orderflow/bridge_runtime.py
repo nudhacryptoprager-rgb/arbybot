@@ -43,6 +43,20 @@ def _write_cold_hot_bridge(
 
     try:
         candidates = artifact.get("top_executable_candidates", [])
+        # E1.69 fix step 5: dedup by pool_address so the same pool appearing
+        # with different actual_pair strings (e.g. "FUN/USDC" vs
+        # "0x16ee7eca/USDC" — symbol-vs-address representation drift)
+        # does not occupy multiple cold_executable slots.
+        _seen_pool_addrs: set = set()
+        _deduped_cands = []
+        for _c in candidates:
+            _pa = (_c.get("pool_address") or "").lower()
+            if _pa and _pa in _seen_pool_addrs:
+                continue
+            if _pa:
+                _seen_pool_addrs.add(_pa)
+            _deduped_cands.append(_c)
+        candidates = _deduped_cands
         stale_pos = artifact.get("top_stale_positive_candidates", [])
         recoverable_stale = artifact.get("top_recoverable_stale_candidates", [])
         recoverable_stale_viable = artifact.get("top_recoverable_stale_route_viable", [])
@@ -134,6 +148,13 @@ def _write_cold_hot_bridge(
                 "recent_active": len(_rap_top),
                 "hot_seen_backfill": 0,
                 "ptt_total": len(_ptt),
+                # E1.69 fix step 6: count unpriced candidates so reviewers
+                # can see if top-bps slots are blocked by missing USD basis.
+                "unpriced_exec": sum(
+                    1 for c in candidates
+                    if (c.get("size_usd_estimate") or 0) == 0
+                    and not (c.get("best_buy_amount_wei") or 0)
+                ),
             },
             "hot_seen_vs_bridge_overlap_top": [],
             "bridge_selected_pools_top": [],
@@ -232,6 +253,13 @@ def _write_cold_hot_bridge(
                         payload["near_executable"] = _prev_near
                         payload["bridge_generation_status"] = "ready_preserved"
                         _has_cold_exec = True
+                        # E1.70 fix 4: keep candidate_source_breakdown in sync with
+                        # preserved cold_executable so cold_exec count is not 0 when
+                        # the list has entries from the previous write.
+                        _csb = payload.get("candidate_source_breakdown") or {}
+                        if _csb.get("cold_exec", 0) == 0:
+                            _csb["cold_exec"] = len(_prev_cold)
+                            _csb["cold_exec_preserved"] = True
                 if _has_cold_exec:
                     for _hpk in _HOT_PRESERVE_IF_COLD_EXEC:
                         _existing_val = _existing.get(_hpk)
@@ -243,6 +271,34 @@ def _write_cold_hot_bridge(
         except Exception:
             pass
         _bsp = payload.get("bridge_selected_pools_top", [])
+        # E1.69 reviewer fix step 2: feed TVL scout artifact into
+        # bridge_selected_pools_top so production-size pools become a
+        # routing input instead of just a status flag. When the bridge
+        # has no own selection (cold scorer not yet wired), the scout
+        # output IS the production candidate set.
+        try:
+            _scout_path = os.path.join(
+                os.path.dirname(_COLD_HOT_BRIDGE_PATH), "m7_tvl_scout_latest.json"
+            )
+            if os.path.exists(_scout_path) and not _bsp:
+                with open(_scout_path, "r", encoding="utf-8") as _sf:
+                    _scout = json.load(_sf)
+                _scout_pools = _scout.get("pools", []) or []
+                # Top 20 production-grade pools as bridge selection seeds.
+                _bsp = [
+                    {
+                        "pool_address": _p.get("pool_address"),
+                        "project": _p.get("project"),
+                        "symbol": _p.get("symbol"),
+                        "tvl_usd": _p.get("tvl_usd"),
+                        "source": "tvl_scout",
+                    }
+                    for _p in _scout_pools[:20]
+                    if _p.get("pool_address")
+                ]
+                payload["bridge_selected_pools_top"] = _bsp
+        except Exception:
+            pass
         payload["candidate_source_breakdown"]["bridge_selected_pools_count"] = len(_bsp)
         # E1.69 Wave D: surface Flashblocks HTTP lane state + TVL scout state
         # so reviewers can audit "is the production-size scout actually
@@ -267,6 +323,97 @@ def _write_cold_hot_bridge(
             )
         except Exception:
             payload["candidate_source_breakdown"]["tvl_scout_enabled"] = False
+        # E1.69 reviewer fix step 5: route_graph dump.
+        # When ARBY_ROUTE_GRAPH_ENABLE=1, build PoolEdges from the TVL scout
+        # output and enumerate top USDC<->X production paths so reviewers
+        # can audit which multi-hop routes the system *would* score if the
+        # cold scorer were wired to call the route graph.
+        try:
+            payload["candidate_source_breakdown"]["route_graph_enabled"] = (
+                os.environ.get("ARBY_ROUTE_GRAPH_ENABLE", "0") == "1"
+            )
+            if payload["candidate_source_breakdown"]["route_graph_enabled"]:
+                _scout_path = os.path.join(
+                    os.path.dirname(_COLD_HOT_BRIDGE_PATH),
+                    "m7_tvl_scout_latest.json",
+                )
+                if os.path.exists(_scout_path):
+                    from m7.routing.route_graph import (
+                        PoolEdge as _PE,
+                        enumerate_paths as _ep,
+                        rank_paths as _rp,
+                    )
+                    with open(_scout_path, "r", encoding="utf-8") as _sf:
+                        _scout = json.load(_sf)
+                    _edges: list = []
+                    for _p in (_scout.get("pools", []) or [])[:100]:
+                        _sym = _p.get("symbol") or ""
+                        if "-" not in _sym:
+                            continue
+                        _t0, _t1 = _sym.split("-", 1)
+                        _addr = _p.get("pool_address") or ""
+                        _tvl = _p.get("tvl_usd") or 0.0
+                        _proj = _p.get("project") or "unknown"
+                        if not _addr or not _t0 or not _t1:
+                            continue
+                        _edges.append(
+                            _PE(
+                                address=_addr,
+                                token0=_t0.upper(),
+                                token1=_t1.upper(),
+                                dex=_proj,
+                                fee_bps=None,
+                                tvl_usd=float(_tvl),
+                            )
+                        )
+                    _all_paths: list = []
+                    for _dst in ("WETH", "AERO", "CBBTC", "VIRTUAL"):
+                        try:
+                            _ps = _ep(_edges, "USDC", _dst, max_hops=3)
+                            _all_paths.extend(_ps)
+                        except Exception:
+                            continue
+                    _ranked = _rp(_all_paths)[:10]
+                    payload["route_graph_top"] = [
+                        {
+                            "tokens": list(_rt.tokens),
+                            "hops": _rt.hops,
+                            "bottleneck_tvl_usd": _rt.bottleneck_tvl_usd,
+                            "pool_addresses": [_pp.address for _pp in _rt.pools],
+                        }
+                        for _rt in _ranked
+                    ]
+                    payload["candidate_source_breakdown"]["route_graph_paths_top"] = len(_ranked)
+        except Exception as _rge:
+            payload["candidate_source_breakdown"]["route_graph_error"] = str(_rge)[:80]
+        # E1.69 fix step 6: surface STF-quarantine-eligible pairs.
+        # A pair is "quarantine-eligible" when its all-time sim revert count
+        # exceeds the STF_QUARANTINE_THRESHOLD (default 100). Shown in the
+        # bridge so reviewers can see which pairs pollute the cold funnel.
+        try:
+            from m7.orderflow.runtime_io import _HOT_ROLLUP_PATH as _RLP
+            _stf_eligible: list[str] = []
+            if os.path.exists(_RLP):
+                with open(_RLP, "r", encoding="utf-8") as _rh:
+                    _rl = json.load(_rh)
+                _STF_THRESHOLD = int(os.environ.get("ARBY_STF_QUARANTINE_THRESHOLD", "100"))
+                _stf_samples = _rl.get("cold_immediate_sim_revert_samples_recent", []) or []
+                _stf_counts: dict[str, int] = {}
+                for _s in _stf_samples:
+                    _spair = _s.get("pair") or ""
+                    if _spair and "STF" in (_s.get("reason") or ""):
+                        _stf_counts[_spair] = _stf_counts.get(_spair, 0) + 1
+                # Use all-time sim_revert as proxy for absolute count per pair
+                _total_revert = int(_rl.get("cold_immediate_sim_revert_total") or 0)
+                if _total_revert >= _STF_THRESHOLD and _stf_counts:
+                    _stf_eligible = sorted(_stf_counts, key=lambda k: -_stf_counts[k])
+            payload["candidate_source_breakdown"]["stf_quarantine_eligible"] = _stf_eligible
+            payload["candidate_source_breakdown"]["stf_quarantine_threshold"] = int(
+                os.environ.get("ARBY_STF_QUARANTINE_THRESHOLD", "100")
+            )
+        except Exception:
+            payload["candidate_source_breakdown"]["stf_quarantine_eligible"] = []
+
         # E1.63 step 5: embed E1.63 split/depth metrics from rolling rollup artifact.
         try:
             from m7.orderflow.runtime_io import _HOT_ROLLUP_PATH

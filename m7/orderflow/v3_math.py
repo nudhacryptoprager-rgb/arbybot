@@ -17,6 +17,7 @@ V2 constant-product math is also provided for pools with getReserves data.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 logger = logging.getLogger("m7.orderflow.v3_math")
@@ -532,7 +533,19 @@ def attempt_split_pricing(
     # Step 1: gather per-pool outputs for each candidate split size.
     # We need outputs at various fractions of backrun_size_wei.
     # Pre-compute outputs at 25%, 50%, 75% for each pool.
-    _RATIOS = (25, 50, 75)  # percent allocated to pool A; pool B gets (100 - ratio)%
+    # E1.69 reviewer fix step 4: ARBY_SPLIT_RATIOS allows 4-way split research
+    # (e.g. "20,40,60,80"). Default keeps E1.63 behaviour.
+    try:
+        _ratios_env = os.environ.get("ARBY_SPLIT_RATIOS", "")
+        if _ratios_env:
+            _parsed = tuple(
+                int(x) for x in _ratios_env.split(",") if x.strip().isdigit()
+            )
+            _RATIOS = _parsed if len(_parsed) >= 2 else (25, 50, 75)
+        else:
+            _RATIOS = (25, 50, 75)
+    except Exception:
+        _RATIOS = (25, 50, 75)
     pool_data: list = []  # (address, fee, adapter, dex, {size_wei: amount_out})
     for cp in candidate_pools:
         addr = cp.get("address")

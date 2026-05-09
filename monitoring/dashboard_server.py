@@ -902,6 +902,27 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
         1 for r in rows
         if (r.get("amount_in_optimal_usd") or 0) >= MIN_EXECUTABLE_SIZE_USD
     )
+    # E1.70 fix 9: "near production" — $25...$50 zone. Positive-profit routes in
+    # this band indicate we are close to the production gate threshold and the
+    # next sizing / depth fix may unlock them.
+    near_production_min = MIN_PRODUCTION_SIZE_USD / 2.0
+    near_production_candidate_total = sum(
+        1 for r in rows
+        if near_production_min <= (r.get("amount_in_optimal_usd") or 0) < MIN_PRODUCTION_SIZE_USD
+    )
+    near_production_profitable_total = sum(
+        1 for r in rows
+        if near_production_min <= (r.get("amount_in_optimal_usd") or 0) < MIN_PRODUCTION_SIZE_USD
+        and (r.get("expected_profit_usd") or 0) > 0
+    )
+    near_production_best_amount = max(
+        (r.get("amount_in_optimal_usd") or 0)
+        for r in rows
+        if near_production_min <= (r.get("amount_in_optimal_usd") or 0) < MIN_PRODUCTION_SIZE_USD
+    ) if any(
+        near_production_min <= (r.get("amount_in_optimal_usd") or 0) < MIN_PRODUCTION_SIZE_USD
+        for r in rows
+    ) else 0.0
     # pipeline_ready: True when we have candidates at all (scanning is working)
     pipeline_ready = total > 0
     # production_profit_ready: True when any pair has confirmed $50+ profitable depth
@@ -929,6 +950,20 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
         "pipeline_ready": pipeline_ready,
         "production_profit_ready": production_profit_ready,
         "conversion_contract": "dynamic_artifact_usd_only_no_price_hardcode",
+        # E1.69 reviewer fix step 1: PRIMARY KPI - production-size depth, not max bps.
+        # production_gate_pass is the single Boolean reviewers should check first.
+        "primary_kpi": "production_sized_candidate_total",
+        "production_gate_pass": (production_sized_candidate_total or 0) > 0,
+        # E1.70 fix 9: "near production" block ($25-$50, positive profit).
+        # Routes here confirm depth/routing is almost viable; next sizing fix
+        # or lower gas context should unlock production gate.
+        "near_production": {
+            "min_usd": near_production_min,
+            "max_usd": MIN_PRODUCTION_SIZE_USD,
+            "candidate_total": near_production_candidate_total,
+            "profitable_total": near_production_profitable_total,
+            "best_amount_usd": near_production_best_amount,
+        },
     }
 
 
@@ -1013,14 +1048,21 @@ def build_m7_current_payload(
     # ---- WS health (Step 5 reviewer) -------------------------------------
     _total_windows = _safe_int(rollup.get("windows_seen"))
     _failed_429 = _safe_int(rollup.get("session_ws_failed_429_windows"))
+    _connected_windows = _safe_int(rollup.get("session_ws_connected_windows"))
     ws_health = {
-        "connected_windows": _safe_int(rollup.get("session_ws_connected_windows")),
+        "connected_windows": _connected_windows,
         "failed_429_windows": _failed_429,
         "failed_windows": _safe_int(rollup.get("session_ws_failed_windows")),
         "fallback_windows": _safe_int(rollup.get("session_ws_fallback_windows")),
         "total_windows": _total_windows,
         "last_status": rollup.get("last_ws_connection_status"),
         "last_provider": rollup.get("last_ws_provider"),
+        # coverage_pct: fraction of windows where WS connected (not 429/fail).
+        # Distinct from pct_429 (fraction that hit 429 specifically).
+        "coverage_pct": (
+            round(100.0 * (_connected_windows or 0) / _total_windows, 1)
+            if _total_windows > 0 else None
+        ),
         "pct_429": (
             round(100.0 * _failed_429 / _total_windows, 1)
             if _total_windows > 0 else None

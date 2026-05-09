@@ -78,9 +78,18 @@ def _build_payload(
     topics: Optional[Sequence[Optional[str]]] = None,
 ) -> dict:
     """Construct the eth_getLogs JSON-RPC payload."""
+    # E1.70 fix 8: ARBY_FLASHBLOCKS_USE_LATEST=1 falls back to "latest"
+    # when the RPC does not support the "pending" block tag (most Alchemy /
+    # dRPC endpoints).  This allows flashblocks_http_calls_ok > 0 at the
+    # cost of slightly stale logs (still useful for pool-state updates).
+    _block_tag = (
+        "latest"
+        if os.environ.get("ARBY_FLASHBLOCKS_USE_LATEST", "0") == "1"
+        else PENDING_BLOCK_TAG
+    )
     params = {
-        "fromBlock": PENDING_BLOCK_TAG,
-        "toBlock": PENDING_BLOCK_TAG,
+        "fromBlock": _block_tag,
+        "toBlock": _block_tag,
         "address": list(addresses) if len(addresses) > 1 else addresses[0],
     }
     if topics:

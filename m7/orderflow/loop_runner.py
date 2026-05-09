@@ -2026,7 +2026,6 @@ def run_loop(cli_args) -> None:
                         is_enabled as _pshf_en, poll_and_feed as _pshf_poll,
                     )
                     if _pshf_en():
-                        import aiohttp, asyncio
                         _pshf_ptt = (_bridge or {}).get("pool_token_transport", {})
                         _pshf_addrs = list({k.lower() for k in _pshf_ptt})[: 50]
                         if _pshf_addrs:
@@ -2035,16 +2034,31 @@ def run_loop(cli_args) -> None:
                                 os.environ.get("ARBY_RPC_URL", ""),
                             )
                             if _rpc_url:
-                                async def _do_poll():
-                                    async with aiohttp.ClientSession() as _sess_http:
-                                        return await _pshf_poll(
-                                            rpc_url=_rpc_url,
-                                            chain=cli_args.chain,
-                                            addresses=_pshf_addrs,
-                                            http_post=_sess_http.post,
+                                # E1.69 reviewer fix step 9: sync HTTP post via
+                                # urllib so flashblocks_http (sync) actually
+                                # gets a callable response dict (was awaiting
+                                # an aiohttp coroutine and silently failing).
+                                import urllib.request as _ureq
+                                def _sync_post(url: str, body: dict, t: float) -> dict:
+                                    try:
+                                        _data = json.dumps(body).encode("utf-8")
+                                        _req = _ureq.Request(
+                                            url,
+                                            data=_data,
+                                            headers={"content-type": "application/json"},
+                                            method="POST",
                                         )
+                                        with _ureq.urlopen(_req, timeout=t) as _r:
+                                            return json.loads(_r.read().decode("utf-8"))
+                                    except Exception:
+                                        return {}
                                 try:
-                                    _pshf_r = asyncio.get_event_loop().run_until_complete(_do_poll())
+                                    _pshf_r = _pshf_poll(
+                                        rpc_url=_rpc_url,
+                                        chain=cli_args.chain,
+                                        addresses=_pshf_addrs,
+                                        http_post=_sync_post,
+                                    )
                                     logger.debug(
                                         "pool_state_http_feed: v3=%s v2=%s skipped=%s fetched=%s",
                                         _pshf_r.get("v3_updates"),
@@ -2150,9 +2164,20 @@ def run_loop(cli_args) -> None:
                     )
 
         if infinite or iteration < iterations:
-            logger.info("Pausing %ds before next window...", pause)
+            # E1.69 reviewer fix step 3: cold lane out of critical path.
+            # When ARBY_COLD_BACKGROUND_MODE=1, multiply the cold-lane pause
+            # so the full universe scan runs less frequently and frees
+            # capacity for hot/event-driven scoring. Default mult=3.0.
+            _eff_pause = pause
+            if lane == "cold" and os.environ.get("ARBY_COLD_BACKGROUND_MODE", "0") == "1":
+                try:
+                    _mult = float(os.environ.get("ARBY_COLD_BACKGROUND_MULT", "3.0"))
+                    _eff_pause = max(pause, int(pause * _mult))
+                except Exception:
+                    _eff_pause = pause * 3
+            logger.info("Pausing %ds before next window...", _eff_pause)
             try:
-                time.sleep(pause)
+                time.sleep(_eff_pause)
             except KeyboardInterrupt:
                 logger.info("M7 loop interrupted during pause")
                 break

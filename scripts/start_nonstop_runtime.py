@@ -24,6 +24,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -414,6 +415,43 @@ def main():
     # Start production processes immediately
     for p in processes:
         p.start()
+
+    # TVL scout background thread — opt-in via ARBY_TVL_SCOUT_ENABLE=1.
+    # Fetches DefiLlama Base pool TVL once per hour and writes
+    # data/runs/_rolling/m7_tvl_scout_latest.json so the cold lane scorer
+    # and reviewers can audit production-size pool coverage.
+    def _tvl_scout_loop() -> None:
+        import json as _json
+        _rolling = Path("data/runs/_rolling")
+        _rolling.mkdir(parents=True, exist_ok=True)
+        _out = _rolling / "m7_tvl_scout_latest.json"
+        while True:
+            try:
+                from m7.scouts.tvl_scout import fetch_defillama_pools, select_production_pools
+                _pools = fetch_defillama_pools()
+                _prod = select_production_pools(_pools)
+                _payload = {
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "pool_count": len(_prod),
+                    "pools": [_p.to_dict() for _p in _prod],
+                }
+                _tmp = _out.with_suffix(".tmp")
+                _tmp.write_text(_json.dumps(_payload, indent=2), encoding="utf-8")
+                _tmp.replace(_out)
+                print(
+                    f"  [tvl_scout] wrote {len(_prod)} production pools "
+                    f"to {_out.name}"
+                )
+            except Exception as _tvl_e:
+                print(f"  [tvl_scout] error: {str(_tvl_e)[:80]}")
+            time.sleep(3600)
+
+    if os.environ.get("ARBY_TVL_SCOUT_ENABLE", "0") == "1":
+        _tvl_thread = threading.Thread(
+            target=_tvl_scout_loop, daemon=True, name="tvl_scout"
+        )
+        _tvl_thread.start()
+        print("  [tvl_scout] background thread started (ARBY_TVL_SCOUT_ENABLE=1, interval=3600s)")
 
     # E1.65 Step 9: Discovery processes are deferred by warmup delay.
     # When warmup_delay=0, start immediately and merge into processes list.

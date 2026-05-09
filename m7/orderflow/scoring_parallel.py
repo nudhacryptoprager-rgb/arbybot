@@ -231,6 +231,25 @@ def _quote_implied_size_usd(
     if out_sym in _ETH_USD_SYMBOLS and eth_price_usd and eth_price_usd > 0:
         return round(amount_out_wei / (10 ** dec_out) * float(eth_price_usd), 6)
 
+    # E1.69 reviewer fix step 7: USD-basis fallback for production tokens
+    # without a stable/WETH leg (AERO, VIRTUAL, CBBTC, ...).  Opt-in via
+    # ARBY_USD_BASIS_FALLBACK_ENABLE=1 so default behaviour is unchanged.
+    if os.getenv("ARBY_USD_BASIS_FALLBACK_ENABLE", "0") == "1":
+        try:
+            from m7.orderflow.usd_basis_fallback import fallback_usd_for_amount
+            _fb = fallback_usd_for_amount(
+                symbol=in_sym, amount_wei=int(amount_in_wei), decimals=decimals_in
+            )
+            if _fb is not None and _fb > 0:
+                return _fb
+            _fb_out = fallback_usd_for_amount(
+                symbol=out_sym, amount_wei=int(amount_out_wei), decimals=decimals_out
+            )
+            if _fb_out is not None and _fb_out > 0:
+                return _fb_out
+        except Exception:
+            pass
+
     return None
 
 
