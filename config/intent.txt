@@ -95,6 +95,30 @@ base:cbETH/USDC
 base:cbETH/WETH
 base:wstETH/WETH
 
+# ------------------------------------------------------------
+# E1.69 Wave B: multi-hop production-size routes (Base)
+# ------------------------------------------------------------
+# Format: chain:TOKEN_IN/HOP_TOKEN/TOKEN_OUT (2-hop) or 3-hop chain.
+# Production routes use WETH or AERO as bridge to amplify $50+ depth
+# on tokens whose direct USDC pool is thin. Direction-sensitive.
+#
+# Bluechip LST -> WETH -> USDC (deep canonical path):
+base:cbETH/WETH/USDC
+base:wstETH/WETH/USDC
+
+# Memes via WETH (avoids dust direct USDC pools):
+base:BRETT/WETH/USDC
+base:DEGEN/WETH/USDC
+base:TOSHI/WETH/USDC
+base:VIRTUAL/WETH/USDC
+
+# AERO as alternate bridge (Aerodrome native depth):
+base:BRETT/AERO/USDC
+base:DEGEN/AERO/USDC
+
+# cbBTC blue-chip via WETH (deepest BTC route on Base):
+base:cbBTC/WETH/USDC
+
 # ============================================================
 # LINEA (5 pairs, 2 productive tokens)
 # ============================================================

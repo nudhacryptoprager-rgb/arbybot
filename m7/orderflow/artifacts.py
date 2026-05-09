@@ -1031,6 +1031,11 @@ def build_replay_summary(
                 else "dust_only" if (getattr(r, "size_usd_estimate", None) or 0) > 0
                 else "unpriced"
             ),
+            # E1.69 Step 1: persist per-size frontier sweep (depth_curve) so
+            # consumers can plot expected_profit(size) and detect cliff
+            # behaviour without re-running the scoring.  Empty list when the
+            # fast path produced the result (single-size only).
+            "depth_curve": list(getattr(r, "depth_curve", []) or []),
         }
 
     _TOP_N = 5
@@ -1041,11 +1046,42 @@ def build_replay_summary(
     _require_exec_usd_basis = os.getenv("ARBY_COLD_REQUIRE_USD_BASIS", "0") == "1"
     # M7.E1.6: Strict executable = route_viable AND size_valid_for_token.
     # Loose route_viable set preserved as top_route_viable_candidates for diagnostics.
-    _exec_candidates_all = sorted(
-        [r for r in results if r.route_viable and r.size_valid_for_token],
-        key=lambda r: r.best_backrun_net_bps or 0,
-        reverse=True,
-    )
+    # E1.69 Step 6: production-first ranking — sort primarily by
+    # expected_profit_usd (absolute USD edge) and use net_bps only as a
+    # tiebreaker.  This surfaces large/low-bps production-size routes ahead
+    # of dust/high-bps long-tail rows.
+    def _rank_key(r):
+        return (
+            float(getattr(r, "expected_profit_usd", None) or 0.0),
+            float(r.best_backrun_net_bps or 0.0),
+        )
+    _exec_pool_all = [r for r in results if r.route_viable and r.size_valid_for_token]
+    # E1.69 Step 7: dedup candidates by (actual_pair, pool_address, route)
+    # keeping the row with the highest expected_profit_usd.  Without this,
+    # the same FUN/USDC pool/route can occupy all 5 cold_executable slots
+    # and starve other production-size candidates.
+    def _dedup_key(r):
+        return (
+            getattr(r, "actual_pair", None) or "",
+            (getattr(r, "pool_address", None) or "").lower(),
+            getattr(r, "best_buy_venue", None) or "",
+            getattr(r, "best_sell_venue", None) or "",
+            getattr(r, "best_buy_fee", None),
+            getattr(r, "best_sell_fee", None),
+        )
+    _seen: dict = {}
+    _exec_candidates_all = []
+    for _r in sorted(_exec_pool_all, key=_rank_key, reverse=True):
+        _k = _dedup_key(_r)
+        # Only dedup rows with a real route identity (pool_address present).
+        # Synthetic / placeholder rows with no pool keep their original
+        # multiplicity to preserve legacy ordering for diagnostics tests.
+        _has_identity = bool(_k[1])
+        if _has_identity:
+            if _k in _seen:
+                continue
+            _seen[_k] = True
+        _exec_candidates_all.append(_r)
     if _require_exec_usd_basis:
         # E1.65 fix: accept entries that have best_buy_amount_wei > 0 even when
         # size_usd_estimate is still 0 at this point.  cold_immediate_sim will

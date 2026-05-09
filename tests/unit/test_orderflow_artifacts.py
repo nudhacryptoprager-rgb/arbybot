@@ -3161,6 +3161,8 @@ class TestM7A541TopCandidatePersistence:
             "best_buy_amount_wei", "best_sell_amount_wei", "usd_basis_source",
             # E1.65 step 7/10: depth verdict based on size_usd_estimate
             "depth_verdict",
+            # E1.69 Step 1: per-size frontier sweep persisted for reviewers
+            "depth_curve",
         }
         for row in artifact["top_executable_candidates"]:
             assert set(row.keys()) == expected_keys

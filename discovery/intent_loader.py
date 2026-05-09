@@ -41,6 +41,32 @@ class IntentPair(NamedTuple):
         return f"{self.chain}:{self.token_a}/{self.token_b}"
 
 
+class IntentRoute(NamedTuple):
+    """E1.69 Wave B: a multi-hop intent route from intent.txt.
+
+    Format on disk:  ``chain:A/B/C`` (2 hops),  ``chain:A/B/C/D`` (3 hops).
+    Tokens are *ordered* — direction is significant for routing/quoting.
+    A route is treated as the path  A -> B -> C [-> D]; the reverse path
+    is implied automatically by the route graph.
+    """
+
+    chain: str
+    tokens: tuple
+
+    @property
+    def hops(self) -> int:
+        return max(0, len(self.tokens) - 1)
+
+    @property
+    def canonical_key(self) -> str:
+        # Direction-sensitive (multi-hop): A/B/C != C/B/A as routing edges.
+        return f"{self.chain}:" + "/".join(self.tokens)
+
+    @property
+    def display_key(self) -> str:
+        return self.canonical_key
+
+
 class IntentUniverse:
     """
     Loaded intent universe with chain->pairs mapping.
@@ -49,6 +75,9 @@ class IntentUniverse:
     def __init__(self):
         self._pairs: Dict[str, List[IntentPair]] = {}  # chain -> pairs
         self._all_pairs: List[IntentPair] = []
+        # E1.69 Wave B: multi-hop routes (direction-sensitive).
+        self._routes: Dict[str, List[IntentRoute]] = {}
+        self._all_routes: List[IntentRoute] = []
         self._source_path: Optional[Path] = None
     
     def add_pair(self, pair: IntentPair) -> None:
@@ -57,6 +86,21 @@ class IntentUniverse:
             self._pairs[pair.chain] = []
         self._pairs[pair.chain].append(pair)
         self._all_pairs.append(pair)
+
+    def add_route(self, route: IntentRoute) -> None:
+        """E1.69 Wave B: register a multi-hop route."""
+        if route.chain not in self._routes:
+            self._routes[route.chain] = []
+        self._routes[route.chain].append(route)
+        self._all_routes.append(route)
+
+    def get_routes_for_chain(self, chain: str) -> List[IntentRoute]:
+        """E1.69 Wave B: get all multi-hop routes for a chain."""
+        return self._routes.get(chain, [])
+
+    def get_all_routes(self) -> List[IntentRoute]:
+        """E1.69 Wave B: get all multi-hop routes across chains."""
+        return list(self._all_routes)
     
     def get_pairs_for_chain(self, chain: str) -> List[IntentPair]:
         """Get all pairs for a specific chain."""
@@ -172,6 +216,29 @@ def parse_intent_line(line: str) -> Optional[IntentPair]:
     return IntentPair(chain=chain, token_a=token_a, token_b=token_b)
 
 
+def parse_intent_route_line(line: str) -> Optional[IntentRoute]:
+    """E1.69 Wave B: parse a multi-hop route line.
+
+    Accepts ``chain:A/B/C`` (2 hops) or ``chain:A/B/C/D`` (3 hops).
+    Returns ``None`` for 2-token, comment, or malformed lines.
+    """
+    line = line.strip()
+    if not line or line.startswith("#") or ":" not in line:
+        return None
+    chain, pair_str = line.split(":", 1)
+    chain = chain.strip().lower()
+    pair_str = pair_str.strip()
+    if "/" not in pair_str:
+        return None
+    parts = [p.strip().upper() for p in pair_str.split("/")]
+    if any(not p for p in parts):
+        return None
+    # Multi-hop is 3+ tokens.  2-token lines are pairs (handled elsewhere).
+    if len(parts) < 3 or len(parts) > 4:
+        return None
+    return IntentRoute(chain=chain, tokens=tuple(parts))
+
+
 def load_intent(path: Optional[Path] = None) -> IntentUniverse:
     """
     Load intent.txt and return IntentUniverse.
@@ -209,6 +276,15 @@ def load_intent(path: Optional[Path] = None) -> IntentUniverse:
         for line in lines:
             pair = parse_intent_line(line)
             if pair is None:
+                # E1.69 Wave B: try multi-hop route on lines that
+                # parse_intent_line rejected because of >2 tokens.
+                route = parse_intent_route_line(line)
+                if route is not None:
+                    if route.canonical_key not in seen_keys:
+                        seen_keys.add(route.canonical_key)
+                        universe.add_route(route)
+                        parsed_count += 1
+                    continue
                 if line.strip() and not line.strip().startswith("#"):
                     skipped_count += 1
                 continue

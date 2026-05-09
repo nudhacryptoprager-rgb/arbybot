@@ -889,6 +889,19 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
         if (r.get("amount_in_optimal_usd") or 0) > 0
         and (r.get("amount_in_optimal_usd") or 0) < 1.0
     )
+    # E1.69 Step 8: production-size candidate visibility (regardless of profit
+    # sign).  Distinguishes "no production-size routes seen at all" (market
+    # absence) from "production-size routes seen but unprofitable" (gas/spread
+    # constraint).  Counts ALL candidates with optimal_usd >= MIN_PRODUCTION,
+    # including negative-profit ones, so reviewers can audit the funnel.
+    production_sized_candidate_total = sum(
+        1 for r in rows
+        if (r.get("amount_in_optimal_usd") or 0) >= MIN_PRODUCTION_SIZE_USD
+    )
+    research_sized_candidate_total = sum(
+        1 for r in rows
+        if (r.get("amount_in_optimal_usd") or 0) >= MIN_EXECUTABLE_SIZE_USD
+    )
     # pipeline_ready: True when we have candidates at all (scanning is working)
     pipeline_ready = total > 0
     # production_profit_ready: True when any pair has confirmed $50+ profitable depth
@@ -907,6 +920,9 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
         "production_sized_profitable_total": production_sized_profitable,
         "research_profitable_total": research_profitable,
         "dust_only_total": dust_only,
+        # E1.69 Step 8: candidate-side counters (no profit-sign filter).
+        "production_sized_candidate_total": production_sized_candidate_total,
+        "research_sized_candidate_total": research_sized_candidate_total,
         "min_executable_size_usd": MIN_EXECUTABLE_SIZE_USD,
         "min_production_size_usd": MIN_PRODUCTION_SIZE_USD,
         # E1.66 step 2: explicit pipeline/profit readiness flags

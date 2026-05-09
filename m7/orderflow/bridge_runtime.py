@@ -114,6 +114,21 @@ def _write_cold_hot_bridge(
                     if not ((c.get("size_usd_estimate") or 0) > 0
                             or (c.get("best_buy_amount_wei") or 0) > 0)
                 ),
+                # E1.69 Step 8: production-size candidate visibility.
+                # production_sized: routes with amount_in_optimal_usd >= $50
+                # research_sized:   routes with amount_in_optimal_usd >= $10
+                # production_candidate_total exposes how many >=$50 routes
+                # the scanner saw across ALL exec candidates (not just dedup
+                # winners), so reviewers can distinguish "no market" from
+                # "promotion gate filtered them".
+                "production_sized": sum(
+                    1 for c in candidates
+                    if (c.get("amount_in_optimal_usd") or 0) >= 50.0
+                ),
+                "research_sized": sum(
+                    1 for c in candidates
+                    if (c.get("amount_in_optimal_usd") or 0) >= 10.0
+                ),
                 "near_exec": len(near_exec),
                 "stale_positive": len(stale_pos),
                 "recent_active": len(_rap_top),
@@ -229,6 +244,29 @@ def _write_cold_hot_bridge(
             pass
         _bsp = payload.get("bridge_selected_pools_top", [])
         payload["candidate_source_breakdown"]["bridge_selected_pools_count"] = len(_bsp)
+        # E1.69 Wave D: surface Flashblocks HTTP lane state + TVL scout state
+        # so reviewers can audit "is the production-size scout actually
+        # running?" from the rolling artifact alone.
+        try:
+            from chains import flashblocks_http as _fbh
+            payload["candidate_source_breakdown"]["flashblocks_http_enabled"] = bool(
+                _fbh.is_enabled()
+            )
+            _fb_stats = getattr(_fbh, "_STATS", {}) or {}
+            payload["candidate_source_breakdown"]["flashblocks_http_calls_ok"] = int(
+                _fb_stats.get("calls_ok") or 0
+            )
+            payload["candidate_source_breakdown"]["flashblocks_http_logs_total"] = int(
+                _fb_stats.get("logs_returned_total") or 0
+            )
+        except Exception:
+            payload["candidate_source_breakdown"]["flashblocks_http_enabled"] = False
+        try:
+            payload["candidate_source_breakdown"]["tvl_scout_enabled"] = (
+                os.environ.get("ARBY_TVL_SCOUT_ENABLE", "0") == "1"
+            )
+        except Exception:
+            payload["candidate_source_breakdown"]["tvl_scout_enabled"] = False
         # E1.63 step 5: embed E1.63 split/depth metrics from rolling rollup artifact.
         try:
             from m7.orderflow.runtime_io import _HOT_ROLLUP_PATH

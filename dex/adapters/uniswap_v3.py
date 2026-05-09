@@ -102,6 +102,73 @@ def decode_quote_response(hex_result: str) -> tuple[int, int, int, int]:
 
 
 # =============================================================================
+# E1.69 Wave C: multi-hop QuoterV2 (quoteExactInput)
+# =============================================================================
+
+# keccak256("quoteExactInput(bytes,uint256)")[:4]
+SELECTOR_QUOTE_EXACT_INPUT = "0xcdca1753"
+
+
+def encode_v3_path(tokens: list[str], fees: list[int]) -> bytes:
+    """Encode a Uniswap V3 multi-hop path: token0 | fee0 | token1 | fee1 | token2.
+
+    Used by QuoterV2.quoteExactInput(bytes path, uint256 amountIn).  Each
+    token is a 20-byte address; each fee is a 3-byte uint24.  The path
+    has ``len(fees) == len(tokens) - 1``.
+    """
+    if len(tokens) < 2:
+        raise ValueError("path needs at least 2 tokens")
+    if len(fees) != len(tokens) - 1:
+        raise ValueError(
+            f"fees length must be tokens-1: got {len(fees)} fees for {len(tokens)} tokens"
+        )
+    out = b""
+    for i, tok in enumerate(tokens):
+        clean = tok[2:] if tok.startswith("0x") else tok
+        out += bytes.fromhex(clean.lower().zfill(40))
+        if i < len(fees):
+            fee = fees[i]
+            if fee < 0 or fee > 0xFFFFFF:
+                raise ValueError(f"fee out of uint24 range: {fee}")
+            out += fee.to_bytes(3, "big")
+    return out
+
+
+def encode_quote_exact_input(tokens: list[str], fees: list[int], amount_in: int) -> str:
+    """Encode quoteExactInput(bytes path, uint256 amountIn) calldata."""
+    path = encode_v3_path(tokens, fees)
+    # Dynamic ABI: head = (offset_to_path, amount_in); tail = (length || data padded).
+    head_offset = 64  # two head words = 0x40 bytes
+    amount_hex = hex(amount_in)[2:].zfill(64)
+    offset_hex = hex(head_offset)[2:].zfill(64)
+    path_len_hex = hex(len(path))[2:].zfill(64)
+    # Pad path to 32-byte boundary.
+    padded = path + b"\x00" * ((-len(path)) % 32)
+    return (
+        f"{SELECTOR_QUOTE_EXACT_INPUT}"
+        f"{offset_hex}"
+        f"{amount_hex}"
+        f"{path_len_hex}"
+        f"{padded.hex()}"
+    )
+
+
+def decode_quote_exact_input_response(hex_result: str) -> int:
+    """Decode quoteExactInput response.  Returns amountOut.
+
+    The full ABI response is (uint256 amountOut, uint160[] sqrtPricesX96AfterList,
+    uint32[] initializedTicksCrossedList, uint256 gasEstimate).  For sizing
+    the only field consumers care about is ``amountOut``.
+    """
+    if not hex_result or hex_result == "0x":
+        raise QuoteError(code=ErrorCode.QUOTE_REVERT, message="Empty multi-hop quote")
+    data = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if len(data) < 64:
+        raise QuoteError(code=ErrorCode.QUOTE_REVERT, message="Multi-hop quote too short")
+    return int(data[0:64], 16)
+
+
+# =============================================================================
 # ADAPTER
 # =============================================================================
 
