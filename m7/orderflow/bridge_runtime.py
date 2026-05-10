@@ -47,16 +47,24 @@ def _write_cold_hot_bridge(
         # with different actual_pair strings (e.g. "FUN/USDC" vs
         # "0x16ee7eca/USDC" — symbol-vs-address representation drift)
         # does not occupy multiple cold_executable slots.
-        _seen_pool_addrs: set = set()
-        _deduped_cands = []
+        # E1.74: keep the LARGEST-USD sample per pool so the frontier sweep's
+        # highest size tier ($49 999) wins instead of the first-seen entry
+        # ($24.999). Resolves: bridge.production_sized=0 despite near-production
+        # peak of $49 999.
+        _best_by_pool: dict = {}
         for _c in candidates:
             _pa = (_c.get("pool_address") or "").lower()
-            if _pa and _pa in _seen_pool_addrs:
+            _usd = float(_c.get("amount_in_optimal_usd") or 0)
+            if not _pa:
+                _best_by_pool[id(_c)] = _c
                 continue
-            if _pa:
-                _seen_pool_addrs.add(_pa)
-            _deduped_cands.append(_c)
-        candidates = _deduped_cands
+            if _pa not in _best_by_pool:
+                _best_by_pool[_pa] = _c
+            else:
+                _prev_usd = float(_best_by_pool[_pa].get("amount_in_optimal_usd") or 0)
+                if _usd > _prev_usd:
+                    _best_by_pool[_pa] = _c
+        candidates = list(_best_by_pool.values())
         stale_pos = artifact.get("top_stale_positive_candidates", [])
         recoverable_stale = artifact.get("top_recoverable_stale_candidates", [])
         recoverable_stale_viable = artifact.get("top_recoverable_stale_route_viable", [])

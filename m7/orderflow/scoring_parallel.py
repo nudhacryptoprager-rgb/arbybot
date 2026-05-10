@@ -347,10 +347,17 @@ def _usd_frontier_sizes_wei(
 
     Only returns sizes strictly larger than ``amount_in_wei``; the original
     size is always kept in the calling sweep so it is not duplicated here.
-    Returns empty list when the USD basis is unavailable.
+    Returns empty list when the USD basis is unavailable, unless
+    ``ARBY_FRONTIER_FORCE_PROBE=1`` is set, in which case the function
+    treats the missing basis as $1 and emits wei multipliers anyway.
     """
-    if amount_in_wei <= 0 or current_size_usd is None or current_size_usd <= 0:
+    if amount_in_wei <= 0:
         return []
+    if current_size_usd is None or current_size_usd <= 0:
+        if os.getenv("ARBY_FRONTIER_FORCE_PROBE", "0") == "1":
+            current_size_usd = 1.0
+        else:
+            return []
 
     _env_frontier = os.getenv("ARBY_SIZE_FRONTIER_USD", "").strip()
     try:
@@ -1276,6 +1283,20 @@ def score_backrun_live_parallel(
                 _local_eth_price_usd = oracle_result.get("token_in_oracle_usd")
             elif (out_sym or "").upper() in _ETH_USD_SYMBOLS:
                 _local_eth_price_usd = oracle_result.get("token_out_oracle_usd")
+        # E1.73: when oracle is silent, allow constant ETH price fallback so
+        # frontier-sweep candidates with WETH on either leg can be USD-sized.
+        # Mirrors the hot fast-path behaviour and keeps slow path consistent.
+        if _local_eth_price_usd is None and (
+            (in_sym or "").upper() in _ETH_USD_SYMBOLS
+            or (out_sym or "").upper() in _ETH_USD_SYMBOLS
+            or (_ats.get(token_in_addr.lower(), "").upper() in _ETH_USD_SYMBOLS)
+            or (_ats.get(token_out_addr.lower(), "").upper() in _ETH_USD_SYMBOLS)
+        ):
+            try:
+                from m7.shared.constants import _FALLBACK_ETH_PRICE_USD
+                _local_eth_price_usd = float(_FALLBACK_ETH_PRICE_USD)
+            except Exception:
+                _local_eth_price_usd = None
         if _size_usd is None:
             _out_dec_local_usd = get_cached_decimals(token_out_addr)
             _size_usd = _quote_implied_size_usd(
@@ -2073,6 +2094,41 @@ def score_backrun_fast(
     backrun_size_wei = max(event.amount_in_wei // 10, 1)
     backrun_size_wei = max(low, min(high, backrun_size_wei))
 
+    # E1.71: hot fast-path size escalation — when ARBY_HOT_FAST_ESCALATE_USD>0,
+    # probe at production-grade notional from the start instead of event-derived
+    # sub-$1 sizes.  Heuristic uses known stable/ETH token_in with optional
+    # fallback table.  Falls back silently to original size if no USD basis.
+    try:
+        _esc_target_usd = float(os.getenv("ARBY_HOT_FAST_ESCALATE_USD", "0") or "0")
+    except (TypeError, ValueError):
+        _esc_target_usd = 0.0
+    if _esc_target_usd > 0.0:
+        _esc_price_usd: Optional[float] = None
+        if _in_sym in _USD_STABLE_SYMBOLS:
+            _esc_price_usd = 1.0
+        elif _in_sym in _ETH_USD_SYMBOLS:
+            try:
+                from m7.shared.constants import _FALLBACK_ETH_PRICE_USD
+                _esc_price_usd = float(_FALLBACK_ETH_PRICE_USD)
+            except Exception:
+                _esc_price_usd = None
+        else:
+            # Optional fallback table (E1.69 step 7)
+            if os.getenv("ARBY_USD_BASIS_FALLBACK_ENABLE", "0") == "1":
+                try:
+                    from m7.orderflow.usd_basis_fallback import load_fallback_table
+                    _esc_tbl = load_fallback_table()
+                    _esc_price_usd = _esc_tbl.get(_in_sym)
+                except Exception:
+                    _esc_price_usd = None
+        if _esc_price_usd and _esc_price_usd > 0:
+            try:
+                _esc_target_wei = int((_esc_target_usd / _esc_price_usd) * (10 ** _effective_dec))
+                if _esc_target_wei > backrun_size_wei:
+                    backrun_size_wei = max(low, min(high, _esc_target_wei))
+            except (TypeError, ValueError, OverflowError):
+                pass
+
     if backrun_size_wei <= 0:
         return None
 
@@ -2100,6 +2156,64 @@ def score_backrun_fast(
 
     if pricing_result is None:
         return None
+
+    # E1.71: post-pricing size escalation (token_out anchor).
+    # If we still don't have token_in price but token_out is WETH/stable, use
+    # the buy_amount/in_amount ratio as a price quote: token_in_per_unit_out,
+    # then derive wei target for ARBY_HOT_FAST_ESCALATE_USD and re-price.
+    if _esc_target_usd > 0.0:
+        try:
+            _out_sym_esc = _ats.get(token_out_addr.lower(), "").upper()
+            if not _out_sym_esc:
+                _cs = get_cached_symbol(token_out_addr)
+                if _cs:
+                    _out_sym_esc = _cs.upper()
+            _out_dec_esc = get_cached_decimals(token_out_addr)
+            if _out_dec_esc is None:
+                if _out_sym_esc in ("USDC", "USDT", "USDC.E", "USDT.E", "USDBC", "PYUSD"):
+                    _out_dec_esc = 6
+                elif _out_sym_esc in ("WBTC", "CBBTC", "TBTC"):
+                    _out_dec_esc = 8
+                else:
+                    _out_dec_esc = 18
+            _out_price_usd: Optional[float] = None
+            if _out_sym_esc in _USD_STABLE_SYMBOLS:
+                _out_price_usd = 1.0
+            elif _out_sym_esc in _ETH_USD_SYMBOLS:
+                try:
+                    from m7.shared.constants import _FALLBACK_ETH_PRICE_USD
+                    _out_price_usd = float(_FALLBACK_ETH_PRICE_USD)
+                except Exception:
+                    _out_price_usd = None
+            elif os.getenv("ARBY_USD_BASIS_FALLBACK_ENABLE", "0") == "1":
+                try:
+                    from m7.orderflow.usd_basis_fallback import load_fallback_table
+                    _out_price_usd = (load_fallback_table() or {}).get(_out_sym_esc)
+                except Exception:
+                    _out_price_usd = None
+            _buy_amt_esc = pricing_result.get("buy_amount") if pricing_result else None
+            if (_out_price_usd and _out_price_usd > 0
+                    and _buy_amt_esc and int(_buy_amt_esc) > 0):
+                # current size USD via token_out: amount_out / 10**dec_out * out_price
+                _cur_usd = (int(_buy_amt_esc) / (10 ** _out_dec_esc)) * float(_out_price_usd)
+                if _cur_usd and _cur_usd > 0 and _cur_usd < _esc_target_usd:
+                    _scale = _esc_target_usd / _cur_usd
+                    _new_wei = int(backrun_size_wei * _scale)
+                    _new_wei = max(low, min(high, _new_wei))
+                    if _new_wei > backrun_size_wei:
+                        _re_pricing = attempt_local_pricing(
+                            candidate_pools=candidate_pools,
+                            local_sim_states=local_sim_states,
+                            token_in_addr=token_in_addr,
+                            token_out_addr=token_out_addr,
+                            backrun_size_wei=_new_wei,
+                            registry_entries=active_entries,
+                        )
+                        if _re_pricing is not None:
+                            pricing_result = _re_pricing
+                            backrun_size_wei = _new_wei
+        except Exception:
+            pass
 
     # E1.63 fast-path split routing: try 50/50 split across top-2 V3 pools.
     # Pure local math — zero-RPC, same pool states already loaded above.
@@ -2364,6 +2478,20 @@ def score_backrun_fast(
                 _out_dec_fast = 18
             if _out_dec_fast is not None and buy_amount and buy_amount > 0:
                 _size_usd_fast = round(buy_amount / (10 ** _out_dec_fast), 4)
+            elif _out_sym_upper_fast in _ETH_USD_SYMBOLS and buy_amount and buy_amount > 0:
+                # E1.71: token_out=WETH branch — use ETH price for USD basis.
+                from m7.shared.constants import _FALLBACK_ETH_PRICE_USD
+                _eth_px_o = float(_FALLBACK_ETH_PRICE_USD)
+                if _eth_px_o > 0:
+                    _size_usd_fast = round(buy_amount / 1e18 * _eth_px_o, 4)
+            elif os.getenv("ARBY_USD_BASIS_FALLBACK_ENABLE", "0") == "1" and buy_amount and buy_amount > 0:
+                # Fallback table on token_out as last resort
+                from m7.orderflow.usd_basis_fallback import load_fallback_table
+                _tbl_o = load_fallback_table() or {}
+                _px_o = _tbl_o.get(_out_sym_upper_fast)
+                _od = get_cached_decimals(token_out_addr) or 18
+                if _px_o and _px_o > 0:
+                    _size_usd_fast = round(buy_amount / (10 ** _od) * float(_px_o), 4)
         except Exception:
             _size_usd_fast = None
 
