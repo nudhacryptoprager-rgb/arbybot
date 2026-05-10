@@ -726,6 +726,10 @@ def queue_cold_executable_for_sim(
             )
         except Exception:
             pass
+        # E1.81: pair-family observations are now recorded in bridge_runtime.py
+        # (COLD process) where _FAMILY_PROMOTIONS state is shared with the
+        # family_promotion_snapshot() call that writes to the bridge artifact.
+        # Recording here (HOT process) was ineffective due to process isolation.
 
     if not synthetic:
         return None, counters

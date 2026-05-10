@@ -295,6 +295,201 @@ def try_promote_from_cold_signal(
 reset_for_tests = reset
 
 
+# =============================================================================
+# E1.81: PairFamilyPromotion — promote a full pair + pool-family route
+# =============================================================================
+
+@dataclass
+class PairFamilyPromotion:
+    """E1.81: Promotion record for a pair with its full pool-family route.
+
+    Extends the pool-level ``PoolPromotion`` concept to include the entire
+    family (all pools across DEX / fee-tiers) and the winning buy/sell route.
+
+    Fields:
+        pair:              Human-readable symbol, e.g. ``WETH/toby``.
+        canonical_key:     Sorted lowercase address pair key ``a/b``.
+        best_buy_pool:     Pool address of the buy leg that generated profit.
+        best_buy_dex:      DEX name for buy leg.
+        best_buy_fee:      Fee tier for buy leg.
+        best_sell_pool:    Pool address of the sell leg.
+        best_sell_dex:     DEX name for sell leg.
+        best_sell_fee:     Fee tier for sell leg.
+        family_pool_count: Number of pools in the family at promotion time.
+        family_dex_count:  Number of unique DEXes in the family.
+        family_fee_tiers:  Sorted list of fee tiers in the family.
+        profit_bps:        Best net bps observed.
+        max_size_usd:      Largest profitable size seen (USD).
+        max_profit_usd:    Profit at ``max_size_usd``.
+        first_observed_at: ``time.monotonic()`` of first profitable observation.
+        last_profitable_at: Most recent profitable observation.
+        profitable_count:  Number of times profit was observed.
+        observed_in_session: Session label for audit.
+        chain:             Chain identifier.
+    """
+    pair: Optional[str] = None
+    canonical_key: Optional[str] = None
+    best_buy_pool: Optional[str] = None
+    best_buy_dex: Optional[str] = None
+    best_buy_fee: Optional[int] = None
+    best_sell_pool: Optional[str] = None
+    best_sell_dex: Optional[str] = None
+    best_sell_fee: Optional[int] = None
+    family_pool_count: int = 0
+    family_dex_count: int = 0
+    family_fee_tiers: List[int] = field(default_factory=list)
+    profit_bps: Optional[float] = None
+    max_size_usd: Optional[float] = None
+    max_profit_usd: Optional[float] = None
+    first_observed_at: float = 0.0
+    last_profitable_at: float = 0.0
+    profitable_count: int = 0
+    observed_in_session: Optional[str] = None
+    chain: Optional[str] = None
+
+
+_FAMILY_LOCK = threading.RLock()
+_FAMILY_PROMOTIONS: Dict[str, PairFamilyPromotion] = {}
+
+
+def _family_ttl_seconds() -> int:
+    try:
+        return max(1, int(os.environ.get("ARBY_POOL_PROMOTION_TTL_S", "600")))
+    except ValueError:
+        return 600
+
+
+def observe_pair_family_profitable(
+    *,
+    pair: Optional[str] = None,
+    canonical_key: Optional[str] = None,
+    best_buy_pool: Optional[str] = None,
+    best_buy_dex: Optional[str] = None,
+    best_buy_fee: Optional[int] = None,
+    best_sell_pool: Optional[str] = None,
+    best_sell_dex: Optional[str] = None,
+    best_sell_fee: Optional[int] = None,
+    family_pool_count: int = 0,
+    family_dex_count: int = 0,
+    family_fee_tiers: Optional[List[int]] = None,
+    profit_bps: Optional[float] = None,
+    max_size_usd: Optional[float] = None,
+    max_profit_usd: Optional[float] = None,
+    session_id: Optional[str] = None,
+    chain: Optional[str] = None,
+    now: Optional[float] = None,
+) -> Optional[PairFamilyPromotion]:
+    """E1.81: Record a DISC-side profitable observation for a pair + family.
+
+    Requires ``ARBY_POOL_PROMOTION=1`` and a non-empty ``canonical_key`` or
+    ``pair``.  Returns the stored ``PairFamilyPromotion``; returns ``None``
+    when the feature flag is off or key is missing.
+
+    The registry key is ``canonical_key`` if provided, else ``pair``.
+    Fail-soft: any exception is swallowed.
+    """
+    if not is_enabled():
+        return None
+    reg_key = (canonical_key or pair or "").lower().strip()
+    if not reg_key:
+        return None
+    if now is None:
+        now = time.monotonic()
+    try:
+        rec = PairFamilyPromotion(
+            pair=pair,
+            canonical_key=canonical_key or reg_key,
+            best_buy_pool=best_buy_pool,
+            best_buy_dex=best_buy_dex,
+            best_buy_fee=best_buy_fee,
+            best_sell_pool=best_sell_pool,
+            best_sell_dex=best_sell_dex,
+            best_sell_fee=best_sell_fee,
+            family_pool_count=family_pool_count,
+            family_dex_count=family_dex_count,
+            family_fee_tiers=list(family_fee_tiers or []),
+            profit_bps=profit_bps,
+            max_size_usd=max_size_usd,
+            max_profit_usd=max_profit_usd,
+            first_observed_at=now,
+            last_profitable_at=now,
+            profitable_count=1,
+            observed_in_session=session_id,
+            chain=chain,
+        )
+        with _FAMILY_LOCK:
+            existing = _FAMILY_PROMOTIONS.get(reg_key)
+            if existing is None:
+                _FAMILY_PROMOTIONS[reg_key] = rec
+                return rec
+            existing.last_profitable_at = now
+            existing.profitable_count += 1
+            if profit_bps is not None:
+                if existing.profit_bps is None or profit_bps > existing.profit_bps:
+                    existing.profit_bps = profit_bps
+            if max_size_usd is not None:
+                if existing.max_size_usd is None or max_size_usd > existing.max_size_usd:
+                    existing.max_size_usd = max_size_usd
+                    existing.max_profit_usd = max_profit_usd
+            # Refresh routing identity with latest data
+            for attr, val in [
+                ("best_buy_pool", best_buy_pool),
+                ("best_buy_dex", best_buy_dex),
+                ("best_buy_fee", best_buy_fee),
+                ("best_sell_pool", best_sell_pool),
+                ("best_sell_dex", best_sell_dex),
+                ("best_sell_fee", best_sell_fee),
+                ("family_pool_count", family_pool_count or None),
+                ("family_dex_count", family_dex_count or None),
+            ]:
+                if val is not None:
+                    setattr(existing, attr, val)
+            if family_fee_tiers:
+                existing.family_fee_tiers = list(family_fee_tiers)
+            if session_id:
+                existing.observed_in_session = session_id
+            if chain:
+                existing.chain = chain
+            return existing
+    except Exception:
+        return None
+
+
+def active_pair_family_promotions(now: Optional[float] = None) -> List[PairFamilyPromotion]:
+    """E1.81: Return valid (non-expired) PairFamilyPromotion records."""
+    if not is_enabled():
+        return []
+    if now is None:
+        now = time.monotonic()
+    ttl = _family_ttl_seconds()
+    with _FAMILY_LOCK:
+        expired = [k for k, p in _FAMILY_PROMOTIONS.items() if (now - p.last_profitable_at) > ttl]
+        for k in expired:
+            _FAMILY_PROMOTIONS.pop(k, None)
+        return sorted(
+            _FAMILY_PROMOTIONS.values(),
+            key=lambda p: (-p.last_profitable_at, -(p.profitable_count or 0), p.pair or ""),
+        )
+
+
+def family_promotion_snapshot(now: Optional[float] = None) -> Dict[str, object]:
+    """E1.81: JSON-serialisable snapshot of active pair-family promotions."""
+    if now is None:
+        now = time.monotonic()
+    promos = active_pair_family_promotions(now=now)
+    return {
+        "active_count": len(promos),
+        "ttl_s": _family_ttl_seconds(),
+        "promotions": [asdict(p) for p in promos],
+    }
+
+
+def reset_family_promotions() -> None:
+    """E1.81: Clear all PairFamilyPromotion records (for tests / session reset)."""
+    with _FAMILY_LOCK:
+        _FAMILY_PROMOTIONS.clear()
+
+
 __all__ = [
     "PoolPromotion",
     "active_promotions",
@@ -304,4 +499,10 @@ __all__ = [
     "reset_for_tests",
     "snapshot",
     "try_promote_from_cold_signal",
+    # E1.81 pair-family promotion symbols
+    "PairFamilyPromotion",
+    "observe_pair_family_profitable",
+    "active_pair_family_promotions",
+    "family_promotion_snapshot",
+    "reset_family_promotions",
 ]

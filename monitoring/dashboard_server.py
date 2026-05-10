@@ -160,6 +160,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if profile not in ("production", "discovery"):
                 profile = "production"
             self._serve_pair_family_heatmap(profile=profile)
+        elif path == "/api/m7/family_table":
+            # E1.81: family-level scoring table — pools_found, spread_bps,
+            # max_size_usd, profit_usd per pair family.  Reads cold_executable
+            # from the bridge artifact and merges with pair_pool_matrix pools.
+            qs = parse_qs(parsed.query or "")
+            profile = (qs.get("profile") or ["production"])[0]
+            if profile not in ("production", "discovery"):
+                profile = "production"
+            self._serve_family_table(profile=profile)
         elif path == "/m7" or path == "/m7/":
             self._serve_file(Path(__file__).parent / "dashboard_m7.html", "text/html")
         else:
@@ -519,6 +528,174 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             },
             "depth_rungs_usd": list(DEFAULT_DEPTH_LADDER_USD),
             "staleness": staleness,
+        }
+        payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_family_table(self, profile: str = "production"):
+        """E1.81: family-level table — pools_found, spread_bps, max_size_usd, profit_usd.
+
+        Reads ``cold_executable`` from the bridge artifact to extract the
+        best observed spread/size/profit per pair family.  Merges with
+        ``pair_pool_matrix`` pool counts so the viewer sees both the depth
+        landscape (scout-derived) and the live scoring result (cold-derived).
+
+        Response schema::
+
+            {
+              "profile": "production",
+              "timestamp": "...",
+              "rows": [
+                {
+                  "pair":          "USDC/WETH",
+                  "pools_found":   5,
+                  "dex_count":     3,
+                  "fee_tiers":     [100, 500, 3000],
+                  "spread_bps":    1988.9,
+                  "max_size_usd":  50.0,
+                  "profit_usd":    0.5,
+                  "depth_verdict": "micro",
+                  "tvl_total_usd": 1200000.0,
+                },
+                ...
+              ],
+              "pair_count": 17,
+            }
+        """
+        files = DISCOVERY_ARTIFACT_FILES if profile == "discovery" else ARTIFACT_FILES
+        bridge_path = files.get("m7_cold_hot_bridge")
+        bridge: dict = {}
+        if bridge_path and bridge_path.is_file():
+            try:
+                with open(bridge_path, encoding="utf-8") as fh:
+                    bridge = json.load(fh) or {}
+            except (json.JSONDecodeError, OSError):
+                bridge = {}
+
+        # --- Pool count / TVL per family from pair_pool_matrix ---
+        matrix = bridge.get("pair_pool_matrix") or {}
+        matrix_by_pair: dict = {}
+        for fam in matrix.get("pairs") or []:
+            p = (fam.get("pair") or "").upper()
+            if p:
+                matrix_by_pair[p] = fam
+
+        # --- Best spread/size/profit per family from cold_executable ---
+        cold_exec = bridge.get("cold_executable") or []
+        family_best: dict = {}  # pair -> {spread_bps, max_size_usd, profit_usd, depth_verdict}
+        for c in cold_exec:
+            pair = (c.get("pair") or c.get("symbol") or c.get("actual_pair") or "").upper()
+            if not pair:
+                continue
+            net_bps = c.get("net_spread_bps") or c.get("net_bps") or 0.0
+            size_usd = c.get("amount_in_optimal_usd") or c.get("size_usd") or 0.0
+            profit_usd = c.get("expected_profit_usd") or 0.0
+            depth_verdict = c.get("depth_verdict") or ""
+            try:
+                net_bps = float(net_bps)
+                size_usd = float(size_usd)
+                profit_usd = float(profit_usd)
+            except (TypeError, ValueError):
+                net_bps = size_usd = profit_usd = 0.0
+            existing = family_best.get(pair)
+            if existing is None or net_bps > existing["spread_bps"]:
+                family_best[pair] = {
+                    "spread_bps": net_bps,
+                    "max_size_usd": size_usd,
+                    "profit_usd": profit_usd,
+                    "depth_verdict": depth_verdict,
+                }
+
+        # --- Also pull from orderflow for supplementary data ---
+        orderflow_path = files.get("m7_orderflow")
+        orderflow: dict = {}
+        if orderflow_path and orderflow_path.is_file():
+            try:
+                with open(orderflow_path, encoding="utf-8") as fh:
+                    orderflow = json.load(fh) or {}
+            except (json.JSONDecodeError, OSError):
+                orderflow = {}
+        for c in orderflow.get("viable_candidates") or []:
+            pair = (c.get("actual_pair") or "").upper()
+            if not pair:
+                continue
+            net_bps = float(c.get("net_bps") or 0.0)
+            size_usd = float(c.get("amount_in_optimal_usd") or 0.0)
+            profit_usd = float(c.get("expected_profit_usd") or 0.0)
+            depth_verdict = c.get("depth_verdict") or ""
+            existing = family_best.get(pair)
+            if existing is None or net_bps > existing["spread_bps"]:
+                family_best[pair] = {
+                    "spread_bps": net_bps,
+                    "max_size_usd": size_usd,
+                    "profit_usd": profit_usd,
+                    "depth_verdict": depth_verdict,
+                }
+
+        # --- E1.81: merge family_promotion_snapshot (per-pair bps accumulation) ---
+        fpromo_snap = bridge.get("family_promotion_snapshot") or {}
+        for promo in fpromo_snap.get("promotions") or []:
+            pair = (promo.get("pair") or promo.get("canonical_key") or "").upper()
+            if not pair:
+                continue
+            promo_bps = float(promo.get("profit_bps") or 0.0)
+            promo_size = float(promo.get("max_size_usd") or 0.0)
+            promo_profit = float(promo.get("max_profit_usd") or 0.0)
+            existing = family_best.get(pair)
+            # Only overwrite if promotion has higher bps AND current best is unknown
+            if existing is None:
+                family_best[pair] = {
+                    "spread_bps": promo_bps,
+                    "max_size_usd": promo_size,
+                    "profit_usd": promo_profit,
+                    "depth_verdict": "family_promo",
+                    "family_pool_count": promo.get("family_pool_count", 0),
+                    "family_dex_count": promo.get("family_dex_count", 0),
+                    "profitable_count": promo.get("profitable_count", 0),
+                }
+            else:
+                # Annotate existing row with family promotion count
+                existing["family_pool_count"] = promo.get("family_pool_count", 0)
+                existing["family_dex_count"] = promo.get("family_dex_count", 0)
+                existing["profitable_count"] = promo.get("profitable_count", 0)
+
+        # --- Merge into rows ---
+        all_pairs = sorted(set(list(matrix_by_pair.keys()) + list(family_best.keys())))
+        rows = []
+        for pair in all_pairs:
+            mat = matrix_by_pair.get(pair) or {}
+            best = family_best.get(pair) or {}
+            # fee_tiers from matrix (bps) or empty
+            fee_tiers = mat.get("fee_tiers") or []
+            rows.append({
+                "pair": pair,
+                "pools_found": mat.get("pool_count", 0),
+                "dex_count": mat.get("dex_count", 0),
+                "fee_tiers": fee_tiers,
+                "tvl_total_usd": mat.get("tvl_total_usd", 0.0),
+                "spread_bps": best.get("spread_bps", 0.0),
+                "max_size_usd": best.get("max_size_usd", 0.0),
+                "profit_usd": best.get("profit_usd", 0.0),
+                "depth_verdict": best.get("depth_verdict", ""),
+                "family_pool_count": best.get("family_pool_count", 0),
+                "family_dex_count": best.get("family_dex_count", 0),
+                "profitable_count": best.get("profitable_count", 0),
+            })
+        # Sort by spread_bps descending, then tvl descending
+        rows.sort(key=lambda r: (r["spread_bps"], r["tvl_total_usd"]), reverse=True)
+
+        result = {
+            "profile": profile,
+            "timestamp": bridge.get("timestamp"),
+            "rows": rows,
+            "pair_count": len(rows),
+            "family_active_count": fpromo_snap.get("active_count", 0),
+            "family_promo_ttl_s": fpromo_snap.get("ttl_s"),
         }
         payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)

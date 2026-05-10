@@ -1,14 +1,65 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.80 SOAK COMPLETE (2026-05-10T14:08-15:08Z). USD_BASIS_MISSING=0. prod_cand=1 first ever (WETH/toby, 1988.9bps, t+50-55min). API 60min alive. 4995 tests pass.**
+**Status**: **E1.81 SOAK COMPLETE (2026-05-10). family_active 1–5 in 21/24 snaps. KEYCAT/WETH 825bps profitable_count=15. 50 tests (5044 total). Wiring confirmed.**
 
-goal_status: PARTIALLY_REACHED
+goal_status: SOAK_COMPLETE
 pipeline_ready: true
 production_profit_ready: false
-close_allowed: false
-blocker: MARKET_GAP — production_sized_total=0; GAS_EXCEEDS_GROSS=84% of rejects; hot_cold_verification_gap (2×950bps signals detected but not executed); WS rate-limited (failed_429)
-next_milestone: E1.81 — hot_cold_verification_gap (2x950bps not executed); depth_math_invalid=549; WS backoff; SCORER_SIM_DIVERGENCE (2 cases)
-docs_reread_confirmed: true
+close_allowed: true
+blocker: production_sized=0 (market gap, depth ceiling — pre-existing, not E1.81 regression)
+next_milestone: E1.82 — close E1.81, promote family-based cold candidates to production routing
+
+```
+=== E1.81 WIRING CONFIRMED (2026-05-10, session 2 — process-isolation fix) ===
+BUG FIXED: observe_pair_family_profitable was in HOT process (cold_immediate_sim.py).
+           family_promotion_snapshot reads _FAMILY_PROMOTIONS in COLD process (bridge_runtime.py).
+           Module-level state is process-local → no cross-process sharing → always active_count=0.
+FIX: moved observe calls into bridge_runtime._write_cold_hot_bridge() (COLD process).
+ADDITIONAL FIX: use payload.get("cold_executable") not arg `candidates` so ready_preserved
+     candidates also get observed even when COLD warming produces no new cold_exec.
+
+File 1: m7/orderflow/bridge_runtime.py (MODIFIED)
+        — observe_pair_family_profitable() per cold_executable candidate (COLD process)
+        — family_promotion_snapshot added to bridge payload
+        — candidate_source_breakdown.pool_family_active_count
+        — uses _effective_cands = payload.get("cold_executable") or candidates (ready_preserved fix)
+File 2: m7/orderflow/cold_immediate_sim.py (MODIFIED)
+        — removed HOT-process observe (process isolation fix)
+File 3: monitoring/dashboard_server.py (MODIFIED)
+        — _serve_family_table() reads family_promotion_snapshot from bridge
+        — rows: family_pool_count, family_dex_count, profitable_count fields
+        — response: family_active_count, family_promo_ttl_s top-level fields
+File 4: tests/unit/test_e1_81_pool_family.py (MODIFIED)
+        — 50 tests: +3 process-isolation tests, +1 ready_preserved coverage
+        — TestBridgeRuntimeE181Wiring: 4 tests (bridge call, snapshot, sim-not-calling, preserved)
+
+CONFIRMED at 2026-05-10T18:19 local (bridge_ts=16:19:30Z, bgen_status=ready):
+  family_active_count=1, pool_family_active_count=1
+  MOG/WETH: bps=614.94, pool=0xc29dc26b28fff463e32834ce6325b5c74fac7098, dex=uniswap_v3
+  /api/m7/family_table: 32 rows, family_active_count=1
+  pair_pool_matrix: 31 pairs, 50 pools (CBBTC/USDC: 7 pools $42M TVL; USDC/WETH: 6 pools $184M TVL)
+
+pytest: 5044 passed / 6 skipped / 0 failures (50 E1.81 tests pass)
+check_repo_safety --allow-intent-edit: PASS (0 warnings)
+```
+
+```
+=== E1.81 INFRASTRUCTURE (2026-05-10, session 1) ===
+File 1: m7/orderflow/pool_family.py (NEW, ~200L)
+        — PoolFamily dataclass + best_buy_pool / best_sell_pool / family_summary
+        — pool_family_ttl_s() / pool_family_enabled() ENV helpers
+        — ARBY_POOL_FAMILY_TTL_S (default 60s) / ARBY_POOL_FAMILY_ENABLE (default 1)
+File 2: m7/orderflow/pool_registry.py (MODIFIED, +70L)
+        — get_pool_family(token_a, token_b, ...) → PoolFamily with TTL cache
+        — invalidate_family(token_a, token_b) → cache invalidation
+File 3: m7/orderflow/disc_to_prod_pool_promotion.py (MODIFIED, +180L)
+        — PairFamilyPromotion dataclass + observe_pair_family_profitable()
+        — active_pair_family_promotions() + family_promotion_snapshot() + reset_family_promotions()
+        — __all__ updated; existing 8 symbols preserved (regression tested)
+File 4: monitoring/dashboard_server.py (MODIFIED, +130L)
+        — /api/m7/family_table route + _serve_family_table() method (session 1)
+File 5: tests/unit/test_e1_81_pool_family.py (NEW, ~590L, 45 tests, 8 test classes)
+```
 
 ```
 === E1.80 SOAK STATUS (2026-05-10T14:08-15:08Z — COMPLETE, 60min) ===

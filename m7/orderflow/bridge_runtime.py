@@ -505,6 +505,59 @@ def _write_cold_hot_bridge(
                 )
         except Exception as _ppe:
             payload["candidate_source_breakdown"]["pair_pool_matrix_error"] = str(_ppe)[:80]
+        # E1.81: family promotion snapshot — in COLD process, accumulate per-pair
+        # observations from cold_executable candidates, then snapshot. This keeps
+        # the module-level _FAMILY_PROMOTIONS state in the COLD process where
+        # both write and read happen. Fail-soft; gated by ARBY_POOL_PROMOTION=1.
+        # NOTE: use payload["cold_executable"] (not the function argument `candidates`)
+        # so that bridge-preserved candidates (ready_preserved state) also get observed.
+        try:
+            from m7.orderflow.disc_to_prod_pool_promotion import (
+                observe_pair_family_profitable as _ofp,
+                family_promotion_snapshot as _fps,
+            )
+            # Record profitable observation for each cold_executable candidate
+            _chain_for_promo = os.environ.get("ARBY_CHAIN", "base")
+            _effective_cands = payload.get("cold_executable") or candidates or []
+            for _ce in _effective_cands:
+                _ce_bps = _ce.get("net_bps") or _ce.get("net_spread_bps")
+                if not _ce_bps:
+                    continue
+                try:
+                    _ce_bps_f = float(_ce_bps)
+                except (TypeError, ValueError):
+                    continue
+                if _ce_bps_f <= 0:
+                    continue
+                _ce_ta = _ce.get("backrun_token_in_address") or ""
+                _ce_tb = _ce.get("backrun_token_out_address") or ""
+                _ce_ck = (
+                    "/".join(sorted([_ce_ta.lower(), _ce_tb.lower()]))
+                    if (_ce_ta and _ce_tb) else None
+                )
+                try:
+                    _ofp(
+                        pair=_ce.get("actual_pair") or _ce.get("pair"),
+                        canonical_key=_ce_ck,
+                        best_buy_pool=_ce.get("pool_address") or _ce.get("pool"),
+                        best_buy_dex=_ce.get("best_buy_venue") or _ce.get("dex"),
+                        best_buy_fee=(
+                            int(_ce["fee_tier"]) if _ce.get("fee_tier") else None
+                        ),
+                        profit_bps=_ce_bps_f,
+                        max_size_usd=_ce.get("amount_in_optimal_usd"),
+                        max_profit_usd=_ce.get("expected_profit_usd"),
+                        chain=_chain_for_promo,
+                    )
+                except Exception:
+                    pass
+            _fsnap = _fps()
+            payload["family_promotion_snapshot"] = _fsnap
+            payload["candidate_source_breakdown"]["pool_family_active_count"] = (
+                _fsnap.get("active_count", 0)
+            )
+        except Exception:
+            payload["candidate_source_breakdown"]["pool_family_active_count"] = 0
         # E1.76 step 6: DefiLlama dex-volume scout (chain activity layer).
         try:
             if os.environ.get("ARBY_DEFILLAMA_VOLUME_SCOUT_ENABLE", "0") == "1":

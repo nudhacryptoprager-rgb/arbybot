@@ -742,3 +742,74 @@ class PoolRegistry:
                 _dex_dist,
             )
         return registered
+
+    # -------------------------------------------------------------------------
+    # E1.81: pool-family cache
+    # -------------------------------------------------------------------------
+
+    def get_pool_family(
+        self,
+        token_a: str,
+        token_b: str,
+        *,
+        pair_symbol: Optional[str] = None,
+        scout_tvl_usd: Optional[float] = None,
+        scout_volume_24h_usd: Optional[float] = None,
+    ):  # -> PoolFamily
+        """Return a ``PoolFamily`` for ``token_a/token_b`` built from the
+        registry cache.
+
+        The family is re-used until it becomes stale (``PoolFamily.is_stale()``).
+        When the feature flag ``ARBY_POOL_FAMILY_ENABLE`` is ``"0"`` the
+        family is always freshly constructed (no second-level cache).
+
+        Args:
+            token_a / token_b: Raw token identifiers (addresses or symbols).
+                               Need not be sorted.
+            pair_symbol:       Optional human-readable label (e.g. ``USDC/WETH``).
+            scout_tvl_usd / scout_volume_24h_usd: Optional scout-sourced
+                               aggregate figures to annotate the family.
+
+        Returns a ``PoolFamily`` instance (never ``None``).  The family may
+        have an empty ``pools`` list when no pools have been discovered yet.
+        """
+        from m7.orderflow.pool_family import PoolFamily, pool_family_enabled, pool_family_ttl_s  # noqa: E402
+
+        key = _pair_key(token_a, token_b)
+
+        if pool_family_enabled():
+            if not hasattr(self, "_families"):
+                # Lazy-init: avoids __init__ signature change
+                object.__setattr__(self, "_families", {})
+            cached: Optional[PoolFamily] = self._families.get(key)
+            if cached is not None and not cached.is_stale():
+                # Refresh scout annotations if provided
+                if scout_tvl_usd is not None:
+                    cached.scout_tvl_usd = scout_tvl_usd
+                if scout_volume_24h_usd is not None:
+                    cached.scout_volume_24h_usd = scout_volume_24h_usd
+                return cached
+
+        entries = self.lookup_pair(token_a, token_b)
+        family = PoolFamily(
+            canonical_key=key,
+            token_a=token_a.lower(),
+            token_b=token_b.lower(),
+            pools=list(entries),
+            pair_symbol=pair_symbol,
+            source="factory",
+            ttl_s=pool_family_ttl_s(),
+            scout_tvl_usd=scout_tvl_usd,
+            scout_volume_24h_usd=scout_volume_24h_usd,
+        )
+
+        if pool_family_enabled():
+            self._families[key] = family  # type: ignore[attr-defined]
+
+        return family
+
+    def invalidate_family(self, token_a: str, token_b: str) -> None:
+        """E1.81: Drop the cached family for a pair so it is rebuilt next call."""
+        key = _pair_key(token_a, token_b)
+        if hasattr(self, "_families"):
+            self._families.pop(key, None)  # type: ignore[attr-defined]
