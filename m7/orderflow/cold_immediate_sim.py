@@ -48,11 +48,28 @@ def is_enabled() -> bool:
 
 
 def _min_net_bps_threshold() -> float:
-    """Floor for entries fed into the immediate sim queue."""
+    """Floor for entries fed into the immediate sim queue.
+
+    E1.79 Fix 7: when ARBY_DISCOVERY_LOOSE_GATES=1, lower to 1 bps so all
+    positive-signal pools get depth/MAV measurement even if not yet profitable.
+    """
+    if (os.getenv("ARBY_DISCOVERY_LOOSE_GATES", "0") or "0") == "1":
+        return 1.0
     try:
         return float(os.getenv("ARBY_COLD_IMMEDIATE_MIN_NET_BPS", "10") or 10.0)
     except Exception:
         return 10.0
+
+
+def _loose_gates_mode() -> bool:
+    """Return True when ARBY_DISCOVERY_LOOSE_GATES=1.
+
+    In loose-gates mode the scanner collects depth/MAV data on all positive-bps
+    pools regardless of profitability threshold.  Candidates are placed in
+    `unpriced_but_depth_probeable` or `near_executable` rather than
+    `cold_executable`.  No submit_ready signal is raised in this mode.
+    """
+    return (os.getenv("ARBY_DISCOVERY_LOOSE_GATES", "0") or "0") == "1"
 
 
 def _min_expected_profit_usd() -> float:
@@ -149,6 +166,83 @@ def _entry_rank_key(entry: Dict[str, Any]) -> float:
         base = float(entry.get("net_bps") or 0.0) * 1e-6
     boost = 1.0 + min(max(lag_val, 0.0), 100.0) / 100.0
     return base * boost
+
+
+def _writeback_enriched_candidates(ranked: list) -> None:
+    """E1.78 Step 1+2: after _entry_rank_key sort, persist enriched
+    mav_usd/lag_score/best_size_usd back to the bridge artifact so the
+    dashboard heatmap sees non-None values.  Also accumulates session_best
+    KPIs (monotonic max per session) for the strict gate.
+    """
+    import json as _json
+
+    from m7.orderflow.runtime_io import _COLD_HOT_BRIDGE_PATH, _atomic_json_write
+
+    if not ranked:
+        return
+    try:
+        existing: dict = {}
+        if os.path.exists(_COLD_HOT_BRIDGE_PATH):
+            with open(_COLD_HOT_BRIDGE_PATH, "r", encoding="utf-8") as _fh:
+                existing = _json.load(_fh)
+    except Exception:
+        return  # don't crash cold lane on read failure
+
+    # Replace cold_executable with enriched ranked entries.
+    # E1.79 Fix 3: null-row protection — only update pool entries that the
+    # current ranked list actually scored. Pools absent from current ranked
+    # that had priced entries in the previous bridge are retained.
+    ranked_pool_set = {(e.get("pool_address") or "").lower() for e in ranked}
+    prev_cold = existing.get("cold_executable") or []
+    retained_from_prev = [
+        e for e in prev_cold
+        if (e.get("pool_address") or "").lower() not in ranked_pool_set
+        and float(e.get("amount_in_optimal_usd") or 0) > 0
+    ]
+    existing["cold_executable"] = ranked + retained_from_prev
+
+    # E1.78 Step 2 / E1.79 Fix 2: accumulate session_best (monotonic max per session).
+    # session_best_amount_usd  → REAL executable amount (amount_in_optimal_usd only)
+    # session_best_proxy_size_usd → proxy size (mav_usd + depth-ladder best_size_usd)
+    # session_best_near_usd   → kept for backward compat; equals proxy_size_usd
+    # session_best_expected_profit_usd → peak expected profit across entire session
+    prev_best = existing.get("session_best") or {}
+    cur_amount = max(
+        (float(e.get("amount_in_optimal_usd") or 0) for e in ranked),
+        default=0.0,
+    )
+    cur_mav = max((float(e.get("mav_usd") or 0) for e in ranked), default=0.0)
+    cur_best_size = max(
+        (float(e.get("best_size_usd") or 0) for e in ranked), default=0.0
+    )
+    # Proxy = max of MAV estimate + depth-ladder ceiling; NOT the same as real depth.
+    cur_proxy = max(cur_mav, cur_best_size)
+    # near = max(proxy, real amount) — kept for backward compat.
+    cur_near = max(cur_proxy, cur_amount)
+    cur_profit = max(
+        (float(e.get("expected_profit_usd") or 0) for e in ranked), default=0.0
+    )
+    existing["session_best"] = {
+        # Real executable amount only (used by production gate).
+        "session_best_amount_usd": max(
+            float(prev_best.get("session_best_amount_usd") or 0), cur_amount
+        ),
+        # Proxy/ladder ceiling — informational (depth-curve MAV + best_size_usd).
+        "session_best_proxy_size_usd": max(
+            float(prev_best.get("session_best_proxy_size_usd") or 0), cur_proxy
+        ),
+        # Backward-compat alias for session_best_near_usd consumers.
+        "session_best_near_usd": max(
+            float(prev_best.get("session_best_near_usd") or 0), cur_near
+        ),
+        "session_best_expected_profit_usd": max(
+            float(prev_best.get("session_best_expected_profit_usd") or 0), cur_profit
+        ),
+    }
+    try:
+        _atomic_json_write(_COLD_HOT_BRIDGE_PATH, existing)
+    except Exception as _wbe:
+        logger.warning("_writeback_enriched_candidates: write failed: %s", _wbe)
 
 
 def _top_n() -> int:
@@ -318,6 +412,13 @@ def queue_cold_executable_for_sim(
         # These are diagnostic candidates (meme tokens, unknown oracle) — not
         # counted as "profitable" even when they pass the gate.
         "cold_immediate_usd_basis_missing": 0,
+        # E1.79 Fix 9: gate_dropoff — count rejections at each filtering stage.
+        "gate_dropoff_top_n_cutoff": 0,       # excluded by top-N rank cap
+        "gate_dropoff_min_bps_rejected": 0,   # below min_net_bps threshold
+        "gate_dropoff_usd_basis_missing": 0,  # no USD oracle price available
+        "gate_dropoff_min_profit_rejected": 0,# below min_expected_profit_usd
+        "gate_dropoff_sim_admission_failed": 0,# pre-sim skip (no fee/size hint)
+        "gate_dropoff_loose_mode_diverted": 0, # diverted by ARBY_DISCOVERY_LOOSE_GATES
     }
     if not is_enabled():
         return None, counters
@@ -390,6 +491,11 @@ def queue_cold_executable_for_sim(
     # fallback to net_bps for entries without USD oracle basis.
     _all_with_min_bps = [e for e in cold_exec if isinstance(e, dict)
                          and float(e.get("net_bps") or 0.0) >= min_bps]
+    # E1.79 Fix 9: count entries dropped by bps floor.
+    counters["gate_dropoff_min_bps_rejected"] = len([
+        e for e in cold_exec if isinstance(e, dict)
+        and float(e.get("net_bps") or 0.0) < min_bps
+    ])
 
     # E1.65 Step 3: USDC/WETH token_out fallback — for entries where
     # size_usd_estimate=0 but best_buy_amount_wei>0 and token_out is a
@@ -509,11 +615,71 @@ def queue_cold_executable_for_sim(
                     })
         if _usd_missing_samples:
             counters["cold_immediate_usd_basis_missing_samples"] = _usd_missing_samples
-    ranked = sorted(
-        [e for e in _all_with_min_bps if _passes_profit_gate(e)],
-        key=_entry_rank_key,
-        reverse=True,
-    )[:top_n]
+    _profit_passed = [e for e in _all_with_min_bps if _passes_profit_gate(e)]
+    # E1.79 Fix 9: count entries dropped by profit/USD-basis gate.
+    counters["gate_dropoff_min_profit_rejected"] = len(_all_with_min_bps) - len(_profit_passed)
+    if _loose_gates_mode():
+        # In loose-gates mode, divert all entries to near_executable for
+        # depth/MAV measurement without triggering submit_ready signal.
+        counters["gate_dropoff_loose_mode_diverted"] = len(_profit_passed)
+        ranked = sorted(_profit_passed, key=_entry_rank_key, reverse=True)[:top_n]
+    else:
+        ranked = sorted(_profit_passed, key=_entry_rank_key, reverse=True)[:top_n]
+    # Count top-N cutoff: entries that passed profit gate but got capped.
+    counters["gate_dropoff_top_n_cutoff"] = max(0, len(_profit_passed) - top_n)
+    # E1.78 Step 1: persist enriched mav_usd/lag_score/best_size_usd back
+    # to the bridge artifact and accumulate session_best KPIs.
+    try:
+        _writeback_enriched_candidates(ranked)
+    except Exception:
+        pass
+    # E1.78 Step 6: wire pending_eth_call() for top-N MAV candidates.
+    # When ARBY_PENDING_SIM_ENABLE=1 + ARBY_FLASHBLOCKS_HTTP_LANE=1, issue
+    # an eth_call against the pending block tag for each MAV-ranked entry.
+    # Currently uses a balanceOf canary call (real quoter ABI deferred to
+    # E1.79). Non-blocking: any failure is silently recorded in counters.
+    _pending_called = 0
+    _pending_ok = 0
+    try:
+        from chains.flashblocks_http import pending_eth_call, pending_sim_enabled
+        if pending_sim_enabled() and ranked:
+            import httpx as _httpx
+
+            def _http_post_sync(url: str, body: dict, timeout_s: float) -> dict:
+                r = _httpx.post(url, json=body, timeout=timeout_s)
+                return r.json()
+
+            _rpc_url = (
+                os.environ.get("BASE_RPC")
+                or os.environ.get("ARBY_RPC_URL")
+                or "https://mainnet.base.org"
+            )
+            for _top_e in ranked[:3]:
+                _pa = (_top_e.get("pool_address") or "").lower()
+                if not _pa or float(_top_e.get("mav_usd") or 0) < 0.01:
+                    continue
+                # Canary: balanceOf(pool) on token_in — real quoter calldata in E1.79.
+                _token_in = (
+                    (_top_e.get("token_in_address") or "").lower()
+                    or _pa
+                )
+                _selector = "0x70a08231"  # balanceOf(address)
+                _arg = "000000000000000000000000" + _pa[2:].zfill(40)
+                _pending_called += 1
+                _res = pending_eth_call(
+                    rpc_url=_rpc_url,
+                    to=_token_in,
+                    data=_selector + _arg,
+                    http_post=_http_post_sync,
+                    timeout_s=3.0,
+                )
+                if _res is not None:
+                    _top_e["pending_quote_hex"] = _res[:66]
+                    _pending_ok += 1
+    except Exception:
+        pass
+    counters["cold_pending_eth_call_attempted"] = _pending_called
+    counters["cold_pending_eth_call_ok"] = _pending_ok
     counters["cold_immediate_sim_input_count"] = len(ranked)
     # Legacy (non-USD-basis-gating) bookkeeping: count remaining ranked
     # entries with no USD basis (only present when require_usd_basis=0).
@@ -565,6 +731,9 @@ def queue_cold_executable_for_sim(
     counters["cold_immediate_pre_sim_skip"] = sum(
         1 for e in sim_errors if isinstance(e, str) and e.startswith("PRE_SIM_SKIP:")
     )
+    # E1.79 Fix 9: sync gate_dropoff aliases from concrete counter values.
+    counters["gate_dropoff_sim_admission_failed"] = counters["cold_immediate_pre_sim_skip"]
+    counters["gate_dropoff_usd_basis_missing"] = counters.get("cold_immediate_usd_basis_missing", 0)
     counters["cold_immediate_sim_revert"] = sum(
         1 for e in sim_errors if isinstance(e, str) and e.startswith("REVERT:")
     )

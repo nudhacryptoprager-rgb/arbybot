@@ -61,8 +61,19 @@ def _write_cold_hot_bridge(
             if _pa not in _best_by_pool:
                 _best_by_pool[_pa] = _c
             else:
-                _prev_usd = float(_best_by_pool[_pa].get("amount_in_optimal_usd") or 0)
-                if _usd > _prev_usd:
+                # E1.79 Fix 4: prefer entry with highest economic value using score tuple:
+                # (is_priced, expected_profit_usd, mav_usd, amount_in_optimal_usd).
+                # Priced rows (amount_in_optimal_usd > 0) always beat null/unpriced rows,
+                # even if the null row has a larger raw amount_in_optimal_usd=None comparison.
+                def _score(e: dict) -> tuple:
+                    _a = float(e.get("amount_in_optimal_usd") or 0)
+                    return (
+                        int(_a > 0),                              # priced > unpriced
+                        float(e.get("expected_profit_usd") or 0), # higher profit
+                        float(e.get("mav_usd") or 0),            # higher MAV
+                        _a,                                       # larger amount
+                    )
+                if _score(_c) > _score(_best_by_pool[_pa]):
                     _best_by_pool[_pa] = _c
         candidates = list(_best_by_pool.values())
         # E1.77 step 5: normalize identity fields on every cold candidate.
@@ -158,6 +169,14 @@ def _write_cold_hot_bridge(
                 if not ((c.get("size_usd_estimate") or 0) > 0
                         or (c.get("best_buy_amount_wei") or 0) > 0)
             ],
+            # E1.79 Fix 8: explicit bucket for tokens with positive net_bps signal
+            # but no USD oracle price. These are depth-probeable (the chain has
+            # the pool and we have a route) but cannot be sized in USD yet.
+            # Dashboard can show these separately to guide oracle/pricing expansion.
+            "unpriced_but_depth_probeable": [
+                c for c in (artifact.get("top_cold_usd_basis_missing", []) or [])
+                if float(c.get("net_bps") or 0) > 0 and (c.get("depth_curve") or c.get("pool_address"))
+            ],
             "cold_stale_positive": stale_pos,
             "cold_recoverable_stale": recoverable_stale,
             "cold_recoverable_stale_route_viable": recoverable_stale_viable,
@@ -173,11 +192,15 @@ def _write_cold_hot_bridge(
                     1 for c in candidates
                     if (c.get("size_usd_estimate") or 0) > 0
                     or (c.get("best_buy_amount_wei") or 0) > 0
+                    or (c.get("amount_in_optimal_usd") or 0) > 0
                 ),
                 "cold_exec_without_usd_basis": sum(
                     1 for c in candidates
-                    if not ((c.get("size_usd_estimate") or 0) > 0
-                            or (c.get("best_buy_amount_wei") or 0) > 0)
+                    if not (
+                        (c.get("size_usd_estimate") or 0) > 0
+                        or (c.get("best_buy_amount_wei") or 0) > 0
+                        or (c.get("amount_in_optimal_usd") or 0) > 0
+                    )
                 ),
                 # E1.69 Step 8: production-size candidate visibility.
                 # production_sized: routes with amount_in_optimal_usd >= $50
@@ -267,6 +290,11 @@ def _write_cold_hot_bridge(
             "c3_pool_gas_hopeless_skipped",
             "pool_gas_hopeless",
             "pool_gas_hopeless_streak",
+            # E1.78 fix: session_best is written by _writeback_enriched_candidates
+            # (cold_immediate_sim) which runs AFTER _write_cold_hot_bridge on the
+            # hot lane. Without preservation, each cold-lane bridge write would
+            # clear session_best, causing the strict gate to always read 0.
+            "session_best",
         )
         _HOT_PRESERVE_IF_COLD_EXEC = (
             "bridge_hit_trace_top", "cold_exec_pool_trace",

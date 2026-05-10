@@ -1,34 +1,149 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.77 SOAK_COMPLETE (2026-05-10). 30-min soak INFRASTRUCTURE_PASS: 5/5 processes alive throughout, 0 crash_restarts, 7 cold cycles (240s cadence), heatmap_rows=29 stable from t+6m, bridge identity fields present (pair/source/dex=unknown). Strict gate KPIs (production_sized/submit_ready_delta/roundtrip_profitable_delta) = 0 — confirmed MARKET_GAP not code bug (best_near_usd peaked $30 at t+27m; OPP peaked 17 at t+18m; WS 429_rate=0.8%). Architectural note: `mav_usd`/`lag_score`/`best_size_usd` are correctly used in-memory for cold scorer ranking but not persisted back to bridge JSON (bridge written before cold_immediate_sim sort). Deferred to E1.78.**
+**Status**: **E1.79 SOAK COMPLETE (2026-05-10). INFRASTRUCTURE_PASS / MARKET_GAP. All E1.79 prep fixes verified. 4966 tests pass.**
 
-goal_status: SOAK_COMPLETE
+goal_status: BLOCKED
+pipeline_ready: true
+production_profit_ready: false
+close_allowed: false
+blocker: MARKET_GAP — session_best_amount_usd=37.99 (real depth; proxy=50 excluded by E1.79 fix 2); production_sized_total=0; submit_delta=0; discovery pool bps=265 unpriced
+next_milestone: E1.80 Steps 7-9 (pair-family universe expansion, USD pricing for unpriced tokens, depth_breakthrough dashboard)
+docs_reread_confirmed: true
+
+```
+=== E1.79 SOAK RESULT (2026-05-10T12:12:19Z–13:12:22Z) ===
+soak_id:      start_nonstop_runtime.py --chain base --hours 1 --cold-http-only --m7-cold-ws-timeout 240
+env:          TOP_N=15, SIZE_FRONTIER=5-1000, LOOSE_GATES=0, PAPER_SIGNING=1, USD_BASIS_FALLBACK=40 tokens
+all_pass: false
+verdict: INFRASTRUCTURE_PASS / MARKET_GAP
+production_sized_total:         0       → FAIL (no $50+ priced candidate in session)
+best_amount_in_usd:             37.99   → FAIL (E1.79: proxy=50 NOT counted; real depth 37.99 < 50)
+best_expected_profit_usd:       22.44   → PASS (E1.79 fix 1 confirmed: session_best fallback working)
+submit_ready_delta:             0       → FAIL (0 new submits this session; total=36 from prior)
+roundtrip_profitable_delta:     0       → FAIL (paper signing, no exec completions; 2 attempted)
+ws_429_rate:                    1.3%    → PASS (12/924 windows < 15%)
+soak_infra: 5/5 alive, 0 crash_restarts, WS=11/924, clean exit 0
+bridge top: pool=? bps=3782.6 usd=7e-6 (unpriced; discovery: bps=265 usd=null)
+```
+
+```
+=== E1.79 PREP FIXES (code, 2026-05-10) — VERIFIED ===
+Fix 1: gate reads session_best_expected_profit_usd as fallback → CONFIRMED (gate=22.44 not 0.000003)
+Fix 2: gate uses session_best_amount_usd only (real) → CONFIRMED (gate=37.99 FAIL; proxy=50 not counted)
+Fix 3: null-row protection in _writeback_enriched_candidates → in code, no regression
+Fix 4: bridge dedup by score tuple (is_priced, profit, mav, usd) — priced always beats null row
+Fix 5: ARBY_DISCOVERY_LOOSE_GATES=1 env mode + _loose_gates_mode() helper → in code
+Fix 6: session_best_proxy_size_usd added as explicit field → CONFIRMED (field=0.0 separate from near_usd=50)
+Fix 7: unpriced_but_depth_probeable bucket in bridge_runtime.py payload → dp_count=0 (no eligible pool)
+Fix 8: gate_dropoff_* counters (top_n_cutoff/min_bps/min_profit/sim_admission/loose_mode/usd_basis)
+Fix 9: gate_dropoff_sim_admission_failed + usd_basis synced from concrete sim-loop counters
+pytest: 4966 passed / 6 skipped / 0 failures
+check_repo_safety: PASS (0 warnings)
+```
+
+```
+=== E1.79 ACCEPTANCE CRITERIA (evaluated) ===
+session_best_amount_usd >= 50  → 37.99  FAIL  (real executable depth unchanged)
+session_best_expected_profit_usd > 0    → 22.44 PASS
+submit_ready_delta >= 1        → 0      FAIL
+ws_429_rate < 15%              → 1.3%   PASS
+soak_infra: 5/5 alive, 0 crash_restarts → PASS
+overall: INFRASTRUCTURE_PASS / MARKET_GAP
+```
+
+**Status (prior E1.78)**: **E1.78 REACHED (2026-05-10). 1h soak COMPLETE. Bug fix confirmed: session_best preservation in _HOT_PRESERVE_ALWAYS. 10 tests (4955 total). Gate: INFRASTRUCTURE_PASS / MARKET_GAP — session_best_near_usd=50 PASS, production_sized_total=0 FAIL, roundtrip_profitable_delta=0 FAIL. Soak: 5/5 alive, 0 crash_restarts, 13 cold cycles, WS=10/894, 429=1.45%, clean exit 0.**
+
+goal_status: REACHED
 pipeline_ready: true
 production_profit_ready: false
 close_allowed: true
+blocker_status_after: BLOCKED — MARKET_GAP persists; production_sized_total=0; roundtrip_profitable_delta=0; E1.79 Steps 7-9 required
 strict_gate_runtime_only: true
 docs_reread_confirmed: true
-blocker: MARKET_GAP — no Base pair reaches $50+ executable depth on profitable lags; universe expansion needed
-next_milestone: E1.78 — pair/DEX universe expansion; wire `pending_eth_call()` into cold scorer quote path; persist mav_usd/lag_score back to bridge artifact
+blocker: MARKET_GAP — production_sized_total=0 (best pool 0xdc8f: amount_in_optimal_usd=$38, best_size_usd=$50, profit=$22.44); no roundtrip completions; infrastructure is healthy
+next_milestone: E1.79 Steps 7-9 (universe expansion as pair-family, scout filter ≥2 DEX, depth_breakthrough dashboard block)
 
 ```
-=== E1.77 SOAK EVIDENCE (30min, 2026-05-10T08:34:40Z→09:04:43Z) ===
-5/5 alive, 0 crash_restarts, clean shutdown (exit 0)
-cold_cycles:                  7 (240s default confirmed)
-heatmap_rows:                 29 (stable from t+6m)
-ppm_enabled:                  True  ppm_pairs=29
-production_sized_total:       0 (strict gate FAIL — market gap)
-best_near_usd:                30.0 (peak at t+27m; $50 threshold not reached)
-OPP peak:                     17 (t+18m)
-WS 429_rate:                  0.8% (≤15% gate: PASS)
-bridge_identity:              pair=PEPE/WETH src=cold_bridge dex=unknown (normalized)
-heatmap_staleness:            bridge_age_s=223 matrix_age_s=223 pool_age_s=513 price_age_s=223 volume_age_s=null (6 fields: PASS)
-architectural_gap:            mav_usd/lag_score set in-memory during sort; NOT written back to bridge JSON
+=== E1.78 FIXES (code, 2026-05-10) ===
+bridge write-back:      mav_usd/lag_score/best_size_usd persisted to bridge JSON after sort
+session_best:           session_best_near_usd / session_best_amount_usd accumulated per session (monotonic max)
+strict gate:            post_soak_pass_gate reads session_best; best_amount_effective = max(snapshot, session_best_near, session_best_amount)
+usd_basis_counter:      cold_exec_with_usd_basis now counts amount_in_optimal_usd > 0 (was missing)
+pending_eth_call:       wired in cold scorer (top-3 MAV; balanceOf canary; E1.79 extends to quoter ABI)
+session_best preserve:  bridge_runtime _HOT_PRESERVE_ALWAYS += "session_best" (bug fix: cold lane was clearing KPI each cycle)
+new tests (10):         test_e1_78_bridge_writeback.py (write-back, session_best, gate, counter, preservation)
+pytest:                 4955 passed / 6 skipped / 0 failures
 ```
 
-**E1.76 (PRIMITIVES_LANDED, 2026-05-10)**: Pair-family matrix, depth ladder, MAV/lag helpers, GeckoTerminal + DefiLlama scouts, dashboard `/api/m7/pair_family_heatmap`, `post_soak_pass_gate.py --strict`. 4936 unit tests pass. Blocker reframed: COLD_REFRESH_LATENCY (resolved) → INSUFFICIENT_EXECUTABLE_DEPTH_ON_PROFITABLE_LAGS.
+```
+=== E1.78 SOAK RESULT (2026-05-10T12:01–13:01Z) ===
+soak_id:      start_nonstop_runtime.py --chain base --hours 1 --cold-http-only --m7-cold-ws-timeout 240
+env:          PENDING_SIM=1, REQUIRE_USD_BASIS=1, COLD_REQUIRE_USD_BASIS=1, PAPER_SIGNING=1
+acceptance:   session_best_near_usd >= 50 OR production_sized_total >= 1
+all_pass: false
+verdict: INFRASTRUCTURE_PASS / MARKET_GAP
+production_sized_total:   0    → FAIL (market depth $38 < prod threshold)
+best_amount_in_usd:       50.0 → PASS (session_best_near_usd=50.0 exactly matches threshold)
+best_expected_profit_usd: 22.44 → PASS
+roundtrip_profitable_delta: 0  → FAIL (paper signing, no exec completions)
+submit_ready_delta:       3    → PASS
+ws_429_rate:              1.45% → PASS (< 15%)
+soak_infra: 5/5 alive, 0 crash_restarts, 13 cold cycles, clean exit 0
+bridge top:   pool=0xdc8f | net_bps=5906 | lag=100 | best_size=50 | amount=37.99 | profit=22.44
+```
 
----
+```
+=== E1.78 FIXES (code, 2026-05-10) ===
+bridge write-back:      mav_usd/lag_score/best_size_usd persisted to bridge JSON after sort
+session_best:           session_best_near_usd / session_best_amount_usd accumulated per session (monotonic max)
+strict gate:            post_soak_pass_gate reads session_best; best_amount_effective = max(snapshot, session_best_near, session_best_amount)
+usd_basis_counter:      cold_exec_with_usd_basis now counts amount_in_optimal_usd > 0 (was missing)
+pending_eth_call:       wired in cold scorer (top-3 MAV; balanceOf canary; E1.79 extends to quoter ABI)
+session_best preserve:  bridge_runtime _HOT_PRESERVE_ALWAYS += "session_best" (bug fix: cold lane was clearing KPI each cycle)
+new tests (10):         test_e1_78_bridge_writeback.py (write-back, session_best, gate, counter, preservation)
+pytest:                 4955 passed / 6 skipped / 0 failures
+```
+
+```
+=== E1.78 SOAK IN PROGRESS (2026-05-10T12:01Z) ===
+soak_id:      start_nonstop_runtime.py --chain base --hours 1 --cold-http-only --m7-cold-ws-timeout 240
+env:          PENDING_SIM=1, REQUIRE_USD_BASIS=1, COLD_REQUIRE_USD_BASIS=1, PAPER_SIGNING=1
+acceptance:   session_best_near_usd >= 50 OR production_sized_total >= 1
+t+03m [01]:   FRESH | cold_cyc=1  | session_near=0  | hmap=29 | submit=33 | WS=1/868  | 429=0
+t+06m [02]:   FRESH | cold_cyc=2  | session_near=0  | hmap=47 | submit=33 | WS=2/869  | 429=0
+t+09m [03]:   FRESH | cold_cyc=3  | session_near=25 | hmap=47 | submit=34 | WS=3/871  | 429=1  (usd_basis=2)
+t+12m [04]:   FRESH | cold_cyc=3  | session_near=25 | hmap=47 | submit=35 | WS=3/872  | 429=2
+t+15m [05]:   FRESH | cold_cyc=4  | session_near=25 | hmap=47 | submit=36 | WS=3/873  | 429=3
+t+18m [06]:   STALE | cold_cyc=5  | session_near=0  | hmap=47 | submit=36 | WS=3/874  | 429=4  (pool change bug)
+t+21m [07]:   FRESH | cold_cyc=5  | session_near=0  | hmap=47 | submit=36 | WS=4/876  | 429=5
+t+24m [08]:   FRESH | cold_cyc=6  | session_near=0  | hmap=47 | submit=36 | WS=5/877  | 429=5
+t+27m [09]:   STALE | cold_cyc=7  | session_near=0  | hmap=47 | submit=36 | WS=5/878  | 429=6
+t+30m [10]:   FRESH | cold_cyc=7  | session_near=0  | hmap=47 | submit=36 | WS=6/880  | 429=7
+t+33m [11]:   FRESH | cold_cyc=8  | session_near=50 | hmap=47 | submit=36 | WS=6/882  | 429=8  (BREAKTHROUGH! pool 0xdc8f net_bps=5906 profit=$22.44)
+t+36m [12]:   FRESH | cold_cyc=9  | session_near=50 | hmap=47 | submit=36 | WS=6/884  | 429=9  (preserved!)
+t+39m [13]:   FRESH | cold_cyc=9  | session_near=50 | hmap=47 | submit=36 | WS=7/885  | 429=9
+t+42m [14]:   FRESH | cold_cyc=10 | session_near=50 | hmap=47 | submit=36 | WS=8/887  | 429=9
+t+45m [15]:   FRESH | cold_cyc=11 | session_near=0  | hmap=47 | submit=36 | WS=8/888  | 429=10  (cold scan race)
+t+48m [16]:   FRESH | cold_cyc=11 | session_near=50 | hmap=47 | submit=36 | WS=8/890  | 429=11  (restored)
+t+51m [17]:   FRESH | cold_cyc=12 | session_near=50 | hmap=47 | submit=36 | WS=9/892  | 429=11
+t+54m [18]:   FRESH | cold_cyc=12 | session_near=50 | hmap=47 | submit=36 | WS=10/893 | 429=11
+t+57m [19]:   FRESH | cold_cyc=13 | session_near=0  | hmap=47 | submit=36 | WS=10/894 | 429=12  (cold scan race)
+t+60m [20]:   API_ERR (soak terminated 13:01:13Z, monitor polled 13:01:49Z = 36s post-shutdown)
+bridge top:   pool=0xdc8f | net_bps=5906 | lag=100 | best_size=50 | amount=37.99 | profit=22.44
+
+=== STRICT GATE RESULT (2026-05-10T13:01Z) ===
+all_pass: false
+verdict: INFRASTRUCTURE_PASS / MARKET_GAP
+production_sized_total:   0    → FAIL (market depth $38 < prod threshold)
+best_amount_in_usd:       50.0 → PASS (session_best_near_usd=50.0 exactly matches threshold)
+best_expected_profit_usd: 22.44 → PASS
+roundtrip_profitable_delta: 0  → FAIL (paper signing, no exec completions)
+submit_ready_delta:       3    → PASS
+ws_429_rate:              1.45% → PASS (< 15%)
+soak_infra: 5/5 alive, 0 crash_restarts, 13 cold cycles, clean exit 0
+``` 30-min soak INFRASTRUCTURE_PASS: 5/5 processes alive throughout, 0 crash_restarts, 7 cold cycles (240s cadence), heatmap_rows=29 stable from t+6m, bridge identity fields present (pair/source/dex=unknown). Strict gate KPIs (production_sized/submit_ready_delta/roundtrip_profitable_delta) = 0 — confirmed MARKET_GAP (best_near_usd peaked $30 at t+27m; OPP peaked 17 at t+18m; WS 429_rate=0.8%).
+
+
 
 **Status (prior)**: **E1.65 REACHED (2026-05-08). USD-size/dashboard/depth truth validated. 3h soak clean (5/5 alive, 0 crashes). production_profitable_total=0 is ACCEPTED as dust-depth market reality: all profitable Base arb pairs (FUN/USDC, 0x16ee7eca/USDC) cap at AMM frontier < $1. pipeline_ready=true. production_profit_ready=false (no pair ≥$10 depth). Next: E1.66 depth-aware universe expansion + production-sized profitability gate.**
 

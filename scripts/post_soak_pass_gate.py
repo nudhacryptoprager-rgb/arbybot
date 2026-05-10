@@ -198,6 +198,32 @@ def main() -> int:
 
     best_amount = _best_amount_usd(bridge, include_disc=disc_assisted)
     best_profit = _best_profit_usd(bridge, include_disc=disc_assisted)
+
+    # E1.78 Step 3: also read session_best KPIs accumulated across the whole
+    # soak (written back by cold_immediate_sim after each enrichment sort).
+    # session_best_near_usd reflects the peak MAV/best_size seen during the
+    # session — this allows the gate to pass when the peak exceeded $50 even
+    # if the final bridge snapshot shows a lower value.
+    _session_best = bridge.get("session_best") or {}
+    session_best_near_usd = _safe_float(_session_best.get("session_best_near_usd"))
+    session_best_amount_usd = _safe_float(_session_best.get("session_best_amount_usd"))
+    # E1.79 Fix 2: gate uses REAL executable amount only (not proxy/ladder best_size).
+    # session_best_near_usd includes depth-ladder proxy (best_size_usd, capped at $50)
+    # which can mask cases where actual optimal amount < $50.
+    # Production gate passes only on session_best_amount_usd (amount_in_optimal_usd peak).
+    best_amount_effective = max(best_amount, session_best_amount_usd)
+    # Informational: peak proxy size (mav_usd + ladder best_size_usd) — shown in report.
+    session_best_proxy_size_usd = _safe_float(
+        _session_best.get("session_best_proxy_size_usd") or session_best_near_usd
+    )
+    # E1.79 Fix 1: also read session_best_expected_profit_usd accumulated across
+    # the entire soak; the final cold_executable snapshot may have a null-profit row
+    # that makes _best_profit_usd() return 0 even though the session hit $22+.
+    session_best_expected_profit_usd = _safe_float(
+        _session_best.get("session_best_expected_profit_usd")
+    )
+    best_profit_effective = max(best_profit, session_best_expected_profit_usd)
+
     rt_prof_delta = _fresh_delta(
         rollup,
         "roundtrip_profitable_total",
@@ -216,11 +242,20 @@ def main() -> int:
             "value": prod_total, "min": 1, "pass": prod_total > 0,
         },
         "best_amount_in_usd": {
-            "value": best_amount, "min": min_amount,
-            "pass": best_amount >= (min_amount - amount_tolerance),
+            "value": best_amount_effective, "min": min_amount,
+            # E1.79: effective = max(final snapshot, session_best_amount_usd [real only]).
+            # session_best_near_usd (proxy/ladder) is informational; not used for gate.
+            "session_best_amount_usd": session_best_amount_usd,
+            "session_best_proxy_size_usd": session_best_proxy_size_usd,
+            "pass": best_amount_effective >= (min_amount - amount_tolerance),
         },
         "best_expected_profit_usd": {
-            "value": best_profit, "min": min_profit, "pass": best_profit > min_profit,
+            # E1.79 Fix 1: use session-best peak, not only final snapshot.
+            "value": best_profit_effective,
+            "value_snapshot": best_profit,
+            "session_best_expected_profit_usd": session_best_expected_profit_usd,
+            "min": min_profit,
+            "pass": best_profit_effective > min_profit,
         },
         "roundtrip_profitable_delta": {
             "value": rt_prof_delta, "min": 1, "pass": rt_prof_delta > 0,
