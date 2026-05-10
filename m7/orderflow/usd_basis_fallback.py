@@ -39,6 +39,16 @@ _DEFAULT_TABLE: Dict[str, float] = {
     "BRETT": 0.05,
     "DEGEN": 0.005,
     "TOSHI": 0.0001,
+    # E1.80 Coinbase-Wrapped expansion — anchors for cb* assets so
+    # primary _quote_implied_size_usd path can size cb*/WETH and cb*/USDC
+    # routes without OnlyOracleSanity round-trip.  Values are rough
+    # mid-2026 anchors; operators must override via env for live trading.
+    "CBXRP": 1.43,
+    "CBLTC": 58.45,
+    "CBADA": 0.27,
+    "CBMEGA": 0.13,
+    "CBETH": 4500.0,
+    "WSTETH": 5300.0,
 }
 
 

@@ -705,6 +705,27 @@ def queue_cold_executable_for_sim(
         if _epusd is not None:
             res.expected_profit_usd = _epusd
         synthetic.append(res)
+        # E1.80: dynamic cold→hot pool promotion. When a cold candidate
+        # clears the auto-promotion bps threshold (default 20 bps), record
+        # it on the promotion registry so PROD prewarm can re-route to the
+        # exact pool/router on the next iteration. Fail-soft: gated by
+        # ARBY_POOL_PROMOTION=1, never raises.
+        try:
+            from m7.orderflow.disc_to_prod_pool_promotion import (
+                try_promote_from_cold_signal,
+            )
+            try_promote_from_cold_signal(
+                pool=entry.get("pool_address") or entry.get("pool"),
+                net_bps=entry.get("net_bps"),
+                pair=entry.get("actual_pair") or entry.get("pair"),
+                router=entry.get("best_buy_venue") or entry.get("router"),
+                fee_tier=int(entry["fee_tier"]) if entry.get("fee_tier") else None,
+                token_in=entry.get("backrun_token_in_address"),
+                token_out=entry.get("backrun_token_out_address"),
+                chain=chain,
+            )
+        except Exception:
+            pass
 
     if not synthetic:
         return None, counters

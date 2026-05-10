@@ -95,6 +95,19 @@ base:cbETH/USDC
 base:cbETH/WETH
 base:wstETH/WETH
 
+# E1.80 Coinbase-Wrapped expansion (2026-05-10): multi-DEX cb* tokens
+# with verified live depth (DexScreener cross-DEX validation):
+#   cbXRP/WETH  — Aerodrome $500K + PancakeSwap + HyDreX (3-DEX divergence)
+#   cbXRP/USDC  — alt quote for XRP arb
+#   cbLTC/WETH  — Aerodrome $127K + Treble $73K (2-DEX)
+#   cbADA/WETH  — Aerodrome $150K
+#   cbMEGA/USDC — Aerodrome $950K (fresh-listing arb potential)
+base:cbXRP/WETH
+base:cbXRP/USDC
+base:cbLTC/WETH
+base:cbADA/WETH
+base:cbMEGA/USDC
+
 # ------------------------------------------------------------
 # E1.69 Wave B: multi-hop production-size routes (Base)
 # ------------------------------------------------------------
@@ -118,6 +131,10 @@ base:DEGEN/AERO/USDC
 
 # cbBTC blue-chip via WETH (deepest BTC route on Base):
 base:cbBTC/WETH/USDC
+
+# E1.80: cb* multi-hop routes via WETH bridge:
+base:cbXRP/WETH/USDC
+base:cbLTC/WETH/USDC
 
 # ============================================================
 # LINEA (5 pairs, 2 productive tokens)

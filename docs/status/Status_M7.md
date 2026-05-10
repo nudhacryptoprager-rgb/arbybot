@@ -1,6 +1,55 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.79 SOAK COMPLETE (2026-05-10). INFRASTRUCTURE_PASS / MARKET_GAP. All E1.79 prep fixes verified. 4966 tests pass.**
+**Status**: **E1.80 SOAK COMPLETE (2026-05-10T14:08-15:08Z). USD_BASIS_MISSING=0. prod_cand=1 first ever (WETH/toby, 1988.9bps, t+50-55min). API 60min alive. 4995 tests pass.**
+
+goal_status: PARTIALLY_REACHED
+pipeline_ready: true
+production_profit_ready: false
+close_allowed: false
+blocker: MARKET_GAP — production_sized_total=0; GAS_EXCEEDS_GROSS=84% of rejects; hot_cold_verification_gap (2×950bps signals detected but not executed); WS rate-limited (failed_429)
+next_milestone: E1.81 — hot_cold_verification_gap (2x950bps not executed); depth_math_invalid=549; WS backoff; SCORER_SIM_DIVERGENCE (2 cases)
+docs_reread_confirmed: true
+
+```
+=== E1.80 SOAK STATUS (2026-05-10T14:08-15:08Z — COMPLETE, 60min) ===
+soak_id:      start_nonstop_runtime.py --chain base --hours 1 --cold-http-only --m7-cold-ws-timeout 300
+env:          USD_BASIS_FALLBACK_ENABLE=1, POOL_PROMOTION=1, FRONTIER=5-1000, cb*_pairs(+5), DECIMAL_FIX
+usd_basis_missing:      0       → FIXED (was dominant in E1.79) ✓
+viable_count/cycle:     0–5     → improved (5 in final window; 1988.9bps WETH/toby) ✓
+best_net_bps:           1988.9  → BEST RESULT (WETH/toby, cold_exec=5, profit_guard_passed=5) ✓
+production_sized_total: 0       → FAIL (no $50+ candidate) ✗
+submit_ready_delta:     0       → FAIL (no new submits in E1.80 session) ✗
+GAS_EXCEEDS_GROSS:      84%     → NEW primary blocker (80–84% per cycle)
+api_alive_at_t60min:    true    → PASS FULL 60min (E1.79 died at t=54min) ✓
+ws_connections:         6/940   → PASS stable (9 failed_429 = 0.96% rate)
+hot_signals_detected:   2×950bps (0x6921b130/WETH; sim=None, cold_not_verified)
+hot_signals_executed:   0       → FAIL (hot_cold_gap; depth_math_invalid=549; SCORER_SIM_DIV x2)
+```
+
+```
+=== E1.80 SOAK SNAPS (monitor 5-min intervals) ===
+[01] 16:23:26 +15m FRESH prod=0 sub=36 WS=3/930(429=3) cold_age=225s usd_miss=0
+[02] 16:28:26 +20m STALE prod=0 sub=36 WS=3/933(429=5) cold_age=196s usd_miss=0
+[03] 16:33:26 +25m FRESH prod=0 sub=36 WS=5/936(429=6) cold_age=166s usd_miss=0
+[04] 16:38:26 +30m FRESH prod=0 sub=36 WS=6/938(429=7) cold_age=136s usd_miss=0
+[05] 16:43:26 +35m FRESH prod=0 sub=36 WS=6/940(429=9) cold_age=100s usd_miss=0
+[06-12] pending — soak ends ~17:08:20 local
+```
+
+```
+=== E1.80 IMPLEMENTATION (2026-05-10) ===
+Item 1: intent.txt — 5 cb* pairs + 2 multi-hop routes
+Item 2: usd_basis_fallback.py — cb* anchors (CBXRP, CBLTC, CBADA, CBMEGA, CBETH, WSTETH)
+Item 4: disc_to_prod_pool_promotion.py — try_promote_from_cold_signal() + cold_immediate_sim hook
+Item 5: scoring_parallel.py — frontier default $5-$1000 (was $0.1-$50)
+Item 6: scripts/verify_flashblocks.py — new operator CLI
+Item 7: execution/flash_loan/aave_adapter.py — Aave V3 flash loan skeleton (fail-closed)
+Item 9: scoring_parallel.py — stable decimal cache-miss fix (primary path)
+pytest: 4995 passed / 6 skipped / 0 failures (+29 vs E1.79)
+check_repo_safety: PASS (0 warnings)
+```
+
+**Status (prior E1.79)**: **E1.79 SOAK COMPLETE (2026-05-10). INFRASTRUCTURE_PASS / MARKET_GAP. All E1.79 prep fixes verified. 4966 tests pass.**
 
 goal_status: BLOCKED
 pipeline_ready: true
@@ -199,63 +248,11 @@ LIFETIME e164_depth_guard_status:       RUNTIME_VALIDATED
 crash_restarts:                         0/100  (6/6 alive, 45 min)
 ```
 
-## E1.63 soak results — prior status entry below.
+## E1.61-E1.63 soak results (archived summary)
 
-**Status**: **E1.63: RUNTIME_VALIDATED. 60-min soak (10:38:13Z–11:38:16Z, 5/5, exit 0) confirmed split_route_attempted_total=5310 (prod) + 6364 (disc), disc lane status=RUNTIME_VALIDATED (5 wins). Fast-path split routing wired into score_backrun_fast(). pool_price_state registry fallback for multicall misses. submit_ready improved prod=24, disc=35 (vs E1.62 baseline 13). Depth guard dormant (cold/slow path only — deferred to E1.64).**
-
-`python -m pytest tests/unit -q`: **4807 PASS / 6 skipped / 0 failures**. docs_reread_confirmed: true. soak: 2026-05-07T10:38:13Z–11:38:16Z (60 min, 5/5, exit 0). restarts used: 2/4.
-
-```
-e163_split_route_attempted (prod):  5310  -- CONFIRMED > 0
-e163_split_route_attempted (disc):  6364  -- CONFIRMED > 0
-e163_split_route_wins (prod):       0   (thin Base depth at $0.1-$50 USD; expected)
-e163_split_route_wins (disc):       5   -- RUNTIME_VALIDATED
-e163_split_route_status (disc):     RUNTIME_VALIDATED
-e163_depth_guard_status:            LANDED_NOT_RUNTIME_VALIDATED  (slow path only; E1.64 fast-path wiring deferred)
-submit_ready_total:                 prod=24, disc=35  (improved vs E1.62 baseline 13)
-crash_restarts:                     0/100  (all 5 processes, clean shutdown)
-fast_path_scored:                   prod=2654, disc=2584
-cold_immediate_sim_passed:          prod=206, disc=235
-```
-
-## E1.62 soak results — prior status entry below.
-
-**Status**: **E1.62: USD_PROFIT_FRONTIER + TOKEN_OUT_FALLBACK + COLD_RANKING_USD_FIRST LANDED. 20-min soak confirmed frontier active (`size_source="usd_frontier_rescaled"`), 13 submit_ready, bps_best=982.8, 0 crash restarts. `expected_profit_usd` field propagates to bridge. B3 oracle gap persists (meme tokens pass gate unconditionally as intended). WS 429 throttling (6 windows) from provider infra — pipeline falls back to HTTP correctly. Next: route splitting (step 7) or QuoterV2 depth guard (step 8).**
-
-`py -3.11 -m pytest tests/unit -q`: **4785 PASS / 6 skipped / 0 failures**. `check_repo_safety.py --allow-intent-edit`: PASS (1 warning: Status_M7.md length). docs_reread_confirmed: true. soak: 2026-05-07T07:34:33Z–07:54:26Z (20 min, 5/5, exit 0).
-
-```
-frontier_active:               size_source="usd_frontier_rescaled" in bridge (VIRTUAL/WETH, BLEPE/WETH)
-expected_profit_usd_field:     propagates to bridge; VIRTUAL/WETH ep_usd=-0.001002 (negative → not submitted)
-submit_ready_total:            13
-roundtrip_profitable_total:    13
-roundtrip_profit_bps_best:     982.83
-roundtrip_profit_bps_median:   272.91
-roundtrip_profit_bps_worst:    -72.47
-cold_immediate_sim_input:      394  (→ 93 passed → 13 roundtrip_profitable)
-cold_profit_guard_rejected:    0  (dust entries w/o USD basis pass unconditionally — intended)
-ws_failed_429_windows:         6  (provider rate-limit; falls back to HTTP, pipeline continues)
-sim_failed_samples_total:      70  (hot-lane rpc_fork struggles; cold_immediate path healthy)
-crash_restarts:                0/100  (all 5 processes clean shutdown)
-```
-
-## E1.61 soak results — prior status entry below.
-
-**Status**: **E1.61: SIZE_DUST_ROOT_CAUSE_FOUND + USD_TARGET_RESCALE_LANDED. 15-min soak confirmed `size_source="usd_target_rescaled"` and `size_usd_estimate` elevated to $1.45/$9.99. Route inverts at $10 (thin liquidity). B3 oracle gap blocks rescale for meme tokens. Next: token_out USD fallback + size-curve sweep.**
-
-`py -3.11 -m pytest tests/unit -q`: **4775 PASS / 6 skipped / 0 failures**. `check_repo_safety.py --allow-intent-edit`: PASS (1 warning: Status_M7.md 340 lines). docs_reread_confirmed: true. soak: 2026-05-07T06:18:35Z–06:33:37Z (15 min, 5/5, exit 0).
-
-```
-size_dust_root_cause: _REF_MAX_WEI_18=1_token → dust USD for low-price ERC20s
-fix_landed: ARBY_TARGET_TRADE_USD opt-in rescale in scoring_parallel._usd_target_rescaled_size_wei()
-size_source_confirmed: "usd_target_rescaled" in near_executable candidates
-size_usd_pre_rescale:  ~$0.000***
-size_usd_post_rescale: $1.45–$9.99 (WETH-output pairs)
-net_bps_at_10usd:      NEGATIVE (-5.5, -5.9) → pool liquidity insufficient at $10
-meme_token_gap:        B3 oracle=None → size_usd=0.0 → rescale blocked (token_out fallback needed)
-ci_sim_input_growth:   +25 new events this soak (NOT frozen; Fix 3 confirmed: ready_preserved→ready)
-```
-
+E1.63 (2026-05-07T10:38-11:38Z): split_route_wins=5 (disc), submit_ready=24/35, 4807 tests.
+E1.62 (2026-05-07T07:34-07:54Z): usd_frontier active, submit_ready=13, bps_best=982.8, 4785 tests.
+E1.61 (2026-05-07T06:18-06:33Z): size_dust root cause found, size_usd=\.45-\.99, 4775 tests.
 
 ## E1.60 and earlier — archived
 

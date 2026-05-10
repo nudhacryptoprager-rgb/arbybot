@@ -224,6 +224,74 @@ def seed_from_env(now: Optional[float] = None) -> int:
     return count
 
 
+def _auto_promotion_bps_threshold() -> float:
+    """E1.80: minimum net_bps for auto-promotion from cold-positive signal.
+
+    Default 20.0 bps — well above the typical noise floor (gas+fee combined
+    ≈10-15 bps on Base) but low enough to catch real divergence windows.
+    Override via ``ARBY_POOL_PROMOTION_AUTO_BPS``.
+    """
+    try:
+        return float(os.environ.get("ARBY_POOL_PROMOTION_AUTO_BPS", "20") or 20.0)
+    except (TypeError, ValueError):
+        return 20.0
+
+
+def try_promote_from_cold_signal(
+    *,
+    pool: Optional[str],
+    net_bps: Optional[float],
+    pair: Optional[str] = None,
+    router: Optional[str] = None,
+    fee_tier: Optional[int] = None,
+    token_in: Optional[str] = None,
+    token_out: Optional[str] = None,
+    chain: Optional[str] = None,
+    session_id: Optional[str] = None,
+    now: Optional[float] = None,
+) -> Optional[PoolPromotion]:
+    """E1.80: dynamic cold→hot promotion hook.
+
+    Records a profitable cold-lane observation when:
+      * feature flag ``ARBY_POOL_PROMOTION=1`` is set (delegated to
+        ``observe_profitable``);
+      * a non-empty ``pool`` address is supplied;
+      * ``net_bps`` is finite and ≥ ``ARBY_POOL_PROMOTION_AUTO_BPS`` (20 by
+        default).
+
+    Returns the resulting ``PoolPromotion`` on success, ``None`` when the
+    signal is rejected (below threshold, missing data, or feature off).
+
+    Fail-soft: any exception is swallowed so callers in the cold-immediate
+    pipeline never break on a promotion-side bug.
+    """
+    if not pool or net_bps is None:
+        return None
+    try:
+        bps = float(net_bps)
+    except (TypeError, ValueError):
+        return None
+    if not (bps == bps) or bps < _auto_promotion_bps_threshold():  # NaN-safe
+        return None
+    if not is_enabled():
+        return None
+    try:
+        return observe_profitable(
+            pool=pool,
+            pair=pair,
+            router=router,
+            fee_tier=fee_tier,
+            token_in=token_in,
+            token_out=token_out,
+            chain=chain,
+            profit_bps=bps,
+            session_id=session_id or "cold_signal_auto",
+            now=now,
+        )
+    except Exception:
+        return None
+
+
 reset_for_tests = reset
 
 
@@ -235,4 +303,5 @@ __all__ = [
     "reset",
     "reset_for_tests",
     "snapshot",
+    "try_promote_from_cold_signal",
 ]

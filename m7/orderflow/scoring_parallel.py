@@ -209,8 +209,21 @@ def _quote_implied_size_usd(
     """
     in_sym = (symbol_in or "").upper()
     out_sym = (symbol_out or "").upper()
-    dec_in = decimals_in if decimals_in is not None else 18
-    dec_out = decimals_out if decimals_out is not None else 18
+    # E1.80 Iter 9: extend the cache-miss override (E1.65 step 4/7) to the
+    # primary path. Previously only the secondary `out_sym in stables` branch
+    # consulted _STABLE_DEC_OVERRIDE; the primary `in_sym in stables` branch
+    # silently fell back to 18 on cache miss, producing a 10^12 underestimate
+    # for USDC→token swaps and rejecting them as USD_BASIS_MISSING / 0.0.
+    dec_in = (
+        decimals_in
+        if decimals_in is not None
+        else _STABLE_DEC_OVERRIDE.get(in_sym, 18)
+    )
+    dec_out = (
+        decimals_out
+        if decimals_out is not None
+        else _STABLE_DEC_OVERRIDE.get(out_sym, 18)
+    )
 
     # Primary path: token_in is known
     if in_sym in _USD_STABLE_SYMBOLS:
@@ -328,8 +341,12 @@ def _usd_target_rescaled_size_wei(
 
 
 # E1.62 step 2: size frontier — USD ladder instead of single target.
-# ENV: ARBY_SIZE_FRONTIER_USD (comma-separated, default "0.1,0.25,0.5,1,2,5,10,25,50")
-_DEFAULT_SIZE_FRONTIER_USD = "0.1,0.25,0.5,1,2,5,10,25,50"
+# E1.80 update: default ladder shifted up to "5,10,25,50,100,250,500,1000".
+# Rationale: under verified anchor pricing (E1.69 fallback) and 9-bps Aave V3
+# flash loan economics, sub-$5 sizes never break even on Base after gas+fees;
+# the upper rungs ($500-$1000) capture genuine divergence windows on cb*/WETH
+# pools that previously fell out of probe range. Override via ARBY_SIZE_FRONTIER_USD.
+_DEFAULT_SIZE_FRONTIER_USD = "5,10,25,50,100,250,500,1000"
 
 
 def _usd_frontier_sizes_wei(
@@ -366,7 +383,7 @@ def _usd_frontier_sizes_wei(
             if x.strip()
         ]
     except Exception:
-        frontier_usd = [0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0]
+        frontier_usd = [5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0]
 
     max_scale_val = (
         float(max_scale)
