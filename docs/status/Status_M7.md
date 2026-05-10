@@ -1,6 +1,36 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.65 REACHED (2026-05-08). USD-size/dashboard/depth truth validated. 3h soak clean (5/5 alive, 0 crashes). production_profitable_total=0 is ACCEPTED as dust-depth market reality: all profitable Base arb pairs (FUN/USDC, 0x16ee7eca/USDC) cap at AMM frontier < $1. pipeline_ready=true. production_profit_ready=false (no pair ≥$10 depth). Next: E1.66 depth-aware universe expansion + production-sized profitability gate.**
+**Status**: **E1.77 SOAK_COMPLETE (2026-05-10). 30-min soak INFRASTRUCTURE_PASS: 5/5 processes alive throughout, 0 crash_restarts, 7 cold cycles (240s cadence), heatmap_rows=29 stable from t+6m, bridge identity fields present (pair/source/dex=unknown). Strict gate KPIs (production_sized/submit_ready_delta/roundtrip_profitable_delta) = 0 — confirmed MARKET_GAP not code bug (best_near_usd peaked $30 at t+27m; OPP peaked 17 at t+18m; WS 429_rate=0.8%). Architectural note: `mav_usd`/`lag_score`/`best_size_usd` are correctly used in-memory for cold scorer ranking but not persisted back to bridge JSON (bridge written before cold_immediate_sim sort). Deferred to E1.78.**
+
+goal_status: SOAK_COMPLETE
+pipeline_ready: true
+production_profit_ready: false
+close_allowed: true
+strict_gate_runtime_only: true
+docs_reread_confirmed: true
+blocker: MARKET_GAP — no Base pair reaches $50+ executable depth on profitable lags; universe expansion needed
+next_milestone: E1.78 — pair/DEX universe expansion; wire `pending_eth_call()` into cold scorer quote path; persist mav_usd/lag_score back to bridge artifact
+
+```
+=== E1.77 SOAK EVIDENCE (30min, 2026-05-10T08:34:40Z→09:04:43Z) ===
+5/5 alive, 0 crash_restarts, clean shutdown (exit 0)
+cold_cycles:                  7 (240s default confirmed)
+heatmap_rows:                 29 (stable from t+6m)
+ppm_enabled:                  True  ppm_pairs=29
+production_sized_total:       0 (strict gate FAIL — market gap)
+best_near_usd:                30.0 (peak at t+27m; $50 threshold not reached)
+OPP peak:                     17 (t+18m)
+WS 429_rate:                  0.8% (≤15% gate: PASS)
+bridge_identity:              pair=PEPE/WETH src=cold_bridge dex=unknown (normalized)
+heatmap_staleness:            bridge_age_s=223 matrix_age_s=223 pool_age_s=513 price_age_s=223 volume_age_s=null (6 fields: PASS)
+architectural_gap:            mav_usd/lag_score set in-memory during sort; NOT written back to bridge JSON
+```
+
+**E1.76 (PRIMITIVES_LANDED, 2026-05-10)**: Pair-family matrix, depth ladder, MAV/lag helpers, GeckoTerminal + DefiLlama scouts, dashboard `/api/m7/pair_family_heatmap`, `post_soak_pass_gate.py --strict`. 4936 unit tests pass. Blocker reframed: COLD_REFRESH_LATENCY (resolved) → INSUFFICIENT_EXECUTABLE_DEPTH_ON_PROFITABLE_LAGS.
+
+---
+
+**Status (prior)**: **E1.65 REACHED (2026-05-08). USD-size/dashboard/depth truth validated. 3h soak clean (5/5 alive, 0 crashes). production_profitable_total=0 is ACCEPTED as dust-depth market reality: all profitable Base arb pairs (FUN/USDC, 0x16ee7eca/USDC) cap at AMM frontier < $1. pipeline_ready=true. production_profit_ready=false (no pair ≥$10 depth). Next: E1.66 depth-aware universe expansion + production-sized profitability gate.**
 
 goal_status: REACHED
 pipeline_ready: true

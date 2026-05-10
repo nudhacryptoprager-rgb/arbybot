@@ -151,6 +151,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if profile not in ("production", "discovery"):
                 profile = "production"
             self._serve_m7_current(profile=profile)
+        elif path == "/api/m7/pair_family_heatmap":
+            # E1.76 step 9: pair-pool matrix heatmap.  Reads
+            # pair_pool_matrix from the bridge artifact and projects each
+            # family onto the canonical depth ladder.
+            qs = parse_qs(parsed.query or "")
+            profile = (qs.get("profile") or ["production"])[0]
+            if profile not in ("production", "discovery"):
+                profile = "production"
+            self._serve_pair_family_heatmap(profile=profile)
         elif path == "/m7" or path == "/m7/":
             self._serve_file(Path(__file__).parent / "dashboard_m7.html", "text/html")
         else:
@@ -366,6 +375,151 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             canary=canary,
         )
 
+        payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_pair_family_heatmap(self, profile: str = "production"):
+        """E1.76 step 9: heatmap of pair-families × depth-ladder profit.
+
+        Reads ``pair_pool_matrix`` and ``cold_executable`` from the
+        bridge artifact, projects each family onto the canonical depth
+        rungs and returns a flat list of ``{pair, pool_count, dex_count,
+        tvl_total_usd, best_size_usd, best_profit_usd, lag_score}`` rows.
+        """
+        files = DISCOVERY_ARTIFACT_FILES if profile == "discovery" else ARTIFACT_FILES
+        bridge_path = files.get("m7_cold_hot_bridge")
+        bridge: dict = {}
+        if bridge_path and bridge_path.is_file():
+            try:
+                with open(bridge_path, encoding="utf-8") as fh:
+                    bridge = json.load(fh) or {}
+            except (json.JSONDecodeError, OSError):
+                bridge = {}
+
+        try:
+            from m7.orderflow.depth_ladder import (
+                DEFAULT_DEPTH_LADDER_USD,
+                build_depth_ladder,
+                lag_score,
+                mav_estimate_usd,
+            )
+        except Exception:
+            DEFAULT_DEPTH_LADDER_USD = (10.0, 25.0, 50.0, 100.0, 250.0, 500.0)
+            build_depth_ladder = None
+            lag_score = None
+            mav_estimate_usd = None
+
+        # Build a {pair -> [depth_curve rows]} map from cold_executable.
+        cold_exec = bridge.get("cold_executable") or []
+        family_curves: dict = {}
+        family_lag_inputs: dict = {}
+        for c in cold_exec:
+            pair = (c.get("pair") or c.get("symbol") or "").upper()
+            if not pair:
+                continue
+            curve = c.get("depth_curve") or []
+            if curve:
+                family_curves.setdefault(pair, []).extend(curve)
+            else:
+                # Fall back: synthesise a one-rung curve from amount/profit fields.
+                size = c.get("amount_in_optimal_usd") or c.get("size_usd")
+                profit = c.get("expected_profit_usd")
+                if size and profit is not None:
+                    family_curves.setdefault(pair, []).append(
+                        {"size_usd": size, "expected_profit_usd": profit}
+                    )
+            secs = c.get("seconds_since_last_swap")
+            div = c.get("price_divergence_bps") or c.get("net_spread_bps")
+            if secs is not None or div is not None:
+                family_lag_inputs[pair] = {
+                    "seconds_since_last_swap": secs,
+                    "price_divergence_bps": div,
+                }
+
+        matrix = bridge.get("pair_pool_matrix") or {}
+        rows: list = []
+        for fam in matrix.get("pairs") or []:
+            pair = fam.get("pair") or ""
+            curve = family_curves.get(pair) or []
+            mav = (
+                mav_estimate_usd(curve) if mav_estimate_usd is not None
+                else {"mav_usd": 0.0, "best_size_usd": 0.0}
+            )
+            ladder = (
+                build_depth_ladder(curve) if build_depth_ladder is not None
+                else []
+            )
+            lag_inputs = family_lag_inputs.get(pair) or {}
+            score = (
+                lag_score(**lag_inputs) if (lag_score is not None and lag_inputs)
+                else 0.0
+            )
+            rows.append({
+                "pair": pair,
+                "pool_count": fam.get("pool_count", 0),
+                "dex_count": fam.get("dex_count", 0),
+                "tvl_total_usd": fam.get("tvl_total_usd", 0.0),
+                "volume_24h_total_usd": fam.get("volume_24h_total_usd", 0.0),
+                "best_pool": fam.get("best_pool"),
+                "fee_tiers": fam.get("fee_tiers", []),
+                "depth_ladder": ladder,
+                "mav_usd": mav.get("mav_usd", 0.0),
+                "best_size_usd": mav.get("best_size_usd", 0.0),
+                "lag_score": score,
+            })
+        # Sort by MAV desc, ties broken by TVL.
+        rows.sort(key=lambda r: (r["mav_usd"], r["tvl_total_usd"]), reverse=True)
+
+        # E1.77 step 6: staleness/age fields so reviewers can see which
+        # layer of the data plane is stale (pool snapshot vs price feed
+        # vs scout pull vs volume aggregate).
+        def _age_from_iso(ts: str | None) -> int | None:
+            if not ts:
+                return None
+            try:
+                _t = ts.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(_t)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+            except Exception:
+                return None
+
+        def _file_age(p) -> int | None:
+            try:
+                if p and p.is_file():
+                    import os as _os
+                    return max(0, int(datetime.now(timezone.utc).timestamp() - _os.path.getmtime(p)))
+            except Exception:
+                pass
+            return None
+
+        scout_path = ROLLING_DIR / "m7_tvl_scout_latest.json"
+        gecko_path = ROLLING_DIR / "m7_gecko_scout_latest.json"
+        volume_path = ROLLING_DIR / "m7_defillama_volume_latest.json"
+        staleness = {
+            "bridge_age_s": _age_from_iso(bridge.get("timestamp")),
+            "matrix_age_s": _age_from_iso(matrix.get("matrix_timestamp_utc")),
+            "pool_age_s": _file_age(scout_path),
+            "scout_age_s": _file_age(scout_path),
+            "price_age_s": _age_from_iso(bridge.get("timestamp")),
+            "volume_age_s": _file_age(volume_path) or _file_age(gecko_path),
+        }
+
+        result = {
+            "profile": profile,
+            "rows": rows,
+            "summary": matrix.get("summary") or {
+                "pair_count": 0, "pool_count": 0, "tvl_total_usd": 0.0,
+            },
+            "depth_rungs_usd": list(DEFAULT_DEPTH_LADDER_USD),
+            "staleness": staleness,
+        }
         payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")

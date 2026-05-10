@@ -68,8 +68,10 @@ def parse_args():
                          "(active-window default 120s; loop-runner hot default is 30).")
     ap.add_argument("--m7-cold-max-events", type=int, default=500,
                     help="Max events per cold window (soak default 500).")
-    ap.add_argument("--m7-cold-ws-timeout", type=int, default=900,
-                    help="Idle-window timeout in seconds for cold lane.")
+    ap.add_argument("--m7-cold-ws-timeout", type=int, default=240,
+                    help="Idle-window timeout in seconds for cold lane "
+                         "(E1.77: lowered 900→240s for Base profile so the cold "
+                         "WS reconnect cadence matches the median lag-window).")
     ap.add_argument("--no-m4", action="store_true", help="Skip M4/M5 scan orchestrator")
     ap.add_argument("--no-m7-cold", action="store_true", help="Skip M7 cold lane")
     # E1.65 Step 7: HTTP block polling for cold lanes — reduces WS connections

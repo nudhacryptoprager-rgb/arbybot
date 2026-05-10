@@ -187,10 +187,93 @@ def fetch_pending_pool_logs(
     return result
 
 
+def pending_sim_enabled() -> bool:
+    """E1.77 step 9: pending-state simulation switch.
+
+    Two ENV gates must be ON:
+      * ``ARBY_FLASHBLOCKS_HTTP_LANE=1``  — log lane available,
+      * ``ARBY_PENDING_SIM_ENABLE=1``     — caller opts in to pending sim.
+
+    Optional ``ARBY_FLASHBLOCKS_USE_LATEST=1`` falls the underlying tag
+    back to ``latest`` when the RPC does not support ``pending``.  Pure
+    feature flag — no network IO.
+    """
+    return is_enabled() and os.environ.get("ARBY_PENDING_SIM_ENABLE", "0") == "1"
+
+
+def pending_eth_call(
+    *,
+    rpc_url: str,
+    to: str,
+    data: str,
+    http_post: Callable[[str, dict, float], dict],
+    timeout_s: float = 5.0,
+) -> Optional[str]:
+    """E1.77 step 9: minimal ``eth_call`` against the pending block tag.
+
+    Returns the hex result string on success, ``None`` otherwise.
+    Honours the same throttle bucket / breaker as :func:`fetch_pending_pool_logs`.
+    Caller must inject ``http_post`` (same contract as that function) so this
+    helper stays unit-testable without a real RPC.
+
+    The function is intentionally narrow: a single contract call against a
+    pending state.  Higher-level flow (e.g. building the call data for a
+    Uniswap quote) is the caller's responsibility.
+    """
+    if not pending_sim_enabled():
+        return None
+    if not provider_throttle.acquire("logs", blocking=False):
+        _STATS["calls_blocked_by_breaker"] += 1
+        return None
+    _block_tag = (
+        "latest"
+        if os.environ.get("ARBY_FLASHBLOCKS_USE_LATEST", "0") == "1"
+        else PENDING_BLOCK_TAG
+    )
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{"to": to, "data": data}, _block_tag],
+    }
+    _STATS["calls_attempted"] += 1
+    try:
+        resp = http_post(rpc_url, payload, timeout_s)
+    except TimeoutError as exc:
+        _STATS["calls_408"] += 1
+        _STATS["last_error"] = f"timeout: {str(exc)[:120]}"
+        provider_throttle.record_response("logs", status_code=408)
+        return None
+    except Exception as exc:
+        _STATS["calls_other_error"] += 1
+        _STATS["last_error"] = str(exc)[:200]
+        provider_throttle.record_response("logs", ok=False)
+        return None
+    if not isinstance(resp, dict):
+        _STATS["calls_other_error"] += 1
+        provider_throttle.record_response("logs", ok=False)
+        return None
+    if "error" in resp and resp["error"]:
+        _STATS["calls_other_error"] += 1
+        _STATS["last_error"] = str(resp["error"])[:200]
+        provider_throttle.record_response("logs", ok=False)
+        return None
+    result = resp.get("result")
+    if not isinstance(result, str):
+        _STATS["calls_other_error"] += 1
+        provider_throttle.record_response("logs", ok=False)
+        return None
+    _STATS["calls_ok"] += 1
+    provider_throttle.record_response("logs", ok=True)
+    return result
+
+
 __all__ = [
     "PENDING_BLOCK_TAG",
     "fetch_pending_pool_logs",
     "is_enabled",
+    "pending_eth_call",
+    "pending_sim_enabled",
     "reset_stats",
     "stats",
 ]

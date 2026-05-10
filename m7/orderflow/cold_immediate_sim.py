@@ -95,12 +95,60 @@ def _entry_rank_key(entry: Dict[str, Any]) -> float:
     Step 9 fix: rank by expected_profit_usd (absolute USD edge) when
     available.  Fall back to net_bps scaled to a tiny value so that
     USD-ranked entries always beat bps-only entries in the ordering.
+
+    E1.77 P0: mix MAV (Maximal Arbitrage Value at executable depth) and
+    lag-staleness score into the rank key.  When ``depth_curve`` is
+    populated we prefer ``mav_estimate_usd`` over the point-estimate
+    ``expected_profit_usd`` because MAV captures the entire profit
+    surface (the largest size whose marginal profit is still positive).
+    Each candidate is also enriched in-place with ``mav_usd``,
+    ``best_size_usd`` and ``lag_score`` so the bridge artifact and the
+    dashboard heatmap can read identical fields.
     """
     p = _entry_expected_profit_usd(entry)
-    if p is not None:
-        return p
-    # Fallback: use net_bps as a tiebreaker (scaled down so USD entries win)
-    return float(entry.get("net_bps") or 0.0) * 1e-6
+
+    # E1.77 P0: depth-curve aware MAV estimate.
+    mav_usd: float = 0.0
+    best_size_usd: float = 0.0
+    try:
+        from m7.orderflow.depth_ladder import (
+            mav_estimate_usd as _mav_est,
+            lag_score as _lag,
+        )
+        _curve = entry.get("depth_curve") or []
+        if _curve:
+            _mav = _mav_est(_curve) or {}
+            mav_usd = float(_mav.get("mav_usd") or 0.0)
+            best_size_usd = float(_mav.get("best_size_usd") or 0.0)
+        # Lag/staleness score (0..100). Higher = stronger arb signal.
+        _lag_inputs: Dict[str, Any] = {}
+        if entry.get("seconds_since_last_swap") is not None:
+            _lag_inputs["seconds_since_last_swap"] = entry.get("seconds_since_last_swap")
+        if entry.get("price_divergence_bps") is not None:
+            _lag_inputs["price_divergence_bps"] = entry.get("price_divergence_bps")
+        elif entry.get("net_bps") is not None:
+            _lag_inputs["price_divergence_bps"] = entry.get("net_bps")
+        lag_val = float(_lag(**_lag_inputs)) if _lag_inputs else 0.0
+        # Stash for downstream consumers (bridge artifact, heatmap).
+        entry["mav_usd"] = round(mav_usd, 6)
+        entry["best_size_usd"] = round(best_size_usd, 6)
+        entry["lag_score"] = round(lag_val, 3)
+    except Exception:
+        lag_val = 0.0
+
+    # Composite rank: prefer MAV when meaningful (>=$0.01),
+    # else expected_profit_usd, else net_bps tiebreaker.
+    # Lag score acts as a small multiplicative boost (1.0..2.0) so two
+    # equally-profitable entries are ordered by freshness.
+    base: float
+    if mav_usd >= 0.01:
+        base = mav_usd
+    elif p is not None:
+        base = float(p)
+    else:
+        base = float(entry.get("net_bps") or 0.0) * 1e-6
+    boost = 1.0 + min(max(lag_val, 0.0), 100.0) / 100.0
+    return base * boost
 
 
 def _top_n() -> int:

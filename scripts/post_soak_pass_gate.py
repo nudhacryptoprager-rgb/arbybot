@@ -133,8 +133,17 @@ def main() -> int:
         default="prod",
         help="prod: PROD-only criteria. disc-assisted: merges DISC bridge as evidence.",
     )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "E1.76: enforce zero-tolerance on all six checks (no $0.05 dust on amount, "
+            "production_sized_total/submit_ready_delta/roundtrip_profitable_delta must each be >= 1)."
+        ),
+    )
     args, _ = ap.parse_known_args()
     disc_assisted = args.profile == "disc-assisted"
+    strict = bool(args.strict)
 
     rolling_dir = os.environ.get(
         "ARBY_GATE_ROLLING_DIR", os.path.join("data", "runs", "_rolling")
@@ -144,6 +153,9 @@ def main() -> int:
     max_429 = _safe_float(os.environ.get("ARBY_GATE_MAX_WS_429_RATE", "0.15"))
     # E1.70 fix 5: rounding-dust tolerance so $49.9999... passes the $50 gate.
     amount_tolerance = _safe_float(os.environ.get("ARBY_GATE_AMOUNT_TOLERANCE_USD", "0.05"))
+    if strict:
+        # E1.76 step 10: zero tolerance — production-grade gate.
+        amount_tolerance = 0.0
 
     bridge_path = os.path.join(rolling_dir, "m7_cold_hot_bridge.json")
     rollup_path = os.path.join(rolling_dir, "m7_hot_rollup_latest.json")
@@ -223,7 +235,7 @@ def main() -> int:
     }
 
     all_pass = all(c["pass"] for c in checks.values())
-    report = {"all_pass": all_pass, "profile": args.profile, "checks": checks}
+    report = {"all_pass": all_pass, "profile": args.profile, "strict": strict, "checks": checks}
     print(json.dumps(report, indent=2, default=str))
     return 0 if all_pass else 1
 

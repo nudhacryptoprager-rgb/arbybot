@@ -65,6 +65,49 @@ def _write_cold_hot_bridge(
                 if _usd > _prev_usd:
                     _best_by_pool[_pa] = _c
         candidates = list(_best_by_pool.values())
+        # E1.77 step 5: normalize identity fields on every cold candidate.
+        # Reviewers reported `pair=None` for cold rows; this loop guarantees
+        # each entry has `pair`, `pool_in`, `pool_out`, `dex`, `fee`, `source`
+        # so heatmap rows and the strict gate can trace opportunity provenance.
+        for _c in candidates:
+            try:
+                _pair = (
+                    _c.get("pair")
+                    or _c.get("actual_pair")
+                    or _c.get("symbol")
+                    or _c.get("token_pair")
+                )
+                if not _pair:
+                    _ti = _c.get("token_in_symbol") or _c.get("token_in")
+                    _to = _c.get("token_out_symbol") or _c.get("token_out")
+                    if _ti and _to:
+                        _pair = f"{_ti}/{_to}"
+                _c["pair"] = _pair or "UNK/UNK"
+                _c["pool_in"] = (
+                    _c.get("pool_in")
+                    or _c.get("buy_pool_address")
+                    or _c.get("pool_address")
+                )
+                _c["pool_out"] = (
+                    _c.get("pool_out")
+                    or _c.get("sell_pool_address")
+                    or _c.get("pool_address")
+                )
+                _c["dex"] = _c.get("dex") or _c.get("dex_name") or "unknown"
+                _c["fee"] = (
+                    _c.get("fee")
+                    if _c.get("fee") is not None
+                    else (
+                        _c.get("fee_tier")
+                        or _c.get("best_buy_fee")
+                        or _c.get("best_sell_fee")
+                        or 0
+                    )
+                )
+                _c["source"] = _c.get("source") or "cold_bridge"
+            except Exception:
+                # Never let identity-normalization fail the whole bridge write.
+                pass
         stale_pos = artifact.get("top_stale_positive_candidates", [])
         recoverable_stale = artifact.get("top_recoverable_stale_candidates", [])
         recoverable_stale_viable = artifact.get("top_recoverable_stale_route_viable", [])
@@ -394,6 +437,77 @@ def _write_cold_hot_bridge(
                     payload["candidate_source_breakdown"]["route_graph_paths_top"] = len(_ranked)
         except Exception as _rge:
             payload["candidate_source_breakdown"]["route_graph_error"] = str(_rge)[:80]
+        # E1.76 step 1: pair-pool matrix (correlated pool families).
+        # Groups every TVL-scout pool by canonical pair so the cold scanner
+        # and dashboard heatmap can reason about *families* (same pair on
+        # multiple DEXes / fee tiers) rather than isolated pools.
+        try:
+            payload["candidate_source_breakdown"]["pair_pool_matrix_enabled"] = (
+                os.environ.get("ARBY_PAIR_POOL_MATRIX_ENABLE", "1") == "1"
+            )
+            if payload["candidate_source_breakdown"]["pair_pool_matrix_enabled"]:
+                _scout_path = os.path.join(
+                    os.path.dirname(_COLD_HOT_BRIDGE_PATH),
+                    "m7_tvl_scout_latest.json",
+                )
+                _pools_for_matrix: list = []
+                if os.path.exists(_scout_path):
+                    with open(_scout_path, "r", encoding="utf-8") as _sf:
+                        _pools_for_matrix = (json.load(_sf) or {}).get("pools", []) or []
+                # Optionally merge GeckoTerminal scout pools when enabled.
+                if os.environ.get("ARBY_GECKO_SCOUT_ENABLE", "0") == "1":
+                    try:
+                        from m7.scouts.gecko_scout import fetch_top_pools as _gtp
+                        _gecko_pools = _gtp(network="base")
+                        _pools_for_matrix.extend(_gp.to_dict() for _gp in _gecko_pools)
+                    except Exception:
+                        pass
+                from m7.scouts.pair_pool_matrix import build_pair_pool_matrix as _bppm
+                _matrix = _bppm(_pools_for_matrix, min_tvl_usd=0.0)
+                # Top 50 families to keep artifact bounded.
+                _matrix["pairs"] = _matrix.get("pairs", [])[:50]
+                # E1.77 step 6: stamp matrix build time so heatmap reports
+                # `matrix_age_s` independent from bridge `timestamp`.
+                _matrix["matrix_timestamp_utc"] = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+                payload["pair_pool_matrix"] = _matrix
+                payload["candidate_source_breakdown"]["pair_pool_matrix_pairs"] = (
+                    _matrix.get("summary", {}).get("pair_count", 0)
+                )
+        except Exception as _ppe:
+            payload["candidate_source_breakdown"]["pair_pool_matrix_error"] = str(_ppe)[:80]
+        # E1.76 step 6: DefiLlama dex-volume scout (chain activity layer).
+        try:
+            if os.environ.get("ARBY_DEFILLAMA_VOLUME_SCOUT_ENABLE", "0") == "1":
+                from m7.scouts.defillama_volume_scout import (
+                    fetch_dex_volumes as _fdv,
+                    rank_dexes_by_24h_volume as _rdv,
+                )
+                _dex_vols = _rdv(_fdv(chain="Base"), top_n=20)
+                payload["dex_volume_top"] = [_d.to_dict() for _d in _dex_vols]
+                payload["candidate_source_breakdown"]["defillama_volume_scout_enabled"] = True
+            else:
+                payload["candidate_source_breakdown"]["defillama_volume_scout_enabled"] = False
+        except Exception as _dve:
+            payload["candidate_source_breakdown"]["defillama_volume_scout_error"] = str(_dve)[:80]
+        # E1.76 step 8: Flashblocks pending state surface.
+        # The HTTP lane already pulls Flashblocks logs; here we expose the
+        # pending-tag readiness flag to the bridge so reviewers can audit
+        # whether the cold scanner *could* read pending state.
+        try:
+            from chains import flashblocks_http as _fbh2
+            _fb_use_latest = bool(os.environ.get("ARBY_FLASHBLOCKS_USE_LATEST", "0") == "1")
+            payload["candidate_source_breakdown"]["flashblocks_pending_ready"] = bool(
+                _fbh2.is_enabled() and _fb_use_latest
+            )
+            # E1.77 step 9: pending-sim path readiness (eth_call @ pending).
+            payload["candidate_source_breakdown"]["pending_sim_ready"] = bool(
+                _fbh2.pending_sim_enabled()
+            )
+        except Exception:
+            payload["candidate_source_breakdown"]["flashblocks_pending_ready"] = False
+            payload["candidate_source_breakdown"]["pending_sim_ready"] = False
         # E1.69 fix step 6: surface STF-quarantine-eligible pairs.
         # A pair is "quarantine-eligible" when its all-time sim revert count
         # exceeds the STF_QUARANTINE_THRESHOLD (default 100). Shown in the
