@@ -127,6 +127,7 @@ def build_pair_pool_matrix(
     pools: Iterable[Any],
     *,
     min_tvl_usd: float = 0.0,
+    factory_truth: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Group pools into pair-families.
 
@@ -135,6 +136,10 @@ def build_pair_pool_matrix(
              least ``symbol``, ``pool_address``, ``project``, ``tvl_usd``
              and optional ``volume_24h_usd``.
       min_tvl_usd: drop pools below this TVL before grouping.
+      factory_truth: optional dict mapping canonical pair key → PoolFamilyTruth
+             (or its ``to_dict()`` output).  When provided, populates
+             ``factory_pool_count`` and ``factory_dex_count`` for each pair
+             from on-chain factory enumeration data (E1.83).
 
     Returns: schema described in module docstring.  Always returns a
     dict; never raises.
@@ -171,6 +176,7 @@ def build_pair_pool_matrix(
                 "pair": key,
                 "tokens": sorted([ta.upper(), tb.upper()]),
                 "pool_count": 0,
+                "gecko_pool_count": 0,
                 "dex_set": set(),
                 "fee_tiers_set": set(),
                 "tvl_total_usd": 0.0,
@@ -181,6 +187,8 @@ def build_pair_pool_matrix(
             },
         )
         fam["pool_count"] += 1
+        if p.get("source") == "gecko":
+            fam["gecko_pool_count"] += 1
         fam["dex_set"].add(project)
         if fee_bps is not None:
             fam["fee_tiers_set"].add(int(fee_bps))
@@ -209,11 +217,37 @@ def build_pair_pool_matrix(
 
     pairs_out: List[Dict[str, Any]] = []
     for fam in families.values():
+        pair_key = fam["pair"]
+        # E1.83: resolve factory_pool_count from factory_truth when available.
+        fac_truth = (factory_truth or {}).get(pair_key) or {}
+        if isinstance(fac_truth, dict):
+            fac_pool_count = int(fac_truth.get("pool_count") or 0)
+            fac_dex_count = int(fac_truth.get("dex_count") or 0)
+        elif hasattr(fac_truth, "pool_count"):
+            # PoolFamilyTruth dataclass
+            fac_pool_count = int(fac_truth.pool_count)
+            fac_dex_count = int(fac_truth.dex_count)
+        else:
+            fac_pool_count = 0
+            fac_dex_count = 0
+
         pairs_out.append(
             {
-                "pair": fam["pair"],
+                "pair": pair_key,
                 "tokens": fam["tokens"],
+                # pool_count: backward-compat total (scout + gecko combined).
                 "pool_count": fam["pool_count"],
+                # E1.83: source-split pool counts.
+                "scout_pool_count": fam["pool_count"] - fam["gecko_pool_count"],
+                "gecko_pool_count": fam["gecko_pool_count"],
+                # E1.83: on-chain factory enumeration counts (0 when not yet fetched).
+                "factory_pool_count": fac_pool_count,
+                "factory_dex_count": fac_dex_count,
+                # reference_only: prefer factory_dex_count when available,
+                # fall back to scout-based dex_set size.
+                "reference_only": (
+                    (fac_dex_count if fac_dex_count > 0 else len(fam["dex_set"])) <= 1
+                ),
                 "dex_count": len(fam["dex_set"]),
                 "fee_tiers": sorted(fam["fee_tiers_set"]),
                 "tvl_total_usd": round(fam["tvl_total_usd"], 6),

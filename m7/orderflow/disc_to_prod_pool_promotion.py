@@ -480,7 +480,15 @@ def family_promotion_snapshot(now: Optional[float] = None) -> Dict[str, object]:
     return {
         "active_count": len(promos),
         "ttl_s": _family_ttl_seconds(),
-        "promotions": [asdict(p) for p in promos],
+        # E1.82c: arb_candidate = True when dex_count>=2 (real multi-dex family).
+        # Single-pool pairs (cold_executable seeded) get arb_candidate=False (reference_only).
+        "promotions": [
+            {
+                **asdict(p),
+                "arb_candidate": (p.family_dex_count or 0) >= 2,
+            }
+            for p in promos
+        ],
     }
 
 

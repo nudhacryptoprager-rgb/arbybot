@@ -91,6 +91,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "ws_cooldown.json",
             # E1.69 Wave D: TVL scout rolling artifact (production pool ranking)
             "m7_tvl_scout_latest.json",
+            # E1.83: factory-enumerated pool/dex truth (refreshed every 10 min)
+            "pool_family_truth.json",
         }
         
         # Archive files are allowed (created on reset)

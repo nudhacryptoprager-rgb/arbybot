@@ -18,6 +18,7 @@ two scouts can be merged trivially upstream.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -100,7 +101,11 @@ def parse_geckoterminal_pools(
             continue
         name = str(attrs.get("name") or "")
         # GeckoTerminal uses " / " — normalise to "-".
-        symbol = name.replace(" / ", "-").replace(" ", "")
+        # Strip trailing fee-tier suffix (e.g. " 0.05%", " 0.3%", " 1%") from
+        # pool name before building the symbol so the fee tier does not leak
+        # into token symbols like "WETH0.05%".
+        _name_clean = re.sub(r"\s+\d+(?:\.\d+)?%\s*$", "", name)
+        symbol = _name_clean.replace(" / ", "-").replace(" ", "")
         tvl = _safe_float(attrs.get("reserve_in_usd"))
         vol_block = attrs.get("volume_usd") or {}
         if isinstance(vol_block, dict):

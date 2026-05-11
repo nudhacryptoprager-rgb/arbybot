@@ -1,13 +1,109 @@
 # Status: M7 (Triangular Feasibility)
 
-**Status**: **E1.81 SOAK COMPLETE (2026-05-10). family_active 1–5 in 21/24 snaps. KEYCAT/WETH 825bps profitable_count=15. 50 tests (5044 total). Wiring confirmed.**
+**Status**: **E1.83 FACTORY SCOUT SHIPPED — FUNDAMENTAL_DISCOVERY_GAP (2026-05-10). Next: pool_family_truth.json + Step 8 guard activation.**
 
-goal_status: SOAK_COMPLETE
+goal_status: FUNDAMENTAL_DISCOVERY_GAP
 pipeline_ready: true
 production_profit_ready: false
-close_allowed: true
-blocker: production_sized=0 (market gap, depth ceiling — pre-existing, not E1.81 regression)
-next_milestone: E1.82 — close E1.81, promote family-based cold candidates to production routing
+close_allowed: false
+blocker: FUNDAMENTAL_DISCOVERY_GAP — CE universe = dust meme tokens OR instantaneous-only spreads (VIRTUAL/WETH bps=6909 but depth_verdict=dust_only at all real sizes). Deep multi-DEX pairs (USDC/WETH 4dex/$184M) never appear as CE (MEV-efficient). Factory scout scaffold shipped (Steps 1-2 of E1.83). Steps 3-10 pending.
+next_milestone: E1.83 — pool_family_truth.json artifact + background factory refresh + Step 8 guard activation
+
+```
+=== E1.83 GATE EVIDENCE (2026-05-10T21:31Z proof soak 30min, Base) ===
+production_sized_total:     0       FAIL (min=1)
+best_amount_in_usd:         37.99   FAIL (min=50.0)  ← E1.82c rolling session snapshot
+best_expected_profit_usd:   22.44   PASS (min=0.01)
+roundtrip_profitable_delta: 0       FAIL (min=1)
+submit_ready_delta:         0       FAIL (min=1)
+ws_429_rate:                0.64%   PASS (max=15%)
+family_depth_gate:          informational, fam_active=0 — excluded from all_pass
+pytest:                     5098 passed / 6 skipped / 0 failures (was 5064 before E1.83)
+```
+
+```
+=== E1.83 PROOF SOAK (2026-05-10T21:01–21:31Z UTC, 30min, Base) ===
+Supervisor:     5/5 alive, 0 crash restarts, clean exit 0
+PPM:            30 pairs, 50 pools (no gecko — env not transferred to async soak)
+VIRTUAL/WETH:   appeared at 21:07Z bps=6909 sz=$24.9998 — first near-$25 CE observation
+                BUT: sz=size_usd_estimate (reserve proxy), depth_verdict=dust_only
+                → spread inverts to negative bps at all real trade sizes → not profitable
+Final CE:       KEYCAT/WETH bps=287.7 sz=$0.0007 (dust, depth_verdict=dust_only)
+Conclusion:     FUNDAMENTAL_DISCOVERY_GAP confirmed for VIRTUAL/WETH too
+```
+
+```
+=== E1.83 IMPLEMENTATION (2026-05-10) ===
+m7/scouts/factory_scout.py:  NEW — on-chain factory enumeration scaffold
+  - FactoryPoolEntry + PoolFamilyTruth dataclasses
+  - build_pool_family_truth(): pure aggregation (34 unit tests)
+  - scan_factories_for_pairs(): fail-soft RPC scan, all Base factories
+  - BASE_FACTORIES: 7 factories (uniswap_v3, aerodrome_slipstream, aerodrome,
+                    sushiswap_v3, pancakeswap_v3, sushiswap_v2, baseswap_v2)
+m7/scouts/pair_pool_matrix.py:
+  - gecko_pool_count + scout_pool_count split ✅
+  - reference_only flag ✅
+  - factory_pool_count/factory_dex_count from optional factory_truth param ✅
+m7/orderflow/bridge_runtime.py:
+  - gecko source tagging ("source"="gecko") ✅
+  - Step 8 guard DEFERRED (comment) — VIRTUAL/WETH shows dex=1 in scout but has CE
+tests: 5098 passed (was 5059 in E1.82c; +34 new E1.83 factory scout tests + 5 PPM)
+```
+
+```
+=== E1.83 REMAINING STEPS ===
+Step 3-7: pool_family_truth.json artifact (on-chain factory scan for target pairs)
+Step 8:   enable guard when factory_pool_count populated (skip single-dex families)
+Step 9:   dashboard reference_only / factory_dex_count columns
+Step 10:  deep-pool scoring improvements (family-weighted confidence)
+```
+
+```
+=== E1.82c GATE EVIDENCE (2026-05-10T20:47Z post_soak_pass_gate --strict) ===
+production_sized_total:     0       FAIL (min=1)
+best_amount_in_usd:         37.99   FAIL (min=50.0)  ← same as E1.81 (no deep CE)
+best_expected_profit_usd:   22.44   PASS (min=0.01)
+roundtrip_profitable_delta: 0       FAIL (min=1)
+submit_ready_delta:         0       FAIL (min=1)
+ws_429_rate:                1.01%   PASS (max=15%)
+family_depth_gate:          informational, fam_active=0 fam_enriched=0 max_usd=0 — excluded
+pytest:                     5059 passed / 6 skipped / 0 failures (was 5044 in E1.81)
+Conclusion: E1.82c code correct; discovery gap confirmed. close_allowed=false.
+```
+
+```
+=== E1.82c SOAK (2026-05-10T19:47–20:47Z, 60min, Base, GECKO_SCOUT=1) ===
+Supervisor:    5/5 alive, 0 crash restarts, clean exit 0
+PPM:           47 pairs, 70 pools (was 31/50 without gecko) — gecko+tvl scout working ✅
+Multi-dex:     9 families (USDC/WETH 4dex $184M, CBBTC/USDC 4dex $38M, CBBTC/WETH 3dex...)
+CE all snaps:  ALL dust meme tokens: toby/WETH bps=1803 sz=$0.000, Mog/WETH sz=$0.0002,
+               BUILD/WETH sz=$0.0003, KEYCAT/WETH sz=$0.0007, TALENT/WETH sz=$0.0005
+fam_active:    0 all 9 snaps — dust gate ($1.0) correctly blocks ALL CE before _ofp()
+Root cause:    Deep pairs (USDC/WETH, CBBTC/USDC) in PPM but NEVER in CE → MEV-efficient
+```
+
+```
+=== E1.82c IMPLEMENTATION (2026-05-10) ===
+m7/orderflow/bridge_runtime.py: canonical_pair() lookup + CE-seeded fallback + dust gate
+m7/orderflow/disc_to_prod_pool_promotion.py: arb_candidate flag in family_promotion_snapshot()
+m7/scouts/pair_pool_matrix.py: scout_pool_count + factory_pool_count fields
+m7/scouts/gecko_scout.py: fee-tier strip fix re.sub(r"\s+\d+(?:\.\d+)?%\s*$", "", name)
+scripts/post_soak_pass_gate.py: informational bug fix in all_pass calculation
+tests/unit/test_e1_81_pool_family.py: +14 tests → 5059 total
+```
+
+```
+=== E1.81 GATE EVIDENCE (2026-05-10, post_soak_pass_gate --strict) ===
+production_sized_total:     0       FAIL (min=1)
+best_amount_in_usd:         37.99   FAIL (min=50.0)
+best_expected_profit_usd:   22.44   PASS (min=0.01)
+roundtrip_profitable_delta: 8       PASS (min=1)
+submit_ready_delta:         8       PASS (min=1)
+ws_429_rate:                2.84%   PASS (max=15%)
+E1.81 tests:                50/50   PASS
+check_repo_safety:          PASS    (--allow-intent-edit, 1 warning)
+Conclusion: wiring confirmed, depth gap confirmed. E1.81 close_allowed=true.
+```
 
 ```
 === E1.81 WIRING CONFIRMED (2026-05-10, session 2 — process-isolation fix) ===

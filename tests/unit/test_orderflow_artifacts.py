@@ -2070,6 +2070,8 @@ class TestM7A532RollingCanonicalSet:
             "ws_cooldown.json",
             # E1.69 Wave D: TVL scout rolling artifact (production pool ranking)
             "m7_tvl_scout_latest.json",
+            # E1.83: factory-enumerated pool/dex truth (refreshed every 10 min)
+            "pool_family_truth.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):

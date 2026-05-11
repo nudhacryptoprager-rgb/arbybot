@@ -689,6 +689,27 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         # Sort by spread_bps descending, then tvl descending
         rows.sort(key=lambda r: (r["spread_bps"], r["tvl_total_usd"]), reverse=True)
 
+        # E1.82 step 7: family_depth_breakthrough summary block
+        # Production-sized = families with max_size_usd >= MIN_PRODUCTION_SIZE_USD ($50)
+        _prod_sized_families = [r for r in rows if (r.get("max_size_usd") or 0.0) >= MIN_PRODUCTION_SIZE_USD]
+        _enriched_families = [r for r in rows if (r.get("family_pool_count") or 0) > 0]
+        _max_size = max((r.get("max_size_usd") or 0.0 for r in rows), default=0.0)
+        _best_profit = max((r.get("profit_usd") or 0.0 for r in rows), default=0.0)
+        _best_bps = max((r.get("spread_bps") or 0.0 for r in rows), default=0.0)
+        family_depth_breakthrough = {
+            "active_family_count": fpromo_snap.get("active_count", 0),
+            "enriched_family_count": len(_enriched_families),
+            "production_sized_count": len(_prod_sized_families),
+            "max_size_usd": round(_max_size, 4),
+            "best_profit_usd": round(_best_profit, 6),
+            "best_bps": round(_best_bps, 4),
+            "gate_pass": (
+                fpromo_snap.get("active_count", 0) > 0
+                and len(_enriched_families) > 0
+                and _max_size >= MIN_PRODUCTION_SIZE_USD
+            ),
+        }
+
         result = {
             "profile": profile,
             "timestamp": bridge.get("timestamp"),
@@ -696,6 +717,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "pair_count": len(rows),
             "family_active_count": fpromo_snap.get("active_count", 0),
             "family_promo_ttl_s": fpromo_snap.get("ttl_s"),
+            "family_depth_breakthrough": family_depth_breakthrough,
         }
         payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)

@@ -658,3 +658,327 @@ class TestBridgeRuntimeE181Wiring:
             "bridge_runtime.py must read payload.get('cold_executable') for E1.81 "
             "observation so that ready_preserved candidates are also observed."
         )
+
+
+# ===========================================================================
+# E1.82: bridge_runtime enrichment + dust-size gating tests
+# ===========================================================================
+
+class TestBridgeRuntimeE182Enrichment:
+    """E1.82: bridge_runtime.py must enrich family promotions with
+    family_pool_count/dex_count/fee_tiers from pair_pool_matrix,
+    and filter out dust candidates below ARBY_FAMILY_MIN_SIZE_USD.
+    """
+
+    def test_bridge_runtime_reads_pair_pool_matrix_for_family_counts(self):
+        """bridge_runtime.py source must use pair_pool_matrix to get pool/dex counts."""
+        src = (REPO_ROOT / "m7" / "orderflow" / "bridge_runtime.py").read_text(encoding="utf-8")
+        assert "_ppm_by_pair" in src, (
+            "bridge_runtime.py must build _ppm_by_pair lookup from pair_pool_matrix (E1.82 step 2)"
+        )
+        assert "family_pool_count=_fam_pool_count" in src, (
+            "bridge_runtime.py must pass family_pool_count=_fam_pool_count to _ofp() (E1.82 step 2)"
+        )
+        assert "family_dex_count=_fam_dex_count" in src
+
+    def test_bridge_runtime_dust_gating_present(self):
+        """bridge_runtime.py source must skip candidates below ARBY_FAMILY_MIN_SIZE_USD."""
+        src = (REPO_ROOT / "m7" / "orderflow" / "bridge_runtime.py").read_text(encoding="utf-8")
+        assert "ARBY_FAMILY_MIN_SIZE_USD" in src, (
+            "bridge_runtime.py must read ARBY_FAMILY_MIN_SIZE_USD for dust gating (E1.82 step 4)"
+        )
+        assert "_family_min_size_usd" in src
+
+    def test_observe_pair_family_profitable_accepts_family_pool_count(self):
+        """observe_pair_family_profitable must accept family_pool_count / dex_count / fee_tiers."""
+        from m7.orderflow.disc_to_prod_pool_promotion import (
+            observe_pair_family_profitable,
+            reset_family_promotions,
+        )
+        reset_family_promotions()
+        rec = observe_pair_family_profitable(
+            pair="WETH/USDC",
+            canonical_key="usdc/weth",
+            best_buy_pool="0xabc",
+            best_buy_dex="uniswap_v3",
+            best_buy_fee=500,
+            profit_bps=250.0,
+            max_size_usd=75.0,
+            family_pool_count=6,
+            family_dex_count=3,
+            family_fee_tiers=[100, 500, 3000],
+            chain="base",
+        )
+        # With ARBY_POOL_PROMOTION=0 (default in tests) returns a transient record
+        if rec is not None:
+            assert rec.family_pool_count == 6
+            assert rec.family_dex_count == 3
+            assert rec.family_fee_tiers == [100, 500, 3000]
+        reset_family_promotions()
+
+    def test_observe_pair_family_profitable_with_promotion_enabled(self, monkeypatch):
+        """With ARBY_POOL_PROMOTION=1, family_pool_count is persisted."""
+        from m7.orderflow.disc_to_prod_pool_promotion import (
+            observe_pair_family_profitable,
+            family_promotion_snapshot,
+            reset_family_promotions,
+        )
+        monkeypatch.setenv("ARBY_POOL_PROMOTION", "1")
+        reset_family_promotions()
+        try:
+            observe_pair_family_profitable(
+                pair="AERO/USDC",
+                canonical_key="aero/usdc",
+                profit_bps=400.0,
+                max_size_usd=60.0,
+                family_pool_count=4,
+                family_dex_count=2,
+                family_fee_tiers=[500, 3000],
+                chain="base",
+            )
+            snap = family_promotion_snapshot()
+            promos = snap.get("promotions") or []
+            assert len(promos) == 1
+            assert promos[0]["family_pool_count"] == 4
+            assert promos[0]["family_dex_count"] == 2
+            assert promos[0]["family_fee_tiers"] == [500, 3000]
+        finally:
+            reset_family_promotions()
+
+
+# ===========================================================================
+# E1.82: dashboard family_depth_breakthrough block test
+# ===========================================================================
+
+class TestDashboardFamilyDepthBreakthrough:
+    """E1.82 step 7: _serve_family_table must include family_depth_breakthrough block."""
+
+    def test_family_table_source_has_depth_breakthrough(self):
+        src = (REPO_ROOT / "monitoring" / "dashboard_server.py").read_text(encoding="utf-8")
+        assert "family_depth_breakthrough" in src, (
+            "dashboard_server.py must include family_depth_breakthrough block (E1.82 step 7)"
+        )
+        assert "production_sized_count" in src
+        assert "gate_pass" in src
+
+    def test_family_depth_gate_fields_present(self):
+        src = (REPO_ROOT / "monitoring" / "dashboard_server.py").read_text(encoding="utf-8")
+        assert "enriched_family_count" in src
+        assert "_max_size" in src
+
+
+# ===========================================================================
+# E1.82: post_soak_pass_gate family_depth_gate check test
+# ===========================================================================
+
+class TestPostSoakGateFamilyDepth:
+    """E1.82 step 8: post_soak_pass_gate must include family_depth_gate check."""
+
+    def test_gate_source_has_family_depth_gate(self):
+        src = (REPO_ROOT / "scripts" / "post_soak_pass_gate.py").read_text(encoding="utf-8")
+        assert "family_depth_gate" in src, (
+            "post_soak_pass_gate.py must include family_depth_gate check (E1.82 step 8)"
+        )
+        assert "family_active_count" in src
+        assert "family_enriched_count" in src
+        assert "family_max_size_usd" in src
+
+    def test_gate_informational_does_not_block_all_pass(self):
+        """all_pass must skip informational checks."""
+        src = (REPO_ROOT / "scripts" / "post_soak_pass_gate.py").read_text(encoding="utf-8")
+        assert 'not c.get("informational")' in src, (
+            "post_soak_pass_gate.py all_pass computation must skip informational checks"
+        )
+
+
+# ===========================================================================
+# E1.82c: canonical_pair lookup + CE-seeded fallback + arb_candidate flag
+# ===========================================================================
+
+
+class TestE182cCanonicalPairLookup:
+    """E1.82c: bridge_runtime must use canonical_pair() for PPM lookup so
+    e.g. CE pair 'WETH/USDC' (non-canonical) maps to PPM key 'USDC/WETH'.
+    """
+
+    def test_bridge_runtime_uses_canonical_pair_for_ppm_lookup(self):
+        src = (REPO_ROOT / "m7" / "orderflow" / "bridge_runtime.py").read_text(encoding="utf-8")
+        assert "_canonical_pair" in src, (
+            "bridge_runtime.py must import and use canonical_pair() for PPM lookup (E1.82c)"
+        )
+        assert "_ce_pair_canonical" in src, (
+            "bridge_runtime.py must compute _ce_pair_canonical for lookup (E1.82c)"
+        )
+
+    def test_bridge_runtime_ce_seeded_fallback_present(self):
+        src = (REPO_ROOT / "m7" / "orderflow" / "bridge_runtime.py").read_text(encoding="utf-8")
+        assert "CE-seeded fallback" in src, (
+            "bridge_runtime.py must have CE-seeded fallback for pairs absent from PPM (E1.82c)"
+        )
+
+    def test_ppm_canonical_pair_lookup_correct(self):
+        """canonical_pair() must sort alphabetically so lookup is deterministic."""
+        from m7.scouts.pair_pool_matrix import canonical_pair, build_pair_pool_matrix
+
+        # USDC < WETH -> canonical = USDC/WETH
+        assert canonical_pair("WETH", "USDC") == "USDC/WETH"
+        assert canonical_pair("USDC", "WETH") == "USDC/WETH"
+        assert canonical_pair("AERO", "USDC") == "AERO/USDC"
+        assert canonical_pair("SYND", "USDC") == "SYND/USDC"
+
+        pools = [
+            {"symbol": "WETH-USDC", "pool_address": "0xaaa", "project": "uniswap-v3",
+             "tvl_usd": 1000.0, "volume_24h_usd": 0.0},
+        ]
+        matrix = build_pair_pool_matrix(pools)
+        keys = {p["pair"] for p in matrix["pairs"]}
+        assert "USDC/WETH" in keys, (
+            "build_pair_pool_matrix must store pair under canonical key 'USDC/WETH'"
+        )
+
+
+class TestE182cPPMScoutFields:
+    """E1.82c: pair_pool_matrix must include scout_pool_count and factory_pool_count."""
+
+    def test_ppm_has_scout_pool_count(self):
+        from m7.scouts.pair_pool_matrix import build_pair_pool_matrix
+        pools = [
+            {"symbol": "USDC-WETH", "pool_address": "0x1", "project": "uniswap-v3",
+             "tvl_usd": 500.0, "volume_24h_usd": 0.0},
+            {"symbol": "USDC-WETH", "pool_address": "0x2", "project": "aerodrome",
+             "tvl_usd": 200.0, "volume_24h_usd": 0.0},
+        ]
+        matrix = build_pair_pool_matrix(pools)
+        fam = matrix["pairs"][0]
+        assert "scout_pool_count" in fam, "PPM entry must have scout_pool_count (E1.82c)"
+        assert "factory_pool_count" in fam, "PPM entry must have factory_pool_count (E1.82c)"
+        assert fam["scout_pool_count"] == 2  # 2 tvl_scout, 0 gecko
+        assert fam["pool_count"] == 2  # backward compat
+        assert fam["factory_pool_count"] == 0  # placeholder until factory enum
+        assert "gecko_pool_count" in fam, "E1.83: gecko_pool_count must be present"
+        assert fam["gecko_pool_count"] == 0  # no gecko-tagged pools in this fixture
+
+    def test_ppm_source_has_scout_and_factory_fields(self):
+        src = (REPO_ROOT / "m7" / "scouts" / "pair_pool_matrix.py").read_text(encoding="utf-8")
+        assert "scout_pool_count" in src, (
+            "pair_pool_matrix.py must output scout_pool_count field (E1.82c)"
+        )
+        assert "factory_pool_count" in src, (
+            "pair_pool_matrix.py must output factory_pool_count placeholder (E1.82c)"
+        )
+
+
+class TestE182cArbCandidateFlag:
+    """E1.82c: family_promotion_snapshot must include arb_candidate per promotion."""
+
+    def test_snapshot_has_arb_candidate(self, monkeypatch):
+        from m7.orderflow.disc_to_prod_pool_promotion import (
+            observe_pair_family_profitable,
+            family_promotion_snapshot,
+            reset_family_promotions,
+        )
+        monkeypatch.setenv("ARBY_POOL_PROMOTION", "1")
+        reset_family_promotions()
+        try:
+            # dex_count=2 -> arb_candidate=True
+            observe_pair_family_profitable(
+                pair="USDC/WETH",
+                canonical_key="usdc/weth",
+                profit_bps=100.0,
+                max_size_usd=80.0,
+                family_pool_count=6,
+                family_dex_count=2,
+                chain="base",
+            )
+            # dex_count=1 -> arb_candidate=False (CE-seeded single-pool)
+            observe_pair_family_profitable(
+                pair="SYND/USDC",
+                canonical_key="synd/usdc",
+                profit_bps=1000.0,
+                max_size_usd=5.0,
+                family_pool_count=1,
+                family_dex_count=1,
+                chain="base",
+            )
+            snap = family_promotion_snapshot()
+            promos = {p["pair"]: p for p in snap.get("promotions") or []}
+            assert "arb_candidate" in promos.get("USDC/WETH", promos.get("usdc/weth", {})), (
+                "family_promotion_snapshot must include arb_candidate field (E1.82c)"
+            )
+            weth_usdc = promos.get("USDC/WETH") or promos.get("usdc/weth") or {}
+            synd_usdc = promos.get("SYND/USDC") or promos.get("synd/usdc") or {}
+            assert weth_usdc.get("arb_candidate") is True, "dex_count=2 -> arb_candidate=True"
+            assert synd_usdc.get("arb_candidate") is False, "dex_count=1 -> arb_candidate=False"
+        finally:
+            reset_family_promotions()
+
+
+class TestE183PPMFields:
+    """E1.83: gecko_pool_count split and reference_only flag in pair_pool_matrix."""
+
+    def test_gecko_pool_count_tagged(self):
+        """Pools tagged source='gecko' must be counted in gecko_pool_count."""
+        from m7.scouts.pair_pool_matrix import build_pair_pool_matrix
+        pools = [
+            {"symbol": "USDC-WETH", "pool_address": "0x1", "project": "uniswap-v3",
+             "tvl_usd": 500.0, "volume_24h_usd": 0.0, "source": "tvl_scout"},
+            {"symbol": "USDC-WETH", "pool_address": "0x2", "project": "uniswap-v3",
+             "tvl_usd": 200.0, "volume_24h_usd": 0.0, "source": "gecko"},
+            {"symbol": "USDC-WETH", "pool_address": "0x3", "project": "aerodrome",
+             "tvl_usd": 100.0, "volume_24h_usd": 0.0, "source": "gecko"},
+        ]
+        matrix = build_pair_pool_matrix(pools)
+        fam = matrix["pairs"][0]
+        assert fam["pool_count"] == 3
+        assert fam["gecko_pool_count"] == 2, "2 gecko-tagged pools must be counted"
+        assert fam["scout_pool_count"] == 1, "scout_pool_count = pool_count - gecko"
+
+    def test_gecko_pool_count_zero_when_no_source(self):
+        """Pools without source tag must not increment gecko_pool_count."""
+        from m7.scouts.pair_pool_matrix import build_pair_pool_matrix
+        pools = [
+            {"symbol": "AERO-USDC", "pool_address": "0xA", "project": "aerodrome",
+             "tvl_usd": 1000.0},
+            {"symbol": "AERO-USDC", "pool_address": "0xB", "project": "uniswap-v3",
+             "tvl_usd": 500.0},
+        ]
+        matrix = build_pair_pool_matrix(pools)
+        fam = matrix["pairs"][0]
+        assert "gecko_pool_count" in fam
+        assert fam["gecko_pool_count"] == 0
+        assert fam["scout_pool_count"] == 2
+
+    def test_reference_only_single_dex(self):
+        """Single-DEX family must be reference_only=True."""
+        from m7.scouts.pair_pool_matrix import build_pair_pool_matrix
+        pools = [
+            {"symbol": "AERO-USDC", "pool_address": "0xA", "project": "aerodrome",
+             "tvl_usd": 1000.0},
+            {"symbol": "AERO-USDC", "pool_address": "0xB", "project": "aerodrome",
+             "tvl_usd": 500.0},
+        ]
+        matrix = build_pair_pool_matrix(pools)
+        fam = matrix["pairs"][0]
+        assert "reference_only" in fam, "PPM entry must have reference_only (E1.83)"
+        assert fam["reference_only"] is True, "single-dex family -> reference_only=True"
+
+    def test_reference_only_multi_dex(self):
+        """Multi-DEX family must be reference_only=False."""
+        from m7.scouts.pair_pool_matrix import build_pair_pool_matrix
+        pools = [
+            {"symbol": "USDC-WETH", "pool_address": "0x1", "project": "uniswap-v3",
+             "tvl_usd": 500.0},
+            {"symbol": "USDC-WETH", "pool_address": "0x2", "project": "aerodrome",
+             "tvl_usd": 200.0},
+        ]
+        matrix = build_pair_pool_matrix(pools)
+        fam = matrix["pairs"][0]
+        assert "reference_only" in fam, "PPM entry must have reference_only (E1.83)"
+        assert fam["reference_only"] is False, "multi-dex family -> reference_only=False"
+
+    def test_ppm_source_has_new_fields(self):
+        """pair_pool_matrix.py source must contain gecko_pool_count and reference_only."""
+        src = (REPO_ROOT / "m7" / "scouts" / "pair_pool_matrix.py").read_text(encoding="utf-8")
+        assert "gecko_pool_count" in src, "E1.83: gecko_pool_count field required"
+        assert "reference_only" in src, "E1.83: reference_only field required"
+

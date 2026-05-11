@@ -237,6 +237,27 @@ def main() -> int:
     )
     ws_429_rate = _ws_429_rate(rollup)
 
+    # E1.82 step 8: family_depth_gate — read family_promotion_snapshot from bridge.
+    # Gate: family_active_count > 0 AND family_pool_count > 0 (enriched) AND
+    #       max_size_usd >= ARBY_GATE_MIN_AMOUNT_USD (default $50).
+    # This is an informational check in non-strict mode (soft FAIL); in strict
+    # mode it is evaluated but does NOT block all_pass (separate gate concern).
+    _fpromo = bridge.get("family_promotion_snapshot") or {}
+    _fam_active_count = _safe_int(_fpromo.get("active_count"))
+    _fam_promos = _fpromo.get("promotions") or []
+    _fam_enriched_count = sum(
+        1 for p in _fam_promos if _safe_int(p.get("family_pool_count")) > 0
+    )
+    _fam_max_size = max(
+        (_safe_float(p.get("max_size_usd")) for p in _fam_promos),
+        default=0.0,
+    )
+    _fam_gate_pass = (
+        _fam_active_count > 0
+        and _fam_enriched_count > 0
+        and _fam_max_size >= min_amount
+    )
+
     checks = {
         "production_sized_total": {
             "value": prod_total, "min": 1, "pass": prod_total > 0,
@@ -267,9 +288,20 @@ def main() -> int:
         "ws_429_rate": {
             "value": ws_429_rate, "max": max_429, "pass": ws_429_rate < max_429,
         },
+        # E1.82 step 8: family_depth_gate — informational, does not block all_pass.
+        # When this passes it means families are enriched with real pool counts AND
+        # have production-sized opportunities ($50+).
+        "family_depth_gate": {
+            "family_active_count": _fam_active_count,
+            "family_enriched_count": _fam_enriched_count,
+            "family_max_size_usd": round(_fam_max_size, 4),
+            "min_size_usd": min_amount,
+            "pass": _fam_gate_pass,
+            "informational": True,
+        },
     }
 
-    all_pass = all(c["pass"] for c in checks.values())
+    all_pass = all(c["pass"] for c in checks.values() if not c.get("informational"))
     report = {"all_pass": all_pass, "profile": args.profile, "strict": strict, "checks": checks}
     print(json.dumps(report, indent=2, default=str))
     return 0 if all_pass else 1

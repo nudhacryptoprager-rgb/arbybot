@@ -487,11 +487,30 @@ def _write_cold_hot_bridge(
                     try:
                         from m7.scouts.gecko_scout import fetch_top_pools as _gtp
                         _gecko_pools = _gtp(network="base")
-                        _pools_for_matrix.extend(_gp.to_dict() for _gp in _gecko_pools)
+                        # E1.83: tag gecko pools with source="gecko" so pair_pool_matrix
+                        # can track gecko_pool_count separately from scout_pool_count.
+                        _pools_for_matrix.extend(
+                            {**_gp.to_dict(), "source": "gecko"}
+                            for _gp in _gecko_pools
+                        )
                     except Exception:
                         pass
-                from m7.scouts.pair_pool_matrix import build_pair_pool_matrix as _bppm
-                _matrix = _bppm(_pools_for_matrix, min_tvl_usd=0.0)
+                from m7.scouts.pair_pool_matrix import (
+                    build_pair_pool_matrix as _bppm,
+                    canonical_pair as _canonical_pair,
+                )
+                # E1.83 Steps 3-7: load factory-enumerated pool truth to get
+                # accurate factory_pool_count / factory_dex_count per pair.
+                # Artifact written by scripts/refresh_factory_truth.py (run once,
+                # then refreshed every 10 min by that script or manually).
+                # Fail-soft: missing/stale artifact → factory_truth={} → fields=0.
+                _factory_truth: dict = {}
+                try:
+                    from m7.scouts.factory_scout import load_pool_family_truth as _lpft
+                    _factory_truth = _lpft(max_age_s=3600.0)  # factory registrations are stable intraday
+                except Exception:
+                    pass
+                _matrix = _bppm(_pools_for_matrix, min_tvl_usd=0.0, factory_truth=_factory_truth or None)
                 # Top 50 families to keep artifact bounded.
                 _matrix["pairs"] = _matrix.get("pairs", [])[:50]
                 # E1.77 step 6: stamp matrix build time so heatmap reports
@@ -516,8 +535,35 @@ def _write_cold_hot_bridge(
                 observe_pair_family_profitable as _ofp,
                 family_promotion_snapshot as _fps,
             )
-            # Record profitable observation for each cold_executable candidate
+            # Record profitable observation for each cold_executable candidate.
+            # E1.82 step 2: enrich with family_pool_count/dex_count/fee_tiers
+            #   from pair_pool_matrix (already built in payload this cycle).
+            # E1.82 step 4: dust-family gating — skip candidates below
+            #   ARBY_FAMILY_MIN_SIZE_USD (default $1) so dust-only pairs are
+            #   not promoted into the family table.
             _chain_for_promo = os.environ.get("ARBY_CHAIN", "base")
+            try:
+                _family_min_size_usd = float(
+                    os.environ.get("ARBY_FAMILY_MIN_SIZE_USD", "1.0") or 1.0
+                )
+            except (TypeError, ValueError):
+                _family_min_size_usd = 1.0
+            _ppm = (payload.get("pair_pool_matrix") or {})
+            # Build canonical_pair -> matrix entry map for O(1) lookups.
+            # PPM keys are already canonical (alphabetically sorted by build_pair_pool_matrix);
+            # we index them directly. Lookup uses the same canonical_pair() function.
+            try:
+                from m7.scouts.pair_pool_matrix import canonical_pair as _canonical_pair
+            except Exception:
+                def _canonical_pair(a: str, b: str) -> str:  # type: ignore[misc]
+                    a2 = (a or "").strip().upper()
+                    b2 = (b or "").strip().upper()
+                    return f"{a2}/{b2}" if a2 <= b2 else f"{b2}/{a2}"
+            _ppm_by_pair: dict = {}
+            for _ppm_fam in (_ppm.get("pairs") or []):
+                _ppm_sym = (_ppm_fam.get("pair") or "").upper()
+                if _ppm_sym:
+                    _ppm_by_pair[_ppm_sym] = _ppm_fam
             _effective_cands = payload.get("cold_executable") or candidates or []
             for _ce in _effective_cands:
                 _ce_bps = _ce.get("net_bps") or _ce.get("net_spread_bps")
@@ -529,12 +575,52 @@ def _write_cold_hot_bridge(
                     continue
                 if _ce_bps_f <= 0:
                     continue
+                # E1.82 step 4: skip dust candidates
+                _ce_size = _ce.get("amount_in_optimal_usd") or 0.0
+                try:
+                    _ce_size_f = float(_ce_size)
+                except (TypeError, ValueError):
+                    _ce_size_f = 0.0
+                if _ce_size_f < _family_min_size_usd:
+                    continue
                 _ce_ta = _ce.get("backrun_token_in_address") or ""
                 _ce_tb = _ce.get("backrun_token_out_address") or ""
                 _ce_ck = (
                     "/".join(sorted([_ce_ta.lower(), _ce_tb.lower()]))
                     if (_ce_ta and _ce_tb) else None
                 )
+                # E1.82c step 2: look up pair_pool_matrix using canonical_pair().
+                # PPM keys are alphabetically sorted; use the same canonical function
+                # so e.g. CE pair "WETH/USDC" → canonical "USDC/WETH" → found in PPM.
+                _ce_pair_raw = (_ce.get("actual_pair") or _ce.get("pair") or "").upper()
+                if "/" in _ce_pair_raw:
+                    _rp = _ce_pair_raw.split("/", 1)
+                    _ce_pair_canonical = _canonical_pair(_rp[0], _rp[1])
+                else:
+                    _ce_pair_canonical = _ce_pair_raw
+                _ppm_entry = _ppm_by_pair.get(_ce_pair_canonical) or {}
+                if _ppm_entry:
+                    # Scout data: pool_count from discovery (may be < real on-chain count)
+                    _fam_pool_count = int(_ppm_entry.get("pool_count") or 0)
+                    _fam_dex_count = int(_ppm_entry.get("dex_count") or 0)
+                    _fam_fee_tiers = list(_ppm_entry.get("fee_tiers") or [])
+                else:
+                    # E1.82c CE-seeded fallback: pair not in TVL scout universe.
+                    # CE found at least 1 pool → pool_count=1 is truthful lower bound.
+                    _fam_pool_count = 1
+                    _fam_dex_count = 1
+                    _fam_fee_tiers = (
+                        [int(_ce["fee_tier"])] if _ce.get("fee_tier") else []
+                    )
+                # E1.83 Step 8: skip CE pairs confirmed as single-DEX single-pool
+                # by factory enumeration.  Guard activates ONLY when factory_dex_count > 0
+                # (factory truth exists for this pair).  Conservative fallback: if no
+                # factory data yet, keep the pair (avoids wrongly blocking VIRTUAL/WETH).
+                if _ppm_entry:
+                    _fac_dex_ct = int(_ppm_entry.get("factory_dex_count") or 0)
+                    _fac_pool_ct = int(_ppm_entry.get("factory_pool_count") or 0)
+                    if _fac_dex_ct > 0 and _fac_dex_ct < 2 and _fac_pool_ct < 2:
+                        continue
                 try:
                     _ofp(
                         pair=_ce.get("actual_pair") or _ce.get("pair"),
@@ -545,8 +631,11 @@ def _write_cold_hot_bridge(
                             int(_ce["fee_tier"]) if _ce.get("fee_tier") else None
                         ),
                         profit_bps=_ce_bps_f,
-                        max_size_usd=_ce.get("amount_in_optimal_usd"),
+                        max_size_usd=_ce_size_f,
                         max_profit_usd=_ce.get("expected_profit_usd"),
+                        family_pool_count=_fam_pool_count,
+                        family_dex_count=_fam_dex_count,
+                        family_fee_tiers=_fam_fee_tiers,
                         chain=_chain_for_promo,
                     )
                 except Exception:
