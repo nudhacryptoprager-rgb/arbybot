@@ -94,3 +94,120 @@ def test_post_soak_gate_reads_ws_provider_health_rate(tmp_path, monkeypatch, cap
     report = json.loads(capsys.readouterr().out)
     assert report["checks"]["ws_429_rate"]["value"] == 0.4
     assert report["checks"]["ws_429_rate"]["pass"] is False
+
+
+# E1.83 Step 4: factory_enriched_guard tests
+def test_factory_enriched_guard_pass_when_enriched(tmp_path, monkeypatch):
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_truth_loaded"] = True
+    bridge["factory_enriched_pairs"] = 5
+    bridge["factory_truth_age_s"] = 900.0
+    result = gate._build_factory_enriched_check(bridge)
+    assert result["pass"] is True
+    assert result["factory_enriched_pairs"] == 5
+    assert result["informational"] is True
+
+
+def test_factory_enriched_guard_fail_when_loaded_but_zero(tmp_path, monkeypatch):
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_truth_loaded"] = True
+    bridge["factory_enriched_pairs"] = 0
+    bridge["factory_truth_age_s"] = 900.0
+    result = gate._build_factory_enriched_check(bridge)
+    assert result["pass"] is False
+    assert "wiring regression" in result["reason"]
+
+
+def test_factory_enriched_guard_pass_when_not_loaded(tmp_path, monkeypatch):
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # factory_truth_loaded absent (artifact missing)
+    result = gate._build_factory_enriched_check(bridge)
+    assert result["pass"] is True
+    assert result["factory_truth_loaded"] is False
+
+
+# E1.83 fix steps 2-5+7: micro_tier_gate tests
+def test_micro_tier_gate_pass_when_profitable_candidate():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # Candidate at $20, profit $0.30 >> required ($0.05 or 3x fee~$0.04)
+    bridge["cold_executable"] = [
+        {"amount_in_optimal_usd": 20.0, "expected_profit_usd": 0.30, "gas_usd": 0.003}
+    ]
+    result = gate._build_micro_tier_check(bridge, micro_min_usd=5.0, micro_max_usd=50.0)
+    assert result["micro_candidate_count"] == 1
+    assert result["micro_viable_count"] == 1
+    assert result["pass"] is True
+    assert result["informational"] is True
+    # profit_after_all_costs_usd must be present in candidates
+    assert "profit_after_all_costs_usd" in result["candidates"][0]
+
+
+def test_micro_tier_gate_fail_when_profit_below_3x_fee():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # profit $0.01 < required $0.05 (min floor)
+    bridge["cold_executable"] = [
+        {"amount_in_optimal_usd": 15.0, "expected_profit_usd": 0.01, "gas_usd": 0.003}
+    ]
+    result = gate._build_micro_tier_check(bridge, micro_min_usd=5.0, micro_max_usd=50.0)
+    assert result["micro_candidate_count"] == 1
+    assert result["micro_viable_count"] == 0
+    assert result["pass"] is False
+
+
+def test_micro_tier_gate_empty_when_no_micro_candidates():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # $60 candidate is above micro range
+    bridge["cold_executable"] = [
+        {"amount_in_optimal_usd": 60.0, "expected_profit_usd": 0.50, "gas_usd": 0.005}
+    ]
+    result = gate._build_micro_tier_check(bridge, micro_min_usd=5.0, micro_max_usd=50.0)
+    assert result["micro_candidate_count"] == 0
+    assert result["pass"] is False
+
+
+def test_micro_tier_gate_fee_model_exposed():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    result = gate._build_micro_tier_check(bridge)
+    # Fee model fields must always be present
+    assert "l1_fee_usd_approx" in result["micro_fee_model"]
+    assert "eth_price_usd" in result["micro_fee_model"]
+    assert result["micro_fee_model"]["eth_price_usd"] > 0
+
+
+# E1.83 fix #2/#6: factory_enriched_guard strict mode tests
+def test_factory_enriched_guard_strict_fail_when_not_loaded():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # factory truth absent
+    result = gate._build_factory_enriched_check(bridge, strict=True)
+    assert result["pass"] is False
+    assert result["informational"] is False
+    assert "factory_truth_not_loaded" in result["reason"]
+
+
+def test_factory_enriched_guard_strict_fail_when_loaded_but_zero():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_truth_loaded"] = True
+    bridge["factory_enriched_pairs"] = 0
+    result = gate._build_factory_enriched_check(bridge, strict=True)
+    assert result["pass"] is False
+    assert result["informational"] is False
+    assert "wiring regression" in result["reason"]
+
+
+def test_factory_enriched_guard_strict_pass_when_enriched():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_truth_loaded"] = True
+    bridge["factory_enriched_pairs"] = 7
+    result = gate._build_factory_enriched_check(bridge, strict=True)
+    assert result["pass"] is True
+    assert result["informational"] is False

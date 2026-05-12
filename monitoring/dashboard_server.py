@@ -92,6 +92,16 @@ except (TypeError, ValueError):
     MIN_PRODUCTION_SIZE_USD = 50.0
     MIN_EXECUTABLE_SIZE_USD = 10.0
 
+# E1.83 fix step 1: Micro-tier — $5-$50.  Separate risk tier, not production.
+# Require explicit opt-in: ARBY_MICRO_PROD_ENABLE=1.
+MICRO_PROD_ENABLE: bool = os.environ.get("ARBY_MICRO_PROD_ENABLE", "0") == "1"
+try:
+    MICRO_MIN_SIZE_USD: float = float(os.environ.get("ARBY_MICRO_MIN_SIZE_USD", "5.0"))
+except (TypeError, ValueError):
+    MICRO_MIN_SIZE_USD = 5.0
+# Micro max = production min (they are adjacent tiers).
+MICRO_MAX_SIZE_USD: float = MIN_PRODUCTION_SIZE_USD
+
 # Standard size buckets used for linear profit extrapolation.
 _SIZE_BUCKETS_USD = (0.01, 0.10, 1.0, 10.0, 50.0, 100.0)
 
@@ -672,18 +682,48 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             best = family_best.get(pair) or {}
             # fee_tiers from matrix (bps) or empty
             fee_tiers = mat.get("fee_tiers") or []
+            # E1.83 fix #9: explicit `why_not_active` per family so the dashboard
+            # surfaces the gating reason for every deep pair instead of silently
+            # showing zeros.  Order: most blocking first.
+            _max_size = float(best.get("max_size_usd") or 0.0)
+            _profit = float(best.get("profit_usd") or 0.0)
+            _spread = float(best.get("spread_bps") or 0.0)
+            _fac_dex = int(mat.get("factory_dex_count") or 0)
+            _scout_dex = int(mat.get("dex_count") or 0)
+            _why_not = []
+            if _fac_dex == 0 and _scout_dex == 0:
+                _why_not.append("no_dex_visible")
+            elif _fac_dex < 2:
+                _why_not.append(f"single_dex_only(factory_dex={_fac_dex})")
+            if _max_size <= 0:
+                _why_not.append("no_priced_quote")
+            elif _max_size < MIN_PRODUCTION_SIZE_USD:
+                _why_not.append(
+                    f"size_below_production(${_max_size:.2f}<${MIN_PRODUCTION_SIZE_USD:.0f})"
+                )
+            if _profit <= 0 and _max_size > 0:
+                _why_not.append("non_positive_profit")
+            if _spread <= 0 and _profit <= 0:
+                _why_not.append("zero_spread")
+            why_not_active = "|".join(_why_not) if _why_not else "active"
             rows.append({
                 "pair": pair,
                 "pools_found": mat.get("pool_count", 0),
                 "dex_count": mat.get("dex_count", 0),
                 "fee_tiers": fee_tiers,
                 "tvl_total_usd": mat.get("tvl_total_usd", 0.0),
+                # E1.83 Step 9: factory-enumerated columns
+                "factory_pool_count": mat.get("factory_pool_count", 0),
+                "factory_dex_count": mat.get("factory_dex_count", 0),
+                "reference_only": mat.get("reference_only", False),
                 "spread_bps": best.get("spread_bps", 0.0),
                 "max_size_usd": best.get("max_size_usd", 0.0),
                 "profit_usd": best.get("profit_usd", 0.0),
                 "depth_verdict": best.get("depth_verdict", ""),
                 "family_pool_count": best.get("family_pool_count", 0),
                 "family_dex_count": best.get("family_dex_count", 0),
+                # E1.83 fix #9: human-readable diagnostic
+                "why_not_active": why_not_active,
                 "profitable_count": best.get("profitable_count", 0),
             })
         # Sort by spread_bps descending, then tvl descending
@@ -693,6 +733,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         # Production-sized = families with max_size_usd >= MIN_PRODUCTION_SIZE_USD ($50)
         _prod_sized_families = [r for r in rows if (r.get("max_size_usd") or 0.0) >= MIN_PRODUCTION_SIZE_USD]
         _enriched_families = [r for r in rows if (r.get("family_pool_count") or 0) > 0]
+        # E1.83 Step 9: factory-enriched families (have factory_dex_count > 0)
+        _factory_enriched_rows = [r for r in rows if int(r.get("factory_dex_count") or 0) > 0]
         _max_size = max((r.get("max_size_usd") or 0.0 for r in rows), default=0.0)
         _best_profit = max((r.get("profit_usd") or 0.0 for r in rows), default=0.0)
         _best_bps = max((r.get("spread_bps") or 0.0 for r in rows), default=0.0)
@@ -700,6 +742,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "active_family_count": fpromo_snap.get("active_count", 0),
             "enriched_family_count": len(_enriched_families),
             "production_sized_count": len(_prod_sized_families),
+            # E1.83 Step 9: factory fields
+            "factory_enriched_count": len(_factory_enriched_rows),
+            "factory_truth_loaded": bridge.get("factory_truth_loaded", False),
+            "factory_truth_age_s": bridge.get("factory_truth_age_s", -1),
             "max_size_usd": round(_max_size, 4),
             "best_profit_usd": round(_best_profit, 6),
             "best_bps": round(_best_bps, 4),
@@ -1213,7 +1259,7 @@ def _build_m7_opportunity_rows(
     return rows[:limit]
 
 
-def _m7_usd_coverage(rows: list[dict]) -> dict:
+def _m7_usd_coverage(rows: list[dict], bridge: dict | None = None) -> dict:
     """USD coverage + production-vs-research split.
 
     production_profitable_total       — rows where profit>0 and size >= MIN_EXECUTABLE_SIZE_USD ($10)
@@ -1276,6 +1322,28 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
         near_production_min <= (r.get("amount_in_optimal_usd") or 0) < MIN_PRODUCTION_SIZE_USD
         for r in rows
     ) else 0.0
+    # E1.83 fix step 6: Micro-tier $5-$50 (ARBY_MICRO_PROD_ENABLE=1 required).
+    # These candidates are executable on Base given fee coverage, but are a
+    # separate risk tier from production ($50+).  Requires explicit opt-in.
+    micro_candidate_total = sum(
+        1 for r in rows
+        if MICRO_MIN_SIZE_USD <= (r.get("amount_in_optimal_usd") or 0) < MICRO_MAX_SIZE_USD
+    )
+    micro_profitable_total = sum(
+        1 for r in rows
+        if MICRO_MIN_SIZE_USD <= (r.get("amount_in_optimal_usd") or 0) < MICRO_MAX_SIZE_USD
+        and (r.get("expected_profit_usd") or 0) > 0
+    )
+    micro_best_amount = max(
+        (r.get("amount_in_optimal_usd") or 0)
+        for r in rows
+        if MICRO_MIN_SIZE_USD <= (r.get("amount_in_optimal_usd") or 0) < MICRO_MAX_SIZE_USD
+    ) if micro_candidate_total > 0 else 0.0
+    micro_best_profit = max(
+        (r.get("expected_profit_usd") or 0)
+        for r in rows
+        if MICRO_MIN_SIZE_USD <= (r.get("amount_in_optimal_usd") or 0) < MICRO_MAX_SIZE_USD
+    ) if micro_candidate_total > 0 else 0.0
     # pipeline_ready: True when we have candidates at all (scanning is working)
     pipeline_ready = total > 0
     # production_profit_ready: True when any pair has confirmed $50+ profitable depth
@@ -1316,6 +1384,30 @@ def _m7_usd_coverage(rows: list[dict]) -> dict:
             "candidate_total": near_production_candidate_total,
             "profitable_total": near_production_profitable_total,
             "best_amount_usd": near_production_best_amount,
+        },
+        # E1.83 fix step 6: Micro-tier $5-$50.  Separate risk tier.
+        # Only meaningful when ARBY_MICRO_PROD_ENABLE=1.
+        "micro_tier": {
+            "enabled": MICRO_PROD_ENABLE,
+            "min_usd": MICRO_MIN_SIZE_USD,
+            "max_usd": MICRO_MAX_SIZE_USD,
+            "candidate_total": micro_candidate_total,
+            "profitable_total": micro_profitable_total,
+            "best_amount_usd": round(micro_best_amount, 4),
+            "best_profit_usd": round(micro_best_profit, 6),
+        },
+        # E1.83 fix #3 + #8: bridge-sourced factory + deep_pair telemetry.
+        # Pulled directly from m7_cold_hot_bridge.json so dashboard surfaces
+        # the same numbers as post_soak_pass_gate.factory_enriched_guard.
+        "factory_truth": {
+            "loaded": bool((bridge or {}).get("factory_truth_loaded", False)),
+            "age_s": (bridge or {}).get("factory_truth_age_s", -1),
+            "enriched_pairs": int((bridge or {}).get("factory_enriched_pairs", 0) or 0),
+        },
+        "deep_pair": {
+            "scored_total": int((bridge or {}).get("deep_pair_scored_total", 0) or 0),
+            "positive_total": int((bridge or {}).get("deep_pair_positive_total", 0) or 0),
+            "rejected_reason": (bridge or {}).get("deep_pair_rejected_reason", {}) or {},
         },
     }
 
@@ -1491,7 +1583,7 @@ def build_m7_current_payload(
         "ws_health": ws_health,
         "execution_funnel": execution_funnel,
         "candidate_sources": candidate_sources,
-        "usd_coverage": _m7_usd_coverage(opportunity_rows),
+        "usd_coverage": _m7_usd_coverage(opportunity_rows, bridge=bridge),
         "metric_audit": _m7_metric_audit(rollup, opportunity_rows),
         "opportunities": opportunity_rows,
         "live_submit": live_submit,

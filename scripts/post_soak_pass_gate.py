@@ -60,6 +60,126 @@ def _load(path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _build_micro_tier_check(
+    bridge: Dict[str, Any],
+    micro_min_usd: float = 5.0,
+    micro_max_usd: float = 50.0,
+) -> Dict[str, Any]:
+    """E1.83 fix steps 2-5+7: Micro-tier gate ($5-$50).
+
+    For each bridge candidate in the micro range, computes:
+      total_fee_usd  = l2_gas_usd + l1_fee_usd_approx
+      required_profit = max(0.05, 3.0 * total_fee_usd)
+      profit_after_all_costs_usd = expected_profit_usd - total_fee_usd
+
+    A candidate is "micro_viable" only when expected_profit_usd >= required_profit.
+
+    Returns informational check dict:
+      micro_candidate_count    — candidates in [$5, $50) range
+      micro_viable_count       — candidates meeting profit >= 3x fee guard
+      micro_best_profit_usd    — best expected_profit_usd in micro range
+      micro_best_net_usd       — best profit_after_all_costs_usd (post-fee)
+      micro_fee_model          — fee model assumed (L1 default wei + ETH price)
+      pass                     — True when micro_viable_count > 0
+      informational            — always True (separate tier, not prod gate)
+    """
+    # L1 fee estimate: DEFAULT_OP_L1_FEE_WEI = 5e12 wei (~$0.012 @ $2400/ETH).
+    # Use bridge's cached ETH price if present, else conservative default.
+    _DEFAULT_OP_L1_FEE_WEI = 5_000_000_000_000
+    _eth_price_usd = _safe_float(bridge.get("eth_price_usd") or bridge.get("price_eth_usd") or 0)
+    if _eth_price_usd <= 0:
+        _eth_price_usd = 2400.0
+    l1_fee_usd_approx = _DEFAULT_OP_L1_FEE_WEI / 1e18 * _eth_price_usd
+    # L2 base fee: ~0.001 gwei * ~200k gas = 0.0000002 ETH ≈ $0.0005 (negligible, use 0.002 floor)
+    l2_gas_usd_floor = 0.002
+
+    micro_candidates = []
+    for key in ("cold_executable", "production_executable"):
+        for c in bridge.get(key, []) or []:
+            amt = _safe_float(c.get("amount_in_optimal_usd") or c.get("size_usd"))
+            if micro_min_usd <= amt < micro_max_usd:
+                l2_gas_usd = max(_safe_float(c.get("gas_usd")), l2_gas_usd_floor)
+                total_fee_usd = l1_fee_usd_approx + l2_gas_usd
+                expected_profit = _safe_float(c.get("expected_profit_usd"))
+                required_profit = max(0.05, 3.0 * total_fee_usd)
+                profit_after_costs = expected_profit - total_fee_usd
+                viable = expected_profit >= required_profit
+                micro_candidates.append({
+                    "amount_in_optimal_usd": round(amt, 4),
+                    "expected_profit_usd": round(expected_profit, 6),
+                    "total_fee_usd": round(total_fee_usd, 6),
+                    "required_profit_usd": round(required_profit, 6),
+                    "profit_after_all_costs_usd": round(profit_after_costs, 6),
+                    "micro_viable": viable,
+                })
+
+    micro_viable = [c for c in micro_candidates if c["micro_viable"]]
+    best_profit = max((c["expected_profit_usd"] for c in micro_candidates), default=0.0)
+    best_net = max((c["profit_after_all_costs_usd"] for c in micro_candidates), default=0.0)
+    return {
+        "micro_candidate_count": len(micro_candidates),
+        "micro_viable_count": len(micro_viable),
+        "micro_best_profit_usd": round(best_profit, 6),
+        "micro_best_net_usd": round(best_net, 6),
+        "micro_fee_model": {
+            "l1_fee_usd_approx": round(l1_fee_usd_approx, 6),
+            "l2_gas_usd_floor": l2_gas_usd_floor,
+            "eth_price_usd": _eth_price_usd,
+        },
+        "candidates": micro_candidates[:10],  # top 10 for debugging
+        "pass": len(micro_viable) > 0,
+        "informational": True,
+    }
+
+
+def _build_factory_enriched_check(bridge: Dict[str, Any], strict: bool = False) -> Dict[str, Any]:
+    """E1.83 Step 4: factory_enriched guard.
+
+    Default mode (informational=True):
+      - PASS unless factory_truth_loaded=True AND factory_enriched_pairs=0 (wiring regression).
+
+    --strict mode (E1.83 fix #2 + #6):
+      - HARD FAIL if factory_truth not loaded OR factory_enriched_pairs < 1.
+      - This makes a stale/missing pool_family_truth.json a real validation gate failure
+        for E1.83 validation soaks instead of being silently acceptable.
+    """
+    factory_truth_loaded = bool(bridge.get("factory_truth_loaded", False))
+    factory_enriched_pairs = _safe_int(bridge.get("factory_enriched_pairs", 0))
+    factory_truth_age_s = _safe_float(bridge.get("factory_truth_age_s", -1))
+
+    if strict:
+        # Hard guard: require fresh loaded truth with at least one enriched pair.
+        if not factory_truth_loaded:
+            passed = False
+            reason = "strict: factory_truth_not_loaded (stale or missing artifact — run refresh_factory_truth.py)"
+        elif factory_enriched_pairs < 1:
+            passed = False
+            reason = "strict: factory_truth_loaded=True but factory_enriched_pairs=0 — wiring regression"
+        else:
+            passed = True
+            reason = f"strict: factory_enriched_pairs={factory_enriched_pairs}"
+        informational = False
+    else:
+        if factory_truth_loaded and factory_enriched_pairs == 0:
+            passed = False
+            reason = "factory_truth_loaded=True but factory_enriched_pairs=0 — wiring regression"
+        elif not factory_truth_loaded:
+            passed = True
+            reason = "factory_truth_not_loaded (artifact missing/stale — acceptable)"
+        else:
+            passed = True
+            reason = f"factory_enriched_pairs={factory_enriched_pairs}"
+        informational = True
+    return {
+        "factory_truth_loaded": factory_truth_loaded,
+        "factory_enriched_pairs": factory_enriched_pairs,
+        "factory_truth_age_s": factory_truth_age_s,
+        "pass": passed,
+        "reason": reason,
+        "informational": informational,
+    }
+
+
 def _best_amount_usd(bridge: Dict[str, Any], include_disc: bool = False) -> float:
     best = 0.0
     keys = list({"cold_executable", "production_executable"})
@@ -299,6 +419,18 @@ def main() -> int:
             "pass": _fam_gate_pass,
             "informational": True,
         },
+        # E1.83 Step 4 / fix #2 + #6: factory_enriched_guard.
+        # Default: informational. With --strict: HARD FAIL on stale/missing pool_family_truth.json
+        # or zero enriched pairs (wiring regression). Forces fresh refresh before validation soaks.
+        "factory_enriched_guard": _build_factory_enriched_check(bridge, strict=strict),
+        # E1.83 fix steps 2-5+7: micro_tier_gate — informational.
+        # Checks $5-$50 candidates against 3x fee coverage guard.
+        # Does NOT block all_pass (separate risk tier, paper-only by policy).
+        "micro_tier_gate": _build_micro_tier_check(
+            bridge,
+            micro_min_usd=_safe_float(os.environ.get("ARBY_MICRO_MIN_SIZE_USD", "5.0")),
+            micro_max_usd=_safe_float(os.environ.get("ARBY_MIN_PRODUCTION_SIZE_USD", "50.0")),
+        ),
     }
 
     all_pass = all(c["pass"] for c in checks.values() if not c.get("informational"))

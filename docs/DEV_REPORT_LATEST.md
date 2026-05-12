@@ -1,4 +1,123 @@
-# DEV_REPORT_LATEST - E1.83 FACTORY SCOUT SCAFFOLD / FUNDAMENTAL_DISCOVERY_GAP
+# DEV_REPORT_LATEST - E1.83 REVIEWER FIX SOAK / FACTORY-ENRICHED VALIDATION
+
+## TL;DR (E1.83 reviewer-fix soak — 2026-05-12, second soak)
+
+Per project owner directive ("виконай всі вищенаведені інтерації"), the E1.83 reviewer's 10-step
+fix list was executed in this session. **8/10 fixes shipped**, 2 deferred. Fresh
+`pool_family_truth.json` (78 pools, 7/7 BASE pairs healthy) was written, then a clean 30-min
+soak (07:02:12–07:32:12Z UTC) re-validated the entire pipeline. **First cold rebuild at
+07:08:06Z confirmed `factory_truth_loaded=True`, `factory_enriched_pairs=6`, `factory_truth_age_s=668s`** —
+exactly the wiring the reviewer required. The new strict gate
+(`post_soak_pass_gate.py --strict`) now hard-passes `factory_enriched_guard`
+(`pass=true, informational=false, reason="strict: factory_enriched_pairs=6"`).
+Tests: **5119 passed**, 6 skipped (3 new strict-mode tests + regression fix).
+
+```
+=== E1.83 REVIEWER FIX SOAK GATE (2026-05-12T07:02:12–07:32:15Z, 30min, Base) ===
+Supervisor:                5/5 alive, 0 crash restarts, deferred discovery wave (120s warmup)
+Cold rebuild #1:           07:08:06Z  fac_loaded=True  fac_enriched=6  fac_age=668s
+Cold rebuild #2:           07:13:25Z  fac_loaded=True  fac_enriched=6  fac_age=988s
+Cold rebuild final:        07:29:43Z  fac_loaded=True  fac_enriched=6  fac_age=1965s ← END-OF-SOAK
+factory_truth never went stale during the entire 30-min window (max_age=3600s honored)
+deep_pair_scored_total:    0  (field present, not null — counter wiring confirmed)
+deep_pair_positive_total:  0
+deep_pair_rejected_reason: {} (empty — no deep candidates yet, expected for short window)
+factory_enriched_guard:    pass=true, informational=false ← STRICT MODE PASSES END-OF-SOAK
+ws_429_rate:               0.09%  PASS (max=15%)
+best_expected_profit_usd:  22.44  PASS (rolling-snapshot from prior session)
+all_pass:                  false (driven by production_sized_total/roundtrip_delta/submit_ready,
+                                  all manifestations of FUNDAMENTAL_DISCOVERY_GAP — unchanged)
+Pre-soak factory refresh:  AUTO (fix #1 wired in start_nonstop_runtime.py)
+Supervisor exit:           clean (2026-05-12T07:32:15Z, exit 0)
+```
+
+```
+=== E1.83 REVIEWER 10-STEP FIX STATUS ===
+#1  refresh_factory_truth pre-soak (mandatory)        ✅ DONE — wired in start_nonstop_runtime.py
+                                                            (opt-out: ARBY_SKIP_PRESOAK_FACTORY_REFRESH=1)
+#2  factory_enriched_guard strict FAIL when missing   ✅ DONE — strict=True hard-fails
+#3  factory_truth_age_s in dashboard summary           ✅ DONE — usd_coverage.factory_truth block
+#4  check_bridge_e183 reads cold_executable           ✅ DONE — switched from legacy ce_candidates
+#5  block invalid pool addr (0xabc) preservation      ✅ DONE — _is_valid_pool_addr() filter
+#6  hard check factory_enriched_pairs >= 1            ✅ DONE — strict gate enforces
+#7  deep-pair forced quote sweep $50/$100/$250/$500   ⏳ DEFERRED — needs cold scorer changes
+#8  deep_pair_scored / positive / rejected counters   ✅ DONE — bridge_runtime emits 3 fields
+#9  why_not_active per family row                      ✅ DONE — pipe-separated diagnostic per row
+#10 repeat 30-min soak after fresh truth              ✅ DONE — 07:02:12Z–07:32:12Z, validated end-to-end
+```
+
+```
+=== DASHBOARD ENRICHMENT (api/m7/current + api/m7/family_table) ===
+usd_coverage.factory_truth:   {loaded:true, age_s:668.4, enriched_pairs:6}  ← LIVE
+usd_coverage.deep_pair:       {scored_total:0, positive_total:0, rejected_reason:{}}
+family_table rows (36):       each row carries pair, pools_found, dex_count, factory_pool_count,
+                              factory_dex_count, tvl_total_usd, spread_bps, max_size_usd,
+                              profit_usd, depth_verdict, family_pool_count, why_not_active
+why_not_active examples:      "no_dex_visible|size_below_production($0.00<$50)"
+                              "single_dex_only(factory_dex=1)|non_positive_profit"
+                              "active" (when all gates clear)
+$-propagation:                100% dynamic — no per-pair hardcoding (audit grep clean)
+                              every row pulls from cold_executable / orderflow / family_promotion /
+                              pair_pool_matrix; rows without scoring show $0.00 + diagnostic
+```
+
+```
+=== FILES TOUCHED THIS SESSION ===
+scripts/check_bridge_e183.py             — read cold_executable + factory_truth header
+scripts/post_soak_pass_gate.py            — strict mode for factory_enriched_guard
+scripts/start_nonstop_runtime.py          — auto pre-soak factory_truth refresh
+m7/orderflow/bridge_runtime.py            — invalid pool filter + deep_pair_* counters
+monitoring/dashboard_server.py            — factory_truth + deep_pair blocks + why_not_active
+tests/unit/test_post_soak_pass_gate.py    — +3 strict-mode tests (now 13 total)
+tests/unit/test_e1_76_integration.py      — fixture updated for strict gate compatibility
+```
+
+## TL;DR (E1.83 micro-tier soak — 2026-05-12, first soak)
+
+E1.83 30-min micro-tier soak completed (06:14:59–06:45:02Z UTC). Full pipeline alive, 0 crash
+restarts. `micro_candidate_count` field confirmed in bridge (integer, not null — 4 cold rebuilds,
+all show `micro_candidate_count=0`). Micro-tier infrastructure ($5–$50) scaffolded and validated:
+counters in `bridge_runtime.py`, `micro_tier_gate` check in `post_soak_pass_gate.py` (informational),
+`micro_tier` block in `dashboard_server.py`. factory_truth never loaded during soak (file 22h stale,
+refresh did not complete in time) — `factory_enriched_guard` passes as informational.
+FUNDAMENTAL_DISCOVERY_GAP persists: CE list dominated by dust/meme tokens; no real $5-$50 candidates.
+Tests: **5116 passed**, 6 skipped.
+
+```
+=== E1.83 MICRO-TIER SOAK GATE (2026-05-12T06:14:59–06:45:02Z, 30min, Base) ===
+Supervisor:               5/5 alive, 0 crash restarts, clean exit 0
+micro_candidate_count:    0 (integer, not null) ✅  — confirmed in 4 cold rebuilds
+micro_sim_passed:         0  micro_submit_ready: 0  micro_net_usd: 0
+factory_truth_loaded:     False (pool_family_truth.json 22h stale — refresh incomplete in window)
+factory_enriched_guard:   pass=true (informational — stale acceptable)
+micro_tier_gate:          pass=false (informational — no viable $5–$50 candidates expected)
+ws_429_rate:              0.61%  PASS (max=15%)
+best_expected_profit_usd: 22.44  PASS (min=0.01) ← rolling snapshot from prior session
+FUNDAMENTAL_DISCOVERY_GAP: confirmed — micro CE empty because CE driven by orderflow,
+                            not factory enrichment; MEV bots dominate all deep pairs
+```
+
+```
+=== E1.83 MICRO-TIER COLD REBUILD TIMELINE (2026-05-12) ===
+06:21:00Z  bridge_ts=ready  micro_candidate_count=0 ✅  fac_loaded=False (first rebuild)
+06:26:18Z  bridge_ts=ready  micro_candidate_count=0 ✅  fac_loaded=False
+06:31:37Z  bridge_ts=ready  micro_candidate_count=0 ✅  fac_loaded=False
+06:42:36Z  bridge_ts=ready  micro_candidate_count=0 ✅  fac_loaded=False (final rebuild)
+factory file: 05/11/2026 10:22:31 → no update during soak (factory refresh ~15min, window too short)
+```
+
+```
+=== E1.83 MICRO-TIER INFRASTRUCTURE SHIPPED ===
+bridge_runtime.py:     micro_candidate_count, micro_sim_passed, micro_submit_ready, micro_net_usd
+                       computed from cold_executable where $5 ≤ amount_in_optimal_usd < $50
+post_soak_pass_gate.py: _build_micro_tier_check() with fee model:
+                        l1_fee_usd≈$0.012 (5e12wei@$2400), l2_floor=$0.002,
+                        required_profit = max(0.05, 3.0 × total_fee_usd)
+                        micro_tier_gate informational=True (never blocks all_pass)
+dashboard_server.py:   MICRO_PROD_ENABLE env, micro_tier block in _m7_opportunity_summary()
+Tests (new):           4 × test_micro_tier_gate_* (pass/fail/empty/fee_model) — all pass
+Tests total:           5116 passed, 6 skipped
+```
 
 ## TL;DR (E1.83 1-hour soak — 2026-05-11)
 
@@ -76,6 +195,8 @@ Step 6: reference_only correction             ✅ DONE (VIRTUAL/WETH → False, 
 Step 7: 1-hour soak validation                ✅ DONE (factory_enriched=6 confirmed 4/8 rebuilds)
 Step 8: Step 8 guard                          ✅ DONE (guard dormant — correct behavior)
 max_age_s fix (600→3600):                     ✅ DONE (factory_scout.py + bridge_runtime.py)
+Micro-tier infra ($5-$50):                    ✅ DONE (bridge counters + gate + dashboard)
+Micro-tier soak (30min, 2026-05-12):          ✅ DONE (micro_candidate_count=0 integer, 4 rebuilds)
 Step 9: dashboard factory columns             ⏳ PENDING
 Step 10: deep-pool scoring                    ⏳ PENDING
 ```

@@ -30,6 +30,10 @@ def _write_artifacts(rolling_dir: Path, *, best_amount: float, prod_total: int =
                 "pair": "USDC/WETH",
             }
         ],
+        # E1.83 fix #2/#6: strict-mode factory_enriched_guard requires loaded truth.
+        "factory_truth_loaded": True,
+        "factory_enriched_pairs": 1,
+        "factory_truth_age_s": 60.0,
     }
     rollup = {
         "production_sized_candidate_total": prod_total,

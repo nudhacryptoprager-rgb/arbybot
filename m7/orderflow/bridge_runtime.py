@@ -327,6 +327,20 @@ def _write_cold_hot_bridge(
                 if not _has_cold_exec:
                     _prev_cold = _existing.get("cold_executable") or []
                     _prev_near = _existing.get("near_executable") or []
+                    # E1.83 fix #5: filter invalid placeholder addresses (e.g. 0xabc, 0x000…)
+                    # so dashboard never shows hygiene-bug entries from preserved bridges.
+                    def _is_valid_pool_addr(_c) -> bool:
+                        _pa = (_c.get("pool_address") or "").lower()
+                        if not _pa.startswith("0x") or len(_pa) != 42:
+                            return False
+                        try:
+                            int(_pa, 16)
+                        except Exception:
+                            return False
+                        # null address is also invalid
+                        return _pa != "0x" + "0" * 40
+                    _prev_cold = [c for c in _prev_cold if _is_valid_pool_addr(c)]
+                    _prev_near = [c for c in _prev_near if _is_valid_pool_addr(c)]
                     if _prev_cold:
                         payload["cold_executable"] = _prev_cold
                         payload["near_executable"] = _prev_near
@@ -505,12 +519,65 @@ def _write_cold_hot_bridge(
                 # then refreshed every 10 min by that script or manually).
                 # Fail-soft: missing/stale artifact → factory_truth={} → fields=0.
                 _factory_truth: dict = {}
+                _factory_truth_age_s: float = -1.0
                 try:
-                    from m7.scouts.factory_scout import load_pool_family_truth as _lpft
+                    import os as _os2, time as _time2
+                    from m7.scouts.factory_scout import load_pool_family_truth as _lpft, _POOL_FAMILY_TRUTH_PATH as _PFTP
+                    _pft_path = _PFTP
+                    if _os2.path.exists(_pft_path):
+                        _factory_truth_age_s = round(_time2.time() - _os2.path.getmtime(_pft_path), 1)
                     _factory_truth = _lpft(max_age_s=3600.0)  # factory registrations are stable intraday
                 except Exception:
                     pass
                 _matrix = _bppm(_pools_for_matrix, min_tvl_usd=0.0, factory_truth=_factory_truth or None)
+                # Annotate bridge breakdown: factory truth load status.
+                _factory_enriched_pairs = sum(
+                    1 for _p in _matrix.get("pairs", [])
+                    if isinstance(_p, dict) and int(_p.get("factory_dex_count") or 0) > 0
+                )
+                payload["factory_truth_loaded"] = len(_factory_truth) > 0
+                payload["factory_truth_age_s"] = _factory_truth_age_s
+                payload["factory_enriched_pairs"] = _factory_enriched_pairs
+                # E1.83 fix step 4: micro-tier counters ($5-$50 candidates).
+                # These are analytical — based on current cold_executable snapshot.
+                # NOTE: ARBY_MICRO_MIN_SIZE_USD / ARBY_MIN_PRODUCTION_SIZE_USD must
+                # match the gate thresholds to stay consistent.
+                try:
+                    import os as _os3
+                    _micro_min = float(_os3.environ.get("ARBY_MICRO_MIN_SIZE_USD", "5.0") or 5.0)
+                    _micro_max = float(_os3.environ.get("ARBY_MIN_PRODUCTION_SIZE_USD", "50.0") or 50.0)
+                    _ce_all = list(payload.get("cold_executable") or [])
+                    _micro_cands = [
+                        c for c in _ce_all
+                        if _micro_min <= float(c.get("amount_in_optimal_usd") or c.get("size_usd") or 0) < _micro_max
+                    ]
+                    payload["micro_candidate_count"] = len(_micro_cands)
+                    # micro_sim_passed / micro_submit_ready: based on sim_passed / submit_ready fields
+                    payload["micro_sim_passed"] = sum(1 for c in _micro_cands if c.get("sim_passed"))
+                    payload["micro_submit_ready"] = sum(1 for c in _micro_cands if c.get("submit_ready"))
+                    payload["micro_net_usd"] = round(
+                        sum(float(c.get("expected_profit_usd") or 0) for c in _micro_cands), 6
+                    )
+                    # E1.83 fix #8: deep-pair counters (>= $50 production-tier).
+                    # Counts production-sized candidates and how many made it through scoring/profit.
+                    _deep_cands = [
+                        c for c in _ce_all
+                        if float(c.get("amount_in_optimal_usd") or c.get("size_usd") or 0) >= _micro_max
+                    ]
+                    payload["deep_pair_scored_total"] = len(_deep_cands)
+                    payload["deep_pair_positive_total"] = sum(
+                        1 for c in _deep_cands
+                        if float(c.get("expected_profit_usd") or 0) > 0
+                    )
+                    # Group rejection reasons (top-line breakdown for dashboard hint).
+                    _deep_rejects: dict = {}
+                    for c in _deep_cands:
+                        _rr = c.get("reject_reason") or c.get("depth_verdict")
+                        if _rr and float(c.get("expected_profit_usd") or 0) <= 0:
+                            _deep_rejects[str(_rr)] = _deep_rejects.get(str(_rr), 0) + 1
+                    payload["deep_pair_rejected_reason"] = _deep_rejects
+                except Exception:
+                    pass
                 # Top 50 families to keep artifact bounded.
                 _matrix["pairs"] = _matrix.get("pairs", [])[:50]
                 # E1.77 step 6: stamp matrix build time so heatmap reports

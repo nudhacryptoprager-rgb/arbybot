@@ -271,6 +271,51 @@ def main():
             os.environ["ARBY_FLASHBLOCKS_HTTP"] = "https://mainnet-preconf.base.org"
             print("  [P1] ARBY_FLASHBLOCKS_HTTP=https://mainnet-preconf.base.org (default)")
 
+    # E1.83 reviewer fix #1: mandatory pre-soak factory_truth refresh.
+    # Without a fresh pool_family_truth.json, factory enrichment never
+    # populates and the strict factory_enriched_guard fails. We always
+    # attempt the refresh on BASE; failure is non-fatal (we continue with
+    # whatever stale artifact exists, but warn loudly).
+    # Opt-out: ARBY_SKIP_PRESOAK_FACTORY_REFRESH=1.
+    if args.chain == "base" and os.environ.get(
+        "ARBY_SKIP_PRESOAK_FACTORY_REFRESH", "0"
+    ) != "1":
+        _refresh_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "refresh_factory_truth.py",
+        )
+        if os.path.exists(_refresh_script):
+            print("  [presoak] refreshing pool_family_truth.json (E1.83 fix #1)…")
+            import subprocess as _sp
+            try:
+                _r = _sp.run(
+                    [py, _refresh_script],
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
+                if _r.returncode == 0:
+                    # Last non-empty line typically contains the OK summary.
+                    _lines = [
+                        ln for ln in (_r.stdout or "").splitlines() if ln.strip()
+                    ]
+                    _last = _lines[-1] if _lines else "(no output)"
+                    print(f"  [presoak] factory_truth refreshed: {_last[:140]}")
+                else:
+                    print(
+                        f"  [presoak] WARNING factory_truth refresh exit={_r.returncode}: "
+                        f"{(_r.stderr or _r.stdout or '')[:200]}"
+                    )
+            except Exception as _exc_pr:
+                print(
+                    f"  [presoak] WARNING factory_truth refresh failed: "
+                    f"{str(_exc_pr)[:160]}"
+                )
+        else:
+            print(
+                f"  [presoak] WARNING refresh_factory_truth.py not found at {_refresh_script}"
+            )
+
     processes: list[ManagedProcess] = []
 
     # P4 (2026-04-20): optional local Anvil fork. Wires ARBY_SIM_BACKEND=anvil
