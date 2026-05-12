@@ -764,6 +764,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "family_active_count": fpromo_snap.get("active_count", 0),
             "family_promo_ttl_s": fpromo_snap.get("ttl_s"),
             "family_depth_breakthrough": family_depth_breakthrough,
+            # E1.83 Fix #7 dashboard: aggregate why_not_active across all rows.
+            # Allows top-level dashboard consumers to see the distribution of
+            # blocking reasons without iterating individual family rows.
+            "why_not_active_summary": _build_why_not_active_summary(rows),
         }
         payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)
@@ -1259,6 +1263,28 @@ def _build_m7_opportunity_rows(
     return rows[:limit]
 
 
+def _build_why_not_active_summary(rows: list) -> dict:
+    """E1.83 Fix #7: aggregate why_not_active reasons across all family rows.
+
+    Returns a dict mapping each reason tag to the count of families blocked
+    by that reason. A family tagged "active" is counted separately.
+    """
+    summary: dict = {}
+    active_count = 0
+    for row in rows:
+        wna = row.get("why_not_active") or "active"
+        if wna == "active":
+            active_count += 1
+        else:
+            # Split pipe-separated reasons and count each individually.
+            for reason_part in wna.split("|"):
+                rk = reason_part.strip()
+                if rk:
+                    summary[rk] = summary.get(rk, 0) + 1
+    summary["active"] = active_count
+    return summary
+
+
 def _m7_usd_coverage(rows: list[dict], bridge: dict | None = None) -> dict:
     """USD coverage + production-vs-research split.
 
@@ -1589,6 +1615,11 @@ def build_m7_current_payload(
         "live_submit": live_submit,
         "live_pnl": live_pnl,
         "canary": canary,
+        # E1.83 Fix #8: replay_mode flag for post-shutdown artifact replay.
+        # True when the last bridge write is stale (soak not running) — lets
+        # consumers distinguish live data from last-known replayed data.
+        "replay_mode": not is_fresh,
+        "replay_bridge_timestamp": bridge.get("timestamp") if not is_fresh else None,
     }
 
 

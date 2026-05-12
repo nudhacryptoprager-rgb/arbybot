@@ -34,6 +34,9 @@ def _write_artifacts(rolling_dir: Path, *, best_amount: float, prod_total: int =
         "factory_truth_loaded": True,
         "factory_enriched_pairs": 1,
         "factory_truth_age_s": 60.0,
+        # E1.83 NEW: strict-mode deep_sweep_guard requires deep_pair_scored_total > 0
+        # when factory_enriched_pairs > 0.
+        "deep_pair_scored_total": 1,
     }
     rollup = {
         "production_sized_candidate_total": prod_total,

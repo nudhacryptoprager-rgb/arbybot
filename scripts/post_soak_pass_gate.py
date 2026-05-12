@@ -116,9 +116,12 @@ def _build_micro_tier_check(
     micro_viable = [c for c in micro_candidates if c["micro_viable"]]
     best_profit = max((c["expected_profit_usd"] for c in micro_candidates), default=0.0)
     best_net = max((c["profit_after_all_costs_usd"] for c in micro_candidates), default=0.0)
+    # E1.83 Fix #6: count only candidates with net_usd_after_fee > 0
+    micro_net_positive = [c for c in micro_candidates if c["profit_after_all_costs_usd"] > 0]
     return {
         "micro_candidate_count": len(micro_candidates),
         "micro_viable_count": len(micro_viable),
+        "micro_net_positive_count": len(micro_net_positive),
         "micro_best_profit_usd": round(best_profit, 6),
         "micro_best_net_usd": round(best_net, 6),
         "micro_fee_model": {
@@ -127,7 +130,8 @@ def _build_micro_tier_check(
             "eth_price_usd": _eth_price_usd,
         },
         "candidates": micro_candidates[:10],  # top 10 for debugging
-        "pass": len(micro_viable) > 0,
+        # pass requires net_usd_after_fee > 0 (not just viable with 3x guard)
+        "pass": len(micro_net_positive) > 0,
         "informational": True,
     }
 
@@ -174,6 +178,62 @@ def _build_factory_enriched_check(bridge: Dict[str, Any], strict: bool = False) 
         "factory_truth_loaded": factory_truth_loaded,
         "factory_enriched_pairs": factory_enriched_pairs,
         "factory_truth_age_s": factory_truth_age_s,
+        "pass": passed,
+        "reason": reason,
+        "informational": informational,
+    }
+
+
+
+def _build_deep_sweep_check(bridge: Dict[str, Any], strict: bool = False) -> Dict[str, Any]:
+    """E1.83 NEW: deep_sweep_guard.
+
+    Checks that the forced deep-pair quote sweep produced data for at least
+    one factory-enriched pair.  Guards against the case where enrichment is
+    confirmed (factory_enriched_pairs > 0) but the scanner never produced
+    production-sized ($50+) candidates from those pairs.
+
+    strict mode: HARD FAIL when factory_enriched_pairs > 0 AND
+                 deep_pair_scored_total = 0 (wiring regression or dead scanner).
+    default:     informational — shows diagnostic but does not block all_pass.
+    """
+    factory_enriched_pairs = _safe_int(bridge.get("factory_enriched_pairs", 0))
+    deep_pair_scored_total = _safe_int(bridge.get("deep_pair_scored_total", 0))
+    deep_pair_unscored_pairs = _safe_int(bridge.get("deep_pair_unscored_pairs", 0))
+    deep_pair_thin_liquidity_pairs = _safe_int(bridge.get("deep_pair_thin_liquidity_pairs", 0))
+    forced_sweep_count = len(bridge.get("forced_sweep_results") or [])
+    deep_pair_rejected_reason = bridge.get("deep_pair_rejected_reason") or {}
+
+    regression = factory_enriched_pairs > 0 and deep_pair_scored_total == 0
+
+    if strict:
+        passed = not regression
+        reason = (
+            f"strict: deep_pair_scored_total={deep_pair_scored_total} "
+            f"for factory_enriched_pairs={factory_enriched_pairs} — "
+            + (
+                "REGRESSION: forced sweep produced no depth_curve data at $50+"
+                if regression else "OK"
+            )
+        )
+        informational = False
+    else:
+        passed = not regression
+        reason = (
+            f"factory_enriched_pairs={factory_enriched_pairs}, "
+            f"deep_pair_scored_total={deep_pair_scored_total}, "
+            f"unscored_pairs={deep_pair_unscored_pairs}, "
+            f"thin_liquidity_pairs={deep_pair_thin_liquidity_pairs}"
+        )
+        informational = True
+
+    return {
+        "factory_enriched_pairs": factory_enriched_pairs,
+        "deep_pair_scored_total": deep_pair_scored_total,
+        "deep_pair_unscored_pairs": deep_pair_unscored_pairs,
+        "deep_pair_thin_liquidity_pairs": deep_pair_thin_liquidity_pairs,
+        "forced_sweep_count": forced_sweep_count,
+        "deep_pair_rejected_reason": deep_pair_rejected_reason,
         "pass": passed,
         "reason": reason,
         "informational": informational,
@@ -343,6 +403,10 @@ def main() -> int:
         _session_best.get("session_best_expected_profit_usd")
     )
     best_profit_effective = max(best_profit, session_best_expected_profit_usd)
+    # E1.83 Fix #5: expose fresh vs carryover profit explicitly.
+    # best_profit is from the current cold_executable snapshot only.
+    # session_best_expected_profit_usd may be from a prior session (carryover).
+    fresh_best_expected_profit_usd = best_profit
 
     rt_prof_delta = _fresh_delta(
         rollup,
@@ -392,9 +456,15 @@ def main() -> int:
         },
         "best_expected_profit_usd": {
             # E1.79 Fix 1: use session-best peak, not only final snapshot.
+            # E1.83 Fix #5: also expose fresh snapshot vs carryover for diagnostics.
             "value": best_profit_effective,
             "value_snapshot": best_profit,
+            "fresh_best_expected_profit_usd": fresh_best_expected_profit_usd,
             "session_best_expected_profit_usd": session_best_expected_profit_usd,
+            "carryover_flag": (
+                session_best_expected_profit_usd > fresh_best_expected_profit_usd * 10
+                and session_best_expected_profit_usd > 1.0
+            ),
             "min": min_profit,
             "pass": best_profit_effective > min_profit,
         },
@@ -431,6 +501,12 @@ def main() -> int:
             micro_min_usd=_safe_float(os.environ.get("ARBY_MICRO_MIN_SIZE_USD", "5.0")),
             micro_max_usd=_safe_float(os.environ.get("ARBY_MIN_PRODUCTION_SIZE_USD", "50.0")),
         ),
+        # E1.83 NEW: deep_sweep_guard.
+        # Hard fail (strict mode) when factory_enriched_pairs > 0 AND
+        # deep_pair_scored_total = 0 — means forced sweep fired zero depth_curve
+        # data at $50+ for any enriched pair. Indicates scan not reaching pairs.
+        # Informational in non-strict mode.
+        "deep_sweep_guard": _build_deep_sweep_check(bridge, strict=strict),
     }
 
     all_pass = all(c["pass"] for c in checks.values() if not c.get("informational"))

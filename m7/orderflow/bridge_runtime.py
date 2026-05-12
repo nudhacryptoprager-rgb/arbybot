@@ -578,6 +578,125 @@ def _write_cold_hot_bridge(
                     payload["deep_pair_rejected_reason"] = _deep_rejects
                 except Exception:
                     pass
+                # E1.83 NEW: forced deep-pair quote sweep.
+                # For every factory-enriched pair (factory_dex_count >= 2), probe
+                # whether production-sized quotes ($50/$100/$250/$500/$1000) are
+                # available from the existing depth_curve data captured per event.
+                # Populates forced_sweep_results and updates deep_pair counters so
+                # the gate can distinguish "no events" from "thin liquidity at size".
+                try:
+                    _FORCED_SWEEP_SIZES_USD = [50.0, 100.0, 250.0, 500.0, 1000.0]
+                    # Build canonical_pair → depth_curve mapping from cold_executable.
+                    try:
+                        from m7.scouts.pair_pool_matrix import canonical_pair as _cpf2
+                    except Exception:
+                        def _cpf2(a: str, b: str) -> str:  # type: ignore[misc]
+                            a2 = (a or "").strip().upper()
+                            b2 = (b or "").strip().upper()
+                            return f"{a2}/{b2}" if a2 <= b2 else f"{b2}/{a2}"
+                    _pair_dc_map: dict = {}
+                    for _ce_s in list(payload.get("cold_executable") or []):
+                        _pr = (_ce_s.get("actual_pair") or _ce_s.get("pair") or "").upper()
+                        if "/" in _pr:
+                            _rp3 = _pr.split("/", 1)
+                            _cpk = _cpf2(_rp3[0], _rp3[1])
+                        else:
+                            _cpk = _pr
+                        if _cpk and _cpk not in _pair_dc_map:
+                            _dc_data = _ce_s.get("depth_curve") or []
+                            if _dc_data:
+                                _pair_dc_map[_cpk] = _dc_data
+                    # For each factory-enriched pair, try to find $50+ points.
+                    _forced_sweep: list = []
+                    for _ppm_fam in (_matrix.get("pairs") or []):
+                        if int(_ppm_fam.get("factory_dex_count") or 0) < 2:
+                            continue
+                        _fpair = (_ppm_fam.get("pair") or "").upper()
+                        if not _fpair:
+                            continue
+                        _fdc = _pair_dc_map.get(_fpair, [])
+                        _fdc_sorted = sorted(
+                            [pt for pt in _fdc if float(pt.get("size_usd") or 0) > 0],
+                            key=lambda pt: float(pt.get("size_usd") or 0),
+                        )
+                        _fdc_by_sz = {
+                            float(pt.get("size_usd") or 0): pt for pt in _fdc_sorted
+                        }
+                        for _tsz in _FORCED_SWEEP_SIZES_USD:
+                            # Find nearest depth_curve point at or above target size.
+                            _nearest_pt = None
+                            for _pt_sz in sorted(_fdc_by_sz.keys()):
+                                if _pt_sz >= _tsz:
+                                    _nearest_pt = _fdc_by_sz[_pt_sz]
+                                    break
+                            if _nearest_pt is not None:
+                                _snbps = float(_nearest_pt.get("net_bps") or 0)
+                                _sprof = float(_nearest_pt.get("expected_profit_usd") or 0)
+                                _forced_sweep.append({
+                                    "pair": _fpair,
+                                    "size_usd": _tsz,
+                                    "net_bps": round(_snbps, 3),
+                                    "profit_usd": round(_sprof, 6),
+                                    "actual_size_usd": float(
+                                        _nearest_pt.get("size_usd") or _tsz
+                                    ),
+                                    "reject_reason": (
+                                        None if _sprof > 0 else "net_negative_at_size"
+                                    ),
+                                    "source": "depth_curve_nearest",
+                                })
+                            else:
+                                # Distinguish: event fired but liquidity too thin vs no event
+                                _max_dc_sz = (
+                                    max(
+                                        float(pt.get("size_usd") or 0)
+                                        for pt in _fdc_sorted
+                                    )
+                                    if _fdc_sorted else 0.0
+                                )
+                                _forced_rr = (
+                                    "thin_liquidity_at_size"
+                                    if _max_dc_sz > 0
+                                    else "no_event_triggered"
+                                )
+                                _forced_sweep.append({
+                                    "pair": _fpair,
+                                    "size_usd": _tsz,
+                                    "net_bps": None,
+                                    "profit_usd": None,
+                                    "actual_size_usd": None,
+                                    "reject_reason": _forced_rr,
+                                    "source": "forced_sweep_placeholder",
+                                })
+                    payload["forced_sweep_results"] = _forced_sweep
+                    # Update deep_pair counters with forced-sweep coverage.
+                    _deep_scored_pairs = set(
+                        r["pair"] for r in _forced_sweep
+                        if r.get("source") == "depth_curve_nearest"
+                    )
+                    _deep_unscored_pairs = set(
+                        r["pair"] for r in _forced_sweep
+                        if r.get("reject_reason") == "no_event_triggered"
+                    )
+                    _thin_liq_pairs = set(
+                        r["pair"] for r in _forced_sweep
+                        if r.get("reject_reason") == "thin_liquidity_at_size"
+                    )
+                    payload["deep_pair_scored_total"] = max(
+                        int(payload.get("deep_pair_scored_total") or 0),
+                        len(_deep_scored_pairs),
+                    )
+                    payload["deep_pair_unscored_pairs"] = len(_deep_unscored_pairs)
+                    payload["deep_pair_thin_liquidity_pairs"] = len(_thin_liq_pairs)
+                    # Merge forced_sweep reject reasons into deep_pair_rejected_reason.
+                    _deep_rj2 = dict(payload.get("deep_pair_rejected_reason") or {})
+                    for _fr in _forced_sweep:
+                        _frr = _fr.get("reject_reason")
+                        if _frr:
+                            _deep_rj2[str(_frr)] = _deep_rj2.get(str(_frr), 0) + 1
+                    payload["deep_pair_rejected_reason"] = _deep_rj2
+                except Exception:
+                    pass
                 # Top 50 families to keep artifact bounded.
                 _matrix["pairs"] = _matrix.get("pairs", [])[:50]
                 # E1.77 step 6: stamp matrix build time so heatmap reports

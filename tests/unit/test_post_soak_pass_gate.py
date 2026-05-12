@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _load_gate_module():
     path = Path(__file__).resolve().parents[2] / "scripts" / "post_soak_pass_gate.py"
@@ -211,3 +213,110 @@ def test_factory_enriched_guard_strict_pass_when_enriched():
     result = gate._build_factory_enriched_check(bridge, strict=True)
     assert result["pass"] is True
     assert result["informational"] is False
+
+
+# E1.83 NEW: deep_sweep_guard tests
+def test_deep_sweep_guard_informational_regression():
+    """Informational mode: regression detected but does not hard fail."""
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_enriched_pairs"] = 6
+    bridge["deep_pair_scored_total"] = 0
+    result = gate._build_deep_sweep_check(bridge, strict=False)
+    assert result["pass"] is False
+    assert result["informational"] is True
+    assert result["deep_pair_scored_total"] == 0
+
+
+def test_deep_sweep_guard_strict_fail_regression():
+    """Strict mode: regression = hard fail when enriched > 0 but scored = 0."""
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_enriched_pairs"] = 6
+    bridge["deep_pair_scored_total"] = 0
+    result = gate._build_deep_sweep_check(bridge, strict=True)
+    assert result["pass"] is False
+    assert result["informational"] is False
+    assert "REGRESSION" in result["reason"]
+
+
+def test_deep_sweep_guard_strict_pass_when_scored():
+    """Strict mode: passes when at least one enriched pair was scored."""
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_enriched_pairs"] = 6
+    bridge["deep_pair_scored_total"] = 2
+    bridge["deep_pair_unscored_pairs"] = 4
+    result = gate._build_deep_sweep_check(bridge, strict=True)
+    assert result["pass"] is True
+    assert result["informational"] is False
+
+
+def test_deep_sweep_guard_zero_enriched_always_passes():
+    """No enriched pairs → no regression possible → always passes."""
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    bridge["factory_enriched_pairs"] = 0
+    bridge["deep_pair_scored_total"] = 0
+    result = gate._build_deep_sweep_check(bridge, strict=True)
+    assert result["pass"] is True
+
+
+# E1.83 Fix #5: fresh vs carryover profit
+def test_best_expected_profit_exposes_fresh_field(tmp_path, monkeypatch, capsys):
+    gate = _load_gate_module()
+    bridge = {
+        "production_sized_candidate_total": 1,
+        "cold_executable": [
+            {"amount_in_optimal_usd": 60.0, "expected_profit_usd": 0.015}
+        ],
+        # Simulate carryover: session_best from prior session = $22
+        "session_best": {"session_best_expected_profit_usd": 22.44},
+        "factory_truth_loaded": True,
+        "factory_enriched_pairs": 1,
+    }
+    _write_json(tmp_path / "m7_cold_hot_bridge.json", bridge)
+    _write_json(
+        tmp_path / "m7_hot_rollup_latest.json",
+        {
+            "current_session_delta": {
+                "submit_ready_total": 1,
+                "roundtrip_profitable_total": 1,
+            },
+        },
+    )
+    monkeypatch.setenv("ARBY_GATE_ROLLING_DIR", str(tmp_path))
+    gate.main()
+    report = json.loads(capsys.readouterr().out)
+    profit_check = report["checks"]["best_expected_profit_usd"]
+    # fresh snapshot is 0.015 (from cold_executable)
+    assert profit_check["fresh_best_expected_profit_usd"] == pytest.approx(0.015, abs=1e-6)
+    # session_best carryover is $22.44
+    assert profit_check["session_best_expected_profit_usd"] == pytest.approx(22.44, abs=0.01)
+    # carryover_flag should be True (22.44 >> 0.015 * 10 = 0.15)
+    assert profit_check["carryover_flag"] is True
+
+
+# E1.83 Fix #6: micro_tier net_positive_count exposed
+def test_micro_tier_net_positive_count_exposed():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # Candidate at $20 with profit 0.30 (clearly above fee ~0.014)
+    bridge["cold_executable"] = [
+        {"amount_in_optimal_usd": 20.0, "expected_profit_usd": 0.30, "gas_usd": 0.003}
+    ]
+    result = gate._build_micro_tier_check(bridge, micro_min_usd=5.0, micro_max_usd=50.0)
+    assert result["micro_net_positive_count"] == 1
+    assert result["pass"] is True  # net_positive > 0
+
+
+def test_micro_tier_fail_when_net_usd_after_fee_zero():
+    gate = _load_gate_module()
+    bridge = _passing_bridge()
+    # profit 0.01, fee ~0.014: net_after_fee = -0.004 < 0
+    bridge["cold_executable"] = [
+        {"amount_in_optimal_usd": 20.0, "expected_profit_usd": 0.01, "gas_usd": 0.003}
+    ]
+    result = gate._build_micro_tier_check(bridge, micro_min_usd=5.0, micro_max_usd=50.0)
+    assert result["micro_net_positive_count"] == 0
+    assert result["pass"] is False
