@@ -363,6 +363,8 @@ ALLOWED_YAML_FILES = {
     "onboard_mantle_stage2.yaml",
     "onboard_scroll_stage1.yaml",
     "onboard_zksync_candidate.yaml",
+    # M8 Phase 1 — new-pool sniping factory listener config
+    "new_pool_factories.yaml",
 }
 
 

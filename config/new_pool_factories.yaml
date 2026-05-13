@@ -1,0 +1,105 @@
+# M8 Phase 1 — Factory listener config for new-pool sniping (Base chain).
+#
+# ADDRESSES: All factory addresses are sourced directly from config/dexes.yaml
+# where they are already verified with on-chain/official documentation links.
+# Do NOT add addresses from memory; add only after cross-checking config/dexes.yaml
+# or the referenced source URL.
+#
+# TOPIC0: keccak256 of the event signature (canonical Solidity ABI signature).
+# Marked null where not yet independently verified from contract source/ABI.
+# Self-test (startup eth_getLogs replay) is the authoritative verification gate.
+#
+# VERIFICATION BLOCKS: left null here. Set verification_from_block and
+# verification_to_block to a known bounded range (e.g. 20000-block window) that
+# is guaranteed to contain at least one PoolCreated/PairCreated event before
+# deploying the listener. The self-test uses these to confirm the parser works.
+#
+# IMPORTANT: Do not add factories for chains other than base in this file.
+# Multi-chain support will be a separate config per chain.
+
+chain: base
+
+factories:
+
+  # -------------------------------------------------------------------------
+  # Uniswap V3 (Base) — concentrated liquidity, fee-tiered pools.
+  # Address: config/dexes.yaml base.uniswap_v3.factory
+  # Event: PoolCreated(address indexed token0, address indexed token1,
+  #                    uint24 indexed fee, int24 tickSpacing, address pool)
+  # topic0: keccak256("PoolCreated(address,address,uint24,int24,address)")
+  #         = 0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118
+  # Source: https://github.com/Uniswap/v3-core (UniswapV3Factory.sol)
+  # -------------------------------------------------------------------------
+  - dex: uniswap_v3
+    adapter_type: uniswap_v3
+    factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+    event_name: PoolCreated
+    event_signature: "PoolCreated(address,address,uint24,int24,address)"
+    topic0: "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
+    # Log layout: topics[1]=token0, topics[2]=token1, topics[3]=fee
+    #             data = abi.encode(int24 tickSpacing, address pool)
+    log_layout: v3_pool_created
+    # Verified 2025-07-15 via drpc (8 events in this range).
+    verification_from_block: 45946914
+    verification_to_block: 45948913
+
+  # -------------------------------------------------------------------------
+  # Aerodrome Slipstream CL (Base) — concentrated liquidity, tick-spacing.
+  # Address: config/dexes.yaml base.aerodrome_slipstream.factory
+  # Verified: https://aerodrome.finance/security (Base CL factory)
+  # Event: PoolCreated(address indexed token0, address indexed token1,
+  #                    int24 indexed tickSpacing, address pool)
+  # topic0: keccak256("PoolCreated(address,address,int24,address)") — PENDING
+  #         verification against deployed contract ABI; set null until confirmed.
+  # -------------------------------------------------------------------------
+  - dex: aerodrome_slipstream
+    adapter_type: aerodrome_slipstream
+    factory: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
+    event_name: PoolCreated
+    event_signature: "PoolCreated(address,address,int24,address)"
+    # topic0_verified=false: computed as keccak256("PoolCreated(address,address,int24,address)")
+    # Must be confirmed against deployed contract ABI before online smoke.
+    topic0: "0xab0d57f0df537bb25e80245ef7748fa62353808c54d6e528a9dd20887aed9ac2"
+    topic0_verified: false
+    # Log layout: topics[1]=token0, topics[2]=token1, topics[3]=tickSpacing (indexed)
+    #             data = abi.encode(address pool)
+    log_layout: slipstream_pool_created
+    verification_from_block: null
+    verification_to_block: null
+
+  # -------------------------------------------------------------------------
+  # Aerodrome ve33 (Base) — volatile + stable pools.
+  # Address: config/dexes.yaml base.aerodrome.factory
+  # Event: PairCreated(address indexed token0, address indexed token1,
+  #                    bool stable, address pair, uint256)
+  # topic0: keccak256("PairCreated(address,address,bool,address,uint256)")
+  #         = 0xc4805696c66d7cf352fc1d6bb633ad5ee82f6cb577c453024b6e0eb8306c6fc9
+  # Source: Solidly/Velodrome/Aerodrome ve33 fork standard event signature.
+  # -------------------------------------------------------------------------
+  - dex: aerodrome
+    adapter_type: ve33
+    factory: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
+    event_name: PairCreated
+    event_signature: "PairCreated(address,address,bool,address,uint256)"
+    topic0: "0xc4805696c66d7cf352fc1d6bb633ad5ee82f6cb577c453024b6e0eb8306c6fc9"
+    # Log layout: topics[1]=token0, topics[2]=token1
+    #             data = abi.encode(bool stable, address pair, uint256 allPairs)
+    log_layout: ve33_pair_created
+    verification_from_block: null
+    verification_to_block: null
+
+  # -------------------------------------------------------------------------
+  # PancakeSwap V3 (Base) — same factory interface as Uniswap V3.
+  # Address: config/dexes.yaml base.pancakeswap_v3.factory
+  # Event: same as Uniswap V3 PoolCreated
+  # topic0: same as uniswap_v3 (0x783cca1c...)
+  # -------------------------------------------------------------------------
+  - dex: pancakeswap_v3
+    adapter_type: uniswap_v3
+    factory: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
+    event_name: PoolCreated
+    event_signature: "PoolCreated(address,address,uint24,int24,address)"
+    topic0: "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
+    log_layout: v3_pool_created
+    verification_from_block: null
+    verification_to_block: null

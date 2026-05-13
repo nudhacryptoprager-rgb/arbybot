@@ -1,0 +1,19 @@
+{
+  "schema_family": "m8_sniper",
+  "schema_revision": "phase1.1",
+  "generated_at_utc": "2026-01-01T00:00:00Z",
+  "source": "new_pool_listener",
+  "freshness_s": null,
+  "status": "EMPTY",
+  "reasons": [
+    "NO_EVENTS_YET"
+  ],
+  "metrics": {
+    "pool_creation_events_seen": 0,
+    "pool_creation_events_filtered_out": 0,
+    "honeypot_check_pass": 0,
+    "honeypot_check_fail": 0,
+    "snipe_candidates_total": 0
+  },
+  "recent_events": []
+}
