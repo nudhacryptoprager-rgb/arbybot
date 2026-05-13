@@ -266,7 +266,7 @@ def _run_self_test(
         if cfg.topic0:
             params["topics"] = [cfg.topic0]
 
-        logs, had_err = _get_logs_safe(w3, params)
+        logs, had_err, _ = _get_logs_safe(w3, params)
         if had_err:
             logger.error(
                 "self_test rpc_error",
@@ -487,7 +487,8 @@ def _run_online_loop(
                 funnel.inc_dex(cfg.dex, "error")
                 continue
             funnel.inc("raw_fetched", len(logs))
-            funnel.inc_dex(cfg.dex, "raw")
+            funnel.inc_dex(cfg.dex, "polls_ok")            # one per successful poll
+            funnel.inc_dex(cfg.dex, "raw_logs", len(logs))  # actual log count
             cycle_raw += len(logs)
 
             for raw_log in logs:

@@ -571,8 +571,11 @@ class TestFactoryBreakdown:
         t.inc_dex("uniswap_v3", "raw")
         fbd = t.snapshot()["factory_breakdown"]
         entry = fbd["uniswap_v3"]
-        for sub_key in ("raw", "parse_ok", "errors", "candidates"):
+        # new canonical keys
+        for sub_key in ("polls_ok", "raw_logs", "parse_ok", "errors", "candidates"):
             assert sub_key in entry, f"missing sub-key {sub_key!r}"
+        # deprecated backward-compat key
+        assert "raw" in entry, "missing deprecated 'raw' key (backward compat)"
 
     def test_breakdown_shown_in_funnel_table(self):
         t = FunnelTracker()
@@ -580,4 +583,55 @@ class TestFactoryBreakdown:
         lines = t.funnel_table_lines()
         joined = "\n".join(lines)
         assert "uniswap_v3" in joined
+
+    # ------ new: polls_ok / raw_logs / pct fields ------
+
+    def test_inc_dex_polls_ok_stage(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "polls_ok")
+        t.inc_dex("uniswap_v3", "polls_ok")
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["uniswap_v3"]["polls_ok"] == 2
+
+    def test_inc_dex_raw_logs_stage_with_n(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw_logs", 5)
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["uniswap_v3"]["raw_logs"] == 5
+
+    def test_raw_deprecated_alias_equals_polls_ok(self):
+        """'raw' key in breakdown must equal polls_ok (deprecated alias)."""
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "polls_ok", 3)
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["uniswap_v3"]["raw"] == 3
+        assert fbd["uniswap_v3"]["raw"] == fbd["uniswap_v3"]["polls_ok"]
+
+    def test_parse_rate_pct_computed(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw_logs", 10)
+        t.inc_dex("uniswap_v3", "parse_ok", 8)
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["uniswap_v3"]["parse_rate_pct"] == 80.0
+
+    def test_candidate_rate_pct_computed(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw_logs", 4)
+        t.inc_dex("uniswap_v3", "candidate", 2)
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["uniswap_v3"]["candidate_rate_pct"] == 50.0
+
+    def test_parse_rate_pct_none_when_no_raw_logs(self):
+        """When raw_logs=0, parse_rate_pct must be None (no division by zero)."""
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "polls_ok")
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["uniswap_v3"]["parse_rate_pct"] is None
+        assert fbd["uniswap_v3"]["candidate_rate_pct"] is None
+
+    def test_inc_dex_n_parameter_default_is_one(self):
+        t = FunnelTracker()
+        t.inc_dex("aerodrome", "raw_logs")   # no n → default 1
+        fbd = t.snapshot()["factory_breakdown"]
+        assert fbd["aerodrome"]["raw_logs"] == 1
 

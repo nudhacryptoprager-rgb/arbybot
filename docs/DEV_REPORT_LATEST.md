@@ -10,17 +10,18 @@ Phase 1 foundation complete. All 10 team-lead review steps implemented and verif
 2h soak PASS. schema_revision bumped to phase1.2. 5318 unit tests pass.
 
 ```
-=== M8 PHASE 1 STEPS 4-10 SUMMARY (2026-05-13) ===
-Step 4+5: token0_symbol/token1_symbol/pair enrichment in recent_events (ERC20 on-demand, cached)
-Step 6:   rpc_error_histogram — classifies 408_timeout/429_rate_limit/5xx_server/timeout/other
-Step 7:   factory_breakdown — per-dex raw/parse_ok/errors/candidates counters in artifact
-Step 8:   honeypot detector skeleton (KNOWN_SCAM→FAIL, KNOWN_LEGIT→PASS, else UNKNOWN)
-          monitoring/sniper_honeypot.py — 18 tests — tests/unit/test_m8_sniper_honeypot.py
-Step 9:   dry-run scoring placeholders in artifact:
-          spread_bps/spread_usd/volume_usd/profit_usd=null, realizability_reason=PHASE1_NO_SCORING
-          schema_revision: phase1.1 → phase1.2
-Step 10:  2h soak PASS (see below)
-unit tests: 5318 passed, 6 skipped, 0 failed (up from 5289)
+=== M8 FACTORY BREAKDOWN FIX + m8/ PACKAGE (2026-05-13) ===
+Step 1:  factory_breakdown.raw renamed to polls_ok (deprecated alias kept for compat)
+Step 2:  inc_dex now accepts n=len(logs) for raw_logs; polls_ok=1 per successful poll
+Step 3:  parse_rate_pct / candidate_rate_pct added to factory_breakdown entries
+Step 4:  factory_coverage_note added to Status_M8.md; historical verification tracked
+Step 5:  scripts/sniper_factory_probe.py — per-factory eth_getLogs probe tool
+Step 6:  Status_M8.md: phase1_status=REACHED_CORE_LISTENER, multi_factory_coverage=PARTIAL
+Step 7:  m8/ package created: m8/discovery, m8/monitoring, m8/scoring, m8/runtime
+Step 8:  scripts/ remain thin wrappers (sniper_smoke_run.py unchanged as CLI)
+Step 9:  m8.monitoring / m8.discovery re-export canonical modules (compat imports)
+Step 10: unit tests: 5370 passed, 6 skipped (up from 5318); check_repo_safety PASS
+self_test bug: logs, had_err = _get_logs_safe() 2-tuple unpack → 3-tuple (had_err, _, err_str)
 ```
 
 ```

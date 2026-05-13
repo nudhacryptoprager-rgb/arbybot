@@ -81,24 +81,43 @@ def _classify_rpc_error(error_str: str) -> str:
 
 
 def _build_factory_breakdown(
-    raw: Dict[str, int],
+    polls_ok: Dict[str, int],
+    raw_logs: Dict[str, int],
     parse_ok: Dict[str, int],
     errors: Dict[str, int],
     candidates: Dict[str, int],
-) -> Dict[str, Dict[str, int]]:
+) -> Dict[str, Dict[str, Any]]:
     """Merge per-dex counters into a single breakdown dict.
 
     Returns a dict keyed by dex name with sub-keys:
-    ``raw``, ``parse_ok``, ``errors``, ``candidates``.
+    ``polls_ok`` (successful polls), ``raw_logs`` (actual log count),
+    ``parse_ok``, ``errors``, ``candidates``,
+    ``parse_rate_pct``, ``candidate_rate_pct``.
+
+    ``raw`` is kept as a deprecated backward-compat alias for ``polls_ok``.
     """
-    all_dexes = set(raw) | set(parse_ok) | set(errors) | set(candidates)
-    breakdown: Dict[str, Dict[str, int]] = {}
+    all_dexes = (
+        set(polls_ok) | set(raw_logs) | set(parse_ok)
+        | set(errors) | set(candidates)
+    )
+    breakdown: Dict[str, Dict[str, Any]] = {}
     for dex in sorted(all_dexes):
+        p_ok = polls_ok.get(dex, 0)
+        r_logs = raw_logs.get(dex, 0)
+        pk = parse_ok.get(dex, 0)
+        cands = candidates.get(dex, 0)
+        parse_rate = round(100.0 * pk / r_logs, 1) if r_logs > 0 else None
+        cand_rate = round(100.0 * cands / r_logs, 1) if r_logs > 0 else None
         breakdown[dex] = {
-            "raw": raw.get(dex, 0),
-            "parse_ok": parse_ok.get(dex, 0),
+            "polls_ok": p_ok,
+            "raw_logs": r_logs,
+            "parse_ok": pk,
             "errors": errors.get(dex, 0),
-            "candidates": candidates.get(dex, 0),
+            "candidates": cands,
+            "parse_rate_pct": parse_rate,
+            "candidate_rate_pct": cand_rate,
+            # deprecated: kept for backward compat; equals polls_ok
+            "raw": p_ok,
         }
     return breakdown
 
@@ -164,8 +183,9 @@ class FunnelTracker:
         self._started_at: float = time.monotonic()
         # rpc_error_histogram — classify errors by HTTP status / type
         self._rpc_error_types: Dict[str, int] = {}
-        # factory_breakdown — per-dex counters for raw/parse_ok/errors/candidates
-        self._dex_raw: Dict[str, int] = {}
+        # factory_breakdown — per-dex counters
+        self._dex_polls_ok: Dict[str, int] = {}    # successful polls (no RPC error)
+        self._dex_raw_logs: Dict[str, int] = {}    # actual log count (sum of len(logs))
         self._dex_parse_ok: Dict[str, int] = {}
         self._dex_errors: Dict[str, int] = {}
         self._dex_candidates: Dict[str, int] = {}
@@ -199,20 +219,30 @@ class FunnelTracker:
             self._rpc_errors += 1
             self._rpc_error_types[error_type] = self._rpc_error_types.get(error_type, 0) + 1
 
-    def inc_dex(self, dex: str, stage: str) -> None:
-        """Increment a per-dex counter for one of: raw, parse_ok, error, candidate.
+    def inc_dex(self, dex: str, stage: str, n: int = 1) -> None:
+        """Increment a per-dex counter.
+
+        Stages:
+        - ``"polls_ok"`` — one per successful RPC poll (no error).
+        - ``"raw_logs"`` — actual log count from that poll (pass ``n=len(logs)``).
+        - ``"parse_ok"`` — one per successfully parsed event.
+        - ``"error"``    — one per failed RPC call for this dex.
+        - ``"candidate"`` — one per event that becomes a snipe candidate.
+        - ``"raw"`` (deprecated) — backward-compat alias for ``"polls_ok"``.
 
         Unknown stage names are silently ignored.
         """
         with self._lock:
-            if stage == "raw":
-                self._dex_raw[dex] = self._dex_raw.get(dex, 0) + 1
+            if stage in ("polls_ok", "raw"):  # "raw" is deprecated alias
+                self._dex_polls_ok[dex] = self._dex_polls_ok.get(dex, 0) + n
+            elif stage == "raw_logs":
+                self._dex_raw_logs[dex] = self._dex_raw_logs.get(dex, 0) + n
             elif stage == "parse_ok":
-                self._dex_parse_ok[dex] = self._dex_parse_ok.get(dex, 0) + 1
+                self._dex_parse_ok[dex] = self._dex_parse_ok.get(dex, 0) + n
             elif stage == "error":
-                self._dex_errors[dex] = self._dex_errors.get(dex, 0) + 1
+                self._dex_errors[dex] = self._dex_errors.get(dex, 0) + n
             elif stage == "candidate":
-                self._dex_candidates[dex] = self._dex_candidates.get(dex, 0) + 1
+                self._dex_candidates[dex] = self._dex_candidates.get(dex, 0) + n
 
     def complete_cycle(self) -> None:
         with self._lock:
@@ -259,8 +289,8 @@ class FunnelTracker:
                 "rpc_error_histogram": dict(self._rpc_error_types),
                 # Per-factory breakdown
                 "factory_breakdown": _build_factory_breakdown(
-                    self._dex_raw, self._dex_parse_ok,
-                    self._dex_errors, self._dex_candidates,
+                    self._dex_polls_ok, self._dex_raw_logs,
+                    self._dex_parse_ok, self._dex_errors, self._dex_candidates,
                 ),
                 # Session
                 "cycles_completed": self._cycles_completed,
@@ -309,8 +339,11 @@ class FunnelTracker:
         if fbd:
             lines.append("  Per-dex breakdown:")
             for dex, dcnt in fbd.items():
+                parse_pct = dcnt.get("parse_rate_pct")
+                pct_str = f" ({parse_pct}%ok)" if parse_pct is not None else ""
                 lines.append(
-                    f"    {dex:<24} raw={dcnt['raw']}  ok={dcnt['parse_ok']}"
+                    f"    {dex:<24} polls={dcnt['polls_ok']}  logs={dcnt['raw_logs']}"
+                    f"  ok={dcnt['parse_ok']}{pct_str}"
                     f"  err={dcnt['errors']}  cand={dcnt['candidates']}"
                 )
         lines.append("=" * 50)

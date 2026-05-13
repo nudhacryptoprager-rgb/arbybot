@@ -1,20 +1,23 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: IN_PROGRESS — Phase 1 complete (steps 1-10 done); 2h soak PASS; Phase 2 (scoring/filters) next.
+**Status**: IN_PROGRESS — listener_core REACHED; multi_factory coverage PARTIAL; Phase 2 scoring next.
 
 `goal_status`: IN_PROGRESS  
-`phase1_status`: REACHED  
+`phase1_status`: REACHED_CORE_LISTENER  
+`multi_factory_coverage_status`: PARTIAL  
 `phase1_steps_4_9_status`: COMPLETE  
 `pipeline_ready`: false  
 `production_profit_ready`: false  
 `close_allowed`: false  
-`primary_blocker_of_session`: M8_PHASE1_FOUNDATION  
+`primary_blocker_of_session`: M8_NON_UNISWAP_FACTORY_COVERAGE_NOT_VERIFIED  
 `blocker_status_before`: M8_FOUNDATION_NOT_IMPLEMENTED  
-`blocker_status_after`: RESOLVED  
+`blocker_status_after`: PARTIAL  
+`next_phase_blocker`: M8_PHASE2_SCORING_AND_RISK_FILTERS_NOT_IMPLEMENTED  
 `docs_reread_confirmed`: true  
-`phase1_verified_at`: 2026-05-13T19:31:56Z  
+`phase1_verified_at`: 2026-05-13T21:54:59Z  
 `phase1_artifact`: data/runs/_rolling/new_pool_sniper_latest.json  
-`phase1_soak_result`: PASS (parse_ok=7, candidates=7, rpc_error_rate=1.875%, cycles=120)  
+`phase1_soak_result`: PASS (parse_ok=22, candidates=22, rpc_error_rate=1.56%, cycles=240)  
+`factory_coverage_note`: uniswap_v3 verified live (22 events/2h); aerodrome/aerodrome_slipstream/pancakeswap_v3 zero events — RPC timeout (pancakeswap) or no activity in probe window  
 `schema_revision_current`: phase1.2  
 
 ## Scope
