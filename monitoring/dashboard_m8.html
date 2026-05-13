@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ARBY - M8 New Pool Dashboard</title>
+<style>
+  :root {
+    --bg: #0e1117; --panel: #161b22; --border: #30363d;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    --blue: #58a6ff; --muted: #8b949e; --text: #c9d1d9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 13px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 16px; color: var(--blue); }
+  main { padding: 16px 20px; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 10px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; border: 1px solid var(--border); }
+  .green { color: var(--green); } .red { color: var(--red); } .yellow { color: var(--yellow); } .muted { color: var(--muted); }
+  .badge-green { color: var(--green); border-color: var(--green); background: #102515; }
+  .badge-red { color: var(--red); border-color: var(--red); background: #2a1212; }
+  .badge-yellow { color: var(--yellow); border-color: var(--yellow); background: #2c230d; }
+  #last-refresh { color: var(--muted); font-size: 11px; margin-left: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-size: 11px; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid #1c2128; font-size: 12px; vertical-align: top; }
+  tr:hover td { background: #1c2128; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; }
+  .kv dt { color: var(--muted); white-space: nowrap; }
+  .kv dd { word-break: break-word; }
+  code { color: var(--blue); }
+  @media (max-width: 980px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ARBY M8 New Pool</h1>
+  <span id="status-badge" class="badge badge-yellow">status: loading</span>
+  <span id="real-badge" class="badge badge-yellow">realizable: ?</span>
+  <span id="last-refresh">-</span>
+</header>
+<main>
+  <div class="grid2">
+    <section class="panel">
+      <h2>Artifact</h2>
+      <dl class="kv" id="artifact-kv"><dt class="muted">Loading</dt><dd>-</dd></dl>
+    </section>
+    <section class="panel">
+      <h2>Summary</h2>
+      <dl class="kv" id="summary-kv"><dt class="muted">Loading</dt><dd>-</dd></dl>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>Opportunities / New Pool Signals</h2>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Pair</th>
+            <th>Pool</th>
+            <th>Dex</th>
+            <th class="num">Spread $</th>
+            <th class="num">Spread bps</th>
+            <th class="num">Volume $</th>
+            <th class="num">Profit $</th>
+            <th>Realizable</th>
+            <th>Reason</th>
+            <th>Blocking metrics</th>
+          </tr>
+        </thead>
+        <tbody id="opp-body"><tr><td colspan="10" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Signal Funnel</h2>
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th class="num">Count</th>
+            <th class="num">Drop from previous</th>
+            <th class="num">Pass rate</th>
+          </tr>
+        </thead>
+        <tbody id="funnel-body"><tr><td colspan="4" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const REFRESH_MS = 10000;
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function money(v) {
+  if (v === null || v === undefined) return '<span class="muted">$--</span>';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '<span class="muted">$--</span>';
+  const cls = n > 0 ? 'green' : n < 0 ? 'red' : 'muted';
+  return `<span class="${cls}">$${n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 6})}</span>`;
+}
+function num(v, digits=4) {
+  if (v === null || v === undefined) return '<span class="muted">-</span>';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return esc(v);
+  const cls = n > 0 ? 'green' : n < 0 ? 'red' : 'muted';
+  return `<span class="${cls}">${n.toFixed(digits)}</span>`;
+}
+function kv(el, obj) {
+  el.innerHTML = Object.entries(obj).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('');
+}
+function shortAddr(v) {
+  if (!v) return '-';
+  const s = String(v);
+  return s.length > 16 ? `${s.slice(0, 8)}...${s.slice(-6)}` : s;
+}
+function blocking(metrics) {
+  if (!metrics) return '<span class="muted">-</span>';
+  return Object.entries(metrics)
+    .map(([k, v]) => `${esc(k)}=${esc(v)}`)
+    .join('<span class="small"></span>');
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/m8/current', {cache: 'no-store'});
+    const data = await res.json();
+    const art = data.artifact || {};
+    const sum = data.opportunity_summary || {};
+    document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString();
+
+    const statusBadge = document.getElementById('status-badge');
+    statusBadge.textContent = `status: ${art.status || 'MISSING'}`;
+    statusBadge.className = `badge ${art.status === 'ACTIVE' ? 'badge-green' : art.status === 'ERROR' ? 'badge-red' : 'badge-yellow'}`;
+
+    const realBadge = document.getElementById('real-badge');
+    realBadge.textContent = `realizable: ${sum.realizable ?? 0}/${sum.total ?? 0}`;
+    realBadge.className = `badge ${(sum.realizable || 0) > 0 ? 'badge-green' : 'badge-yellow'}`;
+
+    kv(document.getElementById('artifact-kv'), {
+      schema: `<code>${esc(art.schema_family || '-')}</code> / <code>${esc(art.schema_revision || '-')}</code>`,
+      source: esc(art.source || '-'),
+      generated: esc(art.generated_at_utc || '-'),
+      file_age_s: esc(art.file_age_s ?? '-'),
+      freshness_s: esc(art.freshness_s ?? '-'),
+      reasons: esc((art.reasons || []).join(' | ') || 'none'),
+    });
+    kv(document.getElementById('summary-kv'), {
+      total_rows: esc(sum.total ?? 0),
+      realizable: esc(sum.realizable ?? 0),
+      not_realizable: esc(sum.not_realizable ?? 0),
+      economics_available: esc(sum.economics_available),
+      listener_only: esc(sum.listener_only),
+    });
+
+    const rows = data.opportunity_rows || [];
+    const body = document.getElementById('opp-body');
+    body.innerHTML = rows.length ? rows.map(r => `
+      <tr>
+        <td>${esc(r.pair)}</td>
+        <td><code title="${esc(r.pool || '')}">${esc(shortAddr(r.pool))}</code><span class="small">block ${esc(r.block_number ?? '-')}</span></td>
+        <td>${esc(r.dex || '-')}</td>
+        <td class="num">${money(r.spread_usd)}</td>
+        <td class="num">${num(r.spread_bps)}</td>
+        <td class="num">${money(r.volume_usd)}</td>
+        <td class="num">${money(r.profit_usd)}</td>
+        <td>${r.is_realizable ? '<span class="green">yes</span>' : '<span class="yellow">no</span>'}</td>
+        <td>${esc(r.realizability_reason || '-')}</td>
+        <td>${blocking(r.blocking_metrics)}</td>
+      </tr>
+    `).join('') : '<tr><td colspan="10" class="muted">No rows in artifact</td></tr>';
+
+    const funnel = (data.funnel || {}).stages || [];
+    document.getElementById('funnel-body').innerHTML = funnel.length ? funnel.map(s => `
+      <tr>
+        <td>${esc(s.label || s.stage)}</td>
+        <td class="num">${esc(s.count)}</td>
+        <td class="num">${s.drop_from_previous === null || s.drop_from_previous === undefined ? '<span class="muted">-</span>' : esc(s.drop_from_previous)}</td>
+        <td class="num">${s.pass_rate_pct === null || s.pass_rate_pct === undefined ? '<span class="muted">-</span>' : `${esc(s.pass_rate_pct)}%`}</td>
+      </tr>
+    `).join('') : '<tr><td colspan="4" class="muted">No funnel data</td></tr>';
+  } catch (err) {
+    document.getElementById('opp-body').innerHTML = `<tr><td colspan="10" class="red">API error: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>

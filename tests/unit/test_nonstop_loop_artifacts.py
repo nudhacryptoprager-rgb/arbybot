@@ -93,6 +93,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m7_tvl_scout_latest.json",
             # E1.83: factory-enumerated pool/dex truth (refreshed every 10 min)
             "pool_family_truth.json",
+            # M8 Phase 1: new pool sniper rolling artifact
+            "new_pool_sniper_latest.json",
         }
         
         # Archive files are allowed (created on reset)

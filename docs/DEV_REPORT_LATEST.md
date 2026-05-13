@@ -1,4 +1,61 @@
-# DEV_REPORT_LATEST - E1.84 VALIDATION SOAK / DEEP-PAIR FORCED SWEEP END-TO-END
+# DEV_REPORT_LATEST - M8 Phase 1 / New-Pool Sniper Foundation
+
+## TL;DR (M8 Phase 1 soak — 2026-05-13, 18:31–19:31Z)
+
+60-хв listener-only soak для верифікації M8 Phase 1 foundation.
+**Критерій: `parse_failed=0`, `snipe_candidates_total>0`, `status=ACTIVE`, `rpc_error_rate<5%`.**
+Результат: PASS — 7 реальних UniswapV3 pool-creation events спарсовано без помилок, HexBytes
+regression виявлено та виправлено в тій же сесії, усі unit-тести зелені (5289 passed).
+
+```
+=== M8 PHASE 1 LISTENER SOAK (2026-05-13T18:31:54–19:31:56Z, 60min, Base) ===
+chain:                 base (drpc)
+factories:             4 (uniswap_v3, aerodrome_slipstream, aerodrome, pancakeswap_v3)
+duration:              3601.4s  (120 cycles, poll_interval=30s, blocks_back=50)
+artifact:              data/runs/_rolling/new_pool_sniper_latest.json
+schema_family:         m8_sniper
+schema_revision:       phase1.1
+status:                ACTIVE  ✅
+pool_creation_events_seen:     7
+parse_ok:              7       ✅  (parse_failed=0)
+dedup_new:             7
+filter_passed:         7
+snipe_candidates_total: 7      ✅
+rpc_calls_made:        480
+rpc_errors:            9       (1.875% — drpc 408 timeouts, within 5% threshold)
+cycles_completed:      120     ✅
+generated_at_utc:      2026-05-13T17:31:56Z
+```
+
+```
+=== M8 PHASE 1 REGRESSION BUG (FIXED THIS SESSION) ===
+Bug:     parse_raw_log silently returned None for ALL real web3 v6 logs.
+Root cause: web3 v6 eth.get_logs() returns HexBytes (bytes subclass) for
+            topics/data/transactionHash. _strip_0x() called .lower() on bytes → AttributeError
+            → except block returned None.  Symptom: events_seen>0, parse_ok=0, parse_failed=N.
+Fix:     Added _normalize_raw_log() to convert bytes topics/data/transactionHash to
+         0x-prefixed hex strings BEFORE any parser is called.
+         Updated _strip_0x() to call .hex() on bytes input.
+Verified: parse_ok=7, parse_failed=0 over 120 cycles / 60 minutes.
+Tests:   TestParseRawLogHexBytesCompat (6 new tests) — all pass.
+Files:   discovery/new_pool_listener.py
+```
+
+```
+=== M8 PHASE 1 GATE CHECK ===
+offline smoke:         PASS (schema_family=m8_sniper, reasons=[NO_EVENTS_YET]) ✅
+Slipstream topic0:     VERIFIED (velodrome-finance/slipstream ICLFactory.sol PoolCreated event) ✅
+topic0_verified flags: uniswap_v3=true, aerodrome_slipstream=true,
+                       aerodrome=null_TODO, pancakeswap_v3=null_TODO
+                       (drpc nonstable for getLogs without topic0 filter — archive RPC needed)
+10-min online smoke:   PASS (parse_ok=1, candidates=1, status=ACTIVE) ✅
+60-min soak:           PASS (parse_ok=7, candidates=7, rpc_error_rate=1.875%) ✅
+unit tests:            5289 passed, 6 skipped, 0 failed ✅
+canonical rolling set: new_pool_sniper_latest.json registered in
+                       test_nonstop_loop_artifacts.py + test_orderflow_artifacts.py ✅
+```
+
+---
 
 ## TL;DR (E1.84 validation soak — 2026-05-12, 08:15–08:45Z)
 

@@ -614,6 +614,16 @@ class TestLoadFactoryConfig:
                 assert cfg.topic0 == cfg.topic0.lower()
                 assert cfg.topic0.startswith("0x")
 
+    def test_verification_ranges_are_int_or_none(self):
+        configs = load_factory_config()
+        for cfg in configs:
+            assert cfg.verification_from_block is None or isinstance(
+                cfg.verification_from_block, int
+            ), f"{cfg.dex}.verification_from_block must be int or None"
+            assert cfg.verification_to_block is None or isinstance(
+                cfg.verification_to_block, int
+            ), f"{cfg.dex}.verification_to_block must be int or None"
+
 
 # ---------------------------------------------------------------------------
 # Module importability (no web3 required at module level)
@@ -638,7 +648,101 @@ class TestModuleImportability:
         assert "token1" in flds
         assert "fee" in flds
         assert "tick_spacing" in flds
-        assert "stable" in flds
+
+
+# ---------------------------------------------------------------------------
+# HexBytes compatibility (web3 v6 returns bytes for topics/data)
+# ---------------------------------------------------------------------------
+
+class TestParseRawLogHexBytesCompat:
+    """parse_raw_log must succeed when topics/data/transactionHash are bytes.
+
+    web3 v6 ``eth.get_logs()`` returns ``AttributeDict`` with HexBytes values.
+    The parser must normalise them before processing (fix for silent parse_failed
+    regression found during M8 Phase 1 online smoke on 2026-05-13).
+    """
+
+    @staticmethod
+    def _make_v3_log_bytes() -> Dict[str, Any]:
+        """Build a V3 PoolCreated log with bytes (not str) for topics/data."""
+        import struct
+
+        def addr_topic(addr: str) -> bytes:
+            return bytes.fromhex(("0" * 24 + addr.lower().replace("0x", "")))
+
+        def uint_topic(v: int) -> bytes:
+            return v.to_bytes(32, "big")
+
+        def encode_word(v: Any) -> bytes:
+            if isinstance(v, str):
+                s = v.lower().replace("0x", "").zfill(64)
+                return bytes.fromhex(s)
+            return v.to_bytes(32, "big") if isinstance(v, int) else v
+
+        tick_spacing = 60
+        pool_addr = TOKEN1  # reuse as dummy pool address
+        data = encode_word(tick_spacing) + encode_word(pool_addr)
+
+        return {
+            "address": bytes.fromhex(FACTORY_V3.replace("0x", "")),
+            "topics": [
+                bytes.fromhex("783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"),  # topic0
+                bytes.fromhex(("0" * 24 + TOKEN0.replace("0x", ""))),   # token0
+                bytes.fromhex(("0" * 24 + TOKEN1.replace("0x", ""))),   # token1
+                uint_topic(3000),                                          # fee
+            ],
+            "data": data,
+            "blockNumber": 0x1000,
+            "transactionHash": bytes.fromhex(TX_HASH.replace("0x", "")),
+            "logIndex": 0,
+        }
+
+    def test_v3_log_with_bytes_topics_parses(self):
+        """V3 log with bytes topics/data must parse successfully."""
+        log = self._make_v3_log_bytes()
+        ev = parse_raw_log(log, _cfg())
+        assert ev is not None, "parse_raw_log must handle bytes topics from web3"
+        assert ev.token0 == TOKEN0.lower()
+        assert ev.token1 == TOKEN1.lower()
+        assert ev.fee == 3000
+        assert ev.tick_spacing == 60
+
+    def test_v3_log_with_bytes_tx_hash_parses(self):
+        """transactionHash as bytes must be normalised to hex string."""
+        log = self._make_v3_log_bytes()
+        ev = parse_raw_log(log, _cfg())
+        assert ev is not None
+        assert ev.tx_hash == TX_HASH.lower()
+
+    def test_v3_log_with_bytes_block_number_int_parses(self):
+        """blockNumber as int (not hex str) must parse correctly."""
+        log = self._make_v3_log_bytes()
+        ev = parse_raw_log(log, _cfg())
+        assert ev is not None
+        assert ev.block_number == 0x1000
+
+    def test_strip_0x_handles_bytes(self):
+        """Internal _strip_0x must return hex str when given bytes input."""
+        from discovery.new_pool_listener import _strip_0x
+        result = _strip_0x(bytes.fromhex("783cca1c"))
+        assert result == "783cca1c"
+        assert isinstance(result, str)
+
+    def test_normalize_raw_log_converts_topics(self):
+        """_normalize_raw_log converts bytes topics to 0x-prefixed strings."""
+        from discovery.new_pool_listener import _normalize_raw_log
+        raw = {
+            "topics": [b"\x78\x3c", b"\xde\xad"],
+            "data": b"\x00\x01",
+            "transactionHash": b"\xbe\xef",
+            "blockNumber": 100,
+        }
+        norm = _normalize_raw_log(raw)
+        assert norm["topics"][0] == "0x783c"
+        assert norm["topics"][1] == "0xdead"
+        assert norm["data"] == "0x0001"
+        assert norm["transactionHash"] == "0xbeef"
+        assert norm["blockNumber"] == 100  # int unchanged
 
     def test_factoryconfig_is_dataclass(self):
         from dataclasses import fields

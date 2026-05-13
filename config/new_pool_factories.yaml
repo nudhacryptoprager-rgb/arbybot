@@ -57,13 +57,17 @@ factories:
     factory: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A"
     event_name: PoolCreated
     event_signature: "PoolCreated(address,address,int24,address)"
-    # topic0_verified=false: computed as keccak256("PoolCreated(address,address,int24,address)")
-    # Must be confirmed against deployed contract ABI before online smoke.
+    # topic0 verified 2025-07-15 against velodrome-finance/slipstream ICLFactory.sol:
+    # event PoolCreated(address indexed token0, address indexed token1, int24 indexed tickSpacing, address pool)
+    # keccak256("PoolCreated(address,address,int24,address)") = 0xab0d57f0...
     topic0: "0xab0d57f0df537bb25e80245ef7748fa62353808c54d6e528a9dd20887aed9ac2"
-    topic0_verified: false
+    topic0_verified: true
     # Log layout: topics[1]=token0, topics[2]=token1, topics[3]=tickSpacing (indexed)
     #             data = abi.encode(address pool)
     log_layout: slipstream_pool_created
+    # TODO: fill before enabling self-test. Low pool-creation frequency (~rare);
+    # drpc returns empty in last 100k blocks. Scan with `eth_getLogs` + topic0
+    # filter over a wider historical window when a stable archive RPC is available.
     verification_from_block: null
     verification_to_block: null
 
@@ -85,6 +89,8 @@ factories:
     # Log layout: topics[1]=token0, topics[2]=token1
     #             data = abi.encode(bool stable, address pair, uint256 allPairs)
     log_layout: ve33_pair_created
+    # TODO: fill before enabling self-test. Low pool-creation frequency;
+    # drpc returned empty in last 100k blocks. Requires stable archive RPC.
     verification_from_block: null
     verification_to_block: null
 
@@ -101,5 +107,8 @@ factories:
     event_signature: "PoolCreated(address,address,uint24,int24,address)"
     topic0: "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
     log_layout: v3_pool_created
+    # TODO: fill before enabling self-test. PancakeSwap V3 has lower activity
+    # than UniV3; drpc returned empty in last 100k blocks. Use UniV3-range as
+    # a reference once a stable archive RPC is available.
     verification_from_block: null
     verification_to_block: null

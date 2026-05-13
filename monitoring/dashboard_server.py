@@ -117,6 +117,8 @@ ARTIFACT_FILES = {
     "m7_hot_rollup": ROLLING_DIR / "m7_hot_rollup_latest.json",
 }
 
+SNIPER_ARTIFACT_PATH = ROLLING_DIR / "new_pool_sniper_latest.json"
+
 # E1.9.3: Discovery namespace artifacts (parallel to production)
 DISCOVERY_ARTIFACT_FILES = {
     "m7_orderflow": ROLLING_DIR / "m7_orderflow_latest_discovery.json",
@@ -128,6 +130,7 @@ DISCOVERY_ARTIFACT_FILES = {
 }
 
 DASHBOARD_HTML = Path(__file__).parent / "dashboard_m7.html"
+DASHBOARD_M8_HTML = Path(__file__).parent / "dashboard_m8.html"
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -179,8 +182,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if profile not in ("production", "discovery"):
                 profile = "production"
             self._serve_family_table(profile=profile)
+        elif path == "/api/m8/current":
+            self._serve_m8_current()
         elif path == "/m7" or path == "/m7/":
             self._serve_file(Path(__file__).parent / "dashboard_m7.html", "text/html")
+        elif path == "/m8" or path == "/m8/":
+            self._serve_file(DASHBOARD_M8_HTML, "text/html")
         else:
             self.send_error(404)
 
@@ -777,6 +784,46 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _serve_m8_current(self):
+        """Serve M8 new-pool sniper dashboard data.
+
+        M8 Phase 1 is listener-only. The dashboard therefore surfaces every
+        requested economics field but marks it unavailable until later phases
+        write spread/size/profit/simulation data into the canonical artifact.
+        """
+        artifact: dict = {}
+        file_age_s = None
+        if SNIPER_ARTIFACT_PATH.is_file():
+            try:
+                with open(SNIPER_ARTIFACT_PATH, encoding="utf-8") as fh:
+                    artifact = json.load(fh) or {}
+                try:
+                    file_age_s = max(
+                        0,
+                        int(
+                            datetime.now(timezone.utc).timestamp()
+                            - os.path.getmtime(SNIPER_ARTIFACT_PATH)
+                        ),
+                    )
+                except OSError:
+                    file_age_s = None
+            except (json.JSONDecodeError, OSError):
+                artifact = {}
+
+        result = build_m8_current_payload(
+            artifact=artifact,
+            now_utc=datetime.now(timezone.utc),
+            file_age_s=file_age_s,
+        )
+
+        payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def log_message(self, fmt, *args):
         """Suppress default logging noise."""
         pass
@@ -865,6 +912,216 @@ def _safe_float(value):
         return float(dec)
     except (OverflowError, ValueError):
         return None
+
+
+def _first_present(source: dict, *keys):
+    for key in keys:
+        if isinstance(source, dict) and source.get(key) is not None:
+            return source.get(key)
+    return None
+
+
+def _short_address(value) -> str | None:
+    if not value:
+        return None
+    txt = str(value)
+    if len(txt) <= 14:
+        return txt
+    return f"{txt[:8]}...{txt[-6:]}"
+
+
+def _m8_pair_label(event: dict) -> str:
+    explicit = _first_present(event, "pair", "symbol", "actual_pair")
+    if explicit:
+        return str(explicit).upper()
+    t0 = _short_address(event.get("token0")) or "token0?"
+    t1 = _short_address(event.get("token1")) or "token1?"
+    return f"{t0}/{t1}"
+
+
+def _m8_decimal_field(source: dict, *keys):
+    value = _first_present(source, *keys)
+    dec = _safe_decimal(value)
+    if dec is None:
+        return None
+    return float(dec.quantize(Decimal("0.000001")))
+
+
+def _m8_realizability(event: dict, *, phase: str = "phase1_listener_only") -> tuple[bool, str, dict]:
+    spread_usd = _m8_decimal_field(event, "spread_usd", "net_spread_usd", "edge_usd")
+    spread_bps = _m8_decimal_field(event, "spread_bps", "net_bps", "net_spread_bps")
+    volume_usd = _m8_decimal_field(
+        event, "volume_usd", "amount_usd", "size_usd", "notional_usd"
+    )
+    profit_usd = _m8_decimal_field(
+        event, "profit_usd", "expected_profit_usd", "net_pnl_usd"
+    )
+    explicit = _first_present(event, "realizable", "can_execute", "executable")
+
+    metrics = {
+        "phase": phase,
+        "spread_usd_available": spread_usd is not None,
+        "spread_bps_available": spread_bps is not None,
+        "volume_usd_available": volume_usd is not None,
+        "profit_usd_available": profit_usd is not None,
+        "honeypot_checked": bool(event.get("honeypot_checked")),
+        "simulation_available": bool(event.get("simulation_available") or event.get("sim_passed")),
+        "live_execution_enabled": bool(event.get("live_execution_enabled")),
+    }
+
+    if explicit is not None:
+        reason = (
+            event.get("realizability_reason")
+            or event.get("execution_reason")
+            or ("REALIZABLE" if bool(explicit) else "EXPLICITLY_NOT_REALIZABLE")
+        )
+        return bool(explicit), str(reason), metrics
+
+    missing = []
+    if spread_usd is None and spread_bps is None:
+        missing.append("NO_SPREAD_METRICS")
+    if volume_usd is None:
+        missing.append("NO_VOLUME_USD")
+    if profit_usd is None:
+        missing.append("NO_PROFIT_USD")
+    if not metrics["honeypot_checked"]:
+        missing.append("HONEYPOT_CHECK_PENDING")
+    if not metrics["simulation_available"]:
+        missing.append("SIMULATION_PENDING")
+    if not metrics["live_execution_enabled"]:
+        missing.append("LIVE_EXECUTION_DISABLED")
+    if phase == "phase1_listener_only":
+        missing.insert(0, "M8_PHASE1_LISTENER_ONLY")
+    return False, "|".join(dict.fromkeys(missing)), metrics
+
+
+def _build_m8_funnel(metrics: dict) -> dict:
+    stages = [
+        ("raw_fetched", "raw_fetched"),
+        ("parse_ok", "parse_ok"),
+        ("parse_failed", "parse_failed"),
+        ("dedup_new", "dedup_new"),
+        ("dedup_dropped", "dedup_dropped"),
+        ("filter_passed", "filter_passed"),
+        ("filter_rejected", "filter_rejected"),
+        ("candidates_queued", "candidates_queued"),
+    ]
+    rows = []
+    previous = None
+    for key, label in stages:
+        count = _safe_int(metrics.get(key))
+        drop_from_previous = None if previous is None else max(0, previous - count)
+        pass_rate_pct = None
+        if previous and previous > 0:
+            pass_rate_pct = round(count * 100.0 / previous, 2)
+        rows.append({
+            "stage": key,
+            "label": label,
+            "count": count,
+            "drop_from_previous": drop_from_previous,
+            "pass_rate_pct": pass_rate_pct,
+        })
+        if key not in ("parse_failed", "dedup_dropped", "filter_rejected"):
+            previous = count
+    return {
+        "stages": rows,
+        "rpc_calls_made": _safe_int(metrics.get("rpc_calls_made")),
+        "rpc_errors": _safe_int(metrics.get("rpc_errors")),
+        "cycles_completed": _safe_int(metrics.get("cycles_completed")),
+        "elapsed_s": _safe_float(metrics.get("elapsed_s")),
+    }
+
+
+def build_m8_current_payload(
+    *,
+    artifact: dict | None,
+    now_utc: datetime,
+    file_age_s: int | None = None,
+) -> dict:
+    """Build the M8 dashboard payload from ``new_pool_sniper_latest.json``."""
+    artifact = artifact or {}
+    metrics = artifact.get("metrics") if isinstance(artifact.get("metrics"), dict) else {}
+    events = artifact.get("opportunities") or artifact.get("candidates") or artifact.get("recent_events") or []
+    if not isinstance(events, list):
+        events = []
+
+    artifact_ts = _parse_iso_utc(artifact.get("generated_at_utc"))
+    generated_age_s = None
+    if artifact_ts is not None:
+        generated_age_s = max(0, int((now_utc - artifact_ts).total_seconds()))
+
+    rows = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        spread_usd = _m8_decimal_field(event, "spread_usd", "net_spread_usd", "edge_usd")
+        spread_bps = _m8_decimal_field(event, "spread_bps", "net_bps", "net_spread_bps")
+        volume_usd = _m8_decimal_field(
+            event, "volume_usd", "amount_usd", "size_usd", "notional_usd"
+        )
+        profit_usd = _m8_decimal_field(
+            event, "profit_usd", "expected_profit_usd", "net_pnl_usd"
+        )
+        realizable, reason, blocking_metrics = _m8_realizability(event)
+        rows.append({
+            "event_id": event.get("event_id"),
+            "chain": event.get("chain"),
+            "dex": event.get("dex"),
+            "pair": _m8_pair_label(event),
+            "pool": event.get("pool") or event.get("pool_address"),
+            "factory": event.get("factory"),
+            "block_number": event.get("block_number"),
+            "tx_hash": event.get("tx_hash"),
+            "spread_usd": spread_usd,
+            "spread_bps": spread_bps,
+            "volume_usd": volume_usd,
+            "profit_usd": profit_usd,
+            "is_realizable": realizable,
+            "realizability_reason": reason,
+            "blocking_metrics": blocking_metrics,
+            "info": {
+                "token0": event.get("token0"),
+                "token1": event.get("token1"),
+                "source_stage": (
+                    "candidate" if event.get("candidate") else "pool_creation_event"
+                ),
+            },
+        })
+
+    realizable_count = sum(1 for row in rows if row["is_realizable"])
+    return {
+        "schema_family": "m8_dashboard",
+        "schema_revision": "phase1.dashboard",
+        "now_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "artifact": {
+            "exists": bool(artifact),
+            "schema_family": artifact.get("schema_family"),
+            "schema_revision": artifact.get("schema_revision"),
+            "status": artifact.get("status") or "MISSING",
+            "source": artifact.get("source"),
+            "generated_at_utc": artifact.get("generated_at_utc"),
+            "generated_age_s": generated_age_s,
+            "file_age_s": file_age_s,
+            "freshness_s": artifact.get("freshness_s"),
+            "reasons": artifact.get("reasons") or ([] if artifact else ["ARTIFACT_MISSING"]),
+        },
+        "opportunity_rows": rows,
+        "opportunity_summary": {
+            "total": len(rows),
+            "realizable": realizable_count,
+            "not_realizable": len(rows) - realizable_count,
+            "listener_only": True,
+            "economics_available": any(
+                row["spread_usd"] is not None
+                or row["spread_bps"] is not None
+                or row["volume_usd"] is not None
+                or row["profit_usd"] is not None
+                for row in rows
+            ),
+        },
+        "funnel": _build_m8_funnel(metrics),
+        "metrics": metrics,
+    }
 
 
 def _short_pool(value) -> str:

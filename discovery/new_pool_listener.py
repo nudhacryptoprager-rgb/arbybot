@@ -204,8 +204,35 @@ def load_factory_config(
 # ---------------------------------------------------------------------------
 
 
-def _strip_0x(s: str) -> str:
+def _strip_0x(s: Any) -> str:
+    """Strip 0x prefix; also handles bytes/HexBytes from web3."""
+    if isinstance(s, (bytes, bytearray)):
+        return s.hex()  # returns lowercase hex WITHOUT 0x prefix
+    s = str(s)
     return s[2:] if s.startswith("0x") or s.startswith("0X") else s
+
+
+def _normalize_raw_log(raw_log: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalise a web3 AttributeDict log to plain str/int fields.
+
+    web3 v6 returns ``HexBytes`` for ``topics``, ``data``, ``transactionHash``
+    and ``address``.  The per-layout parsers expect hex strings.  This function
+    converts bytes-like values to ``"0x" + hex`` strings so the parsers work
+    regardless of whether the log came from web3 or a plain dict (e.g. tests).
+    """
+    def _to_hex_str(v: Any) -> Any:
+        if isinstance(v, (bytes, bytearray)):
+            return "0x" + v.hex()
+        return v
+
+    result: Dict[str, Any] = dict(raw_log)
+    topics = result.get("topics")
+    if isinstance(topics, (list, tuple)):
+        result["topics"] = [_to_hex_str(t) for t in topics]
+    for key in ("data", "transactionHash", "address"):
+        if key in result:
+            result[key] = _to_hex_str(result[key])
+    return result
 
 
 def _topic_to_address(topic: str) -> str:
@@ -502,6 +529,7 @@ def parse_raw_log(
     The function never raises; malformed logs return ``None``.
     """
     try:
+        raw_log = _normalize_raw_log(raw_log)
         parser = _LAYOUT_PARSERS.get(cfg.log_layout)
         if parser is None:
             return None

@@ -1,15 +1,18 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: OPEN - documentation scaffold only; implementation not started.
+**Status**: REACHED — Phase 1 listener foundation verified.
 
-`goal_status`: OPEN  
+`goal_status`: IN_PROGRESS  
 `pipeline_ready`: false  
 `production_profit_ready`: false  
 `close_allowed`: false  
-`primary_blocker_of_session`: M8_FOUNDATION_NOT_IMPLEMENTED  
-`blocker_status_before`: UNRESOLVED  
-`blocker_status_after`: IN_PROGRESS  
-`docs_reread_confirmed`: true
+`primary_blocker_of_session`: M8_PHASE1_VERIFIED  
+`blocker_status_before`: M8_FOUNDATION_NOT_IMPLEMENTED  
+`blocker_status_after`: RESOLVED  
+`docs_reread_confirmed`: true  
+`phase1_verified_at`: 2026-05-13T19:31:56Z  
+`phase1_artifact`: data/runs/_rolling/new_pool_sniper_latest.json  
+`phase1_soak_result`: PASS (parse_ok=7, candidates=7, rpc_error_rate=1.875%, cycles=120)  
 
 ## Scope
 
@@ -74,16 +77,24 @@ Phase 3: constrained real execution.
 
 ## Current Blockers
 
-1. M8 runtime implementation has not landed.
-2. `new_pool_sniper_latest.json` is not yet produced.
-3. Schema-contract and golden fixture tests are not yet implemented.
-4. Phase CLI flags in `step_pivot.md` are target interfaces, not verified commands.
-5. Live execution must remain disabled until Phase 1 and Phase 2 evidence is green.
+1. Phase 1 RESOLVED — listener foundation verified by 60-min soak.
+2. Phase 2 (scoring / dry-run) not yet started.
+3. verification_from_block for aerodrome (ve33) and pancakeswap_v3 factories pending archive RPC
+   (drpc unstable for eth_getLogs without topic0 filter; TODO in config/new_pool_factories.yaml).
+4. Live execution must remain disabled until Phase 1 and Phase 2 evidence is green.
 
-## Next Required Evidence
+## Phase 1 Evidence (VERIFIED 2026-05-13)
 
-- `py -3.11 scripts/check_repo_safety.py --allow-roadmap-edit --allow-intent-edit`
-- `py -3.11 -m pytest tests/unit -q`
-- First listener-only smoke that writes `new_pool_sniper_latest.json`
-- Schema-contract test for the artifact
-- DEV report updated only with fresh artifact-backed claims
+- ✅ `py -3.11 -m pytest tests/unit -q` → 5289 passed, 0 failed
+- ✅ Offline smoke: schema_family=m8_sniper, schema_revision=phase1.1
+- ✅ Slipstream topic0 verified against ICLFactory.sol on GitHub
+- ✅ 10-min online smoke: parse_ok=1, candidates=1, status=ACTIVE
+- ✅ 60-min soak: parse_ok=7, parse_failed=0, candidates=7, cycles=120, rpc_error_rate=1.875%
+- ✅ HexBytes regression fixed and covered by TestParseRawLogHexBytesCompat (6 tests)
+- ✅ new_pool_sniper_latest.json registered in canonical rolling set tests
+
+## Next Required Evidence (Phase 2)
+
+- Honeypot / scam / freshness filters return non-zero reject counts on known rugpull tokens
+- Dry-run submit rehearsal (`snipe_candidates_total > 0` with `dry_run=True`)
+- Scoring rank is stable across 3 consecutive soaks
