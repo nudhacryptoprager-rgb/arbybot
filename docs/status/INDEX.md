@@ -14,12 +14,15 @@
 | M4 - DEX-DEX Atomic Execution | [IN PROGRESS] | [Status_M4.md](Status_M4.md) |
 | M5_0 - Infrastructure Hardening | [DONE] | [Status_M5_0.md](Status_M5_0.md) |
 | M7 - Triangular Feasibility (M7.A) | [IN PROGRESS] | [Status_M7.md](Status_M7.md) |
+| M8 - New-Pool Sniping Pivot | [OPEN] | [Status_M8.md](Status_M8.md) |
 
 ## Current Focus
 
 **M4 - DEX<->DEX Atomic Execution**: current public-infrastructure branch is frozen by economics evidence; milestone remains open only because online profitable core truth was not reached. See [Status_M4.md](Status_M4.md).
 
 **M7 - Triangular Feasibility (M7.A)**: bounded R&D branch with verdict-ready no-graduate result for the current `arbitrum_one` narrow-universe scope. Live measured scoring, size sweep, blocker RCA, and bounded verdict are complete; `M7.B` remains closed. See [Status_M7.md](Status_M7.md).
+
+**M8 - New-Pool Sniping Pivot**: next production-profit path after M7 economics evidence; starts as documentation-aligned OPEN milestone and must produce its own artifacts before any production claim. See [Status_M8.md](Status_M8.md).
 
 ## Related
 

@@ -472,7 +472,64 @@ Done Criteria:
 - Graph builder + cycle finder + atomic multi-hop execution
 - Розгорнуте керівництво для цього кроку: [docs/step_M7.md](docs/step_M7.md)
 
-### Milestone 8 (R&D) — Cross-chain
+---
+
+### Milestone 8 — New-Pool Sniping (STRATEGIC PIVOT)
+
+> **Pivot rationale:** після 4 послідовних soak-ів (E1.81 → E1.84) підтверджено
+> **FUNDAMENTAL_DISCOVERY_GAP** на bluechip парах Base через public RPC.
+> Поточна DEX-DEX backrun thesis заморожена як economics-blocked
+> (structural disadvantages: latency 200–400ms vs <50ms у топ searchers,
+> mempool blindness, no bundle access, capital efficiency).
+> Повне обґрунтування + roadmap-таблиця: [docs/STRATEGIC_PIVOT.md](docs/STRATEGIC_PIVOT.md).
+> Детальний phase-by-phase operational guide: [docs/step_pivot.md](docs/step_pivot.md).
+
+**Мета:** перейти від event-reactive backrun до **first-mover new-pool discovery**
+з reuse ~70–75% існуючої infra (factory enumeration, family truth, scout, M7 supervisor).
+
+**Primary niche:** New-Pool Sniping (Aerodrome / Uniswap V3+V4 / Pancake on Base).
+**Anchor niche:** Stable-stable peg arb (cbETH/WETH, USDC/USDbC, wstETH/ETH).
+**Optional secondary:** Liquidation MEV (Moonwell / Aave V3 / Seamless).
+
+#### M8.1 — Foundation (Тижні 1–2)
+- `PoolCreated` / `PairCreated` event listener (Aerodrome PoolFactory, Uniswap V3/V4 Factory, Pancake)
+- Honeypot detector (eth_call simulate: `transfer`, `balanceOf`, ownership, blacklist)
+- Inventory module: USDC balance tracker + auto top-up
+- Switch cold-lane primary purpose: backrun-on-event → new-pool-watch
+- New rolling artifact: `new_pool_sniper_latest.json`
+
+#### M8.2 — Sniping Live (Тижні 3–4)
+- Per-snipe exit strategy (TWAP, stop-loss, max-hold-blocks)
+- Stable-stable pair list додано до scout
+- 24-hour paper soak: ≥1 successful snipe simulation + ≥2 stable-pair fills
+
+#### M8.3 — Production-Ready (Тижні 5–6)
+- Real $200–$500 capital trial run
+- Telemetry: per-snipe PnL, slippage realized vs predicted
+- Backout policy: stop after 3 consecutive losses
+- M8 execution gate (offline + online)
+
+#### M8.4 — Scale (Тижні 7–8)
+- Migrate до private RPC (Alchemy/QuickNode Growth)
+- Add Flashbots Protect / Coinbase MEV-Share submission
+- Scale capital: $500 → $2,000 → $10,000 gradually
+
+**Acceptance / Done (M8 close-out):**
+- New-pool listener в production, ≥3 DEX factory джерел
+- ≥30 unit tests + ≥3 contract tests для honeypot detector
+- 24h paper soak: ≥5 simulated snipes, ≥1 з positive expected_profit_usd
+- Real trial: ≥10 real snipes за 7 днів, net P&L ≥ $0
+- Stable anchor: ≥$20 net за 7 днів
+- Dashboard: `/api/m8/sniper_current` endpoint з per-pool stats
+
+**Non-goals для M8:**
+- Не продовжуємо public-RPC backrun на bluechip парах
+- Не реалізуємо >2 ніш одночасно (focus: Primary + Anchor)
+- Не лити >$500 капіталу до завершення M8.2
+
+---
+
+### Milestone 9 (R&D) — Cross-chain
 - Bridge adapters + time-risk model + settlement tracker
 
 ---
