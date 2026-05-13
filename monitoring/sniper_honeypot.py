@@ -1,0 +1,112 @@
+"""M8 Phase 1 — Honeypot detector skeleton.
+
+This module provides a stub honeypot filter for new-pool events.
+Phase 1 implementation: always returns PASS.
+Phase 2 will add on-chain simulation (simulate a small buy + sell).
+
+Public API
+----------
+- ``HoneypotVerdict`` — enum: PASS | FAIL | UNKNOWN
+- ``check_token_honeypot(token_addr, chain)`` — returns ``HoneypotVerdict``
+- ``KNOWN_SCAM_TOKENS`` — frozenset of known-bad token addresses (lowercase)
+- ``KNOWN_LEGIT_TOKENS`` — frozenset of known-good token addresses (lowercase)
+
+Phase 1 behaviour
+-----------------
+- KNOWN_SCAM_TOKENS → FAIL immediately
+- KNOWN_LEGIT_TOKENS → PASS immediately
+- Everything else → UNKNOWN (treated as PASS in Phase 1 pipeline)
+
+When to upgrade
+---------------
+Replace the UNKNOWN branch in ``check_token_honeypot`` with on-chain
+simulation in Phase 2.  The public API (enum + function signature) must
+remain stable.
+"""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Optional
+
+__all__ = [
+    "HoneypotVerdict",
+    "check_token_honeypot",
+    "KNOWN_SCAM_TOKENS",
+    "KNOWN_LEGIT_TOKENS",
+]
+
+# ---------------------------------------------------------------------------
+# Verdict enum
+# ---------------------------------------------------------------------------
+
+
+class HoneypotVerdict(str, Enum):
+    """Result of a honeypot check for a single token."""
+
+    PASS = "PASS"       # token appears tradeable / legit
+    FAIL = "FAIL"       # token is a known scam or failed simulation
+    UNKNOWN = "UNKNOWN"  # not enough data to decide (Phase 1 default)
+
+
+# ---------------------------------------------------------------------------
+# Known-bad and known-good token fixtures
+# ---------------------------------------------------------------------------
+
+# Addresses must be lowercase (no checksum).  These are Base mainnet examples.
+KNOWN_SCAM_TOKENS: frozenset = frozenset({
+    # Example well-known scam tokens on Base — expand as intelligence grows.
+    "0x000000000000000000000000000000000000dead",  # burn address (not tradeable)
+})
+
+KNOWN_LEGIT_TOKENS: frozenset = frozenset({
+    # Canonical stables and blue-chips on Base mainnet (lowercase).
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (Base)
+    "0x4200000000000000000000000000000000000006",  # WETH (Base)
+    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",  # DAI (Base)
+    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (Base)
+})
+
+# ---------------------------------------------------------------------------
+# Public check function
+# ---------------------------------------------------------------------------
+
+
+def check_token_honeypot(
+    token_addr: str,
+    chain: str = "base",  # noqa: ARG001 — reserved for Phase 2 chain routing
+) -> HoneypotVerdict:
+    """Return a ``HoneypotVerdict`` for *token_addr*.
+
+    Phase 1 logic:
+    1. If token is in ``KNOWN_SCAM_TOKENS``  → FAIL
+    2. If token is in ``KNOWN_LEGIT_TOKENS`` → PASS
+    3. Otherwise                              → UNKNOWN
+
+    Phase 2 will replace step 3 with on-chain simulation.
+
+    Parameters
+    ----------
+    token_addr:
+        Token contract address (any case; normalised internally to lowercase).
+    chain:
+        Chain identifier — reserved for Phase 2 routing.  Ignored in Phase 1.
+
+    Returns
+    -------
+    ``HoneypotVerdict``
+    """
+    addr = token_addr.lower().strip()
+    if addr in KNOWN_SCAM_TOKENS:
+        return HoneypotVerdict.FAIL
+    if addr in KNOWN_LEGIT_TOKENS:
+        return HoneypotVerdict.PASS
+    return HoneypotVerdict.UNKNOWN
+
+
+def is_safe_for_pipeline(verdict: HoneypotVerdict) -> bool:
+    """Return True if *verdict* should allow the event through the pipeline.
+
+    Phase 1: PASS and UNKNOWN both allow through.
+    Phase 2: only PASS will allow through.
+    """
+    return verdict in (HoneypotVerdict.PASS, HoneypotVerdict.UNKNOWN)

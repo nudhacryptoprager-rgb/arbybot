@@ -387,3 +387,53 @@ class TestCanonicalRollingArtifactPath:
         assert not self._PATH.is_absolute(), (
             f"ROLLING_ARTIFACT_PATH must be a relative path, got: {self._PATH!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Scoring placeholder field tests (Step 9)
+# ---------------------------------------------------------------------------
+
+class TestScoringField:
+    def test_artifact_has_scoring_field(self):
+        art = make_sniper_artifact()
+        assert "scoring" in art, "artifact must have top-level 'scoring' field"
+
+    def test_scoring_is_dict(self):
+        art = make_sniper_artifact()
+        assert isinstance(art["scoring"], dict)
+
+    def test_scoring_has_spread_bps(self):
+        art = make_sniper_artifact()
+        assert "spread_bps" in art["scoring"]
+
+    def test_scoring_has_spread_usd(self):
+        art = make_sniper_artifact()
+        assert "spread_usd" in art["scoring"]
+
+    def test_scoring_has_volume_usd(self):
+        art = make_sniper_artifact()
+        assert "volume_usd" in art["scoring"]
+
+    def test_scoring_has_profit_usd(self):
+        art = make_sniper_artifact()
+        assert "profit_usd" in art["scoring"]
+
+    def test_scoring_has_realizability_reason(self):
+        art = make_sniper_artifact()
+        assert "realizability_reason" in art["scoring"]
+
+    def test_scoring_phase1_values_are_null_or_placeholder(self):
+        """Phase 1: all numeric fields are None; reason is phase1 placeholder."""
+        art = make_sniper_artifact()
+        scoring = art["scoring"]
+        for field in ("spread_bps", "spread_usd", "volume_usd", "profit_usd"):
+            assert scoring[field] is None, f"Phase 1: {field!r} should be None"
+        assert scoring["realizability_reason"] == "PHASE1_NO_SCORING"
+
+    def test_golden_fixture_has_scoring(self):
+        """Golden fixture must include scoring field."""
+        import json
+        loaded = json.loads(GOLDEN_FIXTURE.read_text(encoding="utf-8"))
+        assert "scoring" in loaded, "Golden fixture must have 'scoring' field"
+        assert loaded["scoring"].get("realizability_reason") == "PHASE1_NO_SCORING"
+

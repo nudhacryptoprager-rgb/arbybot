@@ -425,3 +425,159 @@ class TestSniperSmokeRunOffline:
         rc = main(argv=["--offline", "--duration-minutes", "0"])
         assert rc == 0
         assert not artifact_path.exists(), "artifact must NOT be written when feature flag is off"
+
+
+# ---------------------------------------------------------------------------
+# rpc_error_histogram tests (Step 6)
+# ---------------------------------------------------------------------------
+
+class TestRpcErrorHistogram:
+    def test_inc_rpc_error_no_arg_counts_as_other(self):
+        """inc_rpc_error() with no string defaults to 'other' bucket."""
+        t = FunnelTracker()
+        t.inc_rpc_error()
+        snap = t.snapshot()
+        assert snap["rpc_errors"] == 1
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("other", 0) == 1
+
+    def test_inc_rpc_error_408_classified(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("HTTPError 408 Request Timeout")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("408_timeout", 0) == 1
+
+    def test_inc_rpc_error_429_classified(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("HTTP 429 Too Many Requests")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("429_rate_limit", 0) == 1
+
+    def test_inc_rpc_error_rate_limit_string(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("rate limit exceeded")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("429_rate_limit", 0) == 1
+
+    def test_inc_rpc_error_500_classified_as_5xx(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("HTTP 500 server error")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("5xx_server", 0) == 1
+
+    def test_inc_rpc_error_timeout_string(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("connection timed out")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("timeout", 0) == 1
+
+    def test_inc_rpc_error_multiple_types_accumulate(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("408 timeout")
+        t.inc_rpc_error("408 timeout")
+        t.inc_rpc_error("429 rate limit")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("408_timeout", 0) == 2
+        assert hist.get("429_rate_limit", 0) == 1
+        assert snap["rpc_errors"] == 3
+
+    def test_histogram_empty_when_no_errors(self):
+        t = FunnelTracker()
+        snap = t.snapshot()
+        # no errors → histogram should be an empty dict (or have all zeros)
+        hist = snap["rpc_error_histogram"]
+        assert isinstance(hist, dict)
+        assert sum(hist.values()) == 0
+
+    def test_histogram_in_snapshot_always_present(self):
+        t = FunnelTracker()
+        snap = t.snapshot()
+        assert "rpc_error_histogram" in snap
+
+    def test_histogram_shown_in_funnel_table_when_errors(self):
+        t = FunnelTracker()
+        t.inc_rpc_error("408 timeout")
+        lines = t.funnel_table_lines()
+        joined = "\n".join(lines)
+        assert "408" in joined
+
+
+# ---------------------------------------------------------------------------
+# factory_breakdown tests (Step 7)
+# ---------------------------------------------------------------------------
+
+class TestFactoryBreakdown:
+    def test_breakdown_empty_when_no_inc_dex(self):
+        t = FunnelTracker()
+        snap = t.snapshot()
+        assert "factory_breakdown" in snap
+        assert snap["factory_breakdown"] == {}
+
+    def test_inc_dex_raw_increments_breakdown(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw")
+        snap = t.snapshot()
+        fbd = snap["factory_breakdown"]
+        assert "uniswap_v3" in fbd
+        assert fbd["uniswap_v3"]["raw"] == 1
+
+    def test_inc_dex_parse_ok_increments_breakdown(self):
+        t = FunnelTracker()
+        t.inc_dex("aerodrome", "parse_ok")
+        snap = t.snapshot()
+        fbd = snap["factory_breakdown"]
+        assert fbd["aerodrome"]["parse_ok"] == 1
+
+    def test_inc_dex_error_increments_breakdown(self):
+        t = FunnelTracker()
+        t.inc_dex("pancakeswap_v3", "error")
+        snap = t.snapshot()
+        fbd = snap["factory_breakdown"]
+        assert fbd["pancakeswap_v3"]["errors"] == 1
+
+    def test_inc_dex_candidate_increments_breakdown(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "candidate")
+        snap = t.snapshot()
+        fbd = snap["factory_breakdown"]
+        assert fbd["uniswap_v3"]["candidates"] == 1
+
+    def test_inc_dex_unknown_stage_silently_ignored(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "nonexistent_stage")  # must not raise
+        snap = t.snapshot()
+        fbd = snap["factory_breakdown"]
+        # dex not in breakdown at all since no valid stage was incremented
+        assert "uniswap_v3" not in fbd
+
+    def test_multiple_dexes_tracked_independently(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw")
+        t.inc_dex("uniswap_v3", "raw")
+        t.inc_dex("aerodrome", "raw")
+        snap = t.snapshot()
+        fbd = snap["factory_breakdown"]
+        assert fbd["uniswap_v3"]["raw"] == 2
+        assert fbd["aerodrome"]["raw"] == 1
+
+    def test_breakdown_sub_keys_present(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw")
+        fbd = t.snapshot()["factory_breakdown"]
+        entry = fbd["uniswap_v3"]
+        for sub_key in ("raw", "parse_ok", "errors", "candidates"):
+            assert sub_key in entry, f"missing sub-key {sub_key!r}"
+
+    def test_breakdown_shown_in_funnel_table(self):
+        t = FunnelTracker()
+        t.inc_dex("uniswap_v3", "raw")
+        lines = t.funnel_table_lines()
+        joined = "\n".join(lines)
+        assert "uniswap_v3" in joined
+

@@ -43,6 +43,7 @@ fails for any factory that has verification blocks configured.
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import sys
 import time
@@ -87,6 +88,61 @@ _DEFAULT_CHAIN: str = "base"
 _DEFAULT_BLOCKS_BACK: int = 50
 _DEFAULT_POLL_INTERVAL_S: float = 30.0
 _DEFAULT_DURATION_MIN: float = 10.0
+
+# Minimal ERC20 ABI — only the symbol() function
+_ERC20_SYMBOL_ABI = [
+    {
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+# LRU cache so each token address is resolved at most once per run
+@functools.lru_cache(maxsize=512)
+def _fetch_symbol_cached(token_addr: str, w3_id: int) -> Optional[str]:
+    """Fetch ERC20 symbol for *token_addr* using a cached web3 instance.
+
+    Uses ``w3_id = id(w3)`` as a cache-buster so the LRU is effectively
+    per-w3 instance.  Always returns ``None`` on any failure so the pipeline
+    is never blocked by a symbol lookup.
+    """
+    return None   # resolved at runtime via _fetch_erc20_symbol
+
+
+def _fetch_erc20_symbol(token_addr: str, w3: Any) -> Optional[str]:
+    """Return the ERC20 symbol string for *token_addr*, or None on any error.
+
+    Times out gracefully: if the call raises any exception (timeout,
+    revert, ABI mismatch) we return None.  Results are NOT cached here
+    to keep the function pure — caching is done by the caller.
+    """
+    try:
+        contract = w3.eth.contract(
+            address=w3.to_checksum_address(token_addr),
+            abi=_ERC20_SYMBOL_ABI,
+        )
+        raw = contract.functions.symbol().call()
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()[:32]   # cap to 32 chars to avoid bloat
+        return None
+    except Exception:
+        return None
+
+
+# Per-run in-process cache (not LRU — just a dict — sufficient for 1 run)
+_symbol_cache: Dict[str, Optional[str]] = {}
+
+
+def _get_symbol(token_addr: str, w3: Any) -> Optional[str]:
+    """Symbol with per-run dict cache; never raises."""
+    if token_addr in _symbol_cache:
+        return _symbol_cache[token_addr]
+    sym = _fetch_erc20_symbol(token_addr, w3)
+    _symbol_cache[token_addr] = sym
+    return sym
 
 
 # ---------------------------------------------------------------------------
@@ -160,16 +216,17 @@ def _get_block_number(w3: Any) -> Optional[int]:
 def _get_logs_safe(
     w3: Any,
     params: Dict[str, Any],
-) -> tuple[List[Any], bool]:
-    """Call ``eth.get_logs(params)`` and return (logs, had_error)."""
+) -> tuple[List[Any], bool, str]:
+    """Call ``eth.get_logs(params)`` and return (logs, had_error, error_str)."""
     try:
-        return list(w3.eth.get_logs(params)), False
+        return list(w3.eth.get_logs(params)), False, ""
     except Exception as exc:
+        err_str = str(exc)
         logger.warning(
             "eth_getLogs failed",
-            extra={"context": {"params": str(params)[:200], "error": str(exc)[:120]}},
+            extra={"context": {"params": str(params)[:200], "error": err_str[:120]}},
         )
-        return [], True
+        return [], True, err_str
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +339,23 @@ def _build_and_write_artifact(
     source: str,
     status: str,
     reasons: List[str],
+    w3: Optional[Any] = None,
 ) -> None:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
-    recent_list = [
-        {
+    recent_list = []
+    for e in recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]:
+        token0_sym: Optional[str] = None
+        token1_sym: Optional[str] = None
+        if w3 is not None:
+            token0_sym = _get_symbol(e.token0, w3)
+            token1_sym = _get_symbol(e.token1, w3)
+        pair = (
+            f"{token0_sym}/{token1_sym}"
+            if token0_sym and token1_sym
+            else None
+        )
+        recent_list.append({
             "event_id": e.event_id,
             "chain": e.chain,
             "dex": e.dex,
@@ -294,11 +363,12 @@ def _build_and_write_artifact(
             "pool": e.pool,
             "token0": e.token0,
             "token1": e.token1,
+            "token0_symbol": token0_sym,
+            "token1_symbol": token1_sym,
+            "pair": pair,
             "block_number": e.block_number,
             "tx_hash": e.tx_hash,
-        }
-        for e in recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]
-    ]
+        })
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     artifact = make_sniper_artifact(
         metrics=metrics,
@@ -411,11 +481,13 @@ def _run_online_loop(
         for cfg in configs:
             params = _build_filter_params(w3, cfg, from_block, to_block)
             funnel.inc_rpc_call()
-            logs, had_err = _get_logs_safe(w3, params)
+            logs, had_err, err_str = _get_logs_safe(w3, params)
             if had_err:
-                funnel.inc_rpc_error()
+                funnel.inc_rpc_error(err_str)
+                funnel.inc_dex(cfg.dex, "error")
                 continue
             funnel.inc("raw_fetched", len(logs))
+            funnel.inc_dex(cfg.dex, "raw")
             cycle_raw += len(logs)
 
             for raw_log in logs:
@@ -424,6 +496,7 @@ def _run_online_loop(
                     funnel.inc("parse_failed")
                     continue
                 funnel.inc("parse_ok")
+                funnel.inc_dex(cfg.dex, "parse_ok")
 
                 if event.event_id in seen_ids:
                     funnel.inc("dedup_dropped")
@@ -435,6 +508,7 @@ def _run_online_loop(
                 # Phase 1: all dedup_new pass (honeypot filter in Phase 2)
                 funnel.inc("filter_passed")
                 funnel.inc("candidates_queued")
+                funnel.inc_dex(cfg.dex, "candidate")
                 cycle_new += 1
 
                 recent_events.append(event)
@@ -489,6 +563,7 @@ def _run_online_loop(
                 source=source,
                 status=status,
                 reasons=reasons,
+                w3=w3,
             )
             last_artifact_ts = time.monotonic()
 
@@ -747,6 +822,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         source=source,
         status=status,
         reasons=reasons,
+        w3=w3 if not offline else None,
     )
 
     # ------------------------------------------------------------------

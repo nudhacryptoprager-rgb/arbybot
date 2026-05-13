@@ -37,7 +37,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 SCHEMA_FAMILY: str = "m8_sniper"
-SCHEMA_REVISION: str = "phase1.1"
+SCHEMA_REVISION: str = "phase1.2"
 
 # Canonical rolling artifact path (relative to repo root).
 ROLLING_ARTIFACT_PATH: Path = Path("data/runs/_rolling/new_pool_sniper_latest.json")
@@ -142,6 +142,15 @@ def make_sniper_artifact(
         "status": status,
         "reasons": list(reasons) if reasons is not None else ["NO_EVENTS_YET"],
         "metrics": effective_metrics,
+        # Dry-run scoring fields — Phase 1 stubs (all null / placeholder).
+        # Phase 2 will populate these with real estimates from CEX depth + cost model.
+        "scoring": {
+            "spread_bps": None,        # estimated spread in basis-points
+            "spread_usd": None,        # estimated spread in USD
+            "volume_usd": None,        # estimated 24 h volume in USD
+            "profit_usd": None,        # estimated net profit after fees
+            "realizability_reason": "PHASE1_NO_SCORING",
+        },
     }
 
     # Optional: include recent events for dashboard (capped)

@@ -1,18 +1,21 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: REACHED — Phase 1 listener foundation verified.
+**Status**: IN_PROGRESS — Phase 1 complete (steps 1-10 done); 2h soak PASS; Phase 2 (scoring/filters) next.
 
 `goal_status`: IN_PROGRESS  
+`phase1_status`: REACHED  
+`phase1_steps_4_9_status`: COMPLETE  
 `pipeline_ready`: false  
 `production_profit_ready`: false  
 `close_allowed`: false  
-`primary_blocker_of_session`: M8_PHASE1_VERIFIED  
+`primary_blocker_of_session`: M8_PHASE1_FOUNDATION  
 `blocker_status_before`: M8_FOUNDATION_NOT_IMPLEMENTED  
 `blocker_status_after`: RESOLVED  
 `docs_reread_confirmed`: true  
 `phase1_verified_at`: 2026-05-13T19:31:56Z  
 `phase1_artifact`: data/runs/_rolling/new_pool_sniper_latest.json  
 `phase1_soak_result`: PASS (parse_ok=7, candidates=7, rpc_error_rate=1.875%, cycles=120)  
+`schema_revision_current`: phase1.2  
 
 ## Scope
 
@@ -85,13 +88,23 @@ Phase 3: constrained real execution.
 
 ## Phase 1 Evidence (VERIFIED 2026-05-13)
 
-- ✅ `py -3.11 -m pytest tests/unit -q` → 5289 passed, 0 failed
-- ✅ Offline smoke: schema_family=m8_sniper, schema_revision=phase1.1
+- ✅ `py -3.11 -m pytest tests/unit -q` → 5318 passed, 6 skipped, 1 warning (5289 → 5318 with new tests)
+- ✅ Offline smoke: schema_family=m8_sniper, schema_revision=phase1.2
 - ✅ Slipstream topic0 verified against ICLFactory.sol on GitHub
 - ✅ 10-min online smoke: parse_ok=1, candidates=1, status=ACTIVE
 - ✅ 60-min soak: parse_ok=7, parse_failed=0, candidates=7, cycles=120, rpc_error_rate=1.875%
 - ✅ HexBytes regression fixed and covered by TestParseRawLogHexBytesCompat (6 tests)
 - ✅ new_pool_sniper_latest.json registered in canonical rolling set tests
+- ✅ Step 4+5: token0_symbol/token1_symbol/pair enrichment in recent_events (ERC20 on-demand)
+- ✅ Step 6: rpc_error_histogram in artifact (classifies 408/429/5xx/timeout/other) — 10 new tests
+- ✅ Step 7: factory_breakdown per dex (raw/parse_ok/errors/candidates) — 9 new tests
+- ✅ Step 8: honeypot detector skeleton (KNOWN_SCAM → FAIL, KNOWN_LEGIT → PASS, else UNKNOWN) — 18 tests
+- ✅ Step 9: dry-run scoring placeholder fields (spread_bps/spread_usd/volume_usd/profit_usd/realizability_reason) — 9 tests
+- ✅ Step 10: 2h soak PASS — `parse_ok=22, parse_failed=0, candidates=22, cycles=240, elapsed=7202.7s`
+  - RPC error rate: 15/960 = 1.56% (14×408_timeout, 1×5xx_server) — normal for drpc
+  - Per-dex: uniswap_v3 raw=233/ok=22/cand=22; aerodrome raw=239/ok=0; aerodrome_slipstream raw=233/ok=0; pancakeswap_v3 raw=240/ok=0
+  - factory_breakdown and rpc_error_histogram both populated correctly in artifact
+  - schema_revision=phase1.2 confirmed throughout run
 
 ## Next Required Evidence (Phase 2)
 

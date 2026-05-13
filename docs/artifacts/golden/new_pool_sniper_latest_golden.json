@@ -1,6 +1,6 @@
 {
   "schema_family": "m8_sniper",
-  "schema_revision": "phase1.1",
+  "schema_revision": "phase1.2",
   "generated_at_utc": "2026-01-01T00:00:00Z",
   "source": "new_pool_listener",
   "freshness_s": null,
@@ -14,6 +14,13 @@
     "honeypot_check_pass": 0,
     "honeypot_check_fail": 0,
     "snipe_candidates_total": 0
+  },
+  "scoring": {
+    "spread_bps": null,
+    "spread_usd": null,
+    "volume_usd": null,
+    "profit_usd": null,
+    "realizability_reason": "PHASE1_NO_SCORING"
   },
   "recent_events": []
 }

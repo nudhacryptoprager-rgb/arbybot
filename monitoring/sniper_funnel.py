@@ -47,6 +47,61 @@ FUNNEL_STAGE_NAMES: List[str] = [
 # Maximum per-event traces kept in memory (ring-buffer behaviour).
 _MAX_TRACES = 200
 
+# RPC error type labels
+_RPC_ERR_408 = "408_timeout"
+_RPC_ERR_429 = "429_rate_limit"
+_RPC_ERR_5XX = "5xx_server"
+_RPC_ERR_TIMEOUT = "timeout"
+_RPC_ERR_OTHER = "other"
+
+
+def _classify_rpc_error(error_str: str) -> str:
+    """Classify an RPC error string into a histogram bucket.
+
+    Parameters
+    ----------
+    error_str:
+        The str() of the exception raised by the RPC call.
+
+    Returns
+    -------
+    One of: ``"408_timeout"``, ``"429_rate_limit"``, ``"5xx_server"``,
+    ``"timeout"``, ``"other"``.
+    """
+    s = error_str.lower()
+    if "408" in s:
+        return _RPC_ERR_408
+    if "429" in s or "too many requests" in s or "rate limit" in s:
+        return _RPC_ERR_429
+    if any(code in s for code in ("500", "502", "503", "504", "server error")):
+        return _RPC_ERR_5XX
+    if "timeout" in s or "timed out" in s or "time out" in s:
+        return _RPC_ERR_TIMEOUT
+    return _RPC_ERR_OTHER
+
+
+def _build_factory_breakdown(
+    raw: Dict[str, int],
+    parse_ok: Dict[str, int],
+    errors: Dict[str, int],
+    candidates: Dict[str, int],
+) -> Dict[str, Dict[str, int]]:
+    """Merge per-dex counters into a single breakdown dict.
+
+    Returns a dict keyed by dex name with sub-keys:
+    ``raw``, ``parse_ok``, ``errors``, ``candidates``.
+    """
+    all_dexes = set(raw) | set(parse_ok) | set(errors) | set(candidates)
+    breakdown: Dict[str, Dict[str, int]] = {}
+    for dex in sorted(all_dexes):
+        breakdown[dex] = {
+            "raw": raw.get(dex, 0),
+            "parse_ok": parse_ok.get(dex, 0),
+            "errors": errors.get(dex, 0),
+            "candidates": candidates.get(dex, 0),
+        }
+    return breakdown
+
 
 @dataclass
 class EventTrace:
@@ -107,6 +162,13 @@ class FunnelTracker:
         self._rpc_errors: int = 0
         self._cycles_completed: int = 0
         self._started_at: float = time.monotonic()
+        # rpc_error_histogram — classify errors by HTTP status / type
+        self._rpc_error_types: Dict[str, int] = {}
+        # factory_breakdown — per-dex counters for raw/parse_ok/errors/candidates
+        self._dex_raw: Dict[str, int] = {}
+        self._dex_parse_ok: Dict[str, int] = {}
+        self._dex_errors: Dict[str, int] = {}
+        self._dex_candidates: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -126,9 +188,31 @@ class FunnelTracker:
         with self._lock:
             self._rpc_calls += 1
 
-    def inc_rpc_error(self) -> None:
+    def inc_rpc_error(self, error_str: str = "") -> None:
+        """Increment rpc_errors counter and classify by error type.
+
+        Recognised types: ``408``, ``429``, ``5xx``, ``timeout``, ``other``.
+        The ``error_str`` is the exception message from the failed RPC call.
+        """
+        error_type = _classify_rpc_error(error_str)
         with self._lock:
             self._rpc_errors += 1
+            self._rpc_error_types[error_type] = self._rpc_error_types.get(error_type, 0) + 1
+
+    def inc_dex(self, dex: str, stage: str) -> None:
+        """Increment a per-dex counter for one of: raw, parse_ok, error, candidate.
+
+        Unknown stage names are silently ignored.
+        """
+        with self._lock:
+            if stage == "raw":
+                self._dex_raw[dex] = self._dex_raw.get(dex, 0) + 1
+            elif stage == "parse_ok":
+                self._dex_parse_ok[dex] = self._dex_parse_ok.get(dex, 0) + 1
+            elif stage == "error":
+                self._dex_errors[dex] = self._dex_errors.get(dex, 0) + 1
+            elif stage == "candidate":
+                self._dex_candidates[dex] = self._dex_candidates.get(dex, 0) + 1
 
     def complete_cycle(self) -> None:
         with self._lock:
@@ -172,6 +256,12 @@ class FunnelTracker:
                 # RPC health
                 "rpc_calls_made": self._rpc_calls,
                 "rpc_errors": self._rpc_errors,
+                "rpc_error_histogram": dict(self._rpc_error_types),
+                # Per-factory breakdown
+                "factory_breakdown": _build_factory_breakdown(
+                    self._dex_raw, self._dex_parse_ok,
+                    self._dex_errors, self._dex_candidates,
+                ),
                 # Session
                 "cycles_completed": self._cycles_completed,
                 "elapsed_s": round(elapsed, 1),
@@ -209,6 +299,19 @@ class FunnelTracker:
             f"  RPC errors                       {snap['rpc_errors']:>6}",
             f"  Cycles completed                 {snap['cycles_completed']:>6}",
             f"  Elapsed (s)                      {snap['elapsed_s']:>6.1f}",
-            "=" * 50,
         ])
+        hist = snap.get("rpc_error_histogram", {})
+        if hist:
+            lines.append("  RPC error breakdown:")
+            for err_type, cnt in sorted(hist.items()):
+                lines.append(f"    {err_type:<28} {cnt:>4}")
+        fbd = snap.get("factory_breakdown", {})
+        if fbd:
+            lines.append("  Per-dex breakdown:")
+            for dex, dcnt in fbd.items():
+                lines.append(
+                    f"    {dex:<24} raw={dcnt['raw']}  ok={dcnt['parse_ok']}"
+                    f"  err={dcnt['errors']}  cand={dcnt['candidates']}"
+                )
+        lines.append("=" * 50)
         return lines
