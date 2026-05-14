@@ -1,18 +1,24 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: IN_PROGRESS -- listener_core REACHED; WS live path PROVEN end-to-end; all 6 factory parsers PROVEN historically and live; multi_factory live coverage PROVEN (R8b gate 2026-05-14: V4=194 live events, V2=12 live events, 6/6 self_test PASS).
+**Status**: IN_PROGRESS -- Phase 1 listener foundation: **REACHED** (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z; 6/6 factory self-test; V4=194 events, V2=12 events live). Phase 2 paper-only: **UNLOCKED** (entry-decision + exit + slippage-guard scaffolding shipped; honeypot still placeholder; **real execution stays BLOCKED**, kill-switch ON).
 
 `goal_status`: IN_PROGRESS
-`phase1_status`: REACHED_CORE_LISTENER
+`phase1_status`: REACHED
+`phase2_status`: PAPER_ONLY_UNLOCKED
+`phase1_close_allowed`: true
+`phase2_real_execution_allowed`: false
+`kill_switch_active`: true
+`execution_enabled`: false
+`step_pivot_md_reconciliation`: REQUIRED_BEFORE_LITERAL_PHASE1_CHECKLIST_TICK
 `multi_factory_coverage_status`: PARTIAL_MARKET_WINDOW
 `phase1_steps_4_9_status`: COMPLETE
 `pipeline_ready`: false
 `production_profit_ready`: false
 `close_allowed`: false
-`primary_blocker_of_session`: M8_MULTI_FACTORY_LIVE_PARSE_OK_MARKET_WINDOW
-`blocker_status_before`: WS_END_TO_END_PROVEN
-`blocker_status_after`: WS_4FACTORY_GATE_PASS_INFRA_PROVEN_MARKET_WINDOW_BLOCKER
-`next_phase_blocker`: M8_PHASE2_SCORING_AND_RISK_FILTERS_NOT_IMPLEMENTED
+`primary_blocker_of_session`: PHASE2_PAPER_SOAK_NOT_YET_RUN
+`blocker_status_before`: WS_4FACTORY_GATE_PASS_INFRA_PROVEN_MARKET_WINDOW_BLOCKER
+`blocker_status_after`: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
+`next_phase_blocker`: M8_PHASE2_24H_PAPER_SOAK_NOT_RUN
 `docs_reread_confirmed`: true
 `phase1_verified_at`: 2026-05-13T21:54:59Z
 `phase1_artifact`: data/runs/_rolling/new_pool_sniper_latest.json
@@ -24,7 +30,7 @@
 `aerodrome_slipstream_live_status`: MARKET_WINDOW_NO_POOL_CREATED
 `pancakeswap_v3_status`: PARSER_AND_RPC_PROVEN_HISTORICALLY
 `pancakeswap_v3_live_status`: MARKET_WINDOW_NO_POOL_CREATED
-`schema_revision_current`: phase1.2
+`schema_revision_current`: phase2.0  (was phase1.2; additive expected_pnl_usd field added)
 `round5_ws_gate_status`: COMPLETED -- status=ACTIVE, parse_ok=2, rpc_error_rate=0%, ws_events_emitted=1 (end-to-end proven)
 `round6_1h_ws_gate_status`: COMPLETED -- status=ACTIVE, candidates=3, rpc_error_rate=2.08%, ws_connected=true, ws_subscriptions=20 (4 factories Г— 5 conn), ws_events_seen=2, reconnects=4, parse_ok=5/5 (100%)
 
@@ -306,6 +312,7 @@ Claim-after-evidence discipline: docs updated ONLY after gate artifact confirmed
     - Live в‰Ґ2 DEX parse_ok>0: MARKET_WINDOW blocker -- only uniswap_v3 had live pool creation
       events (3 candidates); other DEXes had zero raw_logs (not a code bug)
     - phase1_close_allowed: false (artifact contract not yet complete; R7 code changes pending)
+      **[SUPERSEDED 2026-05-14 by R8b gate — phase1_close_allowed flipped to true]**
 - вњ… R6.10 Docs updated AFTER gate artifact confirmed (claim-after-evidence discipline maintained).
 
 **Current blockers (Round-6 POST-GATE → Round-7 code fixes):**
@@ -326,6 +333,7 @@ Claim-after-evidence discipline: docs updated ONLY after gate artifact confirmed
 - Artifact contract complete: `self_test_by_dex`, `run_scope`, `dex_filter` in artifact (R7 code)
 - Non-uniswap DEXes classified as MARKET_WINDOW_NO_POOL_CREATED, not broken
 - `phase1_close_allowed`: false — pending fresh all-factory R7 runtime gate
+  **[SUPERSEDED 2026-05-14 — R8b 15-min gate PASS, now true]**
 
 **Round-7 changes (code fixes from reviewer directive):**
 - ✅ R7.1 `_get_logs_safe()` retries on 408/timeout errors (max 3 attempts, 2s delay); avoids
@@ -426,5 +434,51 @@ Claim-after-evidence discipline: docs updated ONLY after gate artifact confirmed
   Plain run fails on pre-existing `INTENT_TIER_LIMIT` (77 vs 64 pairs), not M8-related.
 - git_diff_check: clean (no trailing whitespace errors; LF→CRLF warnings are cosmetic).
 - phase1_close_allowed: false — `_rolling/new_pool_sniper_latest.json` lacks `self_test_by_dex`
+  **[SUPERSEDED 2026-05-14 — R8b rolling artifact has 6/6 self_test_by_dex; phase1_close_allowed: true]**
   (old-contract artifact). Will flip to true after fresh all-factory R7 runtime gate validates
   new contract in _rolling.
+
+
+## Phase 2 Paper-Only Unlock Decision (2026-05-14)
+
+**Decision:** `Phase 1 listener foundation: REACHED. Phase 2 paper-only: UNLOCKED. step_pivot.md reconciliation required before marking literal Phase 1 checklist complete. Real execution remains BLOCKED until Phase 2 evidence.`
+
+**Authority:** R8b 15-min all-factory gate PASS (2026-05-14T18:01:39Z→18:16:49Z); 6/6 factory self_test; parse_failed=0; rpc_errors=0; rolling artifact `data/runs/_rolling/new_pool_sniper_latest.json` carries `run_scope=all`, `status=ACTIVE`, `self_test_by_dex=6 keys`.
+
+**Phase 2 scaffolding shipped this session:**
+- `strategy/sniper_entry_decision.py` — 4-phase paper-only entry engine (liquidity → spread → mirror/anchor → honeypot). Closed reject taxonomy.
+- `strategy/sniper_exit_strategy.py` — 3-layer exit (TIME ceiling, PROFIT_TAKE partial, EMERGENCY full dump).
+- `execution/slippage_guard.py` — constant-product slippage predictor + conservative buffer + per-pool circuit breaker.
+- `monitoring/sniper_artifacts.py` — schema_revision bumped `phase1.2` → `phase2.0`; `phase2_decision.expected_pnl_usd` added (null in Phase 1).
+- New unit tests: `tests/unit/test_sniper_entry_decision.py`, `tests/unit/test_sniper_exit_strategy.py`, `tests/unit/test_slippage_guard.py`.
+
+**Phase 1 step_pivot.md reconciliation gaps (still open):**
+- step_pivot.md 1.3 day-10 asks for a **1-hour validation gate**; R8b ran 15 min. The R8b evidence satisfies the *spirit* (all 6 factory parsers proven, multi-DEX live parse_ok>0, RPC/WS preflight PASS) but the literal "1-hour" wording is not yet reconciled. Step 4 below updates step_pivot.md.
+- step_pivot.md 1.4 mentions a **4-hour listener-only soak** gate. Not yet executed; classed as optional pre-Phase-2-soak hardening rather than a strict Phase 1 close requirement.
+- step_pivot.md 1.5 asks for **dual-source reconciliation** (primary RPC + secondary HTTP eth_getLogs); currently asymmetric (WS primary + 5-min HTTP fallback). Pending.
+- step_pivot.md honeypot detector still placeholder (KNOWN_SCAM frozenset only); 10-scam / 10-legit fixture gate not run.
+
+**Real execution policy (UNCHANGED):**
+- `execution_enabled: false`
+- `kill_switch_active: true`
+- No real signing, no broadcast, no live wallet keys.
+- Phase 3 unlock requires Phase 2 24-hour paper soak evidence + per-snipe trace + reject taxonomy + decision stability.
+
+## Phase 2 First Runtime Gate (planned)
+
+Canonical command (paper-only, no trades):
+
+```powershell
+$env:ARBY_SNIPER_ENABLE='1'
+$env:ARBY_SNIPER_PAPER='1'
+$env:ARBY_SNIPER_EXECUTE='0'
+py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 1440 --prefer-ws --poll-interval-s 30 --blocks-back 50 2>&1 | Tee-Object -FilePath data/tmp/phase2_paper_soak_24h.log
+```
+
+Acceptance:
+- `snipe_simulated_total ≥ 5`
+- `snipe_simulated_profitable ≥ 1`
+- `dry_run_decision` populated for ≥ 1 candidate
+- artifact `phase2_decision.expected_pnl_usd` non-null on ≥ 1 candidate
+- `execution_enabled=false` maintained throughout
+- no infinite-hold positions in sim (max_hold_blocks always trips)

@@ -37,7 +37,9 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 SCHEMA_FAMILY: str = "m8_sniper"
-SCHEMA_REVISION: str = "phase1.2"
+# phase2.0 — Phase 2 paper-only unlock: added ``expected_pnl_usd`` to phase2_decision.
+# All Phase 2 fields stay None in Phase 1 artifacts; null-friendly additive change.
+SCHEMA_REVISION: str = "phase2.0"
 
 # Canonical rolling artifact path (relative to repo root).
 ROLLING_ARTIFACT_PATH: Path = Path("data/runs/_rolling/new_pool_sniper_latest.json")
@@ -154,14 +156,15 @@ def make_sniper_artifact(
             "profit_usd": None,        # estimated net profit after fees
             "realizability_reason": "PHASE1_NO_SCORING",
         },
-        # Phase 2 execution decision stubs (all null in Phase 1).
-        # Phase 2 will populate these with real on-chain simulation + honeypot check results.
+        # Phase 2 execution decision (all null in Phase 1; populated by
+        # strategy/sniper_entry_decision.py + execution/slippage_guard.py + simulator).
         "phase2_decision": {
             "honeypot_result": None,        # None | "SAFE" | "HONEYPOT" | "UNKNOWN"
             "simulation_result": None,      # None | "PASS" | "FAIL" | "REVERT:<reason>"
             "realisability_reason": None,   # None | "PROFITABLE" | "UNPROFITABLE" | "RISKY"
-            "dry_run_decision": None,       # None | "WOULD_EXECUTE" | "SKIP"
+            "dry_run_decision": None,       # None | "WOULD_ENTER" | "SKIP"
             "reject_reason": None,          # None | "<reason_code>" if SKIP
+            "expected_pnl_usd": None,       # None | float — Phase 2 paper-sim expected net PnL
         },
     }
 

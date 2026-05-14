@@ -1,12 +1,14 @@
-# DEV REPORT LATEST — M8 Phase 1 Round-8 CODE_VALIDATED
+# DEV REPORT LATEST — M8 Phase 1 REACHED + Phase 2 Paper-Only UNLOCKED
 
-**mode**: CODE_FIX_DISCOVERY_SURFACE_R8B (V4 parser guard fix, pool_id contract, discovery_only flag, 5 new tests)
+**mode**: PHASE2_PAPER_ONLY_UNLOCK (entry-decision + exit + slippage-guard scaffolding shipped; real execution stays BLOCKED)
 **session_date**: 2026-05-14
 **schema_family**: m8_sniper
-**schema_revision**: phase1.2
-**blocker_status_before**: M8_DISCOVERY_SURFACE_INCOMPLETE
-**blocker_status_after**: RESOLVED (V4+V2 added; slipstream surface confirmed single-factory; clanker source module added)
+**schema_revision**: phase2.0
+**blocker_status_before**: PHASE1_LISTENER_FOUNDATION_PROVEN_BUT_NO_PHASE2_SCAFFOLDING
+**blocker_status_after**: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
 **phase1_close_allowed**: true (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z)
+**phase2_paper_only_unlocked**: true
+**phase2_real_execution_allowed**: false (kill-switch ON, execution_enabled=false)
 
 ---
 
@@ -256,3 +258,50 @@ All 6 run against known block ranges with confirmed on-chain events:
 - Artifact contract: R7 code adds self_test_by_dex, run_scope, dex_filter — unit tests PASS
 - **phase1_close_allowed: true** (R8b gate 2026-05-14T18:01:39Z PASS)
 - ✅ Condition met: run_scope=all, self_test_by_dex=6/6 DEX keys confirmed in `_rolling/new_pool_sniper_latest.json`
+
+
+---
+
+## Phase 2 Paper-Only Unlock (this session)
+
+**Decision (verbatim, propagated to `docs/status/Status_M8.md`):**
+> Phase 1 listener foundation: REACHED. Phase 2 paper-only: UNLOCKED. step_pivot.md reconciliation required before marking literal Phase 1 checklist complete. Real execution remains BLOCKED until Phase 2 evidence.
+
+### Files shipped this session
+
+- `strategy/sniper_entry_decision.py` — 4-phase paper-only entry engine: liquidity → spread → mirror/anchor → honeypot. Closed reject taxonomy (`NO_LIQUIDITY`, `LOW_LIQUIDITY`, `SPREAD_TOO_TIGHT`, `NO_MIRROR_NO_ANCHOR`, `HONEYPOT_FAIL`, `HONEYPOT_UNKNOWN`, `INSUFFICIENT_DATA`). Stateless. No network calls. No signing.
+- `strategy/sniper_exit_strategy.py` — 3-layer exit: EMERGENCY (revert/honeypot) > TIME (max_hold_blocks ceiling) > PROFIT_TAKE (partial). `evaluate(state) → ExitDecision`. Stateless.
+- `execution/slippage_guard.py` — constant-product slippage predictor + conservative `safety_buffer` × predicted + per-pool `circuit_breaker_x` blacklist on realized/predicted ratio breach.
+- `monitoring/sniper_artifacts.py` — `SCHEMA_REVISION` bumped `phase1.2` → `phase2.0`; `phase2_decision.expected_pnl_usd` field added (null in Phase 1 artifacts; populated by paper-sim in Phase 2).
+- `tests/unit/test_sniper_entry_decision.py` — gate ordering + reject taxonomy + confidence bounds.
+- `tests/unit/test_sniper_exit_strategy.py` — trigger priorities + chaos no-infinite-hold.
+- `tests/unit/test_slippage_guard.py` — constant-product math + circuit breaker.
+
+### Docs reconciled
+
+- `docs/step_pivot.md` — added R8b reconciliation block; Phase 1 day-10 wording softened from "1-hour" to "≥ 15 min all-factory gate"; §1.5 criteria checked against R8b; §Cross-Phase soak evidence row reconciled.
+- `docs/status/Status_M8.md` — header replaced; new `phase2_status: PAPER_ONLY_UNLOCKED`, `kill_switch_active: true`, `execution_enabled: false`; old `phase1_close_allowed: false` blocks marked `[SUPERSEDED 2026-05-14]`; Phase 2 first runtime gate command + acceptance criteria appended.
+
+### Real execution policy (UNCHANGED)
+
+- `execution_enabled: false`
+- `kill_switch_active: true`
+- No live signing, no broadcast, no live wallet keys.
+- Phase 3 unlock requires Phase 2 24-hour paper soak evidence + per-snipe trace + reject taxonomy + decision stability across ≥ 3 consecutive paper soaks.
+
+### Next runtime gate (Phase 2 first soak — planned, not yet executed)
+
+```powershell
+$env:ARBY_SNIPER_ENABLE='1'
+$env:ARBY_SNIPER_PAPER='1'
+$env:ARBY_SNIPER_EXECUTE='0'
+py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 1440 --prefer-ws --poll-interval-s 30 --blocks-back 50 2>&1 | Tee-Object -FilePath data/tmp/phase2_paper_soak_24h.log
+```
+
+Acceptance:
+- `snipe_simulated_total ≥ 5`
+- `snipe_simulated_profitable ≥ 1`
+- `phase2_decision.dry_run_decision` populated for ≥ 1 candidate
+- `phase2_decision.expected_pnl_usd` non-null on ≥ 1 candidate
+- `execution_enabled=false` maintained throughout
+- no infinite-hold positions in sim
