@@ -226,6 +226,11 @@ class FunnelTracker:
         self._http_fallback_polls: int = 0
         self._ws_events_by_dex: Dict[str, int] = {}
         self._ws_callbacks_ok_by_dex: Dict[str, int] = {}
+        # Self-test results (Step 2: historical archive probe results per DEX)
+        self._self_test_by_dex: Dict[str, Any] = {}
+        # Run scope (Step 3: identifies full vs isolated --dex runs)
+        self._run_scope: str = "all"
+        self._dex_filter: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -338,6 +343,20 @@ class FunnelTracker:
         with self._lock:
             self._http_fallback_polls += 1
 
+    def set_self_test_results(self, results: Dict[str, Any]) -> None:
+        """Store self-test archive probe results for inclusion in snapshot/artifact.
+
+        *results* maps dex_name -> dict(raw, parse_ok, parse_failed, range, status).
+        """
+        with self._lock:
+            self._self_test_by_dex = dict(results)
+
+    def set_run_scope(self, run_scope: str, dex_filter: Optional[str] = None) -> None:
+        """Record run scope so artifact clearly identifies partial vs full runs."""
+        with self._lock:
+            self._run_scope = run_scope
+            self._dex_filter = dex_filter
+
     def record_trace(self, trace: EventTrace) -> None:
         """Append a per-event trace (ring-buffer, drops oldest if full)."""
         with self._lock:
@@ -398,6 +417,10 @@ class FunnelTracker:
                 "http_fallback_polls": self._http_fallback_polls,
                 "ws_events_by_dex": dict(self._ws_events_by_dex),
                 "ws_callbacks_ok_by_dex": dict(self._ws_callbacks_ok_by_dex),
+                # Self-test results and run scope (Steps 2+3)
+                "self_test_by_dex": dict(self._self_test_by_dex),
+                "run_scope": self._run_scope,
+                "dex_filter": self._dex_filter,
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

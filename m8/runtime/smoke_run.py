@@ -378,17 +378,44 @@ def _get_block_number(w3: Any) -> Optional[int]:
 def _get_logs_safe(
     w3: Any,
     params: Dict[str, Any],
+    retries: int = 3,
+    retry_delay_s: float = 2.0,
 ) -> tuple[List[Any], bool, str]:
-    """Call ``eth.get_logs(params)`` and return (logs, had_error, error_str)."""
-    try:
-        return list(w3.eth.get_logs(params)), False, ""
-    except Exception as exc:
-        err_str = str(exc)
-        logger.warning(
-            "eth_getLogs failed",
-            extra={"context": {"params": str(params)[:200], "error": err_str[:120]}},
-        )
-        return [], True, err_str
+    """Call ``eth.get_logs(params)`` and return (logs, had_error, error_str).
+
+    Automatically retries on 408 (RPC timeout) errors up to *retries* times
+    with *retry_delay_s* sleep between attempts.  This avoids needing
+    ``--skip-self-test`` when the archive RPC is transiently slow.
+    """
+    last_err = ""
+    for attempt in range(1, retries + 1):
+        try:
+            return list(w3.eth.get_logs(params)), False, ""
+        except Exception as exc:
+            err_str = str(exc)
+            is_transient = "408" in err_str or "timeout" in err_str.lower()
+            if is_transient and attempt < retries:
+                logger.warning(
+                    "eth_getLogs_transient_retry",
+                    extra={
+                        "context": {
+                            "attempt": attempt,
+                            "retries": retries,
+                            "error": err_str[:120],
+                        }
+                    },
+                )
+                import time as _time
+                _time.sleep(retry_delay_s)
+                last_err = err_str
+                continue
+            last_err = err_str
+            break
+    logger.warning(
+        "eth_getLogs failed",
+        extra={"context": {"params": str(params)[:200], "error": last_err[:120]}},
+    )
+    return [], True, last_err
 
 
 # ---------------------------------------------------------------------------
@@ -399,11 +426,13 @@ def _run_self_test(
     w3: Any,
     configs: List[FactoryConfig],
     chain: str,
-) -> bool:
+) -> tuple[bool, Dict[str, Any]]:
     """Replay verification block ranges for each factory that has them set.
 
-    Returns True if all testable factories pass (>=1 event parsed).
-    Returns True when no factories have verification blocks (nothing to test).
+    Returns (all_pass, results_by_dex) where results_by_dex maps dex name to
+    a dict with keys: raw, parse_ok, parse_failed, range, status.
+
+    Returns (True, {}) when no factories have verification blocks (nothing to test).
     """
     testable = [
         cfg for cfg in configs
@@ -414,9 +443,10 @@ def _run_self_test(
             "self_test skipped -- no verification blocks configured",
             extra={"context": {"chain": chain, "factories_total": len(configs)}},
         )
-        return True
+        return True, {}
 
     all_pass = True
+    results_by_dex: Dict[str, Any] = {}
     for cfg in testable:
         assert cfg.verification_from_block is not None
         assert cfg.verification_to_block is not None
@@ -435,10 +465,18 @@ def _run_self_test(
                 extra={"context": {"dex": cfg.dex, "factory": cfg.factory}},
             )
             all_pass = False
+            results_by_dex[cfg.dex] = {
+                "raw": 0,
+                "parse_ok": 0,
+                "parse_failed": 0,
+                "range": [cfg.verification_from_block, cfg.verification_to_block],
+                "status": "RPC_ERROR",
+            }
             continue
 
         parsed = [parse_raw_log(lg, cfg) for lg in logs]
         ok_count = sum(1 for e in parsed if e is not None)
+        fail_count = len(logs) - ok_count
         if ok_count == 0:
             logger.error(
                 "self_test FAIL -- no events parsed in verification range",
@@ -453,6 +491,13 @@ def _run_self_test(
                 },
             )
             all_pass = False
+            results_by_dex[cfg.dex] = {
+                "raw": len(logs),
+                "parse_ok": 0,
+                "parse_failed": fail_count,
+                "range": [cfg.verification_from_block, cfg.verification_to_block],
+                "status": "FAIL",
+            }
         else:
             logger.info(
                 "self_test PASS",
@@ -466,7 +511,14 @@ def _run_self_test(
                     }
                 },
             )
-    return all_pass
+            results_by_dex[cfg.dex] = {
+                "raw": len(logs),
+                "parse_ok": ok_count,
+                "parse_failed": fail_count,
+                "range": [cfg.verification_from_block, cfg.verification_to_block],
+                "status": "PASS",
+            }
+    return all_pass, results_by_dex
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +629,9 @@ def _build_and_write_artifact(
         freshness_s=round(elapsed_s, 1),
         generated_at_utc=now_utc,
         recent_events=recent_list,
+        self_test_by_dex=metrics.get("self_test_by_dex"),
+        run_scope=metrics.get("run_scope", "all"),
+        dex_filter=metrics.get("dex_filter"),
     )
     violations = validate_sniper_artifact(artifact)
     if violations:
@@ -584,13 +639,25 @@ def _build_and_write_artifact(
             "artifact_validation_violations",
             extra={"context": {"violations": violations}},
         )
-    path = write_sniper_artifact(artifact)
+
+    # Step 8: When an isolated --dex run is active, write to data/tmp/ (NOT _rolling/)
+    # to avoid polluting the canonical rolling artifact set.  The canonical
+    # new_pool_sniper_latest.json in _rolling is only written for full all-factory runs.
+    dex_filter_val = metrics.get("dex_filter")
+    if dex_filter_val:
+        tmp_dir = Path("data/tmp")
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        isolated_path = tmp_dir / f"new_pool_sniper_{dex_filter_val}_latest.json"
+        path = write_sniper_artifact(artifact, path=isolated_path)
+    else:
+        path = write_sniper_artifact(artifact)
     logger.info(
         "artifact_written",
         extra={
             "context": {
                 "path": str(path),
                 "status": status,
+                "run_scope": metrics.get("run_scope", "all"),
                 "candidates_total": metrics["snipe_candidates_total"],
                 "elapsed_s": round(elapsed_s, 1),
             }
@@ -939,6 +1006,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     t0 = time.monotonic()
 
+    # Record run scope so artifact reflects whether this is a full or isolated run.
+    _dex_filter = getattr(args, "dex", None)
+    funnel.set_run_scope(run_scope="all" if not _dex_filter else _dex_filter, dex_filter=_dex_filter)
+
     # ------------------------------------------------------------------
     # Online-only: build web3 + self-test
     # ------------------------------------------------------------------
@@ -1005,10 +1076,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
 
         if not args.skip_self_test:
-            self_test_ok = _run_self_test(w3, configs, args.chain)
+            self_test_ok, self_test_results = _run_self_test(w3, configs, args.chain)
             if not self_test_ok:
                 logger.error("self_test_FAILED -- aborting run (use --skip-self-test to bypass)")
                 return 3
+        else:
+            self_test_results: Dict[str, Any] = {}
+            logger.warning(
+                "self_test_skipped_via_flag",
+                extra={"context": {"reason": "--skip-self-test is set; historical parser check bypassed"}},
+            )
+
+        # Store self-test results in the funnel for artifact inclusion.
+        funnel.set_self_test_results(self_test_results)
 
     # ------------------------------------------------------------------
     # Main loop

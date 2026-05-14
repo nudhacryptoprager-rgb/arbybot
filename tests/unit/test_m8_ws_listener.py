@@ -409,3 +409,208 @@ class TestLoadFactoryConfigDexFilter:
         filtered = load_factory_config(chain_filter="base", dex_filter="uniswap_v3")
         assert len(all_cfgs) > len(filtered)
 
+
+# ---------------------------------------------------------------------------
+# Aerodrome ve33 layout WS callback (Step 5: R7 reviewer requirement)
+# Proves the aerodrome PairCreated/PoolCreated callback path without live market.
+# ---------------------------------------------------------------------------
+
+def _make_aerodrome_ve33_pool_log(cfg: FactoryConfig, tx_suffix: str = "ae") -> Dict[str, Any]:
+    """Synthetic aerodrome ve33_pool_created log (PoolCreated with stable as indexed bool).
+
+    Log structure (ve33_pool_created layout):
+      topics[0]: keccak256("PoolCreated(address,address,bool,address,uint256)")
+                 = 0x2128d88d14c80cb081c1252a5acff7a264671bf199ce226b53788fb26065005e
+      topics[1]: token0  (indexed address)
+      topics[2]: token1  (indexed address)
+      topics[3]: stable  (indexed bool, 0 = volatile)
+      data:      abi.encode(address pool, uint256 allPools) = 2 × 32-byte words
+    """
+    token0 = "0x" + "00" * 12 + "aa" * 20
+    token1 = "0x" + "00" * 12 + "bb" * 20
+    stable_topic = "0x" + "00" * 31 + "00"   # stable=false
+    pool_word = "00" * 12 + "cc" * 20          # pool address as 32-byte word
+    all_pools_word = "00" * 31 + "01"          # allPools = 1
+    return {
+        "address": cfg.factory,
+        "topics": [
+            cfg.topic0,
+            token0,
+            token1,
+            stable_topic,
+        ],
+        "data": "0x" + pool_word + all_pools_word,
+        "blockNumber": "0x1",
+        "transactionHash": "0x" + tx_suffix * 32,
+        "logIndex": "0x0",
+    }
+
+
+class TestAerodromeVe33WSCallback:
+    """Prove that the aerodrome ve33 layout is correctly handled through
+    the WS callback pipeline without requiring a live market event.
+
+    This directly addresses R7 Step 5: add mock/replay for aerodrome
+    ve33 PairCreated/PoolCreated callback path.
+    """
+
+    def _make_aerodrome_cfg(self) -> FactoryConfig:
+        """Return a FactoryConfig matching the aerodrome ve33_pool_created layout."""
+        return FactoryConfig(
+            chain="base",
+            dex="aerodrome",
+            adapter_type="ve33",
+            factory="0x420dd381b31aef6683db6b902084cb0ffece40da",
+            event_name="PoolCreated",
+            event_signature="PoolCreated(address,address,bool,address,uint256)",
+            topic0="0x2128d88d14c80cb081c1252a5acff7a264671bf199ce226b53788fb26065005e",
+            topic0_verified=True,
+            log_layout="ve33_pool_created",
+            verification_from_block=None,
+            verification_to_block=None,
+        )
+
+    def test_aerodrome_ws_ack_and_notification_increments_callback(self):
+        """Simulate ACK + synthetic aerodrome PoolCreated notification.
+
+        Asserts callbacks_ok_by_dex['aerodrome'] == 1 and the funnel
+        receives the event, proving the ve33_pool_created callback path
+        works without live market events.
+        """
+        cfg = self._make_aerodrome_cfg()
+        received: List[Dict[str, Any]] = []
+
+        def on_event(c: FactoryConfig, raw_log: Dict[str, Any]) -> None:
+            received.append({"dex": c.dex, "log": raw_log})
+
+        lst = WSPoolEventListener("wss://x/", [cfg], on_event=on_event)
+
+        # Step 1: simulate subscription ACK
+        ack = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "sub-aero-1"})
+        lst._handle_message(ack, {1: cfg})
+        assert lst.stats.sub_id_to_dex.get("sub-aero-1") == "aerodrome"
+
+        # Step 2: simulate a synthetic aerodrome PoolCreated notification
+        raw_log = _make_aerodrome_ve33_pool_log(cfg)
+        notif = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "eth_subscription",
+            "params": {
+                "subscription": "sub-aero-1",
+                "result": raw_log,
+            },
+        })
+        lst._handle_message(notif, {})
+
+        # Assertions: event emitted and per-DEX counters updated
+        assert lst.stats.log_events_emitted == 1
+        assert lst.stats.events_by_dex.get("aerodrome") == 1
+        assert lst.stats.callbacks_ok_by_dex.get("aerodrome") == 1
+        assert len(received) == 1
+        assert received[0]["dex"] == "aerodrome"
+
+    def test_aerodrome_ws_log_parses_via_funnel_pipeline(self):
+        """End-to-end: aerodrome ve33 WS log → funnel callback → parse_ok=1.
+
+        Uses _make_ws_on_event_callback to run the full pipeline
+        (parse_raw_log → dedup → candidates) and asserts parse_ok=1.
+        """
+        from monitoring.sniper_funnel import FunnelTracker
+        from m8.runtime.smoke_run import _make_ws_on_event_callback
+
+        funnel = FunnelTracker()
+        seen_ids: set = set()
+        recent_events: list = []
+        lock = threading.Lock()
+        cb = _make_ws_on_event_callback(funnel, seen_ids, recent_events, lock)
+
+        cfg = self._make_aerodrome_cfg()
+        cb(cfg, _make_aerodrome_ve33_pool_log(cfg))
+
+        snap = funnel.snapshot()
+        assert snap["raw_fetched"] == 1
+        assert snap["parse_ok"] == 1
+        assert snap["parse_failed"] == 0
+        assert snap["dedup_new"] == 1
+        assert snap["candidates_queued"] == 1
+        assert len(recent_events) == 1
+        assert recent_events[0].dex == "aerodrome"
+
+
+# ---------------------------------------------------------------------------
+# _get_logs_safe retry behaviour (R7 Step 4: unit tests for 408/timeout retry)
+# ---------------------------------------------------------------------------
+
+class TestGetLogsSafeRetry:
+    """Verify that _get_logs_safe retries on 408/timeout and succeeds on 2nd attempt.
+
+    Uses unittest.mock to simulate a web3 provider that fails with a 408 error
+    on the first call but succeeds on subsequent calls.
+    """
+
+    def _make_w3_mock(self, side_effects):
+        """Return a minimal mock w3 whose eth.get_logs raises in sequence."""
+        from unittest.mock import MagicMock
+        w3 = MagicMock()
+        w3.eth.get_logs.side_effect = side_effects
+        return w3
+
+    def test_succeeds_immediately_when_no_error(self):
+        """Zero failures → returns logs on first call without retry."""
+        from m8.runtime.smoke_run import _get_logs_safe
+        w3 = self._make_w3_mock([["log1", "log2"]])
+        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        assert not had_err
+        assert logs == ["log1", "log2"]
+        assert w3.eth.get_logs.call_count == 1
+
+    def test_retries_on_408_and_succeeds(self):
+        """408 error on first call → retries → succeeds on second call."""
+        from m8.runtime.smoke_run import _get_logs_safe
+        side_effects = [
+            Exception("408 Client Error: Request Timeout"),
+            ["log1"],
+        ]
+        w3 = self._make_w3_mock(side_effects)
+        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        assert not had_err
+        assert logs == ["log1"]
+        assert w3.eth.get_logs.call_count == 2
+
+    def test_retries_on_timeout_keyword_and_succeeds(self):
+        """'timeout' in error message → treated as transient, retried."""
+        from m8.runtime.smoke_run import _get_logs_safe
+        side_effects = [
+            Exception("ConnectionTimeout: read timed out"),
+            ["logA"],
+        ]
+        w3 = self._make_w3_mock(side_effects)
+        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        assert not had_err
+        assert logs == ["logA"]
+        assert w3.eth.get_logs.call_count == 2
+
+    def test_non_transient_error_not_retried(self):
+        """Non-408/timeout error (e.g. 403) → returns error immediately, no retry."""
+        from m8.runtime.smoke_run import _get_logs_safe
+        w3 = self._make_w3_mock([Exception("403 Forbidden"), ["should_not_reach"]])
+        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        assert had_err
+        assert logs == []
+        assert "403" in err_str
+        # Must not retry — only 1 call
+        assert w3.eth.get_logs.call_count == 1
+
+    def test_exhausted_retries_returns_error(self):
+        """All retries fail with 408 → returns had_err=True after max retries."""
+        from m8.runtime.smoke_run import _get_logs_safe
+        w3 = self._make_w3_mock([
+            Exception("408 Request Timeout"),
+            Exception("408 Request Timeout"),
+            Exception("408 Request Timeout"),
+        ])
+        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        assert had_err
+        assert logs == []
+        assert w3.eth.get_logs.call_count == 3
+

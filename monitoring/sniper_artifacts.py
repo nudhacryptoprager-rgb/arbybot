@@ -102,6 +102,9 @@ def make_sniper_artifact(
     freshness_s: Optional[float] = None,
     generated_at_utc: Optional[str] = None,
     recent_events: Optional[List[Dict[str, Any]]] = None,
+    self_test_by_dex: Optional[Dict[str, Any]] = None,
+    run_scope: str = "all",
+    dex_filter: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a ``new_pool_sniper_latest.json`` artifact dict.
 
@@ -165,6 +168,11 @@ def make_sniper_artifact(
     # Optional: include recent events for dashboard (capped)
     events = (recent_events or [])[:20]
     artifact["recent_events"] = events
+
+    # Run scope and self-test results (Steps 2+3: identify partial runs, include parser proof)
+    artifact["run_scope"] = run_scope
+    artifact["dex_filter"] = dex_filter
+    artifact["self_test_by_dex"] = dict(self_test_by_dex) if self_test_by_dex else {}
 
     return artifact
 

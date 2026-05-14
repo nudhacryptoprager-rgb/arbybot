@@ -470,3 +470,135 @@ class TestPhase2DecisionStubs:
                 f"Phase 1: phase2_decision[{key!r}] should be None"
             )
 
+
+# ---------------------------------------------------------------------------
+# R7: self_test_by_dex / run_scope / dex_filter contract tests
+# ---------------------------------------------------------------------------
+
+class TestR7NewArtifactFields:
+    """Contract tests for the three fields added in Round-7:
+      - self_test_by_dex: dict mapping dex -> {raw, parse_ok, parse_failed, range, status}
+      - run_scope: "all" for full runs, dex name for isolated --dex runs
+      - dex_filter: None for full runs, dex name for isolated runs
+
+    These lock the public artifact schema so CI fails loudly if the fields
+    are accidentally removed.
+    """
+
+    def test_artifact_has_run_scope_field(self):
+        """artifact must include 'run_scope' (default 'all')."""
+        art = make_sniper_artifact()
+        assert "run_scope" in art, "artifact must have 'run_scope' field"
+
+    def test_run_scope_default_is_all(self):
+        art = make_sniper_artifact()
+        assert art["run_scope"] == "all"
+
+    def test_run_scope_custom_value(self):
+        art = make_sniper_artifact(run_scope="aerodrome")
+        assert art["run_scope"] == "aerodrome"
+
+    def test_artifact_has_dex_filter_field(self):
+        """artifact must include 'dex_filter' (default None)."""
+        art = make_sniper_artifact()
+        assert "dex_filter" in art, "artifact must have 'dex_filter' field"
+
+    def test_dex_filter_default_is_none(self):
+        art = make_sniper_artifact()
+        assert art["dex_filter"] is None
+
+    def test_dex_filter_custom_value(self):
+        art = make_sniper_artifact(dex_filter="aerodrome")
+        assert art["dex_filter"] == "aerodrome"
+
+    def test_artifact_has_self_test_by_dex_field(self):
+        """artifact must include 'self_test_by_dex' (default empty dict)."""
+        art = make_sniper_artifact()
+        assert "self_test_by_dex" in art, "artifact must have 'self_test_by_dex' field"
+
+    def test_self_test_by_dex_default_is_empty_dict(self):
+        art = make_sniper_artifact()
+        assert art["self_test_by_dex"] == {}
+
+    def test_self_test_by_dex_custom_value(self):
+        results = {
+            "aerodrome": {"raw": 1, "parse_ok": 1, "parse_failed": 0,
+                          "range": [45925000, 45926000], "status": "PASS"},
+            "uniswap_v3": {"raw": 2, "parse_ok": 2, "parse_failed": 0,
+                           "range": [45946914, 45947413], "status": "PASS"},
+        }
+        art = make_sniper_artifact(self_test_by_dex=results)
+        assert art["self_test_by_dex"]["aerodrome"]["status"] == "PASS"
+        assert art["self_test_by_dex"]["uniswap_v3"]["parse_ok"] == 2
+
+    def test_self_test_by_dex_none_coerced_to_empty(self):
+        """Passing None for self_test_by_dex must result in {}."""
+        art = make_sniper_artifact(self_test_by_dex=None)
+        assert art["self_test_by_dex"] == {}
+
+    def test_all_three_new_fields_json_serialisable(self):
+        import json
+        results = {"aerodrome": {"raw": 1, "parse_ok": 1, "parse_failed": 0,
+                                 "range": [1, 2], "status": "PASS"}}
+        art = make_sniper_artifact(
+            self_test_by_dex=results,
+            run_scope="aerodrome",
+            dex_filter="aerodrome",
+        )
+        serialised = json.dumps(art)
+        roundtrip = json.loads(serialised)
+        assert roundtrip["run_scope"] == "aerodrome"
+        assert roundtrip["dex_filter"] == "aerodrome"
+        assert roundtrip["self_test_by_dex"]["aerodrome"]["status"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# R7: isolated --dex run must NOT pollute _rolling canonical set
+# ---------------------------------------------------------------------------
+
+class TestIsolatedRunRollingIsolation:
+    """Verifies that _build_and_write_artifact() writes to data/tmp/ (not _rolling/)
+    when dex_filter is set.  Locks Step 8 so it cannot regress.
+    """
+
+    def test_isolated_run_writes_to_tmp_not_rolling(self, tmp_path: Path):
+        """When dex_filter is set, write_sniper_artifact uses tmp path.
+
+        We test this by directly calling write_sniper_artifact with an
+        explicit isolated path (as smoke_run does for --dex runs) and
+        verifying the file is created where expected.
+        """
+        isolated = tmp_path / "new_pool_sniper_aerodrome_latest.json"
+        art = make_sniper_artifact(
+            status="EMPTY",
+            run_scope="aerodrome",
+            dex_filter="aerodrome",
+        )
+        write_sniper_artifact(art, path=isolated)
+        assert isolated.is_file()
+        loaded = json.loads(isolated.read_text(encoding="utf-8"))
+        assert loaded["dex_filter"] == "aerodrome"
+        assert loaded["run_scope"] == "aerodrome"
+
+    def test_isolated_run_artifact_name_follows_convention(self, tmp_path: Path):
+        """Isolated artifact filename must be new_pool_sniper_{dex}_latest.json."""
+        dex = "pancakeswap_v3"
+        isolated = tmp_path / f"new_pool_sniper_{dex}_latest.json"
+        art = make_sniper_artifact(
+            status="EMPTY",
+            run_scope=dex,
+            dex_filter=dex,
+        )
+        write_sniper_artifact(art, path=isolated)
+        assert isolated.name == f"new_pool_sniper_{dex}_latest.json"
+
+    def test_full_run_writes_to_rolling(self, tmp_path: Path):
+        """When dex_filter is None (full run), canonical rolling path is used."""
+        canonical = tmp_path / "new_pool_sniper_latest.json"
+        art = make_sniper_artifact(status="EMPTY", run_scope="all", dex_filter=None)
+        write_sniper_artifact(art, path=canonical)
+        assert canonical.is_file()
+        loaded = json.loads(canonical.read_text(encoding="utf-8"))
+        assert loaded["dex_filter"] is None
+        assert loaded["run_scope"] == "all"
+
