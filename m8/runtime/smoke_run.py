@@ -848,6 +848,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="(Phase 1.3+) Prefer WS endpoint when resolvable; HTTP polling stays "
              "as fallback (heartbeat + reconnect implemented elsewhere).",
     )
+    parser.add_argument(
+        "--dex", default=None, metavar="DEX",
+        help="If set, only listen to this DEX (e.g. 'pancakeswap_v3'). "
+             "Useful for isolated single-DEX WS gates.",
+    )
     args = parser.parse_args(argv)
 
     # Offline via ENV as well
@@ -875,7 +880,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Load factory configs
     # ------------------------------------------------------------------
     try:
-        configs = load_factory_config(chain_filter=args.chain)
+        configs = load_factory_config(chain_filter=args.chain, dex_filter=args.dex)
     except Exception as exc:
         logger.error(
             "factory_config_load_failed",
@@ -1104,6 +1109,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             events_seen=stats.log_events_emitted,
             reconnects=stats.reconnect_attempts,
             last_event_seen_ts=stats.last_event_seen_ts,
+            events_by_dex=stats.events_by_dex,
+            callbacks_ok_by_dex=stats.callbacks_ok_by_dex,
         )
         logger.info(
             "ws_listener_stopped",

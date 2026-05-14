@@ -224,6 +224,8 @@ class FunnelTracker:
         self._ws_reconnects: int = 0
         self._ws_last_event_seen_ts: Optional[float] = None
         self._http_fallback_polls: int = 0
+        self._ws_events_by_dex: Dict[str, int] = {}
+        self._ws_callbacks_ok_by_dex: Dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -316,6 +318,8 @@ class FunnelTracker:
         events_seen: int = 0,
         reconnects: int = 0,
         last_event_seen_ts: Optional[float] = None,
+        events_by_dex: Optional[Dict[str, int]] = None,
+        callbacks_ok_by_dex: Optional[Dict[str, int]] = None,
     ) -> None:
         """Sync WS listener stats into funnel for artifact export."""
         with self._lock:
@@ -324,6 +328,10 @@ class FunnelTracker:
             self._ws_events_seen = events_seen
             self._ws_reconnects = reconnects
             self._ws_last_event_seen_ts = last_event_seen_ts
+            if events_by_dex is not None:
+                self._ws_events_by_dex = dict(events_by_dex)
+            if callbacks_ok_by_dex is not None:
+                self._ws_callbacks_ok_by_dex = dict(callbacks_ok_by_dex)
 
     def inc_http_fallback_poll(self) -> None:
         """Increment HTTP fallback poll counter (used in --prefer-ws mode)."""
@@ -388,6 +396,8 @@ class FunnelTracker:
                 "ws_reconnects": self._ws_reconnects,
                 "ws_last_event_seen_ts": self._ws_last_event_seen_ts,
                 "http_fallback_polls": self._http_fallback_polls,
+                "ws_events_by_dex": dict(self._ws_events_by_dex),
+                "ws_callbacks_ok_by_dex": dict(self._ws_callbacks_ok_by_dex),
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

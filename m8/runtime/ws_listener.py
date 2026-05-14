@@ -57,6 +57,9 @@ class WSListenerStats:
     last_disconnect_ts: Optional[float] = None
     # Map subscription_id -> FactoryConfig.dex
     sub_id_to_dex: Dict[str, str] = field(default_factory=dict)
+    # Per-DEX counters
+    events_by_dex: Dict[str, int] = field(default_factory=dict)
+    callbacks_ok_by_dex: Dict[str, int] = field(default_factory=dict)
 
 
 class WSPoolEventListener:
@@ -164,8 +167,10 @@ class WSPoolEventListener:
                 return
             self.stats.log_events_emitted += 1
             self.stats.last_event_seen_ts = time.time()
+            self.stats.events_by_dex[dex] = self.stats.events_by_dex.get(dex, 0) + 1
             try:
                 self.on_event(cfg, raw_log)
+                self.stats.callbacks_ok_by_dex[dex] = self.stats.callbacks_ok_by_dex.get(dex, 0) + 1
             except Exception as exc:  # callback failure must not kill loop
                 logger.warning("ws_on_event_callback_failed: %s", str(exc)[:120])
 

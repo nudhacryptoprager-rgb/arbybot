@@ -1,26 +1,26 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: IN_PROGRESS — listener_core REACHED; WS live path integration IN_PROGRESS; multi_factory coverage PARTIAL.
+**Status**: IN_PROGRESS — listener_core REACHED; WS live path PROVEN end-to-end; all 4 factory parsers PROVEN historically; multi_factory live coverage PARTIAL (market-window blocker, not code bug).
 
 `goal_status`: IN_PROGRESS  
 `phase1_status`: REACHED_CORE_LISTENER  
-`multi_factory_coverage_status`: PARTIAL  
+`multi_factory_coverage_status`: PARTIAL_MARKET_WINDOW  
 `phase1_steps_4_9_status`: COMPLETE  
 `pipeline_ready`: false  
 `production_profit_ready`: false  
 `close_allowed`: false  
-`primary_blocker_of_session`: M8_PHASE1_3_WS_LIVE_PATH_NOT_PROVEN  
-`blocker_status_before`: WS_SKELETON_ONLY  
-`blocker_status_after`: WS_INTEGRATED_GATE_RUNNING  
+`primary_blocker_of_session`: M8_MULTI_FACTORY_LIVE_PARSE_OK_MARKET_WINDOW  
+`blocker_status_before`: WS_END_TO_END_PROVEN  
+`blocker_status_after`: WS_4FACTORY_GATE_PASS_INFRA_PROVEN_MARKET_WINDOW_BLOCKER  
 `next_phase_blocker`: M8_PHASE2_SCORING_AND_RISK_FILTERS_NOT_IMPLEMENTED  
 `docs_reread_confirmed`: true  
 `phase1_verified_at`: 2026-05-13T21:54:59Z  
 `phase1_artifact`: data/runs/_rolling/new_pool_sniper_latest.json  
 `phase1_soak_result`: PASS (parse_ok=22, candidates=22, rpc_error_rate=1.56%, cycles=240)  
-`factory_coverage_note`: uniswap_v3 verified live (22 events/2h); aerodrome/aerodrome_slipstream/pancakeswap_v3 zero events — RPC timeout (pancakeswap) or no activity in probe window  
+`factory_coverage_note`: uniswap_v3 verified live (22 events/2h + 3 events/1h R6 gate); aerodrome/aerodrome_slipstream/pancakeswap_v3 verified by historical archive probes (100% parse_ok); no live pool creation events in R6 1h window — MARKET_WINDOW blocker, not code bug  
 `schema_revision_current`: phase1.2  
-`round5_ws_gate_started_at`: 2026-05-14T11:02:05Z  
 `round5_ws_gate_status`: COMPLETED — status=ACTIVE, parse_ok=2, rpc_error_rate=0%, ws_events_emitted=1 (end-to-end proven)  
+`round6_1h_ws_gate_status`: COMPLETED — status=ACTIVE, candidates=3, rpc_error_rate=2.08%, ws_connected=true, ws_subscriptions=20 (4 factories × 5 conn), ws_events_seen=2, reconnects=4, parse_ok=5/5 (100%)  
 
 ## Scope
 
@@ -196,14 +196,20 @@ Phase 1 closure requires *all* of:
 - [x] RPC preflight (`chain_id` + `archive` + `WS newHeads`) PASS for the run RPC.
 - [x] Factory self-test PASS for every factory in `config/new_pool_factories.yaml` that has
       `verification_from_block`/`verification_to_block` set (currently 4 of 4 on Base).
-- [x] 1-hour scan completes without `self_test_FAILED` (RPC error rate 14.8% on drpc — above
-      the 5% target; tracked as follow-up: `--prefer-ws` or Alchemy fallback).
-- [x] `parse_failed == 0` across the 1-hour window (raw_logs=0, parse_ok=0, parse_failed=0).
-- [ ] `factory_breakdown` shows `parse_ok > 0` for at least two distinct DEXes
-      (multi-factory coverage proven, not just `uniswap_v3`).
-      **Status: PARTIAL** — Base did not produce any PoolCreated/PairCreated event in the
-      100-block rolling window during the 1h gate. Re-run with `--prefer-ws` (no lookback throttle)
-      OR a longer run that catches a real new-pool event.
+- [x] 1-hour scan completes without `self_test_FAILED`.
+      R6 gate rpc_error_rate=2.08% (1/48 calls) — **PASS** (< 5% threshold).
+- [x] `parse_failed == 0` across the 1-hour window. **R6: parse_failed=0, parse_ok=5/5 (100%)**.
+- [x] All-factory **historical archive probes** PASS (R6 proven 2026-05-14):
+      - aerodrome_slipstream (45920743-45921242): raw=1, parse_ok=1, 100% ✅
+      - aerodrome/ve33 (45925000-45926000): raw=1, parse_ok=1, 100% ✅
+      - uniswap_v3 (45946914-45947413): raw=2, parse_ok=2, 100% ✅
+      - pancakeswap_v3 (45926100-45926500): raw=1, parse_ok=1, 100% ✅
+- [ ] `factory_breakdown` shows `parse_ok > 0` for at least two distinct DEXes (live).
+      **Status: MARKET_WINDOW_BLOCKER** — uniswap_v3 had live events (raw=5, parse_ok=5,
+      candidates=3). aerodrome/aerodrome_slipstream/pancakeswap_v3 had raw=0 in the R6 1h window
+      (no pool creation events landed on Base for those DEXes during the gate).
+      **This is NOT a code bug**: all 4 parsers are historically proven (see criterion above).
+      Phase 1 close gated only on this criterion. Requires longer run or lucky market window.
 
 ## Next Required Evidence (Phase 2)
 
@@ -251,4 +257,56 @@ Phase 1 closure requires *all* of:
 **Current blockers (Round-5 POST-GATE):**
 1. `M8_MULTI_FACTORY_PARSE_OK_SINGLE_DEX` — only pancakeswap_v3 had live events; uniswap_v3/aerodrome/
    slipstream had zero. Phase 1 close requires parse_ok > 0 on ≥2 DEXes. Next longer gate needed.
+2. `PLAIN_CI_BLOCKED_BY_INTENT_TIER_LIMIT` — known pre-existing blocker; not M8-specific.
+
+## Round-6 GPT Review Evidence (2026-05-14)
+
+Lead directive: archive preflight 100k, 4 historical factory probes, per-DEX WS stats,
+--dex filter, dashboard check, 1h --prefer-ws all-factory gate.
+Claim-after-evidence discipline: docs updated ONLY after gate artifact confirmed.
+
+- ✅ R6.1 Archive preflight PASS: `--archive-depth 100000` → head=45980928, probed=45880928 (drpc OK)
+- ✅ R6.2 4 historical factory probes — ALL PASS (parsers are correct, zero parse_failed):
+    - aerodrome_slipstream (45920743-45921242): raw=1, parse_ok=1, parse_rate=100%
+    - aerodrome/ve33 (45925000-45926000): raw=1, parse_ok=1, parse_rate=100%
+    - uniswap_v3 (45946914-45947413): raw=2, parse_ok=2, parse_rate=100%
+    - pancakeswap_v3 (45926100-45926500): raw=1, parse_ok=1, parse_rate=100%
+- ✅ R6.3 No parse_ok=0 / raw_logs>0 anomalies — code blocker ruled out entirely.
+- ✅ R6.4 Per-DEX WS stats added to artifact:
+    - `WSListenerStats.events_by_dex: Dict[str,int]` and `callbacks_ok_by_dex: Dict[str,int]`
+    - `FunnelTracker.update_ws_stats(events_by_dex=..., callbacks_ok_by_dex=...)` new kwargs
+    - `snapshot()` now includes `ws_events_by_dex` and `ws_callbacks_ok_by_dex`
+    - Passed into `make_sniper_artifact` via the `metrics` dict (additive, no schema bump)
+- ✅ R6.5 `--dex` filter for smoke_run: `load_factory_config(dex_filter=...)` added to
+    `discovery/new_pool_listener.py`; argparse `--dex` arg in `m8/runtime/smoke_run.py`
+    → allows isolated single-DEX WS gates.
+- ✅ R6.6 5412 unit tests PASS (+7 new: per-DEX WS snapshot, WSListenerStats per-DEX,
+    load_factory_config dex_filter × 3). No regressions from Round-6 changes.
+- ✅ R6.7 Dashboard `/m8` check: HTTP 200 OK on `http://127.0.0.1:8099/m8` before gate start.
+- ✅ R6.8 1h `--prefer-ws` all-factory gate COMPLETED 2026-05-14T11:40:47Z → 12:40:55Z (3607s):
+    - Preflight: chain_id 8453 OK; archive head=45981150 (probed 45979150) OK; WS newHeads OK.
+    - Self-test PASS: uniswap_v3 (2), aerodrome_slipstream (1), aerodrome (1), pancakeswap_v3 (1).
+    - ws_listener_started: factories=4, http_fallback_interval_s=300.0
+    - Live run: cycles=12, elapsed=3607s, RPC calls=48, RPC errors=1 (408_timeout)
+      rpc_error_rate=2.08% → **PASS (< 5% threshold)**
+    - ws_connected=True, ws_subscriptions=20 (4 factories × 5 conn attempts incl. 4 reconnects)
+    - ws_events_seen=2 (WS-direct), ws_events_by_dex={'uniswap_v3': 2}
+    - ws_reconnects=4 (drpc drops ~every 15 min; auto-reconnect working)
+    - parse_ok=5, parse_failed=0 (uniswap_v3 raw=5/ok=5/cand=3)
+    - status=ACTIVE, candidates_total=3
+    - aerodrome/aerodrome_slipstream/pancakeswap_v3: polls_ok=12 each, raw_logs=0
+      → MARKET_WINDOW blocker (no new pools created on those DEXes in this 1h window)
+- ✅ R6.9 Phase 1 factory proof summary:
+    - Historical: 4/4 PASS (all parsers correct, all block ranges with known events fully parsed)
+    - Infrastructure: ws_connected=True, rpc_error_rate=2.08% (<5%), all self-tests PASS
+    - Live ≥2 DEX parse_ok>0: MARKET_WINDOW blocker — only uniswap_v3 had live pool creation
+      events (3 candidates); other DEXes had zero raw_logs (not a code bug)
+    - phase1_close_allowed: false (single live DEX criterion not yet met by 2nd DEX)
+- ✅ R6.10 Docs updated AFTER gate artifact confirmed (claim-after-evidence discipline maintained).
+
+**Current blockers (Round-6 POST-GATE):**
+1. `M8_MULTI_FACTORY_LIVE_PARSE_OK_MARKET_WINDOW` — only uniswap_v3 had live pool events in the
+   R6 1h window; aerodrome/aerodrome_slipstream/pancakeswap_v3 had raw_logs=0. Phase 1 close
+   requires parse_ok > 0 on ≥2 live DEXes. Requires longer run or different market window.
+   Historical archive probes PASS for all 4 — parsers are correct, this is purely market timing.
 2. `PLAIN_CI_BLOCKED_BY_INTENT_TIER_LIMIT` — known pre-existing blocker; not M8-specific.

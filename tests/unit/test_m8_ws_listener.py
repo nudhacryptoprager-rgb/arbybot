@@ -317,3 +317,95 @@ class TestWSFunnelIntegration:
         self.funnel.inc_http_fallback_poll()
         snap = self.funnel.snapshot()
         assert snap["http_fallback_polls"] == 2
+
+    def test_update_ws_stats_per_dex_in_snapshot(self):
+        """update_ws_stats(events_by_dex, callbacks_ok_by_dex) appears in snapshot."""
+        self.funnel.update_ws_stats(
+            connected=True,
+            subscriptions=2,
+            events_seen=3,
+            reconnects=0,
+            last_event_seen_ts=None,
+            events_by_dex={"uniswap_v3": 2, "pancakeswap_v3": 1},
+            callbacks_ok_by_dex={"uniswap_v3": 2, "pancakeswap_v3": 1},
+        )
+        snap = self.funnel.snapshot()
+        assert snap["ws_events_by_dex"]["uniswap_v3"] == 2
+        assert snap["ws_events_by_dex"]["pancakeswap_v3"] == 1
+        assert snap["ws_callbacks_ok_by_dex"]["uniswap_v3"] == 2
+        assert snap["ws_callbacks_ok_by_dex"]["pancakeswap_v3"] == 1
+
+    def test_ws_stats_per_dex_empty_by_default(self):
+        """snapshot() returns empty dicts for per-DEX WS stats if not set."""
+        snap = self.funnel.snapshot()
+        assert snap["ws_events_by_dex"] == {}
+        assert snap["ws_callbacks_ok_by_dex"] == {}
+
+
+# ---------------------------------------------------------------------------
+# WSListenerStats per-DEX counters
+# ---------------------------------------------------------------------------
+
+class TestWSListenerStatsPerDex:
+    """Tests for events_by_dex / callbacks_ok_by_dex tracking in WSListenerStats."""
+
+    def test_events_by_dex_incremented_on_dispatch(self):
+        """Simulated ACK + notification increments events_by_dex for the right DEX."""
+        cfg_u = _cfg("uniswap_v3")
+        cfg_p = _cfg("pancakeswap_v3")
+        received: List[str] = []
+
+        def on_event(cfg, raw_log):
+            received.append(cfg.dex)
+
+        lst = WSPoolEventListener("wss://x/", [cfg_u, cfg_p], on_event=on_event)
+        # Simulate ACK for uniswap_v3 subscription
+        ack_msg = json.dumps({"jsonrpc": "2.0", "id": 1, "result": "sub-u1"})
+        lst._handle_message(ack_msg, {1: cfg_u})
+        assert lst.stats.sub_id_to_dex["sub-u1"] == "uniswap_v3"
+
+        # Simulate log notification for uniswap_v3
+        notif = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "eth_subscription",
+            "params": {
+                "subscription": "sub-u1",
+                "result": _make_v3_raw_log(cfg_u),
+            },
+        })
+        lst._handle_message(notif, {})
+        assert lst.stats.events_by_dex.get("uniswap_v3") == 1
+        assert lst.stats.callbacks_ok_by_dex.get("uniswap_v3") == 1
+        assert len(received) == 1
+
+    def test_events_by_dex_empty_on_new_instance(self):
+        """Fresh WSListenerStats has empty per-DEX dicts."""
+        stats = WSListenerStats()
+        assert stats.events_by_dex == {}
+        assert stats.callbacks_ok_by_dex == {}
+
+
+# ---------------------------------------------------------------------------
+# load_factory_config dex_filter
+# ---------------------------------------------------------------------------
+
+class TestLoadFactoryConfigDexFilter:
+    """Tests for dex_filter parameter in load_factory_config."""
+
+    def test_dex_filter_returns_only_matching(self):
+        from discovery.new_pool_listener import load_factory_config
+        configs = load_factory_config(chain_filter="base", dex_filter="uniswap_v3")
+        assert all(c.dex == "uniswap_v3" for c in configs)
+        assert len(configs) >= 1
+
+    def test_dex_filter_unknown_returns_empty(self):
+        from discovery.new_pool_listener import load_factory_config
+        configs = load_factory_config(chain_filter="base", dex_filter="does_not_exist_xyz")
+        assert configs == []
+
+    def test_no_dex_filter_returns_all(self):
+        from discovery.new_pool_listener import load_factory_config
+        all_cfgs = load_factory_config(chain_filter="base")
+        filtered = load_factory_config(chain_filter="base", dex_filter="uniswap_v3")
+        assert len(all_cfgs) > len(filtered)
+

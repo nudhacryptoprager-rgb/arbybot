@@ -126,6 +126,7 @@ def load_factory_config(
     path: Optional[Path] = None,
     *,
     chain_filter: Optional[str] = None,
+    dex_filter: Optional[str] = None,
 ) -> List[FactoryConfig]:
     """Load factory configs from YAML.  Returns list of ``FactoryConfig``.
 
@@ -135,6 +136,8 @@ def load_factory_config(
         Path to the YAML file.  Defaults to ``config/new_pool_factories.yaml``.
     chain_filter:
         If provided, only return factories for this chain.
+    dex_filter:
+        If provided, only return configs for this DEX name.
 
     Raises
     ------
@@ -172,6 +175,8 @@ def load_factory_config(
             continue
         entry_chain = entry.get("chain", chain)
         if chain_filter and entry_chain != chain_filter:
+            continue
+        if dex_filter and entry.get("dex", "") != dex_filter:
             continue
 
         layout = entry.get("log_layout", "")
