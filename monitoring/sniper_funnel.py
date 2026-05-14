@@ -216,6 +216,14 @@ class FunnelTracker:
         self._cycle_durations_ms: List[float] = []
         self._factory_latency_ms_last: Dict[str, float] = {}
         self._max_cycle_latency_samples: int = 256
+        # Listener mode and WS stats (Step 2/5: --prefer-ws integration)
+        self._listener_mode: str = "http_only"
+        self._ws_connected: bool = False
+        self._ws_subscriptions: int = 0
+        self._ws_events_seen: int = 0
+        self._ws_reconnects: int = 0
+        self._ws_last_event_seen_ts: Optional[float] = None
+        self._http_fallback_polls: int = 0
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -295,6 +303,33 @@ class FunnelTracker:
                 # Shallow copy (small dict).
                 self._factory_latency_ms_last = dict(per_factory_latency_ms)
 
+    def set_listener_mode(self, mode: str) -> None:
+        """Set listener mode: 'http_only' or 'ws+http_fallback'."""
+        with self._lock:
+            self._listener_mode = mode
+
+    def update_ws_stats(
+        self,
+        *,
+        connected: bool = False,
+        subscriptions: int = 0,
+        events_seen: int = 0,
+        reconnects: int = 0,
+        last_event_seen_ts: Optional[float] = None,
+    ) -> None:
+        """Sync WS listener stats into funnel for artifact export."""
+        with self._lock:
+            self._ws_connected = connected
+            self._ws_subscriptions = subscriptions
+            self._ws_events_seen = events_seen
+            self._ws_reconnects = reconnects
+            self._ws_last_event_seen_ts = last_event_seen_ts
+
+    def inc_http_fallback_poll(self) -> None:
+        """Increment HTTP fallback poll counter (used in --prefer-ws mode)."""
+        with self._lock:
+            self._http_fallback_polls += 1
+
     def record_trace(self, trace: EventTrace) -> None:
         """Append a per-event trace (ring-buffer, drops oldest if full)."""
         with self._lock:
@@ -345,6 +380,14 @@ class FunnelTracker:
                 # Latency (Step 8)
                 "cycle_latency_ms": _percentile_summary(self._cycle_durations_ms),
                 "factory_latency_ms_last": dict(self._factory_latency_ms_last),
+                # WS listener stats (Step 5: --prefer-ws metrics)
+                "listener_mode": self._listener_mode,
+                "ws_connected": self._ws_connected,
+                "ws_subscriptions": self._ws_subscriptions,
+                "ws_events_seen": self._ws_events_seen,
+                "ws_reconnects": self._ws_reconnects,
+                "ws_last_event_seen_ts": self._ws_last_event_seen_ts,
+                "http_fallback_polls": self._http_fallback_polls,
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

@@ -151,6 +151,15 @@ def make_sniper_artifact(
             "profit_usd": None,        # estimated net profit after fees
             "realizability_reason": "PHASE1_NO_SCORING",
         },
+        # Phase 2 execution decision stubs (all null in Phase 1).
+        # Phase 2 will populate these with real on-chain simulation + honeypot check results.
+        "phase2_decision": {
+            "honeypot_result": None,        # None | "SAFE" | "HONEYPOT" | "UNKNOWN"
+            "simulation_result": None,      # None | "PASS" | "FAIL" | "REVERT:<reason>"
+            "realisability_reason": None,   # None | "PROFITABLE" | "UNPROFITABLE" | "RISKY"
+            "dry_run_decision": None,       # None | "WOULD_EXECUTE" | "SKIP"
+            "reject_reason": None,          # None | "<reason_code>" if SKIP
+        },
     }
 
     # Optional: include recent events for dashboard (capped)

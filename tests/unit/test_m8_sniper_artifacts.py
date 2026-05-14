@@ -437,3 +437,36 @@ class TestScoringField:
         assert "scoring" in loaded, "Golden fixture must have 'scoring' field"
         assert loaded["scoring"].get("realizability_reason") == "PHASE1_NO_SCORING"
 
+
+class TestPhase2DecisionStubs:
+    """Phase 2 decision stubs are present and null in Phase 1 artifacts."""
+
+    _REQUIRED_KEYS = (
+        "honeypot_result",
+        "simulation_result",
+        "realisability_reason",
+        "dry_run_decision",
+        "reject_reason",
+    )
+
+    def test_artifact_has_phase2_decision_field(self):
+        art = make_sniper_artifact()
+        assert "phase2_decision" in art, "artifact must have top-level 'phase2_decision' field"
+
+    def test_phase2_decision_is_dict(self):
+        art = make_sniper_artifact()
+        assert isinstance(art["phase2_decision"], dict)
+
+    def test_phase2_decision_has_all_required_keys(self):
+        art = make_sniper_artifact()
+        for key in self._REQUIRED_KEYS:
+            assert key in art["phase2_decision"], f"Missing Phase 2 key: {key!r}"
+
+    def test_phase2_decision_all_null_in_phase1(self):
+        """Phase 1: all phase2_decision fields must be None (stubs only)."""
+        art = make_sniper_artifact()
+        for key in self._REQUIRED_KEYS:
+            assert art["phase2_decision"][key] is None, (
+                f"Phase 1: phase2_decision[{key!r}] should be None"
+            )
+

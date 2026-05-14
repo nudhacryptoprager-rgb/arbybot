@@ -7,6 +7,7 @@ is exercised only by mock-driven tests.
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Dict, List
 
 import pytest
@@ -191,3 +192,128 @@ class TestStats:
         assert s.last_event_seen_ts is None
         assert s.last_disconnect_ts is None
         assert s.sub_id_to_dex == {}
+
+
+# ---------------------------------------------------------------------------
+# Integration: WS callback feeds the full funnel pipeline
+# ---------------------------------------------------------------------------
+
+def _make_v3_raw_log(cfg: FactoryConfig, tx_hash_suffix: str = "ab") -> Dict[str, Any]:
+    """Minimal valid PoolCreated (v3) raw log dict for *cfg*."""
+    token0 = "0x" + "00" * 12 + "11" * 20
+    token1 = "0x" + "00" * 12 + "22" * 20
+    fee = "0x" + "00" * 29 + "01f4"        # 500
+    pool_word = "00" * 12 + "33" * 20       # pool address as 32-byte word
+    tick_word = "00" * 32                   # tickSpacing = 0
+    return {
+        "address": cfg.factory,
+        "topics": [cfg.topic0, token0, token1, fee],
+        "data": "0x" + tick_word + pool_word,
+        "blockNumber": "0x1",
+        "transactionHash": "0x" + tx_hash_suffix * 32,
+        "logIndex": "0x0",
+    }
+
+
+class TestWSFunnelIntegration:
+    """Integration tests for the WS on_event callback → funnel pipeline.
+
+    These tests call ``_make_ws_on_event_callback`` directly with a fake raw
+    log and assert the funnel counters are correct — without any real socket.
+    """
+
+    def setup_method(self):
+        from monitoring.sniper_funnel import FunnelTracker
+        self.funnel = FunnelTracker()
+        self.seen_ids: set = set()
+        self.recent_events: list = []
+        self.events_lock = threading.Lock()
+        self.cfg = _cfg()  # uniswap_v3
+
+    def _make_callback(self):
+        from m8.runtime.smoke_run import _make_ws_on_event_callback
+        return _make_ws_on_event_callback(
+            self.funnel, self.seen_ids, self.recent_events, self.events_lock,
+        )
+
+    def test_valid_log_increments_full_funnel(self):
+        """One valid WS log → raw_fetched=1, parse_ok=1, dedup_new=1, candidates_queued=1."""
+        cb = self._make_callback()
+        cb(self.cfg, _make_v3_raw_log(self.cfg))
+        snap = self.funnel.snapshot()
+        assert snap["raw_fetched"] == 1
+        assert snap["parse_ok"] == 1
+        assert snap["parse_failed"] == 0
+        assert snap["dedup_new"] == 1
+        assert snap["dedup_dropped"] == 0
+        assert snap["candidates_queued"] == 1
+        assert snap["snipe_candidates_total"] == 1
+
+    def test_duplicate_log_is_deduped(self):
+        """Sending the same log twice → second call increments dedup_dropped."""
+        cb = self._make_callback()
+        raw = _make_v3_raw_log(self.cfg)
+        cb(self.cfg, raw)
+        cb(self.cfg, raw)
+        snap = self.funnel.snapshot()
+        assert snap["raw_fetched"] == 2
+        assert snap["parse_ok"] == 2
+        assert snap["dedup_new"] == 1
+        assert snap["dedup_dropped"] == 1
+        assert snap["candidates_queued"] == 1
+
+    def test_valid_log_appears_in_recent_events(self):
+        """A passed event is appended to recent_events."""
+        cb = self._make_callback()
+        cb(self.cfg, _make_v3_raw_log(self.cfg))
+        assert len(self.recent_events) == 1
+        assert self.recent_events[0].dex == "uniswap_v3"
+
+    def test_unparseable_log_increments_parse_failed(self):
+        """A log with too few topics gives parse_failed=1, no candidate."""
+        cb = self._make_callback()
+        bad_log = {
+            "address": self.cfg.factory,
+            "topics": [self.cfg.topic0],   # only 1 topic, v3 needs 4
+            "data": "0x",
+            "blockNumber": "0x1",
+            "transactionHash": "0x" + "cc" * 32,
+            "logIndex": "0x0",
+        }
+        cb(self.cfg, bad_log)
+        snap = self.funnel.snapshot()
+        assert snap["raw_fetched"] == 1
+        assert snap["parse_failed"] == 1
+        assert snap["parse_ok"] == 0
+        assert snap["candidates_queued"] == 0
+
+    def test_funnel_listener_mode_set(self):
+        """After set_listener_mode, snapshot() reflects 'ws+http_fallback'."""
+        self.funnel.set_listener_mode("ws+http_fallback")
+        snap = self.funnel.snapshot()
+        assert snap["listener_mode"] == "ws+http_fallback"
+        assert snap["ws_connected"] is False   # not set yet
+        assert snap["ws_events_seen"] == 0
+
+    def test_update_ws_stats_reflected_in_snapshot(self):
+        """update_ws_stats() values appear in snapshot()."""
+        self.funnel.update_ws_stats(
+            connected=True,
+            subscriptions=4,
+            events_seen=7,
+            reconnects=1,
+            last_event_seen_ts=1234567890.0,
+        )
+        snap = self.funnel.snapshot()
+        assert snap["ws_connected"] is True
+        assert snap["ws_subscriptions"] == 4
+        assert snap["ws_events_seen"] == 7
+        assert snap["ws_reconnects"] == 1
+        assert snap["ws_last_event_seen_ts"] == 1234567890.0
+
+    def test_http_fallback_polls_counter(self):
+        """inc_http_fallback_poll() increments counter in snapshot."""
+        self.funnel.inc_http_fallback_poll()
+        self.funnel.inc_http_fallback_poll()
+        snap = self.funnel.snapshot()
+        assert snap["http_fallback_polls"] == 2

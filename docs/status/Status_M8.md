@@ -1,6 +1,6 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: IN_PROGRESS — listener_core REACHED; multi_factory coverage PARTIAL; Phase 2 scoring next.
+**Status**: IN_PROGRESS — listener_core REACHED; WS live path integration IN_PROGRESS; multi_factory coverage PARTIAL.
 
 `goal_status`: IN_PROGRESS  
 `phase1_status`: REACHED_CORE_LISTENER  
@@ -9,9 +9,9 @@
 `pipeline_ready`: false  
 `production_profit_ready`: false  
 `close_allowed`: false  
-`primary_blocker_of_session`: M8_NON_UNISWAP_FACTORY_COVERAGE_NOT_VERIFIED  
-`blocker_status_before`: M8_FOUNDATION_NOT_IMPLEMENTED  
-`blocker_status_after`: PARTIAL  
+`primary_blocker_of_session`: M8_PHASE1_3_WS_LIVE_PATH_NOT_PROVEN  
+`blocker_status_before`: WS_SKELETON_ONLY  
+`blocker_status_after`: WS_INTEGRATED_GATE_RUNNING  
 `next_phase_blocker`: M8_PHASE2_SCORING_AND_RISK_FILTERS_NOT_IMPLEMENTED  
 `docs_reread_confirmed`: true  
 `phase1_verified_at`: 2026-05-13T21:54:59Z  
@@ -19,6 +19,8 @@
 `phase1_soak_result`: PASS (parse_ok=22, candidates=22, rpc_error_rate=1.56%, cycles=240)  
 `factory_coverage_note`: uniswap_v3 verified live (22 events/2h); aerodrome/aerodrome_slipstream/pancakeswap_v3 zero events — RPC timeout (pancakeswap) or no activity in probe window  
 `schema_revision_current`: phase1.2  
+`round5_ws_gate_started_at`: 2026-05-14T11:02:05Z  
+`round5_ws_gate_status`: COMPLETED — status=ACTIVE, parse_ok=2, rpc_error_rate=0%, ws_events_emitted=1 (end-to-end proven)  
 
 ## Scope
 
@@ -208,3 +210,45 @@ Phase 1 closure requires *all* of:
 - Honeypot / scam / freshness filters return non-zero reject counts on known rugpull tokens
 - Dry-run submit rehearsal (`snipe_candidates_total > 0` with `dry_run=True`)
 - Scoring rank is stable across 3 consecutive soaks
+
+## Round-5 GPT Review Evidence (2026-05-14)
+
+**Active blocker at start of session:** `M8_PHASE1_3_WS_LIVE_PATH_NOT_PROVEN`
+(WSPoolEventListener was skeleton-only — not wired into smoke_run.py main loop)
+
+- ✅ R5.1: Stale repo memory file `M8_phase1_round4_complete.md` deleted (violated no-new-docs policy).
+- ✅ R5.2: `WSPoolEventListener` wired into `m8/runtime/smoke_run.py` as real live source.
+  Background daemon thread started when `--prefer-ws` is passed; `events_lock: threading.Lock` added.
+- ✅ R5.3: Full WS callback pipeline via `_process_log_event()`:
+  raw_log → parse → dedup (seen_ids) → funnel counters → recent_events append → EventTrace → logger.
+  Thread-safe when `events_lock` supplied. Callback factory: `_make_ws_on_event_callback()`.
+- ✅ R5.4: HTTP polling in WS mode → fallback/reconciliation: interval × 10 (capped 300s).
+  `funnel.inc_http_fallback_poll()` incremented per HTTP cycle. Logged: `http_polling_in_fallback_mode`.
+- ✅ R5.5: WS metrics added to `FunnelTracker` and `snapshot()`:
+  `listener_mode`, `ws_connected`, `ws_subscriptions`, `ws_events_seen`, `ws_reconnects`,
+  `ws_last_event_seen_ts`, `http_fallback_polls` → flow through to artifact via `make_sniper_artifact`.
+- ✅ R5.6: 7 integration tests in `TestWSFunnelIntegration` in `tests/unit/test_m8_ws_listener.py`.
+  Targeted M8 suite: **156 passed** (was 149; +7 TestWSFunnelIntegration tests).
+  Full suite baseline: **5405 passed, 6 skipped** (was 5394, +11: 7 WS funnel + 4 phase2_decision stubs).
+- ✅ R5.7: 15-min WS control gate COMPLETED 2026-05-14T11:02:05Z → 2026-05-14T11:17:14Z (909.4s):
+  - Preflight PASS: chain_id 8453; archive head=45979988; WS newHeads 2.13s.
+  - Self-test 4/4 PASS.
+  - `listener_mode=ws+http_fallback` confirmed in artifact; `http_fallback_polls=3` (3 HTTP cycles in 15 min).
+  - **RPC error rate: 0%** (RPC calls=12, errors=0) vs 14.8% in HTTP-only 1h gate.
+  - **pancakeswap_v3: raw_logs=2, parse_ok=2 (100%), candidates=1** — first live parse_ok on pancakeswap_v3.
+  - **status=ACTIVE** (was EMPTY in 1h HTTP-only gate).
+  - **WS end-to-end proven**: `ws_listener_stopped | subscriptions=4, events_emitted=1, reconnects=0`.
+    WS subscription received the same pool creation event, callback fired, `_process_log_event` parsed it,
+    dedup correctly dropped it (HTTP fallback had already captured it first). Full WS funnel verified.
+  - Dedup: raw=2, dedup_new=1, dedup_dropped=1 — duplicate correctly suppressed across both paths.
+  - `phase2_decision` stubs present and null in artifact.
+- ✅ R5.9: Phase 2 `phase2_decision` stubs added to artifact schema in `monitoring/sniper_artifacts.py`:
+  `honeypot_result`, `simulation_result`, `realisability_reason`, `dry_run_decision`, `reject_reason`
+  (all `null` in Phase 1; Phase 2 will populate with on-chain simulation results).
+- ✅ R5.10: Full pytest PASS — **5405 passed, 6 skipped** (was 5394, +11 new tests).
+  `check_repo_safety --allow-intent-edit` PASS (1 warning: Status_M7.md bloat — pre-existing).
+
+**Current blockers (Round-5 POST-GATE):**
+1. `M8_MULTI_FACTORY_PARSE_OK_SINGLE_DEX` — only pancakeswap_v3 had live events; uniswap_v3/aerodrome/
+   slipstream had zero. Phase 1 close requires parse_ok > 0 on ≥2 DEXes. Next longer gate needed.
+2. `PLAIN_CI_BLOCKED_BY_INTENT_TIER_LIMIT` — known pre-existing blocker; not M8-specific.

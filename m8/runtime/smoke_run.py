@@ -49,6 +49,7 @@ import argparse
 import functools
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -146,6 +147,101 @@ def _get_symbol(token_addr: str, w3: Any) -> Optional[str]:
     sym = _fetch_erc20_symbol(token_addr, w3)
     _symbol_cache[token_addr] = sym
     return sym
+
+
+# ---------------------------------------------------------------------------
+# Shared per-log pipeline: parse → dedup → funnel → recent_events
+# ---------------------------------------------------------------------------
+
+def _process_log_event(
+    raw_log: Any,
+    cfg: FactoryConfig,
+    funnel: "FunnelTracker",
+    seen_ids: Set[str],
+    recent_events: List[NewPoolEvent],
+    events_lock: Optional[threading.Lock] = None,
+) -> Optional[NewPoolEvent]:
+    """Parse one raw log through the full funnel pipeline.
+
+    Thread-safe when *events_lock* is provided. Used by both HTTP polling
+    and the WS ``on_event`` callback (``--prefer-ws`` mode).
+
+    Returns the event if it became a candidate, ``None`` otherwise.
+    """
+    event = parse_raw_log(raw_log, cfg)
+    if event is None:
+        funnel.inc("parse_failed")
+        return None
+    funnel.inc("parse_ok")
+    funnel.inc_dex(cfg.dex, "parse_ok")
+
+    if events_lock is not None:
+        events_lock.acquire()
+    try:
+        if event.event_id in seen_ids:
+            funnel.inc("dedup_dropped")
+            return None
+        seen_ids.add(event.event_id)
+        funnel.inc("dedup_new")
+        funnel.inc("filter_passed")
+        funnel.inc("candidates_queued")
+        funnel.inc_dex(cfg.dex, "candidate")
+        recent_events.append(event)
+        if len(recent_events) > _MAX_RECENT_EVENTS_IN_ARTIFACT * 5:
+            recent_events[:] = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT * 5:]
+    finally:
+        if events_lock is not None:
+            events_lock.release()
+
+    trace = EventTrace(
+        event_id=event.event_id,
+        chain=event.chain,
+        dex=event.dex,
+        factory=event.factory,
+        pool=event.pool,
+        token0=event.token0,
+        token1=event.token1,
+        block_number=event.block_number,
+        received_ts=time.time(),
+        filter_passed=True,
+        candidate=True,
+    )
+    funnel.record_trace(trace)
+    logger.info(
+        "new_pool_event",
+        extra={
+            "context": {
+                "event_id": event.event_id,
+                "chain": event.chain,
+                "dex": event.dex,
+                "pool": event.pool,
+                "token0": event.token0,
+                "token1": event.token1,
+                "block_number": event.block_number,
+                "tx_hash": event.tx_hash,
+            }
+        },
+    )
+    return event
+
+
+def _make_ws_on_event_callback(
+    funnel: "FunnelTracker",
+    seen_ids: Set[str],
+    recent_events: List[NewPoolEvent],
+    events_lock: threading.Lock,
+) -> Any:
+    """Return an ``on_event(cfg, raw_log)`` callback for WSPoolEventListener.
+
+    The callback is thread-safe: it acquires *events_lock* around dedup +
+    recent_events mutations.  It feeds each raw log through the full funnel
+    pipeline via :func:`_process_log_event`.
+    """
+    def on_event(cfg: FactoryConfig, raw_log: Any) -> None:
+        funnel.inc("raw_fetched")
+        funnel.inc_dex(cfg.dex, "raw_logs")
+        _process_log_event(raw_log, cfg, funnel, seen_ids, recent_events, events_lock)
+    return on_event
 
 
 # ---------------------------------------------------------------------------
@@ -547,8 +643,22 @@ def _run_online_loop(
     blocks_back: int,
     duration_s: float,
     source: str,
+    events_lock: Optional[threading.Lock] = None,
+    http_fallback_mode: bool = False,
 ) -> None:
-    """Main online HTTP polling loop."""
+    """Main online HTTP polling loop.
+
+    When ``http_fallback_mode=True`` (``--prefer-ws`` active): polling interval
+    is multiplied by 10 (capped at 300 s) to act as a reconciliation pass,
+    and ``funnel.inc_http_fallback_poll()`` is called each cycle.
+    """
+    if http_fallback_mode:
+        # Long interval: reconciliation/catch-up only
+        poll_interval_s = min(poll_interval_s * 10, 300.0)
+        logger.info(
+            "http_polling_in_fallback_mode",
+            extra={"context": {"reconciliation_interval_s": poll_interval_s}},
+        )
     deadline = time.monotonic() + duration_s
     last_artifact_ts = time.monotonic()
     cycle_n = 0
@@ -614,65 +724,18 @@ def _run_online_loop(
                 cycle_raw += len(logs)
 
                 for raw_log in logs:
-                    event = parse_raw_log(raw_log, cfg)
-                    if event is None:
-                        funnel.inc("parse_failed")
-                        continue
-                    funnel.inc("parse_ok")
-                    funnel.inc_dex(cfg.dex, "parse_ok")
-
-                    if event.event_id in seen_ids:
-                        funnel.inc("dedup_dropped")
-                        continue
-
-                    funnel.inc("dedup_new")
-                    seen_ids.add(event.event_id)
-
-                    # Phase 1: all dedup_new pass (honeypot filter in Phase 2)
-                    funnel.inc("filter_passed")
-                    funnel.inc("candidates_queued")
-                    funnel.inc_dex(cfg.dex, "candidate")
-                    cycle_new += 1
-
-                    recent_events.append(event)
-                    if len(recent_events) > _MAX_RECENT_EVENTS_IN_ARTIFACT * 5:
-                        recent_events[:] = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT * 5:]
-
-                    trace = EventTrace(
-                        event_id=event.event_id,
-                        chain=event.chain,
-                        dex=event.dex,
-                        factory=event.factory,
-                        pool=event.pool,
-                        token0=event.token0,
-                        token1=event.token1,
-                        block_number=event.block_number,
-                        received_ts=time.time(),
-                        filter_passed=True,
-                        candidate=True,
+                    candidate = _process_log_event(
+                        raw_log, cfg, funnel, seen_ids, recent_events, events_lock,
                     )
-                    funnel.record_trace(trace)
-
-                    logger.info(
-                        "new_pool_event",
-                        extra={
-                            "context": {
-                                "event_id": event.event_id,
-                                "chain": event.chain,
-                                "dex": event.dex,
-                                "pool": event.pool,
-                                "token0": event.token0,
-                                "token1": event.token1,
-                                "block_number": event.block_number,
-                                "tx_hash": event.tx_hash,
-                            }
-                        },
-                    )
+                    if candidate is not None:
+                        cycle_new += 1
 
         cycle_duration_ms = (time.monotonic() - cycle_start) * 1000.0
         last_processed_block = to_block
         funnel.complete_cycle()
         funnel.record_cycle_latency(cycle_duration_ms, per_factory_latency_ms)
+        if http_fallback_mode:
+            funnel.inc_http_fallback_poll()
 
         elapsed_since_artifact = time.monotonic() - last_artifact_ts
         if elapsed_since_artifact >= _ARTIFACT_WRITE_INTERVAL_S:
@@ -950,6 +1013,57 @@ def main(argv: Optional[List[str]] = None) -> int:
     if duration_s <= 0:
         duration_s = 0.001
 
+    # ------------------------------------------------------------------
+    # --prefer-ws: start WSPoolEventListener on a background thread.
+    # HTTP polling runs as a slower reconciliation fallback.
+    # ------------------------------------------------------------------
+    events_lock = threading.Lock()
+    ws_listener = None
+    ws_thread = None
+    http_fallback_mode = False
+
+    if args.prefer_ws and not offline:
+        ws_url = _resolve_ws_url(args.chain, None)
+        if ws_url:
+            try:
+                from m8.runtime.ws_listener import WSPoolEventListener
+                ws_on_event = _make_ws_on_event_callback(
+                    funnel, seen_ids, recent_events, events_lock,
+                )
+                ws_listener = WSPoolEventListener(
+                    ws_url=ws_url,
+                    configs=configs,
+                    on_event=ws_on_event,
+                )
+                funnel.set_listener_mode("ws+http_fallback")
+                ws_thread = threading.Thread(
+                    target=ws_listener.run,
+                    daemon=True,
+                    name="ws-listener",
+                )
+                ws_thread.start()
+                http_fallback_mode = True
+                logger.info(
+                    "ws_listener_started",
+                    extra={"context": {
+                        "ws_url": ws_url[:60],
+                        "factories": len(configs),
+                        "http_fallback_interval_s": min(args.poll_interval_s * 10, 300.0),
+                    }},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ws_listener_start_failed -- HTTP polling continues as primary",
+                    extra={"context": {"error": str(exc)[:120]}},
+                )
+                ws_listener = None
+                ws_thread = None
+        else:
+            logger.warning(
+                "prefer_ws_set_but_no_ws_url -- HTTP polling continues as primary",
+                extra={"context": {"chain": args.chain}},
+            )
+
     try:
         if offline:
             # Single offline cycle (enough for smoke / CI)
@@ -970,9 +1084,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                 blocks_back=args.blocks_back,
                 duration_s=duration_s,
                 source=source,
+                events_lock=events_lock,
+                http_fallback_mode=http_fallback_mode,
             )
     except KeyboardInterrupt:
         logger.info("sniper interrupted by user (KeyboardInterrupt)")
+
+    # ------------------------------------------------------------------
+    # Stop WS listener thread (if running) and sync stats into funnel.
+    # ------------------------------------------------------------------
+    if ws_listener is not None:
+        ws_listener.stop()
+        if ws_thread is not None:
+            ws_thread.join(timeout=3.0)
+        stats = ws_listener.stats
+        funnel.update_ws_stats(
+            connected=(stats.subscriptions_succeeded > 0),
+            subscriptions=stats.subscriptions_succeeded,
+            events_seen=stats.log_events_emitted,
+            reconnects=stats.reconnect_attempts,
+            last_event_seen_ts=stats.last_event_seen_ts,
+        )
+        logger.info(
+            "ws_listener_stopped",
+            extra={"context": {
+                "subscriptions": stats.subscriptions_succeeded,
+                "events_emitted": stats.log_events_emitted,
+                "reconnects": stats.reconnect_attempts,
+                "disconnects": stats.disconnects,
+            }},
+        )
 
     # ------------------------------------------------------------------
     # Final artifact write
