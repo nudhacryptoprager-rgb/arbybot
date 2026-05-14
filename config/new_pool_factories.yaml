@@ -39,9 +39,9 @@ factories:
     # Log layout: topics[1]=token0, topics[2]=token1, topics[3]=fee
     #             data = abi.encode(int24 tickSpacing, address pool)
     log_layout: v3_pool_created
-    # Verified 2025-07-15 via drpc (8 events in this range).
-    verification_from_block: 45946914
-    verification_to_block: 45947413
+    # Verified 2026-05-14 via drpc (2 events in this range; head=45992560).
+    verification_from_block: 45992100
+    verification_to_block: 45992560
 
   # -------------------------------------------------------------------------
   # Aerodrome Slipstream CL (Base) — concentrated liquidity, tick-spacing.
@@ -109,3 +109,55 @@ factories:
     # Verified 2026-05-13 via drpc (2 events at block 45926270 found in this range).
     verification_from_block: 45926100
     verification_to_block: 45926500
+
+  # -------------------------------------------------------------------------
+  # Uniswap V4 (Base) — PoolManager singleton, Initialize event.
+  # Address: official Uniswap V4 PoolManager on Base
+  # Source: https://developers.uniswap.org/docs/protocols/v4/deployments
+  # Event: Initialize(PoolId indexed id, address indexed currency0,
+  #                   address indexed currency1, uint24 fee, int24 tickSpacing,
+  #                   IHooks hooks, uint160 sqrtPriceX96, int24 tick)
+  # Note: In V4 there is no per-pool contract; ``pool`` field stores the
+  #       PoolId (bytes32) as a unique identifier instead of an address.
+  # topic0: keccak256("Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)")
+  #         = 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438
+  # Verified 2026-05-14 via drpc (575 events per hour on Base live chain).
+  # -------------------------------------------------------------------------
+  - dex: uniswap_v4
+    adapter_type: uniswap_v4
+    factory: "0x498581fF718922c3f8e6a244956af099b2652b2b"
+    event_name: Initialize
+    event_signature: "Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)"
+    topic0: "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
+    topic0_verified: true
+    log_layout: v4_initialize
+    discovery_only: true  # PoolManager is a listener-only source; V4 execution path not yet approved
+    # Verified 2026-05-14 via drpc (49 events in blocks 45990736-45990836).
+    verification_from_block: 45990736
+    verification_to_block: 45990836
+
+  # -------------------------------------------------------------------------
+  # Uniswap V2 (Base) — experimental discovery lane.
+  # High frequency of new low-cap pool launches; requires downstream
+  # liquidity/age/honeypot filters before use in execution.
+  # Address: Uniswap V2 Factory on Base
+  # Source: https://docs.uniswap.org/contracts/v2/reference/smart-contracts/factory
+  # Event: PairCreated(address indexed token0, address indexed token1,
+  #                    address pair, uint256)
+  # topic0: keccak256("PairCreated(address,address,address,uint256)")
+  #         = 0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9
+  # Verified 2026-05-14 via drpc (22 events per hour on Base live chain).
+  # -------------------------------------------------------------------------
+  - dex: uniswap_v2
+    adapter_type: uniswap_v2
+    factory: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6"
+    event_name: PairCreated
+    event_signature: "PairCreated(address,address,address,uint256)"
+    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    topic0_verified: true
+    log_layout: v2_pair_created
+    experimental: true
+    discovery_only: true  # experimental lane; requires downstream filters before execution
+    # Verified 2026-05-14 via drpc (3 events in blocks 45990779-45990879).
+    verification_from_block: 45990779
+    verification_to_block: 45990879

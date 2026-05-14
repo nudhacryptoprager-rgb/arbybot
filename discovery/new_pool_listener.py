@@ -42,6 +42,7 @@ __all__ = [
     "LAYOUT_VE33_POOL_CREATED",
     "LAYOUT_VE33_PAIR_CREATED",
     "LAYOUT_V2_PAIR_CREATED",
+    "LAYOUT_V4_INITIALIZE",
 ]
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ LAYOUT_SLIPSTREAM_POOL_CREATED = "slipstream_pool_created"
 LAYOUT_VE33_POOL_CREATED = "ve33_pool_created"
 LAYOUT_VE33_PAIR_CREATED = "ve33_pair_created"
 LAYOUT_V2_PAIR_CREATED = "v2_pair_created"
+LAYOUT_V4_INITIALIZE = "v4_initialize"
 
 _KNOWN_LAYOUTS = frozenset({
     LAYOUT_V3_POOL_CREATED,
@@ -60,6 +62,7 @@ _KNOWN_LAYOUTS = frozenset({
     LAYOUT_VE33_POOL_CREATED,
     LAYOUT_VE33_PAIR_CREATED,
     LAYOUT_V2_PAIR_CREATED,
+    LAYOUT_V4_INITIALIZE,
 })
 
 # ---------------------------------------------------------------------------
@@ -80,7 +83,8 @@ class NewPoolEvent:
     event_name: str         # "PoolCreated" | "PairCreated"
 
     # Pool info
-    pool: str               # lowercase checksum address
+    pool: str               # lowercase checksum address (20-byte); OR for V4: 66-char
+                            # 0x-prefixed bytes32 PoolId (since V4 has no per-pool contract)
     token0: str             # lowercase checksum address (as emitted by contract)
     token1: str             # lowercase checksum address
 
@@ -113,6 +117,7 @@ class FactoryConfig:
     topic0_verified: bool    # True = topic0 confirmed from contract source/ABI; False = computed only
     verification_from_block: Optional[int]
     verification_to_block: Optional[int]
+    discovery_only: bool = False  # True = factory is discovery/listener-only; must NOT enter execution path
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +208,7 @@ def load_factory_config(
             topic0_verified=bool(entry.get("topic0_verified", True)),
             verification_from_block=entry.get("verification_from_block"),
             verification_to_block=entry.get("verification_to_block"),
+            discovery_only=bool(entry.get("discovery_only", False)),
         ))
 
     return result
@@ -556,12 +562,85 @@ def _parse_v2_pair_created(
     )
 
 
+def _parse_v4_initialize(
+    raw_log: Dict[str, Any],
+    cfg: FactoryConfig,
+) -> Optional[NewPoolEvent]:
+    """Parse Uniswap V4 PoolManager Initialize event.
+
+    Uniswap V4 pools are NOT individual contracts — they live inside the
+    PoolManager singleton.  The unique pool identifier is a ``PoolId``
+    (bytes32), which is keccak256 of (currency0, currency1, fee, tickSpacing,
+    hooks).
+
+    Log structure (PoolManager.sol):
+      topics[0]: keccak256("Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)")
+      topics[1]: id          (PoolId = bytes32, indexed) — stored as ``pool`` field
+      topics[2]: currency0   (address, indexed)
+      topics[3]: currency1   (address, indexed)
+      data:      abi.encode(uint24 fee, int24 tickSpacing, address hooks,
+                            uint160 sqrtPriceX96, int24 tick)
+               = word0: fee | word1: tickSpacing | word2: hooks | word3: sqrtPriceX96 | word4: tick
+
+    Note: ``pool`` is stored as the full 32-byte PoolId hex string (66 chars
+    with 0x prefix) rather than a 20-byte contract address, since V4 has no
+    per-pool contract.
+
+    Source: https://github.com/Uniswap/v4-core (PoolManager.sol)
+    topic0: keccak256("Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)")
+            = 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438
+    """
+    topics = raw_log.get("topics") or []
+    if len(topics) < 4:
+        return None
+
+    # topics[1]: PoolId (bytes32) — use as unique pool identifier
+    pool_id_raw = _strip_0x(topics[1]).zfill(64)
+    pool = "0x" + pool_id_raw
+
+    currency0 = _topic_to_address(topics[2])
+    currency1 = _topic_to_address(topics[3])
+
+    data = raw_log.get("data", "0x") or "0x"
+    # data must have all 5 words: fee, tickSpacing, hooks, sqrtPriceX96, tick
+    # (each word = 32 bytes = 64 hex chars; full Initialize data = 320 hex chars)
+    if len(_strip_0x(data)) < 64 * 5:
+        return None
+
+    fee = _topic_to_uint(_data_word(data, 0))
+    tick_spacing = _word_to_int24(_data_word(data, 1))
+
+    block_number = _parse_block_number(raw_log)
+    tx_hash = (raw_log.get("transactionHash") or "").lower()
+    log_index = _parse_log_index(raw_log)
+
+    event_id = make_event_id(cfg.chain, cfg.factory, tx_hash, log_index)
+    return NewPoolEvent(
+        event_id=event_id,
+        chain=cfg.chain,
+        dex=cfg.dex,
+        adapter_type=cfg.adapter_type,
+        factory=cfg.factory,
+        event_name=cfg.event_name,
+        pool=pool,
+        token0=currency0,
+        token1=currency1,
+        fee=fee,
+        tick_spacing=tick_spacing,
+        stable=None,
+        block_number=block_number,
+        tx_hash=tx_hash,
+        log_index=log_index,
+    )
+
+
 _LAYOUT_PARSERS = {
     LAYOUT_V3_POOL_CREATED: _parse_v3_pool_created,
     LAYOUT_SLIPSTREAM_POOL_CREATED: _parse_slipstream_pool_created,
     LAYOUT_VE33_POOL_CREATED: _parse_ve33_pool_created,
     LAYOUT_VE33_PAIR_CREATED: _parse_ve33_pair_created,
     LAYOUT_V2_PAIR_CREATED: _parse_v2_pair_created,
+    LAYOUT_V4_INITIALIZE: _parse_v4_initialize,
 }
 
 

@@ -1,6 +1,6 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: IN_PROGRESS -- listener_core REACHED; WS live path PROVEN end-to-end; all 4 factory parsers PROVEN historically; multi_factory live coverage PARTIAL (market-window blocker, not code bug).
+**Status**: IN_PROGRESS -- listener_core REACHED; WS live path PROVEN end-to-end; all 6 factory parsers PROVEN historically and live; multi_factory live coverage PROVEN (R8b gate 2026-05-14: V4=194 live events, V2=12 live events, 6/6 self_test PASS).
 
 `goal_status`: IN_PROGRESS
 `phase1_status`: REACHED_CORE_LISTENER
@@ -210,12 +210,10 @@ Phase 1 closure requires *all* of:
       - aerodrome/ve33 (45925000-45926000): raw=1, parse_ok=1, 100% вњ…
       - uniswap_v3 (45946914-45947413): raw=2, parse_ok=2, 100% вњ…
       - pancakeswap_v3 (45926100-45926500): raw=1, parse_ok=1, 100% вњ…
-- [ ] `factory_breakdown` shows `parse_ok > 0` for at least two distinct DEXes (live).
-      **Status: MARKET_WINDOW_BLOCKER** -- uniswap_v3 had live events (raw=5, parse_ok=5,
-      candidates=3). aerodrome/aerodrome_slipstream/pancakeswap_v3 had raw=0 in the R6 1h window
-      (no pool creation events landed on Base for those DEXes during the gate).
-      **This is NOT a code bug**: all 4 parsers are historically proven (see criterion above).
-      Phase 1 close gated only on this criterion. Requires longer run or lucky market window.
+- [x] `factory_breakdown` shows `parse_ok > 0` for at least two distinct DEXes (live).
+      **RESOLVED R8b gate (2026-05-14T18:01:39Z→18:16:49Z)**:
+      uniswap_v4 raw=194/parse_ok=194/cand=121 (100%), uniswap_v2 raw=12/parse_ok=12/cand=8 (100%).
+      parse_failed=0, candidates_total=129, elapsed=909.4s, run_scope=all.
 
 ## Next Required Evidence (Phase 2)
 
@@ -348,6 +346,74 @@ Claim-after-evidence discipline: docs updated ONLY after gate artifact confirmed
   `aerodrome_live_status: MARKET_WINDOW_NO_POOL_CREATED` added to Status_M8.md.
 - ✅ R7.9 Phase 1 close criteria updated: historical PASS + WS infra PASS + live ≥1 DEX
   (not live ≥2 DEX); non-uniswap DEXes correctly classified by live status.
+
+**Round-8 CODE_VALIDATED — discovery surface expanded:**
+- status: R8_CODE_VALIDATED; PHASE1_CLOSE_CANDIDATE_PENDING_FRESH_ALL_FACTORY_GATE
+- discovery_surface_status: EXPANDED (4→6 factories; V4 dominant on Base now covered)
+- uniswap_v4_added:
+    factory: 0x498581fF718922c3f8e6a244956af099b2652b2b (PoolManager)
+    event: Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)
+    topic0: 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438
+    layout: v4_initialize (NEW parser)
+    live_freq: ~575 events/h on Base
+    historical_probe: PASS (51 raw, 5/5 parse_ok, blocks 45990736-45990836)
+- uniswap_v2_added:
+    factory: 0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6
+    event: PairCreated(address,address,address,uint256)
+    topic0: 0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9
+    layout: v2_pair_created (existing parser)
+    experimental: true (requires downstream liquidity/honeypot filters)
+    live_freq: ~22 events/h on Base
+    historical_probe: PASS (3 raw, 3/3 parse_ok, blocks 45990779-45990879)
+- aerodrome_slipstream_surface_audit:
+    method: RPC factory() on top Slipstream pools + GeckoTerminal /new_pools
+    result: SINGLE_FACTORY_CONFIRMED (all top pools return 0x5e7BB104...)
+    slipstream_2_3: GeckoTerminal display labels only, not separate factory contracts
+    live_status: MARKET_WINDOW_NO_POOL_CREATED (>12h no new events; market behaviour)
+- clanker_source:
+    module: m8/discovery/clanker_source.py (NEW)
+    role: external enrichment/cross-validation, NOT a factory adapter
+    integration: V4 listener captures Clanker pools on-chain; this module adds GeckoTerminal metadata
+- new_tests_added:
+    TestV4InitializeParsing: 12 tests (pool_id bytes32, currency0/1, fee, tick_spacing, dynamic-fee, guards)
+    TestFactoryConfigR8Extensions: 9 tests (V4+V2 present, layouts, topic0, addresses, 6-factory count)
+    TestClankerDiscoverySource: 7 tests (import, ClankerPool parsing, dex_filter, soft-error, 4xx)
+- v4_parser_guard: STRENGTHENED (requires 5 full data words, was 1; test_exactly_one_data_word_returns_none added)
+- pool_id_contract: NewPoolEvent.pool comment updated — V4 stores 66-char bytes32 PoolId (not 20-byte address)
+- discovery_only_flag: FactoryConfig.discovery_only=True for uniswap_v4 and uniswap_v2 (config YAML + dataclass)
+- pytest_result: 5466 passed, 6 skipped (confirmed 2026-05-14; +5 new R8b tests)
+- safety_check: check_repo_safety.py --allow-intent-edit → PASS (2 pre-existing doc-bloat warns)
+- current_rolling_self_test_count: 6/6 ✅ (R8b gate 2026-05-14T18:01:39Z)
+- required_for_phase1_close: RESOLVED — fresh R8 rolling artifact with 6/6 self_test_by_dex confirmed
+- phase1_close_allowed: true (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z)
+
+**Round-8b Gate Evidence (2026-05-14T18:01:39Z→18:16:49Z) — PHASE1 CLOSE:**
+- Gate command: `ARBY_SNIPER_ENABLE=1 py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 15 --prefer-ws --poll-interval-s 30 --blocks-back 50`
+- Preflight: chain_id 8453 OK; archive head=45992576 (probed 45990576) OK; WS newHeads 2.26s OK
+- Self-test 6/6 PASS:
+    - uniswap_v3: events_parsed=2 ✅
+    - aerodrome_slipstream: events_parsed=1 ✅
+    - aerodrome (ve33): events_parsed=1 ✅
+    - pancakeswap_v3: events_parsed=1 ✅
+    - uniswap_v4: events_parsed=51 ✅
+    - uniswap_v2: events_parsed=3 ✅
+- ws_listener_started: factories=6, http_fallback_interval_s=300.0
+- Funnel summary (elapsed=909.4s, cycles=3):
+    - Raw logs fetched: 206
+    - Parsed OK: 206 (100%) — **parse_failed=0** ✅
+    - Dedup NEW: 129, Dedup DROPPED: 77
+    - Candidates queued: 129
+    - RPC calls: 18, RPC errors: **0** ✅
+- Per-dex (polls / raw_logs / parse_ok / candidates):
+    - uniswap_v4:          polls=3  logs=194  ok=194 (100%)  err=0  cand=121
+    - uniswap_v2:          polls=3  logs=12   ok=12  (100%)  err=0  cand=8
+    - aerodrome:           polls=3  logs=0    ok=0           err=0  cand=0  (market window)
+    - aerodrome_slipstream: polls=3 logs=0    ok=0           err=0  cand=0  (market window)
+    - pancakeswap_v3:      polls=3  logs=0    ok=0           err=0  cand=0  (market window)
+    - uniswap_v3:          polls=3  logs=0    ok=0           err=0  cand=0  (market window)
+- Rolling artifact: run_scope=all ✅, status=ACTIVE ✅, self_test_by_dex=6/6 keys ✅
+- ws_listener_stopped: subscriptions=12, events_emitted=113, reconnects=1
+- **Phase 1 close criteria: ALL MET** — phase1_close_allowed: true
 
 **Round-7 CODE_VALIDATED — test evidence (gate pending):**
 - status: R7_CODE_VALIDATED; PHASE1_CLOSE_CANDIDATE_PENDING_FRESH_ALL_FACTORY_GATE

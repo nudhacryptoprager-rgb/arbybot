@@ -25,6 +25,7 @@ from discovery.new_pool_listener import (
     LAYOUT_V2_PAIR_CREATED,
     LAYOUT_V3_POOL_CREATED,
     LAYOUT_VE33_PAIR_CREATED,
+    LAYOUT_V4_INITIALIZE,
     FactoryConfig,
     NewPoolEvent,
     dedup_events,
@@ -660,6 +661,7 @@ class TestLoadFactoryConfig:
                 LAYOUT_VE33_POOL_CREATED,
                 LAYOUT_VE33_PAIR_CREATED,
                 LAYOUT_V2_PAIR_CREATED,
+                LAYOUT_V4_INITIALIZE,
             ), f"Unknown layout: {cfg.log_layout}"
 
     def test_aerodrome_uses_pool_created_topic(self):
@@ -848,3 +850,324 @@ class TestParseRawLogHexBytesCompat:
         assert "factory" in flds
         assert "log_layout" in flds
         assert "topic0" in flds
+
+
+# ---------------------------------------------------------------------------
+# Uniswap V4 Initialize parser tests (R8 new)
+# ---------------------------------------------------------------------------
+
+V4_POOL_MANAGER = "0x498581ff718922c3f8e6a244956af099b2652b2b"
+V4_TOPIC0 = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
+POOL_ID = "0xff0a2c69f2f8ba342e49ce3edf818b6bc53cf5db0af7629f8df2ce7abb3a541f"
+
+
+def _make_v4_init_log(
+    pool_id: str = POOL_ID,
+    currency0: str = TOKEN0,
+    currency1: str = TOKEN1,
+    fee: int = 0x800000,      # dynamic fee flag
+    tick_spacing: int = 200,
+    hooks: str = "0xd60d6b218116cfd801e28f78d011a203d2b068cc",
+    tx_hash: str = TX_HASH,
+    log_index: int = LOG_INDEX,
+    block_number: str = BLOCK_HEX,
+    factory: str = V4_POOL_MANAGER,
+) -> Dict[str, Any]:
+    """Build a synthetic Uniswap V4 Initialize log."""
+    fee_word = _to_data_word(fee)
+    ts_encoded = tick_spacing & 0xFFFFFF
+    tick_word = _to_data_word(ts_encoded)
+    hooks_word = _to_data_word(hooks)
+    # sqrtPriceX96 and tick (words 3 and 4) can be anything
+    sqrt_word = _to_data_word(0x1eb4151a40562b0e7)
+    init_tick_word = _to_data_word(0)
+    data = "0x" + fee_word + tick_word + hooks_word + sqrt_word + init_tick_word
+    return {
+        "address": factory,
+        "topics": [
+            V4_TOPIC0,
+            pool_id,
+            _to_topic_address(currency0),
+            _to_topic_address(currency1),
+        ],
+        "data": data,
+        "blockNumber": block_number,
+        "transactionHash": tx_hash,
+        "logIndex": hex(log_index),
+    }
+
+
+def _v4_cfg(
+    dex: str = "uniswap_v4",
+    factory: str = V4_POOL_MANAGER,
+) -> FactoryConfig:
+    return FactoryConfig(
+        chain=CHAIN,
+        dex=dex,
+        adapter_type="uniswap_v4",
+        factory=factory.lower(),
+        event_name="Initialize",
+        event_signature="Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)",
+        log_layout=LAYOUT_V4_INITIALIZE,
+        topic0=V4_TOPIC0,
+        topic0_verified=True,
+        verification_from_block=None,
+        verification_to_block=None,
+    )
+
+
+class TestV4InitializeParsing:
+    """parse_raw_log with v4_initialize layout."""
+
+    def test_basic_parse_returns_event(self):
+        log = _make_v4_init_log()
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert isinstance(event, NewPoolEvent)
+
+    def test_pool_is_pool_id_bytes32(self):
+        log = _make_v4_init_log(pool_id=POOL_ID)
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        # pool field must be the full 32-byte PoolId (0x + 64 hex chars)
+        assert event.pool.startswith("0x")
+        assert len(event.pool) == 66  # 0x + 64 hex
+
+    def test_token0_token1_extracted_correctly(self):
+        log = _make_v4_init_log(currency0=TOKEN0, currency1=TOKEN1)
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert event.token0 == TOKEN0
+        assert event.token1 == TOKEN1
+
+    def test_fee_extracted(self):
+        log = _make_v4_init_log(fee=3000)
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert event.fee == 3000
+
+    def test_tick_spacing_extracted(self):
+        log = _make_v4_init_log(tick_spacing=60)
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert event.tick_spacing == 60
+
+    def test_dynamic_fee_flag_parsed(self):
+        """0x800000 is the Uniswap V4 DYNAMIC_FEE_FLAG (Clanker pools)."""
+        log = _make_v4_init_log(fee=0x800000)
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert event.fee == 0x800000
+
+    def test_stable_is_none(self):
+        log = _make_v4_init_log()
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert event.stable is None
+
+    def test_dex_name_preserved(self):
+        log = _make_v4_init_log()
+        event = parse_raw_log(log, _v4_cfg(dex="uniswap_v4"))
+        assert event is not None
+        assert event.dex == "uniswap_v4"
+
+    def test_too_few_topics_returns_none(self):
+        log = _make_v4_init_log()
+        log["topics"] = log["topics"][:2]  # only 2 topics
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is None
+
+    def test_short_data_returns_none(self):
+        log = _make_v4_init_log()
+        log["data"] = "0x00112233"  # only 4 bytes, needs >=32
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is None
+
+    def test_event_id_deterministic(self):
+        log = _make_v4_init_log()
+        cfg = _v4_cfg()
+        event1 = parse_raw_log(log, cfg)
+        event2 = parse_raw_log(log, cfg)
+        assert event1 is not None and event2 is not None
+        assert event1.event_id == event2.event_id
+
+    def test_block_number_parsed(self):
+        log = _make_v4_init_log(block_number="0x127a3c0")
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert event.block_number == 0x127a3c0  # 19375040
+
+    def test_pool_id_length_is_66_chars(self):
+        """V4 pool field is a 32-byte PoolId (0x + 64 hex chars = 66 chars total)."""
+        log = _make_v4_init_log(pool_id=POOL_ID)
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is not None
+        assert len(event.pool) == 66
+        assert event.pool.startswith("0x")
+
+    def test_exactly_one_data_word_returns_none(self):
+        """data with only 1 word (64 hex chars) must return None — full Initialize needs 5 words."""
+        log = _make_v4_init_log()
+        # Replace data with exactly 1 word (32 bytes = 64 hex chars, no 0x)
+        log["data"] = "0x" + "ab" * 32  # 64 hex chars = 1 word
+        event = parse_raw_log(log, _v4_cfg())
+        assert event is None
+
+
+# ---------------------------------------------------------------------------
+# Config loading: verify V4 and V2 entries present in YAML (R8 new)
+# ---------------------------------------------------------------------------
+
+
+class TestFactoryConfigR8Extensions:
+    """load_factory_config includes the new V4 and V2 entries."""
+
+    def test_uniswap_v4_present(self):
+        configs = load_factory_config()
+        dex_names = [c.dex for c in configs]
+        assert "uniswap_v4" in dex_names
+
+    def test_uniswap_v2_present(self):
+        configs = load_factory_config()
+        dex_names = [c.dex for c in configs]
+        assert "uniswap_v2" in dex_names
+
+    def test_uniswap_v4_layout_is_v4_initialize(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        assert configs["uniswap_v4"].log_layout == LAYOUT_V4_INITIALIZE
+
+    def test_uniswap_v2_layout_is_v2_pair_created(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        assert configs["uniswap_v2"].log_layout == LAYOUT_V2_PAIR_CREATED
+
+    def test_uniswap_v4_topic0_verified(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        v4 = configs["uniswap_v4"]
+        assert v4.topic0 is not None
+        assert v4.topic0_verified is True
+        assert v4.topic0 == "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
+
+    def test_uniswap_v4_factory_address(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        # Factory is PoolManager — must match official Base deployment
+        assert configs["uniswap_v4"].factory.lower() == "0x498581ff718922c3f8e6a244956af099b2652b2b"
+
+    def test_uniswap_v2_factory_address(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        assert configs["uniswap_v2"].factory.lower() == "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"
+
+    def test_total_factory_count_is_six(self):
+        """Regression: exactly 6 factories after R8 additions."""
+        configs = load_factory_config()
+        assert len(configs) == 6
+
+    def test_all_new_configs_have_verification_blocks(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        for dex in ("uniswap_v4", "uniswap_v2"):
+            cfg = configs[dex]
+            assert cfg.verification_from_block is not None, f"{dex} missing from_block"
+            assert cfg.verification_to_block is not None, f"{dex} missing to_block"
+
+    def test_uniswap_v4_is_discovery_only(self):
+        """V4 PoolManager must be flagged discovery_only — execution path not yet approved."""
+        configs = {c.dex: c for c in load_factory_config()}
+        assert configs["uniswap_v4"].discovery_only is True
+
+    def test_uniswap_v2_is_discovery_only(self):
+        """V2 experimental lane must be flagged discovery_only — requires downstream filters."""
+        configs = {c.dex: c for c in load_factory_config()}
+        assert configs["uniswap_v2"].discovery_only is True
+
+    def test_legacy_factories_not_discovery_only(self):
+        """Pre-R8 factories (V3, Slipstream, ve33, Pancake) must have discovery_only=False (default)."""
+        configs = {c.dex: c for c in load_factory_config()}
+        for dex in ("uniswap_v3", "aerodrome_slipstream", "aerodrome", "pancakeswap_v3"):
+            if dex in configs:
+                assert configs[dex].discovery_only is False, f"{dex} should not be discovery_only"
+
+
+
+
+class TestClankerDiscoverySource:
+    """Unit tests for m8.discovery.clanker_source (pure / offline)."""
+
+    def test_import(self):
+        from m8.discovery.clanker_source import (
+            ClankerDiscoverySource,
+            ClankerPool,
+            ClankerSourceError,
+            CLANKER_DEX_ID,
+        )
+        assert ClankerDiscoverySource is not None
+
+    def test_clanker_pool_from_gecko_data(self):
+        from m8.discovery.clanker_source import ClankerPool
+        item = {
+            "attributes": {
+                "address": "0xABCDEF1234",
+                "name": "PEPE / USDC",
+                "pool_created_at": "2026-05-14T12:00:00Z",
+                "fdv_usd": "1234.56",
+                "volume_usd": {"h24": "5678.9"},
+            },
+            "relationships": {
+                "dex": {"data": {"id": "uniswap-v4-base"}},
+                "base_token": {"data": {"id": "base_0xtoken0address"}},
+                "quote_token": {"data": {"id": "base_0xtoken1address"}},
+            },
+        }
+        pool = ClankerPool.from_gecko_data(item, network="base")
+        assert pool.pool_address == "0xabcdef1234"
+        assert pool.dex_id == "uniswap-v4-base"
+        assert pool.name == "PEPE / USDC"
+        assert pool.token0_address == "0xtoken0address"
+        assert pool.token1_address == "0xtoken1address"
+        assert pool.fdv_usd == pytest.approx(1234.56)
+        assert pool.volume_usd_24h == pytest.approx(5678.9)
+
+    def test_clanker_pool_from_gecko_data_minimal(self):
+        """Empty/missing attributes don't crash."""
+        from m8.discovery.clanker_source import ClankerPool
+        pool = ClankerPool.from_gecko_data({}, network="base")
+        assert pool.pool_address == ""
+        assert pool.dex_id == ""
+
+    def test_dex_filter_default_is_v4(self):
+        from m8.discovery.clanker_source import ClankerDiscoverySource, CLANKER_DEX_ID
+        src = ClankerDiscoverySource()
+        assert src.dex_filter == CLANKER_DEX_ID
+
+    def test_dex_filter_none_accepts_all(self):
+        from m8.discovery.clanker_source import ClankerDiscoverySource
+        src = ClankerDiscoverySource(dex_filter=None)
+        assert src.dex_filter is None
+
+    def test_fetch_new_pools_returns_empty_list_on_network_error(self, monkeypatch):
+        """fetch_new_pools swallows OSError (no network) and returns []."""
+        from m8.discovery.clanker_source import ClankerDiscoverySource
+        import urllib.request
+
+        def _fail(*args, **kwargs):
+            raise OSError("no network")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fail)
+        src = ClankerDiscoverySource()
+        result = src.fetch_new_pools(page=1)
+        assert result == []
+
+    def test_fetch_new_pools_raises_on_4xx(self, monkeypatch):
+        """4xx HTTP errors surface as ClankerSourceError."""
+        from m8.discovery.clanker_source import ClankerDiscoverySource, ClankerSourceError
+        import urllib.error
+        import urllib.request
+
+        def _fail(*args, **kwargs):
+            raise urllib.error.HTTPError(
+                url="https://test", code=429, msg="Too Many Requests",
+                hdrs=None, fp=None,
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fail)
+        src = ClankerDiscoverySource()
+        with pytest.raises(ClankerSourceError):
+            src.fetch_new_pools(page=1)
