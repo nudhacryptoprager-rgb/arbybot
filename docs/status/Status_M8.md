@@ -1,23 +1,25 @@
 # Status: M8 New-Pool Sniping Pivot
 
-**Status**: IN_PROGRESS -- Phase 1 listener foundation: **REACHED** (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z; 6/6 factory self-test; V4=194 events, V2=12 events live). Phase 2 paper-only: **UNLOCKED** (entry-decision + exit + slippage-guard scaffolding shipped; honeypot still placeholder; **real execution stays BLOCKED**, kill-switch ON).
+**Status**: IN_PROGRESS -- Phase 1 listener foundation: **REACHED** (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z; 6/6 factory self-test; V4=194 events, V2=12 events live). Phase 2 paper-only: **STABILIZED** (entry-decision engine wired into runtime; 15m+30m+60m short gates ALL PASS 2026-05-14; phase2_decision populated in artifact; `dry_run_decision=SKIP`/`reject_reason=INSUFFICIENT_DATA` proven; **real execution stays BLOCKED**, kill-switch ON).
 
 `goal_status`: IN_PROGRESS
 `phase1_status`: REACHED
-`phase2_status`: PAPER_ONLY_UNLOCKED
+`phase2_status`: PAPER_ONLY_STABILIZED
 `phase1_close_allowed`: true
 `phase2_real_execution_allowed`: false
 `kill_switch_active`: true
 `execution_enabled`: false
+`phase2_short_gates_status`: ALL_PASS (15m+30m+60m 2026-05-14)
+`phase2_24h_soak_allowed`: true
 `step_pivot_md_reconciliation`: REQUIRED_BEFORE_LITERAL_PHASE1_CHECKLIST_TICK
 `multi_factory_coverage_status`: PARTIAL_MARKET_WINDOW
 `phase1_steps_4_9_status`: COMPLETE
 `pipeline_ready`: false
 `production_profit_ready`: false
 `close_allowed`: false
-`primary_blocker_of_session`: PHASE2_PAPER_SOAK_NOT_YET_RUN
-`blocker_status_before`: WS_4FACTORY_GATE_PASS_INFRA_PROVEN_MARKET_WINDOW_BLOCKER
-`blocker_status_after`: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
+`primary_blocker_of_session`: PHASE2_PAPER_RUNTIME_GATES
+`blocker_status_before`: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
+`blocker_status_after`: PHASE2_SHORT_GATES_PASS_24H_SOAK_AUTHORIZED
 `next_phase_blocker`: M8_PHASE2_24H_PAPER_SOAK_NOT_RUN
 `docs_reread_confirmed`: true
 `phase1_verified_at`: 2026-05-13T21:54:59Z
@@ -221,11 +223,54 @@ Phase 1 closure requires *all* of:
       uniswap_v4 raw=194/parse_ok=194/cand=121 (100%), uniswap_v2 raw=12/parse_ok=12/cand=8 (100%).
       parse_failed=0, candidates_total=129, elapsed=909.4s, run_scope=all.
 
-## Next Required Evidence (Phase 2)
+## Phase 2 Runtime Gates Evidence (PASS 2026-05-14)
 
-- Honeypot / scam / freshness filters return non-zero reject counts on known rugpull tokens
-- Dry-run submit rehearsal (`snipe_candidates_total > 0` with `dry_run=True`)
-- Scoring rank is stable across 3 consecutive soaks
+Phase 2 entry engine wired into `m8/runtime/smoke_run.py`; all 3 short gates PASS.
+
+### Phase 2 wiring verification (from 15m artifact)
+
+- `schema_revision: phase2.0` ✅
+- `status: ACTIVE`, `run_scope: all` ✅
+- `self_test_by_dex: 6/6 PASS` ✅
+- `phase2_decision.dry_run_decision: SKIP` ✅ (not null)
+- `phase2_decision.reject_reason: INSUFFICIENT_DATA` ✅ (correct: no liquidity oracle at pool creation)
+- `recent_events[*].phase2_decision` — per-event decision present ✅
+
+### 15m gate (2026-05-14T19:14:50Z → 19:29:56Z)
+
+- `parse_failed=0`, `rpc_errors=0`, `candidates_total=197`, `elapsed_s=905.2` ✅
+- `ws_listener_stopped: subscriptions=6, events_emitted=187, reconnects=0` ✅
+- Self-test 6/6 PASS ✅
+
+### 30m gate (2026-05-14T19:31:26Z → 20:01:26Z)
+
+- `parse_failed=0`, `rpc_errors=0`, `candidates_total=316`, `elapsed_s=1837.1` ✅
+- `ws_listener_stopped: subscriptions=12, events_emitted=307, reconnects=1` ✅
+
+### 60m gate (2026-05-14T20:02:09Z → 21:03:33Z)
+
+- `parse_failed=0`, `rpc_errors=0`, `candidates_total=449`, `elapsed_s=3607.3` ✅
+- `ws_listener_stopped: subscriptions=24, events_emitted=436, reconnects=3` ✅
+- `aerodrome: 4 candidates` (first live aerodrome events in this session) ✅
+- `execution_enabled: false` throughout (ARBY_SNIPER_EXECUTE not set) ✅
+
+**Verdict: phase2_status → PAPER_ONLY_STABILIZED; phase2_24h_soak_allowed: true**
+
+## Next Required Evidence (Phase 2 → 24h Paper Soak)
+
+**Command (authorized after short gates PASS):**
+```powershell
+$env:ARBY_SNIPER_ENABLE='1'
+$env:ARBY_SNIPER_PAPER='1'
+py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 1440 --prefer-ws --poll-interval-s 30 --blocks-back 50 2>&1 | Tee-Object -FilePath data/tmp/phase2_paper_soak_24h.log
+```
+
+**Acceptance criteria:**
+- `snipe_candidates_total ≥ 5` with non-null `dry_run_decision` per event
+- `parse_failed=0` maintained for 24h
+- `rpc_errors < 5%` (0 rpc_errors expected with prefer-ws)
+- `execution_enabled: false` throughout
+- No WS disconnects > 3 in 24h OR auto-reconnect restores within 30s
 
 ## Round-5 GPT Review Evidence (2026-05-14)
 

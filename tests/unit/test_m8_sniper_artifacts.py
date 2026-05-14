@@ -602,3 +602,66 @@ class TestIsolatedRunRollingIsolation:
         assert loaded["dex_filter"] is None
         assert loaded["run_scope"] == "all"
 
+
+# ---------------------------------------------------------------------------
+# Phase 2 decision wiring contract tests (phase2_decision param)
+# ---------------------------------------------------------------------------
+
+class TestPhase2DecisionParam:
+    """phase2_decision kwarg overrides the all-null stub when provided."""
+
+    def test_phase2_decision_null_when_not_provided(self):
+        """Default: phase2_decision.dry_run_decision is None."""
+        art = make_sniper_artifact()
+        assert art["phase2_decision"]["dry_run_decision"] is None
+
+    def test_phase2_decision_override_applied(self):
+        """Providing phase2_decision dict replaces the null stub."""
+        override = {
+            "honeypot_result": None,
+            "simulation_result": None,
+            "realisability_reason": None,
+            "dry_run_decision": "SKIP",
+            "reject_reason": "INSUFFICIENT_DATA",
+            "expected_pnl_usd": None,
+        }
+        art = make_sniper_artifact(phase2_decision=override)
+        assert art["phase2_decision"]["dry_run_decision"] == "SKIP"
+        assert art["phase2_decision"]["reject_reason"] == "INSUFFICIENT_DATA"
+
+    def test_phase2_decision_would_enter(self):
+        """WOULD_ENTER verdict is preserved."""
+        override = {
+            "honeypot_result": None,
+            "simulation_result": None,
+            "realisability_reason": None,
+            "dry_run_decision": "WOULD_ENTER",
+            "reject_reason": None,
+            "expected_pnl_usd": None,
+        }
+        art = make_sniper_artifact(phase2_decision=override)
+        assert art["phase2_decision"]["dry_run_decision"] == "WOULD_ENTER"
+        assert art["phase2_decision"]["reject_reason"] is None
+
+    def test_phase2_decision_json_serialisable(self):
+        """Phase 2 override must survive JSON round-trip."""
+        import json
+        override = {
+            "honeypot_result": None,
+            "simulation_result": None,
+            "realisability_reason": None,
+            "dry_run_decision": "SKIP",
+            "reject_reason": "NO_MIRROR_NO_ANCHOR",
+            "expected_pnl_usd": None,
+        }
+        art = make_sniper_artifact(phase2_decision=override)
+        round_trip = json.loads(json.dumps(art))
+        assert round_trip["phase2_decision"]["dry_run_decision"] == "SKIP"
+        assert round_trip["phase2_decision"]["reject_reason"] == "NO_MIRROR_NO_ANCHOR"
+
+    def test_phase2_decision_none_falls_back_to_null_stub(self):
+        """Explicitly passing None gives the same result as omitting the param."""
+        art_default = make_sniper_artifact()
+        art_explicit = make_sniper_artifact(phase2_decision=None)
+        assert art_default["phase2_decision"] == art_explicit["phase2_decision"]
+

@@ -107,6 +107,7 @@ def make_sniper_artifact(
     self_test_by_dex: Optional[Dict[str, Any]] = None,
     run_scope: str = "all",
     dex_filter: Optional[str] = None,
+    phase2_decision: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a ``new_pool_sniper_latest.json`` artifact dict.
 
@@ -158,7 +159,8 @@ def make_sniper_artifact(
         },
         # Phase 2 execution decision (all null in Phase 1; populated by
         # strategy/sniper_entry_decision.py + execution/slippage_guard.py + simulator).
-        "phase2_decision": {
+        # If ``phase2_decision`` kwarg is provided, its values override the null stub.
+        "phase2_decision": phase2_decision if phase2_decision is not None else {
             "honeypot_result": None,        # None | "SAFE" | "HONEYPOT" | "UNKNOWN"
             "simulation_result": None,      # None | "PASS" | "FAIL" | "REVERT:<reason>"
             "realisability_reason": None,   # None | "PROFITABLE" | "UNPROFITABLE" | "RISKY"

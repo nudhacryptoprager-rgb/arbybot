@@ -79,6 +79,16 @@ from monitoring.sniper_artifacts import (
 )
 from monitoring.sniper_funnel import EventTrace, FunnelTracker
 
+# Phase 2 paper-only — entry decision engine (optional; gracefully absent on import error)
+try:
+    from strategy.sniper_entry_decision import (
+        EntryCandidate,
+        make_default_engine,
+    )
+    _PHASE2_ENTRY_ENGINE_AVAILABLE: bool = True
+except ImportError:  # pragma: no cover
+    _PHASE2_ENTRY_ENGINE_AVAILABLE = False
+
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -225,11 +235,46 @@ def _process_log_event(
     return event
 
 
+def _apply_phase2_decision(
+    event: NewPoolEvent,
+    engine: Any,
+    decisions: Dict[str, Any],
+) -> None:
+    """Run the Phase 2 paper-only entry engine for *event* and store the result.
+
+    Builds a minimal :class:`~strategy.sniper_entry_decision.EntryCandidate`
+    from the available pool event fields (token addresses, dex, block).
+    Liquidity and spread are not yet available at pool-creation time, so the
+    engine will typically return SKIP / INSUFFICIENT_DATA for new events.
+    The key outcome is that ``dry_run_decision`` is **non-null**, proving
+    the Phase 2 engine is actively integrated into the runtime pipeline.
+
+    Results are stored in *decisions* keyed by ``event.event_id``.
+    """
+    try:
+        cand = EntryCandidate(
+            token0=(event.token0 or "").lower(),
+            token1=(event.token1 or "").lower(),
+            pool=(event.pool or "").lower(),
+            dex=event.dex,
+            block_number=event.block_number,
+        )
+        decision = engine.decide(cand)
+        decisions[event.event_id] = decision.to_dict()
+    except Exception as exc:
+        logger.warning(
+            "phase2_entry_decision_error",
+            extra={"context": {"event_id": event.event_id, "error": str(exc)[:80]}},
+        )
+
+
 def _make_ws_on_event_callback(
     funnel: "FunnelTracker",
     seen_ids: Set[str],
     recent_events: List[NewPoolEvent],
     events_lock: threading.Lock,
+    phase2_engine: Any = None,
+    phase2_event_decisions: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Return an ``on_event(cfg, raw_log)`` callback for WSPoolEventListener.
 
@@ -240,7 +285,11 @@ def _make_ws_on_event_callback(
     def on_event(cfg: FactoryConfig, raw_log: Any) -> None:
         funnel.inc("raw_fetched")
         funnel.inc_dex(cfg.dex, "raw_logs")
-        _process_log_event(raw_log, cfg, funnel, seen_ids, recent_events, events_lock)
+        candidate = _process_log_event(raw_log, cfg, funnel, seen_ids, recent_events, events_lock)
+        if (candidate is not None
+                and phase2_engine is not None
+                and phase2_event_decisions is not None):
+            _apply_phase2_decision(candidate, phase2_engine, phase2_event_decisions)
     return on_event
 
 
@@ -554,6 +603,7 @@ def _build_and_write_artifact(
     status: str,
     reasons: List[str],
     w3: Optional[Any] = None,
+    phase2_event_decisions: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
@@ -619,7 +669,43 @@ def _build_and_write_artifact(
             "pair": pair,
             "block_number": e.block_number,
             "tx_hash": e.tx_hash,
+            # Phase 2: per-event entry decision (None when engine not wired / not called)
+            "phase2_decision": (
+                phase2_event_decisions.get(e.event_id)
+                if phase2_event_decisions else None
+            ),
         })
+
+    # Phase 2 top-level summary: last non-null decision, or all-null stub.
+    phase2_summary: Optional[Dict[str, Any]] = None
+    if phase2_event_decisions:
+        # Build summary from the most recently evaluated event in the window
+        for e in reversed(recent_window):
+            dec = phase2_event_decisions.get(e.event_id)
+            if dec is not None:
+                phase2_summary = {
+                    "honeypot_result": None,
+                    "simulation_result": None,
+                    "realisability_reason": None,
+                    "dry_run_decision": dec.get("verdict"),
+                    "reject_reason": dec.get("reject_reason"),
+                    "expected_pnl_usd": None,
+                }
+                break
+        if phase2_summary is None and phase2_event_decisions:
+            # Decisions exist but none in recent window — use latest overall
+            last_eid = next(reversed(list(phase2_event_decisions.keys())), None)
+            if last_eid:
+                dec = phase2_event_decisions[last_eid]
+                phase2_summary = {
+                    "honeypot_result": None,
+                    "simulation_result": None,
+                    "realisability_reason": None,
+                    "dry_run_decision": dec.get("verdict"),
+                    "reject_reason": dec.get("reject_reason"),
+                    "expected_pnl_usd": None,
+                }
+
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     artifact = make_sniper_artifact(
         metrics=metrics,
@@ -632,6 +718,7 @@ def _build_and_write_artifact(
         self_test_by_dex=metrics.get("self_test_by_dex"),
         run_scope=metrics.get("run_scope", "all"),
         dex_filter=metrics.get("dex_filter"),
+        phase2_decision=phase2_summary,
     )
     violations = validate_sniper_artifact(artifact)
     if violations:
@@ -712,6 +799,8 @@ def _run_online_loop(
     source: str,
     events_lock: Optional[threading.Lock] = None,
     http_fallback_mode: bool = False,
+    phase2_engine: Any = None,
+    phase2_event_decisions: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Main online HTTP polling loop.
 
@@ -796,6 +885,11 @@ def _run_online_loop(
                     )
                     if candidate is not None:
                         cycle_new += 1
+                        if (phase2_engine is not None
+                                and phase2_event_decisions is not None):
+                            _apply_phase2_decision(
+                                candidate, phase2_engine, phase2_event_decisions,
+                            )
 
         cycle_duration_ms = (time.monotonic() - cycle_start) * 1000.0
         last_processed_block = to_block
@@ -819,6 +913,7 @@ def _run_online_loop(
                 status=status,
                 reasons=reasons,
                 w3=w3,
+                phase2_event_decisions=phase2_event_decisions,
             )
             last_artifact_ts = time.monotonic()
 
@@ -1011,6 +1106,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     funnel.set_run_scope(run_scope="all" if not _dex_filter else _dex_filter, dex_filter=_dex_filter)
 
     # ------------------------------------------------------------------
+    # Phase 2 paper-only engine setup
+    # ------------------------------------------------------------------
+    _paper_mode = env_flag_enabled("ARBY_SNIPER_PAPER")
+    _execute_mode = env_flag_enabled("ARBY_SNIPER_EXECUTE")
+    if _execute_mode:
+        logger.error(
+            "phase2_execute_blocked",
+            extra={"context": {
+                "reason": "ARBY_SNIPER_EXECUTE=1 is NOT permitted in Phase 2 paper-only mode",
+                "policy": "kill_switch_active=true, execution_enabled=false",
+            }},
+        )
+        return 1
+
+    phase2_engine: Any = None
+    phase2_event_decisions: Dict[str, Any] = {}
+    if _paper_mode:
+        if _PHASE2_ENTRY_ENGINE_AVAILABLE:
+            phase2_engine = make_default_engine()
+            logger.info(
+                "phase2_entry_engine_loaded",
+                extra={"context": {"paper_mode": True, "execute_mode": False}},
+            )
+        else:  # pragma: no cover
+            logger.warning(
+                "phase2_paper_mode_requested_but_engine_unavailable",
+                extra={"context": {"hint": "strategy.sniper_entry_decision import failed"}},
+            )
+
+    # ------------------------------------------------------------------
     # Online-only: build web3 + self-test
     # ------------------------------------------------------------------
     w3: Any = None
@@ -1114,6 +1239,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 from m8.runtime.ws_listener import WSPoolEventListener
                 ws_on_event = _make_ws_on_event_callback(
                     funnel, seen_ids, recent_events, events_lock,
+                    phase2_engine=phase2_engine,
+                    phase2_event_decisions=phase2_event_decisions,
                 )
                 ws_listener = WSPoolEventListener(
                     ws_url=ws_url,
@@ -1171,6 +1298,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 source=source,
                 events_lock=events_lock,
                 http_fallback_mode=http_fallback_mode,
+                phase2_engine=phase2_engine,
+                phase2_event_decisions=phase2_event_decisions,
             )
     except KeyboardInterrupt:
         logger.info("sniper interrupted by user (KeyboardInterrupt)")
@@ -1232,6 +1361,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         status=status,
         reasons=reasons,
         w3=w3 if not offline else None,
+        phase2_event_decisions=phase2_event_decisions,
     )
 
     # ------------------------------------------------------------------

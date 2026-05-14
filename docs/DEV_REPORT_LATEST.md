@@ -1,29 +1,31 @@
-# DEV REPORT LATEST — M8 Phase 1 REACHED + Phase 2 Paper-Only UNLOCKED
+# DEV REPORT LATEST — M8 Phase 2 Paper-Only STABILIZED
 
-**mode**: PHASE2_PAPER_ONLY_UNLOCK (entry-decision + exit + slippage-guard scaffolding shipped; real execution stays BLOCKED)
+**mode**: PHASE2_SHORT_GATES_ALL_PASS (15m+30m+60m runtime gates completed; entry engine wired; real execution stays BLOCKED)
 **session_date**: 2026-05-14
 **schema_family**: m8_sniper
 **schema_revision**: phase2.0
-**blocker_status_before**: PHASE1_LISTENER_FOUNDATION_PROVEN_BUT_NO_PHASE2_SCAFFOLDING
-**blocker_status_after**: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
+**blocker_status_before**: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
+**blocker_status_after**: PHASE2_SHORT_GATES_PASS_24H_SOAK_AUTHORIZED
 **phase1_close_allowed**: true (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z)
 **phase2_paper_only_unlocked**: true
+**phase2_status**: PAPER_ONLY_STABILIZED
+**phase2_24h_soak_allowed**: true
 **phase2_real_execution_allowed**: false (kill-switch ON, execution_enabled=false)
 
 ---
 
 ## Session Completion
 
-session_goal: Expand discovery surface per reviewer 10-step directive: add Uniswap V4 PoolManager Initialize listener, Uniswap V2 experimental lane, Aerodrome Slipstream surface audit, Clanker external discovery source.
+session_goal: Wire Phase 2 entry decision engine into m8 smoke_run runtime; prove via 15m+30m+60m paper gates that phase2_decision is populated in rolling artifact; confirm execution_enabled=false throughout.
 goal_status: REACHED
 close_allowed: true
 remaining_blockers:
-  - FRESH_ALL_FACTORY_R8_GATE_REQUIRED: RESOLVED (15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z; 6/6 self_test PASS; parse_failed=0; V4=194 logs 100% ok; V2=12 logs 100% ok; candidates_total=129)
+  - PHASE2_24H_PAPER_SOAK_NOT_RUN: pending (authorized; next gate)
   - PLAIN_CI_BLOCKED_BY_INTENT_TIER_LIMIT (pre-existing, not M8-specific)
-evidence_session_run_dirs: none (code-only session; evidence = pytest 5466 passed)
-primary_blocker_of_session: M8_DISCOVERY_SURFACE_INCOMPLETE (4 factories; V4 dominant on Base not covered)
-blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED
+evidence_session_run_dirs: data/tmp/phase2_short_gate_15m.log, data/tmp/phase2_short_gate_30m.log, data/tmp/phase2_short_gate_60m.log
+primary_blocker_of_session: PHASE2_ENTRY_ENGINE_NOT_WIRED_IN_RUNTIME
+blocker_status_before: ACTIVE (phase2_decision was always all-null in artifact)
+blocker_status_after: RESOLVED (dry_run_decision=SKIP/reject_reason=INSUFFICIENT_DATA populated; 3 gates PASS)
 docs_reread_confirmed: true
 
 ---
@@ -262,7 +264,92 @@ All 6 run against known block ranges with confirmed on-chain events:
 
 ---
 
-## Phase 2 Paper-Only Unlock (this session)
+## Phase 2 Runtime Gates Evidence (2026-05-14)
+
+### Phase 2 wiring (smoke_run.py)
+
+**Critical fix this session:** `strategy.sniper_entry_decision` was NOT imported in smoke_run.py — `phase2_decision` was always all-null in artifact. Full wiring added:
+
+1. Try-import with graceful fallback (`_PHASE2_ENTRY_ENGINE_AVAILABLE` flag)
+2. `ARBY_SNIPER_EXECUTE=1` → hard abort (kill-switch policy enforced at startup)
+3. Engine instantiation when `ARBY_SNIPER_PAPER=1` via `make_default_engine()`
+4. `_apply_phase2_decision()` called after each event in both WS callback and HTTP polling paths
+5. `phase2_summary` built from most recent evaluated event in `_build_and_write_artifact()`
+6. `make_sniper_artifact(phase2_decision=phase2_summary)` kwarg added
+7. `recent_events[*].phase2_decision` key added per-event
+
+**pytest after wiring**: 5520 passed, 6 skipped (+5 new `TestPhase2DecisionParam` tests)
+
+### Artifact verification (from 15m gate)
+
+```
+schema_revision: phase2.0     ✅
+status: ACTIVE                  ✅
+run_scope: all                  ✅
+self_test: 6/6 PASS             ✅
+candidates_total: 197           ✅
+dry_run_decision: SKIP          ✅  (not null — wiring proven)
+reject_reason: INSUFFICIENT_DATA ✅  (correct: no liquidity oracle at pool creation)
+recent_events[*].phase2_decision: {'verdict': 'SKIP', 'reject_reason': 'INSUFFICIENT_DATA', 'confidence': 0.0, 'notes': ['liquidity:INSUFFICIENT_DATA']}
+```
+
+### 15m gate (2026-05-14T19:14:50Z → 19:29:56Z)
+
+**Command**: `$env:ARBY_SNIPER_ENABLE='1'; $env:ARBY_SNIPER_PAPER='1'; py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 15 --prefer-ws --poll-interval-s 30 --blocks-back 50`
+
+| Metric | Value | Pass |
+|--------|-------|------|
+| `parse_failed` | 0 | ✅ |
+| `rpc_errors` | 0 | ✅ |
+| `candidates_total` | 197 | ✅ |
+| `elapsed_s` | 905.2 | ✅ |
+| `ws: events_emitted` | 187 | ✅ |
+| `ws: reconnects` | 0 | ✅ |
+| `self_test` | 6/6 PASS | ✅ |
+| `phase2_decision.dry_run_decision` | SKIP (non-null) | ✅ |
+| `execution_enabled` | false | ✅ |
+
+### 30m gate (2026-05-14T19:31:26Z → 20:01:26Z)
+
+| Metric | Value | Pass |
+|--------|-------|------|
+| `parse_failed` | 0 | ✅ |
+| `rpc_errors` | 0 | ✅ |
+| `candidates_total` | 316 | ✅ |
+| `elapsed_s` | 1837.1 | ✅ |
+| `ws: events_emitted` | 307 | ✅ |
+| `ws: reconnects` | 1 (auto-recovered) | ✅ |
+| `cycles_completed` | 6 | ✅ |
+
+### 60m gate (2026-05-14T20:02:09Z → 21:03:33Z)
+
+| Metric | Value | Pass |
+|--------|-------|------|
+| `parse_failed` | 0 | ✅ |
+| `rpc_errors` | 0 | ✅ |
+| `candidates_total` | 449 | ✅ |
+| `elapsed_s` | 3607.3 | ✅ |
+| `ws: events_emitted` | 436 | ✅ |
+| `ws: reconnects` | 3 (all auto-recovered) | ✅ |
+| `cycles_completed` | 12 | ✅ |
+| aerodrome candidates | 4 (first live aerodrome!) | ✅ |
+| `execution_enabled` | false throughout | ✅ |
+
+**Per-dex 60m breakdown**:
+| DEX | polls | logs | parse_ok | rpc_err | candidates |
+|-----|-------|------|----------|---------|-----------|
+| aerodrome | 12 | 8 | 8 (100%) | 0 | 4 |
+| aerodrome_slipstream | 12 | 0 | 0 | 0 | 0 (market window) |
+| pancakeswap_v3 | 12 | 0 | 0 | 0 | 0 (market window) |
+| uniswap_v2 | 12 | 39 | 39 (100%) | 0 | 21 |
+| uniswap_v3 | 12 | 2 | 2 (100%) | 0 | 1 |
+| uniswap_v4 | 12 | 807 | 807 (100%) | 0 | 423 |
+
+**Verdict: ALL 3 SHORT GATES PASS → phase2_status: PAPER_ONLY_STABILIZED → 24h soak authorized**
+
+---
+
+## Phase 2 Paper-Only Unlock (previous session)
 
 **Decision (verbatim, propagated to `docs/status/Status_M8.md`):**
 > Phase 1 listener foundation: REACHED. Phase 2 paper-only: UNLOCKED. step_pivot.md reconciliation required before marking literal Phase 1 checklist complete. Real execution remains BLOCKED until Phase 2 evidence.
@@ -289,12 +376,13 @@ All 6 run against known block ranges with confirmed on-chain events:
 - No live signing, no broadcast, no live wallet keys.
 - Phase 3 unlock requires Phase 2 24-hour paper soak evidence + per-snipe trace + reject taxonomy + decision stability across ≥ 3 consecutive paper soaks.
 
-### Next runtime gate (Phase 2 first soak — planned, not yet executed)
+### Next runtime gate (Phase 2 24h paper soak — AUTHORIZED)
+
+**Status**: AUTHORIZED (15m+30m+60m short gates all PASS 2026-05-14)
 
 ```powershell
 $env:ARBY_SNIPER_ENABLE='1'
 $env:ARBY_SNIPER_PAPER='1'
-$env:ARBY_SNIPER_EXECUTE='0'
 py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 1440 --prefer-ws --poll-interval-s 30 --blocks-back 50 2>&1 | Tee-Object -FilePath data/tmp/phase2_paper_soak_24h.log
 ```
 
