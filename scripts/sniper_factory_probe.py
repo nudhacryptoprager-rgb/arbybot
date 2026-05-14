@@ -1,4 +1,4 @@
-"""M8 — Per-factory eth_getLogs probe.
+"""M8 - Per-factory eth_getLogs probe.
 
 Runs a single eth_getLogs call per configured factory and reports:
   - raw log count
@@ -134,7 +134,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     setup_logging(json_format=False)
 
     parser = argparse.ArgumentParser(
-        description="M8 — Per-factory eth_getLogs probe. Reports logs/parse_ok/error per dex.",
+        description="M8 - Per-factory eth_getLogs probe. Reports logs/parse_ok/error per dex.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--chain", default="base", help="Chain to probe.")
@@ -178,8 +178,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     print(f"\n{'=' * 60}")
-    print(f"SNIPER FACTORY PROBE — {args.chain.upper()}")
-    print(f"Block range: {from_block} → {to_block}  ({to_block - from_block + 1} blocks)")
+    print(f"SNIPER FACTORY PROBE -- {args.chain.upper()}")
+    print(f"Block range: {from_block} -> {to_block}  ({to_block - from_block + 1} blocks)")
     print(f"{'=' * 60}")
 
     # Load factory configs
@@ -197,7 +197,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     results = []
     for cfg in configs:
-        print(f"\n  Probing {cfg.dex} ({cfg.factory[:10]}…)  topic0_verified={cfg.topic0_verified}")
+        print(f"\n  Probing {cfg.dex} ({cfg.factory[:10]}...)  topic0_verified={cfg.topic0_verified}")
         r = _probe_factory(w3, cfg, from_block, to_block)
         results.append(r)
         status_tag = f"[{r['status']}]"

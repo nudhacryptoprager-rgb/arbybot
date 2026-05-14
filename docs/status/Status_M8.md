@@ -83,15 +83,17 @@ Phase 3: constrained real execution.
 
 ## Current Blockers
 
-1. Phase 1 RESOLVED — listener foundation verified by 60-min soak.
+1. Listener foundation Phase 1 verified -- `listener_core: REACHED`. Multi-factory coverage partial
+   (uniswap_v3 verified live; aerodrome/slipstream/pancakeswap_v3 events not yet confirmed).
 2. Phase 2 (scoring / dry-run) not yet started.
-3. verification_from_block for aerodrome (ve33) and pancakeswap_v3 factories pending archive RPC
-   (drpc unstable for eth_getLogs without topic0 filter; TODO in config/new_pool_factories.yaml).
+3. `verification_from_block` for aerodrome (ve33) pending wider archive-RPC scan (no events in
+   last 100k blocks on drpc); aerodrome_slipstream (45920743-45921242) and pancakeswap_v3
+   (45925866-45927865) verified 2026-05-13 and written to config/new_pool_factories.yaml.
 4. Live execution must remain disabled until Phase 1 and Phase 2 evidence is green.
 
 ## Phase 1 Evidence (VERIFIED 2026-05-13)
 
-- ✅ `py -3.11 -m pytest tests/unit -q` → 5318 passed, 6 skipped, 1 warning (5289 → 5318 with new tests)
+- ✅ `py -3.11 -m pytest tests/unit -q` → 5376 passed, 6 skipped, 1 warning (5370 → 5376 with factory_probe ASCII tests)
 - ✅ Offline smoke: schema_family=m8_sniper, schema_revision=phase1.2
 - ✅ Slipstream topic0 verified against ICLFactory.sol on GitHub
 - ✅ 10-min online smoke: parse_ok=1, candidates=1, status=ACTIVE
@@ -104,10 +106,25 @@ Phase 3: constrained real execution.
 - ✅ Step 8: honeypot detector skeleton (KNOWN_SCAM → FAIL, KNOWN_LEGIT → PASS, else UNKNOWN) — 18 tests
 - ✅ Step 9: dry-run scoring placeholder fields (spread_bps/spread_usd/volume_usd/profit_usd/realizability_reason) — 9 tests
 - ✅ Step 10: 2h soak PASS — `parse_ok=22, parse_failed=0, candidates=22, cycles=240, elapsed=7202.7s`
-  - RPC error rate: 15/960 = 1.56% (14×408_timeout, 1×5xx_server) — normal for drpc
+  - RPC error rate: 15/960 = 1.56% (14x408_timeout, 1x5xx_server) — normal for drpc
   - Per-dex: uniswap_v3 raw=233/ok=22/cand=22; aerodrome raw=239/ok=0; aerodrome_slipstream raw=233/ok=0; pancakeswap_v3 raw=240/ok=0
   - factory_breakdown and rpc_error_histogram both populated correctly in artifact
   - schema_revision=phase1.2 confirmed throughout run
+
+## Round-3 GPT Review Evidence (2026-05-13)
+
+- ✅ Step R1+R3: sniper_factory_probe.py fully ASCII-safe (no non-ASCII bytes); verified by test_m8_sniper_factory_probe.py
+- ✅ Step R2: Windows encoding test added (TestAsciiSafety — 4 tests; cp1252-safe confirmed)
+- ✅ Step R4+R5: Status_M8.md unit baseline updated (5376); "Phase 1 RESOLVED" removed, replaced with precise wording
+- ✅ Step R6: m8/__init__.py documents m8_package_status=NAMESPACE_SLICE_WITH_RUNTIME explicitly
+- ✅ Step R7+R8: smoke_run implementation migrated to m8/runtime/smoke_run.py; scripts/sniper_smoke_run.py is now a 24-line thin wrapper re-exporting main
+  - Confirmed: logger source shows "m8.runtime.smoke_run" in soak logs
+- ✅ Step R9: verification_from_block/to_block set in config/new_pool_factories.yaml:
+  - aerodrome_slipstream: 45920743-45921242 (1 event at block 45920986, verified 2026-05-13)
+  - pancakeswap_v3: 45925866-45927865 (2 events at block 45926270, verified 2026-05-13)
+  - aerodrome_ve33: null (no events in last 100k blocks on drpc; wider archive scan needed)
+- ✅ Step R10: 60-min soak started 2026-05-13T22:49:30Z via m8.runtime.smoke_run thin wrapper
+  - IN_PROGRESS at time of status update; results to be appended when complete
 
 ## Next Required Evidence (Phase 2)
 

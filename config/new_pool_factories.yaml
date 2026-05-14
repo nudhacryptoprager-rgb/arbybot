@@ -65,14 +65,12 @@ factories:
     # Log layout: topics[1]=token0, topics[2]=token1, topics[3]=tickSpacing (indexed)
     #             data = abi.encode(address pool)
     log_layout: slipstream_pool_created
-    # TODO: fill before enabling self-test. Low pool-creation frequency (~rare);
-    # drpc returns empty in last 100k blocks. Scan with `eth_getLogs` + topic0
-    # filter over a wider historical window when a stable archive RPC is available.
-    verification_from_block: null
-    verification_to_block: null
+    # Verified 2026-05-13 via drpc (1 event at block 45920986 found in this range).
+    verification_from_block: 45920743
+    verification_to_block: 45921242
 
   # -------------------------------------------------------------------------
-  # Aerodrome ve33 (Base) — volatile + stable pools.
+  # Aerodrome ve33 (Base) -- volatile + stable pools.
   # Address: config/dexes.yaml base.aerodrome.factory
   # Event: PairCreated(address indexed token0, address indexed token1,
   #                    bool stable, address pair, uint256)
@@ -89,8 +87,9 @@ factories:
     # Log layout: topics[1]=token0, topics[2]=token1
     #             data = abi.encode(bool stable, address pair, uint256 allPairs)
     log_layout: ve33_pair_created
-    # TODO: fill before enabling self-test. Low pool-creation frequency;
-    # drpc returned empty in last 100k blocks. Requires stable archive RPC.
+    # TODO: fill before enabling self-test. Low pool-creation frequency (~rare);
+    # drpc returns empty in last 100k blocks. Scan with `eth_getLogs` + topic0
+    # filter over a wider historical window when a stable archive RPC is available.
     verification_from_block: null
     verification_to_block: null
 
@@ -107,8 +106,6 @@ factories:
     event_signature: "PoolCreated(address,address,uint24,int24,address)"
     topic0: "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
     log_layout: v3_pool_created
-    # TODO: fill before enabling self-test. PancakeSwap V3 has lower activity
-    # than UniV3; drpc returned empty in last 100k blocks. Use UniV3-range as
-    # a reference once a stable archive RPC is available.
-    verification_from_block: null
-    verification_to_block: null
+    # Verified 2026-05-13 via drpc (2 events at block 45926270 found in this range).
+    verification_from_block: 45925866
+    verification_to_block: 45927865
