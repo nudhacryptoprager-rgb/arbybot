@@ -1,133 +1,155 @@
-# DEV_REPORT_LATEST - M8 Phase 1 Complete / Steps 1-10 Done
+# ЗВІТ РОЗРОБКИ
 
+## 0) Метадані
+timestamp_utc: 2026-05-14T06:56:44Z  
+run_id: data/runs/_rolling/new_pool_sniper_latest.json  
+mode: ONLINE_CONTROL + OFFLINE_CI  
+artifact_mode: rolling  
+config: config/new_pool_factories.yaml, M8 listener factory на Base  
+repo_revision_reviewed: split/code / a10d2bc27dcb485ae89bd028852ee1c6415366bb  
+code_identity:
+  primary: runtime provenance для поточного M8 контрольного артефакту базується на rolling timestamp
+  dirty: true - змінено M8 factory config, parser listener, unit-тести та цей звіт
+  desc: Aerodrome ve33 factory переведено на layout PoolCreated; звіт переписано українською без передчасного закриття Phase 1
+
+## 1) Обсяг роботи
+goal (Roadmap пункт): M8 перехід до new-pool sniping, Phase 1 listener-only foundation.  
+
+change_summary:
+- Поточний DEV report переписано українською мовою.
+- Прибрано некоректне формулювання "M8 Phase 1 Complete / Steps 1-10 Done".
+- Зафіксовано фактичний стан: ядро listener працює, але повне закриття Phase 1 ще не дозволене.
+- Виправлення Aerodrome factory доведене на рівні parser/config/test та коротким live-пробом.
+- Multi-factory runtime-soak після виправлення ще потрібен як доказ для чесного закриття Phase 1.
+- Поточний rolling artifact є контрольним `EMPTY`, а не доказом multi-factory live activity.
+- Стандартний CI без винятку все ще блокується наявним `intent.txt` tier limit.
+
+touched_files:
+- config/new_pool_factories.yaml
+- discovery/new_pool_listener.py
+- tests/unit/test_m8_sniper_listener.py
+- docs/DEV_REPORT_LATEST.md
+
+## Завершення сесії
+session_goal: привести поточний DEV report до української мови та вирівняти його з фактичним M8 статусом без передчасного закриття Phase 1  
 goal_status: IN_PROGRESS  
-`phase1_status`: REACHED  
-`phase2_status`: NOT_STARTED  
+close_allowed: false  
+remaining_blockers: M8_RUNTIME_SOAK_AFTER_AERODROME_FACTORY_FIX_PENDING; PLAIN_CI_BLOCKED_BY_INTENT_TIER_LIMIT  
+evidence_session_run_dirs: data/runs/ci_m5_gate_offline_20260514_090223; data/runs/ci_m4_gate_offline_20260514_070223  
+primary_blocker_of_session: M8_NON_UNISWAP_FACTORY_COVERAGE_NOT_VERIFIED  
+blocker_status_before: PARTIAL  
+blocker_status_after: SELF_TEST_REACHED_RUNTIME_SOAK_PENDING  
+docs_reread_confirmed: true  
 
-## TL;DR (M8 Phase 1 — 2026-05-13, steps 1-10 implemented and verified)
+## 2) Виконані команди
+py -3.11 -m pytest tests/unit/test_m8_sniper_listener.py tests/unit/test_m8_sniper_funnel.py tests/unit/test_m8_sniper_artifacts.py tests/unit/test_m8_sniper_factory_probe.py -q: PASS, 203 passed  
+py -3.11 -m pytest tests/unit -q: PASS, 5382 passed, 6 skipped, 1 warning  
+py -3.11 scripts/check_repo_safety.py: FAIL, наявний INTENT_TIER_LIMIT, intent.txt має 77 pairs проти baseline 64  
+py -3.11 scripts/check_repo_safety.py --allow-intent-edit: PASS, 1 warning for Status_M7.md bloat  
+py -3.11 scripts/ci_full_pipeline.py --mode ci: FAIL, блокується тим самим наявним INTENT_TIER_LIMIT  
+py -3.11 scripts/ci_full_pipeline.py --mode ci --allow-intent-edit: PASS, усі обов'язкові offline gates пройдено  
+py -3.11 scripts/sniper_factory_probe.py --chain base --from-block 45925000 --to-block 45926000 --rpc-url https://mainnet.base.org: PASS для Aerodrome у цьому діапазоні, raw_logs=1, parse_ok=1  
+ARBY_SNIPER_ENABLE=1 py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 0 --poll-interval-s 1 --blocks-back 1 --rpc-url https://mainnet.base.org: self_test PASS для всіх налаштованих factories; поточний poll створив EMPTY artifact  
 
-Phase 1 foundation complete. All 10 team-lead review steps implemented and verified.
-2h soak PASS. schema_revision bumped to phase1.2. 5318 unit tests pass.
+## 3) Використані артефакти
+rolling:
+- data/runs/_rolling/new_pool_sniper_latest.json
 
-```
-=== M8 FACTORY BREAKDOWN FIX + m8/ PACKAGE (2026-05-13) ===
-Step 1:  factory_breakdown.raw renamed to polls_ok (deprecated alias kept for compat)
-Step 2:  inc_dex now accepts n=len(logs) for raw_logs; polls_ok=1 per successful poll
-Step 3:  parse_rate_pct / candidate_rate_pct added to factory_breakdown entries
-Step 4:  factory_coverage_note added to Status_M8.md; historical verification tracked
-Step 5:  scripts/sniper_factory_probe.py — per-factory eth_getLogs probe tool
-Step 6:  Status_M8.md: phase1_status=REACHED_CORE_LISTENER, multi_factory_coverage=PARTIAL
-Step 7:  m8/ package created: m8/discovery, m8/monitoring, m8/scoring, m8/runtime
-Step 8:  scripts/ remain thin wrappers (sniper_smoke_run.py unchanged as CLI)
-Step 9:  m8.monitoring / m8.discovery re-export canonical modules (compat imports)
-Step 10: unit tests: 5370 passed, 6 skipped (up from 5318); check_repo_safety PASS
-self_test bug: logs, had_err = _get_logs_safe() 2-tuple unpack → 3-tuple (had_err, _, err_str)
-```
+rolling_absent_in_workspace:
+- data/runs/_rolling/_latest.json
+- data/runs/_rolling/run_summary_latest.json
+- data/runs/_rolling/m4_stability_agg.json
 
-```
-=== M8 PHASE 1 — 2h SOAK (2026-05-13T19:54:57–21:54:59Z, 120min, Base) ===
-chain:                 base (drpc)
-factories:             4 (uniswap_v3, aerodrome_slipstream, aerodrome, pancakeswap_v3)
-duration:              7202.7s  (240 cycles, poll_interval=30s, blocks_back=50)
-schema_revision:       phase1.2
-status:                ACTIVE  ✅
-pool_creation_events_seen:     22
-parse_ok:              22      ✅  (parse_failed=0)
-snipe_candidates_total: 22     ✅
-rpc_calls_made:        960
-rpc_errors:            15      (1.56% — within 5% threshold)
-rpc_error_histogram:   408_timeout=14, 5xx_server=1
-factory_breakdown:
-  uniswap_v3           raw=233  parse_ok=22  errors=7   candidates=22
-  aerodrome_slipstream raw=233  parse_ok=0   errors=7   candidates=0
-  aerodrome            raw=239  parse_ok=0   errors=1   candidates=0
-  pancakeswap_v3       raw=240  parse_ok=0   errors=0   candidates=0
-cycles_completed:      240     ✅
-```
+run_dir_bundle:
+- data/runs/ci_m5_gate_offline_20260514_090223
+- data/runs/ci_m4_gate_offline_20260514_070223
 
-```
-=== M8 PHASE 1 — 60min SOAK (reference, 2026-05-13T18:31–19:31Z) ===
-parse_ok=7, parse_failed=0, candidates=7, cycles=120, rpc_error_rate=1.875%
-schema_revision: phase1.1
-```
+runtime_policy:
+- Runtime artifacts під data/runs/** є лише evidence і не мають комітитися.
 
-```
-=== M8 PHASE 1 GATE CHECK (FINAL) ===
-offline smoke:         PASS ✅
-Slipstream topic0:     VERIFIED ✅
-10-min online smoke:   PASS ✅
-60-min soak:           PASS ✅
-2h soak:               PASS ✅
-unit tests:            5318 passed, 6 skipped, 0 failed ✅
-check_repo_safety:     PASS (1 warning) ✅
-canonical rolling set: new_pool_sniper_latest.json registered ✅
-```
+## 4) Ключові результати
+latest_m8_sniper:
+  schema_family: m8_sniper
+  schema_revision: phase1.2
+  generated_at_utc: 2026-05-14T06:56:44Z
+  status: EMPTY
+  reasons: NO_EVENTS_YET
+  pool_creation_events_seen: 0
+  parse_ok: 0
+  parse_failed: 0
+  snipe_candidates_total: 0
+  rpc_calls_made: 4
+  rpc_errors: 0
+  cycles_completed: 1
 
-## Archive
+factory_current_control:
+- uniswap_v3: raw_logs=0, parse_ok=0, candidates=0 у короткому контрольному poll
+- aerodrome_slipstream: raw_logs=0, parse_ok=0, candidates=0 у короткому контрольному poll
+- aerodrome: raw_logs=0, parse_ok=0, candidates=0 у короткому контрольному poll
+- pancakeswap_v3: raw_logs=0, parse_ok=0, candidates=0 у короткому контрольному poll
 
-Historical M7 session reports (E1.81–E1.84) moved to archive/docs/DEV_REPORT_M7_history.md.
-Current file intentionally contains only the active milestone (M8) report.
+factory_fix_evidence:
+- Старий Aerodrome ve33 topic PairCreated був неправильним для фактичної factory activity на Base.
+- Правильна подія Aerodrome: PoolCreated(address,address,bool,address,uint256).
+- Правильний layout: token0=topics[1], token1=topics[2], stable=topics[3], pool=data word 0.
+- Історичний live-проб по Base blocks 45925000-45926000 знайшов Aerodrome raw_logs=1 і parse_ok=1.
+- Smoke self_test спарсив sample logs для uniswap_v3, aerodrome_slipstream, aerodrome і pancakeswap_v3.
 
+phase_status:
+- Status_M8.md залишається source of truth: goal_status=IN_PROGRESS.
+- phase1_status дорівнює REACHED_CORE_LISTENER, а не повному закриттю Phase 1.
+- multi_factory_coverage_status був PARTIAL і має змінюватися лише після fresh runtime soak evidence.
+- pipeline_ready=false і production_profit_ready=false залишаються коректними.
+- close_allowed=false залишається коректним.
 
-## TL;DR (M8 Phase 1 soak — 2026-05-13, 18:31–19:31Z)
+## 4.1) Теоретичний net profit
+theoretical_net_profit:
+  mode: not_applicable_for_m8_phase1_listener
+  gross_pnl_usdc: null
+  cost_breakdown:
+    gas_usd: null
+    slippage_bps: null
+    slippage_usd: null
+    l1_cost_usd: null
+    total_cost_usd: null
+  net_pnl_usdc: null
+  disclaimer: "M8 Phase 1 є listener-only. Реальних угод не виконувалося, реальний прибуток не заявляється."
 
-60-хв listener-only soak для верифікації M8 Phase 1 foundation.
-**Критерій: `parse_failed=0`, `snipe_candidates_total>0`, `status=ACTIVE`, `rpc_error_rate<5%`.**
-Результат: PASS — 7 реальних UniswapV3 pool-creation events спарсовано без помилок, HexBytes
-regression виявлено та виправлено в тій же сесії, усі unit-тести зелені (5289 passed).
+## 5) Перевірки контрактів
+status/reasons consistency: OK для поточного artifact, EMPTY з NO_EVENTS_YET є консистентним  
+rolling discipline: OK для M8 primary rolling artifact; M4 rolling triplet відсутній у цьому workspace  
+provenance contract: OK для M8 report scope, поточний artifact використовує generated_at_utc і rolling path  
+runtime artifacts not committed: OK, data/runs/** залишається runtime-only  
+docs language: OK, поточний report українською мовою  
+completion language: OK, claim про завершення Phase 1 прибрано  
 
-```
-=== M8 PHASE 1 LISTENER SOAK (2026-05-13T18:31:54–19:31:56Z, 60min, Base) ===
-chain:                 base (drpc)
-factories:             4 (uniswap_v3, aerodrome_slipstream, aerodrome, pancakeswap_v3)
-duration:              3601.4s  (120 cycles, poll_interval=30s, blocks_back=50)
-artifact:              data/runs/_rolling/new_pool_sniper_latest.json
-schema_family:         m8_sniper
-schema_revision:       phase1.1
-status:                ACTIVE  ✅
-pool_creation_events_seen:     7
-parse_ok:              7       ✅  (parse_failed=0)
-dedup_new:             7
-filter_passed:         7
-snipe_candidates_total: 7      ✅
-rpc_calls_made:        480
-rpc_errors:            9       (1.875% — drpc 408 timeouts, within 5% threshold)
-cycles_completed:      120     ✅
-generated_at_utc:      2026-05-13T17:31:56Z
-```
+## 6) Класифікація блокерів
+code_blocker: MEDIUM - plain CI падає, доки intent tier limit не вирішено або явно не дозволено  
+data_collection_blocker: MEDIUM - усі factory parsers проходять self_test, але post-fix long runtime soak ще відсутній  
+market_window_blocker: LOW - короткий поточний poll не мав new events; це очікувано і не є доказом failure  
+infra_blocker: LOW - public Base RPC достатній для контрольних probes, але для serious soak потрібен archive/stable RPC  
+release_blocker: HIGH - Phase 1 не можна закривати, доки runtime artifact не доведе post-fix multi-factory behavior  
 
-```
-=== M8 PHASE 1 REGRESSION BUG (FIXED THIS SESSION) ===
-Bug:     parse_raw_log silently returned None for ALL real web3 v6 logs.
-Root cause: web3 v6 eth.get_logs() returns HexBytes (bytes subclass) for
-            topics/data/transactionHash. _strip_0x() called .lower() on bytes → AttributeError
-            → except block returned None.  Symptom: events_seen>0, parse_ok=0, parse_failed=N.
-Fix:     Added _normalize_raw_log() to convert bytes topics/data/transactionHash to
-         0x-prefixed hex strings BEFORE any parser is called.
-         Updated _strip_0x() to call .hex() on bytes input.
-Verified: parse_ok=7, parse_failed=0 over 120 cycles / 60 minutes.
-Tests:   TestParseRawLogHexBytesCompat (6 new tests) — all pass.
-Files:   discovery/new_pool_listener.py
-```
+## 6.1) Блокери / ризики
+- Попередній DEV report завищував готовність M8; це виправлено.
+- Status_M8.md ще потребує post-soak update після fresh evidence.
+- Поточний rolling artifact є EMPTY і не може підтримувати закриття Phase 1.
+- `sniper_factory_probe.py` ще потребує chunked scanning для ширших історичних діапазонів, щоб уникати RPC 413 failures.
+- `intent.txt` tier limit треба вирішити до використання strict plain CI як release evidence.
 
-```
-=== M8 PHASE 1 GATE CHECK ===
-offline smoke:         PASS (schema_family=m8_sniper, reasons=[NO_EVENTS_YET]) ✅
-Slipstream topic0:     VERIFIED (velodrome-finance/slipstream ICLFactory.sol PoolCreated event) ✅
-topic0_verified:       uniswap_v3=true, aerodrome_slipstream=true,
-                       aerodrome=unverified (topic0 known, verification_range_missing),
-                       pancakeswap_v3=unverified (topic0 known, verification_range_missing)
-                       (drpc returns 408 for eth_getLogs without topic0 filter — archive RPC needed
-                        to confirm historic events; topic0 signatures are correct per ABI)
-10-min online smoke:   PASS (parse_ok=1, candidates=1, status=ACTIVE) ✅
-60-min soak:           PASS (parse_ok=7, candidates=7, rpc_error_rate=1.875%) ✅
-unit tests:            5289 passed, 6 skipped, 0 failed ✅
-canonical rolling set: new_pool_sniper_latest.json registered in
-                       test_nonstop_loop_artifacts.py + test_orderflow_artifacts.py ✅
-```
+## 7) Карта виконання попередніх 10 кроків тімліда
+step_01: DONE evidence: Aerodrome config тепер використовує PoolCreated signature і verified topic0  
+step_02: DONE evidence: ve33_pool_created parser додано і покрито тестами  
+step_03: DONE evidence: legacy ve33_pair_created parser залишено для compatibility  
+step_04: DONE evidence: targeted M8 tests пройдено, 203 passed  
+step_05: DONE evidence: full unit suite пройдено, 5382 passed, 6 skipped  
+step_06: DONE evidence: Aerodrome historical probe має parse_ok=1 на Base block range 45925000-45926000  
+step_07: DONE evidence: smoke self_test пройшов для всіх чотирьох налаштованих factories  
+step_08: PARTIAL evidence: поточний rolling artifact є EMPTY після короткого контрольного poll  
+step_09: PARTIAL evidence: 4h post-fix runtime soak ще не запущено  
+step_10: NO evidence: Status_M8.md не оновлено після post-fix soak, бо soak evidence ще не існує  
 
-
-## Archive
-
-Historical M7 session reports (E1.81�E1.84) moved to archive/docs/DEV_REPORT_M7_history.md.
-Current file intentionally contains only the active milestone (M8) report.
+## 8) Що потрібно від тімліда зараз
+request_1: Запустити 4h M8 soak зі stable Base RPC endpoint перед дозволом будь-якої мови про закриття Phase 1.
+request_2: Вирішити або явно прийняти виняток `intent.txt` tier-limit перед використанням plain CI як release gate.
+request_3: Після появи fresh soak evidence спочатку оновити Status_M8.md, потім оновити цей report з нового artifact.

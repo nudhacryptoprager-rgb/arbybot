@@ -62,7 +62,7 @@ if str(_ROOT) not in sys.path:
 
 from core.env import env_flag_enabled, load_root_dotenv
 from core.logging import get_logger, setup_logging
-from core.rpc_urls import public_fallback_for
+from core.rpc_urls import public_fallback_for, resolve_rpc_http, resolve_rpc_ws
 from discovery.new_pool_listener import (
     FactoryConfig,
     NewPoolEvent,
@@ -181,12 +181,40 @@ def _resolve_rpc_url(chain: str, override: Optional[str]) -> str:
     """Return the RPC URL to use, in priority order.
 
     1. CLI override (``--rpc-url``)
-    2. ``BASE_RPC`` (or chain-upper env) env var
-    3. ``ARBY_BASE_RPC_URL`` / ``ARBY_{CHAIN}_RPC_URL``
-    4. Public fallback from ``core.rpc_urls``
+    2. ``core.rpc_urls.resolve_rpc_http`` -- centralized M5/M7 resolver
+       (handles chain-scoped env vars, dRPC validation, Alchemy keys,
+       public fallbacks).
+    3. Legacy chain-prefixed env vars (kept for backward compat).
+    4. Public fallback.
     """
     if override:
         return override
+
+    # 2) Use centralized resolver (M5/M7 RPC discipline).
+    chain_key = chain.lower()
+    chain_id_map = {"base": 8453, "arbitrum": 42161, "optimism": 10, "ethereum": 1}
+    chain_id = chain_id_map.get(chain_key)
+    try:
+        url, provider, diag = resolve_rpc_http(
+            chain_id=chain_id, network=chain_key, env=dict(os.environ)
+        )
+        if url:
+            logger.info(
+                "rpc_resolved_http",
+                extra={"context": {
+                    "chain": chain_key,
+                    "provider": provider,
+                    "source": diag.get("source"),
+                }},
+            )
+            return url
+    except Exception as exc:
+        logger.warning(
+            "resolve_rpc_http_failed",
+            extra={"context": {"chain": chain_key, "error": str(exc)[:120]}},
+        )
+
+    # 3) Legacy chain-prefixed env vars (backward compat).
     chain_upper = chain.upper()
     for env_var in (
         f"{chain_upper}_RPC",
@@ -196,6 +224,8 @@ def _resolve_rpc_url(chain: str, override: Optional[str]) -> str:
         val = os.environ.get(env_var, "").strip()
         if val:
             return val
+
+    # 4) Public fallback.
     fb = public_fallback_for(chain)
     if fb:
         return fb
@@ -203,6 +233,39 @@ def _resolve_rpc_url(chain: str, override: Optional[str]) -> str:
         f"No RPC URL available for chain={chain!r}. "
         f"Set {chain_upper}_RPC env var or pass --rpc-url."
     )
+
+
+def _resolve_ws_url(chain: str, override: Optional[str]) -> Optional[str]:
+    """Return a WebSocket RPC URL (or None if not configured).
+
+    Resolution uses ``core.rpc_urls.resolve_rpc_ws`` (centralized M5/M7
+    resolver). Returns ``None`` if no WS endpoint is available.
+    """
+    if override:
+        return override
+    chain_key = chain.lower()
+    chain_id_map = {"base": 8453, "arbitrum": 42161, "optimism": 10, "ethereum": 1}
+    chain_id = chain_id_map.get(chain_key)
+    try:
+        url, provider, diag = resolve_rpc_ws(
+            chain_id=chain_id, network=chain_key, env=dict(os.environ)
+        )
+        if url:
+            logger.info(
+                "rpc_resolved_ws",
+                extra={"context": {
+                    "chain": chain_key,
+                    "provider": provider,
+                    "source": diag.get("source"),
+                }},
+            )
+            return url
+    except Exception as exc:
+        logger.warning(
+            "resolve_rpc_ws_failed",
+            extra={"context": {"chain": chain_key, "error": str(exc)[:120]}},
+        )
+    return None
 
 
 def _get_block_number(w3: Any) -> Optional[int]:
@@ -346,12 +409,49 @@ def _build_and_write_artifact(
 ) -> None:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
+    recent_window = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]
+
+    # ------------------------------------------------------------------
+    # Step 7: Batch ERC20 symbol() via core.multicall.
+    # Per-token individual calls replaced with one multicall round-trip
+    # for tokens in the current artifact window. Falls back to the
+    # legacy per-token call on any multicall error.
+    # ------------------------------------------------------------------
+    symbol_map: Dict[str, Optional[str]] = {}
+    if w3 is not None and recent_window:
+        unique_tokens: List[str] = []
+        seen: Set[str] = set()
+        for e in recent_window:
+            for tok in (e.token0, e.token1):
+                if tok and tok not in seen:
+                    seen.add(tok)
+                    unique_tokens.append(tok)
+        try:
+            from core.multicall import get_multicall_batcher
+            rpc_url_for_mc: Optional[str] = None
+            try:
+                rpc_url_for_mc = getattr(w3.provider, "endpoint_uri", None)
+            except Exception:
+                rpc_url_for_mc = None
+            if rpc_url_for_mc:
+                block_num = _get_block_number(w3) or 0
+                batcher = get_multicall_batcher(rpc_url_for_mc, block_num)
+                symbol_map = batcher.batch_symbol(unique_tokens) or {}
+        except Exception as exc:
+            logger.warning(
+                "multicall_symbol_batch_failed_falling_back",
+                extra={"context": {"error": str(exc)[:120]}},
+            )
+            symbol_map = {}
+
     recent_list = []
-    for e in recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]:
-        token0_sym: Optional[str] = None
-        token1_sym: Optional[str] = None
-        if w3 is not None:
+    for e in recent_window:
+        # Prefer batched result; fall back to legacy cached single-call.
+        token0_sym: Optional[str] = symbol_map.get(e.token0) if symbol_map else None
+        token1_sym: Optional[str] = symbol_map.get(e.token1) if symbol_map else None
+        if w3 is not None and token0_sym is None:
             token0_sym = _get_symbol(e.token0, w3)
+        if w3 is not None and token1_sym is None:
             token1_sym = _get_symbol(e.token1, w3)
         pair = (
             f"{token0_sym}/{token1_sym}"
@@ -480,78 +580,99 @@ def _run_online_loop(
 
         cycle_raw = 0
         cycle_new = 0
+        cycle_rpc_calls = 0
+        per_factory_latency_ms: Dict[str, float] = {}
 
-        for cfg in configs:
+        # ------------------------------------------------------------------
+        # Step 6: Concurrent factory polling (bounded thread pool).
+        # Each factory eth_getLogs runs in parallel; per-factory latency
+        # is recorded for the artifact (Step 8).
+        # ------------------------------------------------------------------
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _poll_factory(cfg: FactoryConfig) -> tuple[FactoryConfig, list, bool, str, float]:
             params = _build_filter_params(w3, cfg, from_block, to_block)
-            funnel.inc_rpc_call()
+            t_start = time.monotonic()
             logs, had_err, err_str = _get_logs_safe(w3, params)
-            if had_err:
-                funnel.inc_rpc_error(err_str)
-                funnel.inc_dex(cfg.dex, "error")
-                continue
-            funnel.inc("raw_fetched", len(logs))
-            funnel.inc_dex(cfg.dex, "polls_ok")            # one per successful poll
-            funnel.inc_dex(cfg.dex, "raw_logs", len(logs))  # actual log count
-            cycle_raw += len(logs)
+            return cfg, logs, had_err, err_str, (time.monotonic() - t_start) * 1000.0
 
-            for raw_log in logs:
-                event = parse_raw_log(raw_log, cfg)
-                if event is None:
-                    funnel.inc("parse_failed")
+        max_workers = min(len(configs), 4) or 1
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_poll_factory, cfg) for cfg in configs]
+            for fut in as_completed(futures):
+                cfg, logs, had_err, err_str, lat_ms = fut.result()
+                cycle_rpc_calls += 1
+                funnel.inc_rpc_call()
+                per_factory_latency_ms[cfg.dex] = round(lat_ms, 1)
+                if had_err:
+                    funnel.inc_rpc_error(err_str)
+                    funnel.inc_dex(cfg.dex, "error")
                     continue
-                funnel.inc("parse_ok")
-                funnel.inc_dex(cfg.dex, "parse_ok")
+                funnel.inc("raw_fetched", len(logs))
+                funnel.inc_dex(cfg.dex, "polls_ok")
+                funnel.inc_dex(cfg.dex, "raw_logs", len(logs))
+                cycle_raw += len(logs)
 
-                if event.event_id in seen_ids:
-                    funnel.inc("dedup_dropped")
-                    continue
+                for raw_log in logs:
+                    event = parse_raw_log(raw_log, cfg)
+                    if event is None:
+                        funnel.inc("parse_failed")
+                        continue
+                    funnel.inc("parse_ok")
+                    funnel.inc_dex(cfg.dex, "parse_ok")
 
-                funnel.inc("dedup_new")
-                seen_ids.add(event.event_id)
+                    if event.event_id in seen_ids:
+                        funnel.inc("dedup_dropped")
+                        continue
 
-                # Phase 1: all dedup_new pass (honeypot filter in Phase 2)
-                funnel.inc("filter_passed")
-                funnel.inc("candidates_queued")
-                funnel.inc_dex(cfg.dex, "candidate")
-                cycle_new += 1
+                    funnel.inc("dedup_new")
+                    seen_ids.add(event.event_id)
 
-                recent_events.append(event)
-                if len(recent_events) > _MAX_RECENT_EVENTS_IN_ARTIFACT * 5:
-                    recent_events[:] = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT * 5:]
+                    # Phase 1: all dedup_new pass (honeypot filter in Phase 2)
+                    funnel.inc("filter_passed")
+                    funnel.inc("candidates_queued")
+                    funnel.inc_dex(cfg.dex, "candidate")
+                    cycle_new += 1
 
-                trace = EventTrace(
-                    event_id=event.event_id,
-                    chain=event.chain,
-                    dex=event.dex,
-                    factory=event.factory,
-                    pool=event.pool,
-                    token0=event.token0,
-                    token1=event.token1,
-                    block_number=event.block_number,
-                    received_ts=time.time(),
-                    filter_passed=True,
-                    candidate=True,
-                )
-                funnel.record_trace(trace)
+                    recent_events.append(event)
+                    if len(recent_events) > _MAX_RECENT_EVENTS_IN_ARTIFACT * 5:
+                        recent_events[:] = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT * 5:]
 
-                logger.info(
-                    "new_pool_event",
-                    extra={
-                        "context": {
-                            "event_id": event.event_id,
-                            "chain": event.chain,
-                            "dex": event.dex,
-                            "pool": event.pool,
-                            "token0": event.token0,
-                            "token1": event.token1,
-                            "block_number": event.block_number,
-                            "tx_hash": event.tx_hash,
-                        }
-                    },
-                )
+                    trace = EventTrace(
+                        event_id=event.event_id,
+                        chain=event.chain,
+                        dex=event.dex,
+                        factory=event.factory,
+                        pool=event.pool,
+                        token0=event.token0,
+                        token1=event.token1,
+                        block_number=event.block_number,
+                        received_ts=time.time(),
+                        filter_passed=True,
+                        candidate=True,
+                    )
+                    funnel.record_trace(trace)
 
+                    logger.info(
+                        "new_pool_event",
+                        extra={
+                            "context": {
+                                "event_id": event.event_id,
+                                "chain": event.chain,
+                                "dex": event.dex,
+                                "pool": event.pool,
+                                "token0": event.token0,
+                                "token1": event.token1,
+                                "block_number": event.block_number,
+                                "tx_hash": event.tx_hash,
+                            }
+                        },
+                    )
+
+        cycle_duration_ms = (time.monotonic() - cycle_start) * 1000.0
         last_processed_block = to_block
         funnel.complete_cycle()
+        funnel.record_cycle_latency(cycle_duration_ms, per_factory_latency_ms)
 
         elapsed_since_artifact = time.monotonic() - last_artifact_ts
         if elapsed_since_artifact >= _ARTIFACT_WRITE_INTERVAL_S:
@@ -581,6 +702,9 @@ def _run_online_loop(
                     "raw_logs": cycle_raw,
                     "new_events": cycle_new,
                     "total_candidates": funnel.snapshot()["snipe_candidates_total"],
+                    "cycle_duration_ms": round(cycle_duration_ms, 1),
+                    "rpc_calls": cycle_rpc_calls,
+                    "factory_latency_ms": per_factory_latency_ms,
                 }
             },
         )
@@ -651,6 +775,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--skip-self-test", action="store_true",
         help="Skip startup self-test (verification block replay).",
+    )
+    parser.add_argument(
+        "--skip-preflight", action="store_true",
+        help="Skip RPC preflight (chain_id + archive + newHeads).",
+    )
+    parser.add_argument(
+        "--prefer-ws", action="store_true",
+        help="(Phase 1.3+) Prefer WS endpoint when resolvable; HTTP polling stays "
+             "as fallback (heartbeat + reconnect implemented elsewhere).",
     )
     args = parser.parse_args(argv)
 
@@ -758,6 +891,50 @@ def main(argv: Optional[List[str]] = None) -> int:
                 extra={"context": {"rpc_url": rpc_url, "error": str(exc)}},
             )
             return 1
+
+        # --------------------------------------------------------------
+        # RPC preflight (Step 3) -- chain_id + archive depth + WS newHeads.
+        # Skippable with --skip-preflight. Hard-fails only on chain_id mismatch.
+        # --------------------------------------------------------------
+        if not args.skip_preflight:
+            try:
+                from scripts.check_rpc_endpoints import (
+                    check_chain_id, check_http_archive, check_ws_newheads,
+                )
+                chain_id_map = {"base": 8453, "arbitrum": 42161, "optimism": 10, "ethereum": 1}
+                expected_chain_id = chain_id_map.get(args.chain.lower(), 0)
+                if expected_chain_id:
+                    ok, msg = check_chain_id(rpc_url, expected_chain_id)
+                    if ok:
+                        logger.info("preflight_chain_id_ok", extra={"context": {"msg": msg}})
+                    else:
+                        logger.error("preflight_chain_id_FAIL", extra={"context": {"msg": msg}})
+                        return 4
+
+                ok, msg = check_http_archive(rpc_url, archive_depth=2000)
+                logger.info(
+                    "preflight_archive",
+                    extra={"context": {"ok": ok, "msg": msg[:120]}},
+                )
+
+                # WS newHeads is informational only; HTTP-polling can still run.
+                ws_url = _resolve_ws_url(args.chain, None)
+                if ws_url:
+                    ok, msg = check_ws_newheads(ws_url, timeout=15.0)
+                    logger.info(
+                        "preflight_ws_newheads",
+                        extra={"context": {"ok": ok, "msg": msg[:120], "ws_resolved": True}},
+                    )
+                else:
+                    logger.info(
+                        "preflight_ws_newheads_skipped",
+                        extra={"context": {"reason": "no WS URL resolved for chain"}},
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "preflight_exception",
+                    extra={"context": {"error": str(exc)[:120]}},
+                )
 
         if not args.skip_self_test:
             self_test_ok = _run_self_test(w3, configs, args.chain)

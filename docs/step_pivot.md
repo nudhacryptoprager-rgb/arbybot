@@ -96,7 +96,7 @@
 | 7 | `monitoring/sniper_artifacts.py` — write `new_pool_sniper_latest.json` | + module | Schema validation test pass |
 | 8 | Cold-lane switch: feature flag `ARBY_SNIPER_MODE=1` redirects from backrun queue to new-pool queue | `m7/orderflow/bridge_runtime.py` | A/B: backrun mode unchanged, sniper mode ingests new-pool events |
 | 9 | End-to-end integration test (mock RPC + event injection) | `tests/unit/test_phase1_e2e.py` | 100% events reach scored state |
-| 10 | 4-hour foundation soak (paper, no trades, listener-only) | runtime script | Real RPC, log events seen |
+| 10 | 1-hour validation gate (paper, no trades, listener-only) — gated by RPC preflight + factory probes | runtime script | Real RPC, multi-factory events seen |
 
 ### 1.4. На чому акцентувати
 
@@ -107,7 +107,7 @@
 
 ### 1.5. Критерії успіху Phase 1
 - [ ] ≥3 factory listeners active (Aerodrome + UniV3 + UniV4 або Pancake)
-- [ ] 4-hour soak: `pool_creation_events_seen > 0` (real events on Base)
+- [ ] 1-hour validation gate: `pool_creation_events_seen > 0` AND multi-factory `parse_ok > 0` (≥2 distinct dexes), gated by RPC/WS preflight + factory probes
 - [ ] Dual-source reconciliation: primary RPC and secondary HTTP `eth_getLogs` agree for factory events
 - [ ] Honeypot detector: 10/10 scam reject, 10/10 legit accept (test fixtures)
 - [ ] ≥30 unit tests (listener + detector + inventory) green

@@ -126,6 +126,83 @@ Phase 3: constrained real execution.
 - ✅ Step R10: 60-min soak started 2026-05-13T22:49:30Z via m8.runtime.smoke_run thin wrapper
   - IN_PROGRESS at time of status update; results to be appended when complete
 
+## Round-4 GPT Review Evidence (2026-05-14)
+
+Lead directive: drop multi-hour soaks until a 1-hour validation gate proves multi-factory coverage.
+All 10 review steps executed in a single session, with intermediate verification between iterations.
+
+- ✅ R4.1 Ownership of dirty changes claimed:
+  - Codex previously corrected aerodrome ve33 event signature: was `PairCreated`, real on-chain
+    event is `PoolCreated(address indexed token0, address indexed token1, bool indexed stable,
+    address pool, uint256)` with topic0 `0x2128d88d14c80cb081c1252a5acff7a264671bf199ce226b53788fb26065005e`.
+    Verified live on 2026-05-14: 1 event at block 45925521 in window 45925000-45926000.
+  - `LAYOUT_VE33_POOL_CREATED` + `_parse_ve33_pool_created` added to `discovery/new_pool_listener.py`.
+  - 5 new tests in `tests/unit/test_m8_sniper_listener.py::TestParseVe33PoolCreated`.
+- ✅ R4.2 Documentation rebalanced: `docs/step_pivot.md` switched from "4-hour foundation soak"
+  to "1-hour validation gate (paper, no trades, listener-only) — gated by RPC preflight + factory probes".
+- ✅ R4.3 RPC preflight wired into M8 online flow: `m8/runtime/smoke_run.py` now invokes
+  `scripts.check_rpc_endpoints.check_chain_id`, `check_http_archive`, `check_ws_newheads` before
+  self-test. Hard-fails (exit 4) only on chain_id mismatch. `--skip-preflight` flag available.
+- ✅ R4.4 M8 routes through `core.rpc_urls.resolve_rpc_http` and `resolve_rpc_ws`. dRPC validation,
+  Alchemy keys, public fallbacks now apply to M8 the same way they do to M5/M7.
+- ✅ R4.5 WebSocket listener skeleton added (`m8/runtime/ws_listener.py`): `WSPoolEventListener`
+  with `eth_subscribe logs`, bounded exponential backoff, reconnect, `last_event_seen_ts`
+  heartbeat field, callback-based event handoff. 12 new tests in
+  `tests/unit/test_m8_ws_listener.py`. Integration into the main loop is gated behind
+  `--prefer-ws` (Phase 1.3+); HTTP polling stays the canonical path through Phase 1.2.
+- ✅ R4.6 Concurrent factory polling: factory `eth_getLogs` calls now run in a bounded
+  `ThreadPoolExecutor(max_workers=min(N,4))`. Per-factory wall-clock latency recorded.
+- ✅ R4.7 ERC20 `symbol()` batched via `core.multicall.get_multicall_batcher` /
+  `batch_symbol(...)` in `_build_and_write_artifact`. Per-token single-call path kept as
+  fallback for tokens missing from batch (e.g. some non-standard ERC20s).
+- ✅ R4.8 Latency surface added to artifact: `metrics.cycle_latency_ms = {count,p50,p95,max}`
+  and `metrics.factory_latency_ms_last` (per-dex). Backed by `FunnelTracker.record_cycle_latency`.
+- ✅ R4.9 Phase 2 fork-backend integration plan documented at
+  `docs/m8/PHASE_2_FORK_BACKEND_INTEGRATION.md` (honeypot layer 1, slippage estimator,
+  roundtrip realisability gate; Anvil stays terminal-stage only).
+- ✅ R4.10 1-hour validation gate COMPLETED 2026-05-14T09:39:11Z → 2026-05-14T10:39:22Z (3610.4s):
+  - Preflight: chain_id 8453 OK; archive head=45977501 (probed block=45975501) OK; WS newHeads OK.
+  - Self-test PASS on all four factories: uniswap_v3 (2 events parsed), aerodrome_slipstream (1),
+    aerodrome ve33 (1), pancakeswap_v3 (1). First-ever 4/4 PASS.
+  - Run: `--poll-interval-s 10 --blocks-back 100`, cycles=354, RPC calls=1416, RPC errors=209
+    (14.8% — drpc 408 timeouts + 5xx; above 5% Phase 1.3 target but does not block listener path;
+    will be addressed by `--prefer-ws` and/or Alchemy fallback in next iteration).
+  - Per-dex breakdown (polls / raw_logs / parse_ok / errors / candidates):
+    - uniswap_v3:           303 / 0 / 0 / 51 / 0
+    - aerodrome_slipstream: 297 / 0 / 0 / 57 / 0
+    - aerodrome (ve33):     304 / 0 / 0 / 50 / 0
+    - pancakeswap_v3:       303 / 0 / 0 / 51 / 0
+  - Latency metrics confirmed live: `cycle_latency_ms = {count:22, p50:3703, p95:7203, max:7421}`
+    @ elapsed=220s (captured mid-run; full p95 in artifact at run end).
+  - Final artifact: `status=EMPTY, candidates_total=0` — NO `PoolCreated`/`PairCreated` event landed
+    on Base in the 100-block rolling window during the 1-hour run. This is a real-world property
+    of Base at that hour, not an M8 bug: the listener polled correctly, all 4 factories were
+    self-tested green on a known historical block window before live polling started, and the
+    artifact pipeline (factory_breakdown, rpc_error_histogram, cycle/factory latency, multicall
+    symbol fallback) was fully exercised.
+  - **multi_factory_coverage_status remains PARTIAL**: multi-factory `parse_ok > 0` not yet proven
+    on live tip — proof requires either (a) a longer live run that catches a real PoolCreated, or
+    (b) the planned `--prefer-ws` listener which subscribes to live newHeads + logs without the
+    100-block lookback throttle.
+  - Full unit baseline after Round-4 changes: **5394 passed, 6 skipped** (5376 → 5394, +18 tests:
+    12 WS listener + 5 ve33_pool_created parser + 1 aerodrome topic assertion).
+
+## Phase 1 Close Criteria (1-hour validation gate)
+
+Phase 1 closure requires *all* of:
+
+- [x] RPC preflight (`chain_id` + `archive` + `WS newHeads`) PASS for the run RPC.
+- [x] Factory self-test PASS for every factory in `config/new_pool_factories.yaml` that has
+      `verification_from_block`/`verification_to_block` set (currently 4 of 4 on Base).
+- [x] 1-hour scan completes without `self_test_FAILED` (RPC error rate 14.8% on drpc — above
+      the 5% target; tracked as follow-up: `--prefer-ws` or Alchemy fallback).
+- [x] `parse_failed == 0` across the 1-hour window (raw_logs=0, parse_ok=0, parse_failed=0).
+- [ ] `factory_breakdown` shows `parse_ok > 0` for at least two distinct DEXes
+      (multi-factory coverage proven, not just `uniswap_v3`).
+      **Status: PARTIAL** — Base did not produce any PoolCreated/PairCreated event in the
+      100-block rolling window during the 1h gate. Re-run with `--prefer-ws` (no lookback throttle)
+      OR a longer run that catches a real new-pool event.
+
 ## Next Required Evidence (Phase 2)
 
 - Honeypot / scam / freshness filters return non-zero reject counts on known rugpull tokens

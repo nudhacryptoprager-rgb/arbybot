@@ -80,6 +80,27 @@ def _classify_rpc_error(error_str: str) -> str:
     return _RPC_ERR_OTHER
 
 
+def _percentile_summary(samples: List[float]) -> Dict[str, Optional[float]]:
+    """Return p50/p95/max summary for a list of latency samples (ms).
+
+    All keys present even if list is empty (values become ``None``).
+    """
+    if not samples:
+        return {"count": 0, "p50": None, "p95": None, "max": None}
+    s = sorted(samples)
+    n = len(s)
+    def _q(q: float) -> float:
+        # Nearest-rank percentile (cheap, no numpy dependency).
+        idx = max(0, min(n - 1, int(round(q * (n - 1)))))
+        return round(s[idx], 1)
+    return {
+        "count": n,
+        "p50": _q(0.50),
+        "p95": _q(0.95),
+        "max": round(s[-1], 1),
+    }
+
+
 def _build_factory_breakdown(
     polls_ok: Dict[str, int],
     raw_logs: Dict[str, int],
@@ -189,6 +210,12 @@ class FunnelTracker:
         self._dex_parse_ok: Dict[str, int] = {}
         self._dex_errors: Dict[str, int] = {}
         self._dex_candidates: Dict[str, int] = {}
+        # Latency tracking (Step 8: latency metrics in artifact)
+        # cycle_durations_ms: ring buffer of last N cycle wall-clock durations.
+        # factory_latency_ms: last observed per-factory eth_getLogs latency.
+        self._cycle_durations_ms: List[float] = []
+        self._factory_latency_ms_last: Dict[str, float] = {}
+        self._max_cycle_latency_samples: int = 256
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -248,6 +275,26 @@ class FunnelTracker:
         with self._lock:
             self._cycles_completed += 1
 
+    def record_cycle_latency(
+        self,
+        cycle_duration_ms: float,
+        per_factory_latency_ms: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """Record latency samples for one polling cycle (Step 8).
+
+        - ``cycle_duration_ms`` appended to ring buffer (bounded length).
+        - ``per_factory_latency_ms`` overwrites the "last observed" map.
+        """
+        with self._lock:
+            self._cycle_durations_ms.append(float(cycle_duration_ms))
+            if len(self._cycle_durations_ms) > self._max_cycle_latency_samples:
+                self._cycle_durations_ms = self._cycle_durations_ms[
+                    -self._max_cycle_latency_samples:
+                ]
+            if per_factory_latency_ms:
+                # Shallow copy (small dict).
+                self._factory_latency_ms_last = dict(per_factory_latency_ms)
+
     def record_trace(self, trace: EventTrace) -> None:
         """Append a per-event trace (ring-buffer, drops oldest if full)."""
         with self._lock:
@@ -295,6 +342,9 @@ class FunnelTracker:
                 # Session
                 "cycles_completed": self._cycles_completed,
                 "elapsed_s": round(elapsed, 1),
+                # Latency (Step 8)
+                "cycle_latency_ms": _percentile_summary(self._cycle_durations_ms),
+                "factory_latency_ms_last": dict(self._factory_latency_ms_last),
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

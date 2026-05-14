@@ -19,6 +19,7 @@ are intentionally NOT in this module (those are Phase 1 Day 8–9 concerns).
 Log layout constants (see config/new_pool_factories.yaml):
   ``v3_pool_created``         — Uniswap V3 / PancakeSwap V3
   ``slipstream_pool_created`` — Aerodrome Slipstream CL
+  ``ve33_pool_created``       — Aerodrome/Velodrome ve33 PoolFactory
   ``ve33_pair_created``       — Aerodrome ve33 / Solidly forks
   ``v2_pair_created``         — Uniswap V2 / SushiSwap V2 / BaseSwap V2
 """
@@ -38,6 +39,7 @@ __all__ = [
     "dedup_events",
     "LAYOUT_V3_POOL_CREATED",
     "LAYOUT_SLIPSTREAM_POOL_CREATED",
+    "LAYOUT_VE33_POOL_CREATED",
     "LAYOUT_VE33_PAIR_CREATED",
     "LAYOUT_V2_PAIR_CREATED",
 ]
@@ -48,12 +50,14 @@ __all__ = [
 
 LAYOUT_V3_POOL_CREATED = "v3_pool_created"
 LAYOUT_SLIPSTREAM_POOL_CREATED = "slipstream_pool_created"
+LAYOUT_VE33_POOL_CREATED = "ve33_pool_created"
 LAYOUT_VE33_PAIR_CREATED = "ve33_pair_created"
 LAYOUT_V2_PAIR_CREATED = "v2_pair_created"
 
 _KNOWN_LAYOUTS = frozenset({
     LAYOUT_V3_POOL_CREATED,
     LAYOUT_SLIPSTREAM_POOL_CREATED,
+    LAYOUT_VE33_POOL_CREATED,
     LAYOUT_VE33_PAIR_CREATED,
     LAYOUT_V2_PAIR_CREATED,
 })
@@ -445,6 +449,58 @@ def _parse_ve33_pair_created(
     )
 
 
+def _parse_ve33_pool_created(
+    raw_log: Dict[str, Any],
+    cfg: FactoryConfig,
+) -> Optional[NewPoolEvent]:
+    """Parse Aerodrome / Velodrome ve33 PoolCreated event.
+
+    Log structure:
+      topics[0]: keccak256("PoolCreated(address,address,bool,address,uint256)")
+      topics[1]: token0  (indexed address)
+      topics[2]: token1  (indexed address)
+      topics[3]: stable  (indexed bool)
+      data:      abi.encode(address pool, uint256 allPools)
+                 = word0: pool | word1: allPools
+    """
+    topics = raw_log.get("topics") or []
+    if len(topics) < 4:
+        return None
+
+    token0 = _topic_to_address(topics[1])
+    token1 = _topic_to_address(topics[2])
+    stable = bool(_topic_to_uint(topics[3]))
+
+    data = raw_log.get("data", "0x") or "0x"
+    if len(_strip_0x(data)) < 128:  # need at least 2 words
+        return None
+
+    pool = "0x" + _data_word(data, 0)[-40:].lower()
+
+    block_number = _parse_block_number(raw_log)
+    tx_hash = (raw_log.get("transactionHash") or "").lower()
+    log_index = _parse_log_index(raw_log)
+
+    event_id = make_event_id(cfg.chain, cfg.factory, tx_hash, log_index)
+    return NewPoolEvent(
+        event_id=event_id,
+        chain=cfg.chain,
+        dex=cfg.dex,
+        adapter_type=cfg.adapter_type,
+        factory=cfg.factory,
+        event_name=cfg.event_name,
+        pool=pool,
+        token0=token0,
+        token1=token1,
+        fee=None,
+        tick_spacing=None,
+        stable=stable,
+        block_number=block_number,
+        tx_hash=tx_hash,
+        log_index=log_index,
+    )
+
+
 def _parse_v2_pair_created(
     raw_log: Dict[str, Any],
     cfg: FactoryConfig,
@@ -498,6 +554,7 @@ def _parse_v2_pair_created(
 _LAYOUT_PARSERS = {
     LAYOUT_V3_POOL_CREATED: _parse_v3_pool_created,
     LAYOUT_SLIPSTREAM_POOL_CREATED: _parse_slipstream_pool_created,
+    LAYOUT_VE33_POOL_CREATED: _parse_ve33_pool_created,
     LAYOUT_VE33_PAIR_CREATED: _parse_ve33_pair_created,
     LAYOUT_V2_PAIR_CREATED: _parse_v2_pair_created,
 }

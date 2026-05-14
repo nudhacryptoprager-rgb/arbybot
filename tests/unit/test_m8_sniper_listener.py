@@ -21,6 +21,7 @@ import pytest
 # ---------------------------------------------------------------------------
 from discovery.new_pool_listener import (
     LAYOUT_SLIPSTREAM_POOL_CREATED,
+    LAYOUT_VE33_POOL_CREATED,
     LAYOUT_V2_PAIR_CREATED,
     LAYOUT_V3_POOL_CREATED,
     LAYOUT_VE33_PAIR_CREATED,
@@ -147,6 +148,35 @@ def _make_ve33_log(
             "0xc4805696c66d7cf352fc1d6bb633ad5ee82f6cb577c453024b6e0eb8306c6fc9",
             _to_topic_address(token0),
             _to_topic_address(token1),
+        ],
+        "data": data,
+        "blockNumber": block_number,
+        "transactionHash": tx_hash,
+        "logIndex": hex(log_index),
+    }
+
+
+def _make_ve33_pool_log(
+    token0: str = TOKEN0,
+    token1: str = TOKEN1,
+    stable: bool = False,
+    pool: str = POOL,
+    all_pools: int = 42,
+    tx_hash: str = TX_HASH,
+    log_index: int = LOG_INDEX,
+    block_number: str = BLOCK_HEX,
+    factory: str = "0x420dd381b31aef6683db6b902084cb0ffece40da",
+) -> Dict[str, Any]:
+    pool_word = _to_data_word(pool)
+    all_pools_word = _to_data_word(all_pools)
+    data = "0x" + pool_word + all_pools_word
+    return {
+        "address": factory,
+        "topics": [
+            "0x2128d88d14c80cb081c1252a5acff7a264671bf199ce226b53788fb26065005e",
+            _to_topic_address(token0),
+            _to_topic_address(token1),
+            _to_topic_uint(1 if stable else 0),
         ],
         "data": data,
         "blockNumber": block_number,
@@ -377,7 +407,50 @@ class TestParseSlipstreamPoolCreated:
 
 
 # ---------------------------------------------------------------------------
-# ve33 PairCreated parser
+# ve33 PoolCreated parser (Aerodrome / Velodrome)
+# ---------------------------------------------------------------------------
+
+class TestParseVe33PoolCreated:
+    def _vcfg(self) -> FactoryConfig:
+        return _cfg(
+            dex=DEX_VE33,
+            adapter_type="ve33",
+            factory="0x420dd381b31aef6683db6b902084cb0ffece40da",
+            layout=LAYOUT_VE33_POOL_CREATED,
+        )
+
+    def test_volatile_pool(self):
+        log = _make_ve33_pool_log(stable=False)
+        ev = parse_raw_log(log, self._vcfg())
+        assert ev is not None
+        assert ev.event_name == "PoolCreated"
+        assert ev.stable is False
+        assert ev.fee is None
+        assert ev.tick_spacing is None
+        assert ev.pool == POOL.lower()
+        assert ev.adapter_type == "ve33"
+
+    def test_stable_pool(self):
+        log = _make_ve33_pool_log(stable=True)
+        ev = parse_raw_log(log, self._vcfg())
+        assert ev is not None
+        assert ev.stable is True
+
+    def test_too_few_topics_returns_none(self):
+        log = _make_ve33_pool_log()
+        log["topics"] = log["topics"][:3]  # remove indexed stable topic
+        ev = parse_raw_log(log, self._vcfg())
+        assert ev is None
+
+    def test_short_data_returns_none(self):
+        log = _make_ve33_pool_log()
+        log["data"] = "0x" + "00" * 30  # less than 2 words
+        ev = parse_raw_log(log, self._vcfg())
+        assert ev is None
+
+
+# ---------------------------------------------------------------------------
+# ve33 PairCreated parser (legacy Solidly-style forks)
 # ---------------------------------------------------------------------------
 
 class TestParseVe33PairCreated:
@@ -482,6 +555,18 @@ class TestParseRawLogDispatch:
             dex=DEX_VE33,
             adapter_type="ve33",
             factory="0x420dd381b31aef6683db6b902084cb0ffece40da",
+            layout=LAYOUT_VE33_POOL_CREATED,
+        )
+        ev = parse_raw_log(_make_ve33_pool_log(), cfg)
+        assert ev is not None
+        assert ev.adapter_type == "ve33"
+        assert ev.event_name == "PoolCreated"
+
+    def test_dispatch_legacy_ve33_pair_created(self):
+        cfg = _cfg(
+            dex=DEX_VE33,
+            adapter_type="ve33",
+            factory="0x420dd381b31aef6683db6b902084cb0ffece40da",
             layout=LAYOUT_VE33_PAIR_CREATED,
         )
         ev = parse_raw_log(_make_ve33_log(), cfg)
@@ -572,9 +657,20 @@ class TestLoadFactoryConfig:
             assert cfg.log_layout in (
                 LAYOUT_V3_POOL_CREATED,
                 LAYOUT_SLIPSTREAM_POOL_CREATED,
+                LAYOUT_VE33_POOL_CREATED,
                 LAYOUT_VE33_PAIR_CREATED,
                 LAYOUT_V2_PAIR_CREATED,
             ), f"Unknown layout: {cfg.log_layout}"
+
+    def test_aerodrome_uses_pool_created_topic(self):
+        configs = load_factory_config()
+        aero = next(c for c in configs if c.dex == "aerodrome")
+        assert aero.event_name == "PoolCreated"
+        assert aero.event_signature == "PoolCreated(address,address,bool,address,uint256)"
+        assert aero.topic0 == "0x2128d88d14c80cb081c1252a5acff7a264671bf199ce226b53788fb26065005e"
+        assert aero.log_layout == LAYOUT_VE33_POOL_CREATED
+        assert aero.verification_from_block == 45925000
+        assert aero.verification_to_block == 45926000
 
     def test_uniswap_v3_present(self):
         configs = load_factory_config()
