@@ -5,11 +5,11 @@
 **schema_family**: m8_sniper
 **schema_revision**: phase2.0
 **blocker_status_before**: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
-**blocker_status_after**: PHASE2_SHORT_GATES_PASS_24H_SOAK_AUTHORIZED
+**blocker_status_after**: PHASE2_SHORT_GATES_PASS_REAL_INPUT_GATE_REQUIRED
 **phase1_close_allowed**: true (R8b 15-min gate PASS 2026-05-14T18:01:39Z→18:16:49Z)
 **phase2_paper_only_unlocked**: true
 **phase2_status**: PAPER_ONLY_STABILIZED
-**phase2_24h_soak_allowed**: true
+**phase2_24h_soak_blocked_until_real_inputs**: true
 **phase2_real_execution_allowed**: false (kill-switch ON, execution_enabled=false)
 
 ---

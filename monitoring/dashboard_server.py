@@ -948,15 +948,38 @@ def _m8_decimal_field(source: dict, *keys):
 
 
 def _m8_realizability(event: dict, *, phase: str = "phase1_listener_only") -> tuple[bool, str, dict]:
+    # Phase 2 decision data (if enricher already ran for this event)
+    phase2_dec: dict = event.get("phase2_decision") or {}
+
     spread_usd = _m8_decimal_field(event, "spread_usd", "net_spread_usd", "edge_usd")
+    # Phase2 spread_bps fallback
     spread_bps = _m8_decimal_field(event, "spread_bps", "net_bps", "net_spread_bps")
+    if spread_bps is None and phase2_dec.get("estimated_spread_bps") is not None:
+        try:
+            from decimal import Decimal
+            spread_bps = Decimal(str(phase2_dec["estimated_spread_bps"]))
+        except Exception:
+            pass
     volume_usd = _m8_decimal_field(
         event, "volume_usd", "amount_usd", "size_usd", "notional_usd"
     )
+    # Phase2 expected_pnl_usd fallback
     profit_usd = _m8_decimal_field(
         event, "profit_usd", "expected_profit_usd", "net_pnl_usd"
     )
+    if profit_usd is None and phase2_dec.get("expected_pnl_usd") is not None:
+        try:
+            from decimal import Decimal
+            profit_usd = Decimal(str(phase2_dec["expected_pnl_usd"]))
+        except Exception:
+            pass
     explicit = _first_present(event, "realizable", "can_execute", "executable")
+
+    # Phase 2 explicit WOULD_ENTER decision overrides phase1 listener-only
+    # event-level uses "verdict", summary-level uses "dry_run_decision"
+    if phase2_dec.get("verdict") == "WOULD_ENTER" or phase2_dec.get("dry_run_decision") == "WOULD_ENTER":
+        phase = "phase2_would_enter"
+        explicit = True
 
     metrics = {
         "phase": phase,
@@ -964,7 +987,10 @@ def _m8_realizability(event: dict, *, phase: str = "phase1_listener_only") -> tu
         "spread_bps_available": spread_bps is not None,
         "volume_usd_available": volume_usd is not None,
         "profit_usd_available": profit_usd is not None,
-        "honeypot_checked": bool(event.get("honeypot_checked")),
+        "honeypot_checked": bool(
+            event.get("honeypot_checked")
+            or phase2_dec.get("honeypot_verdict") is not None
+        ),
         "simulation_available": bool(event.get("simulation_available") or event.get("sim_passed")),
         "live_execution_enabled": bool(event.get("live_execution_enabled")),
     }
@@ -1029,6 +1055,12 @@ def _build_m8_funnel(metrics: dict) -> dict:
         "rpc_errors": _safe_int(metrics.get("rpc_errors")),
         "cycles_completed": _safe_int(metrics.get("cycles_completed")),
         "elapsed_s": _safe_float(metrics.get("elapsed_s")),
+        # Phase 2 counters
+        "phase2_reject_histogram": metrics.get("phase2_reject_histogram") or {},
+        "phase2_would_enter_count": _safe_int(metrics.get("phase2_would_enter_count")),
+        "phase2_expected_pnl_non_null_count": _safe_int(
+            metrics.get("phase2_expected_pnl_non_null_count")
+        ),
     }
 
 
@@ -1056,13 +1088,29 @@ def build_m8_current_payload(
             continue
         spread_usd = _m8_decimal_field(event, "spread_usd", "net_spread_usd", "edge_usd")
         spread_bps = _m8_decimal_field(event, "spread_bps", "net_bps", "net_spread_bps")
+        # Phase 2 fallback: use enricher's estimated_spread_bps when no phase1 spread
+        _p2 = event.get("phase2_decision") or {}
+        if spread_bps is None and _p2.get("estimated_spread_bps") is not None:
+            try:
+                from decimal import Decimal as _D
+                spread_bps = _D(str(_p2["estimated_spread_bps"]))
+            except Exception:
+                pass
         volume_usd = _m8_decimal_field(
             event, "volume_usd", "amount_usd", "size_usd", "notional_usd"
         )
         profit_usd = _m8_decimal_field(
             event, "profit_usd", "expected_profit_usd", "net_pnl_usd"
         )
+        # Phase 2 fallback: use enricher's expected_pnl_usd when no phase1 profit
+        if profit_usd is None and _p2.get("expected_pnl_usd") is not None:
+            try:
+                from decimal import Decimal as _D
+                profit_usd = _D(str(_p2["expected_pnl_usd"]))
+            except Exception:
+                pass
         realizable, reason, blocking_metrics = _m8_realizability(event)
+        phase2_dec: dict = event.get("phase2_decision") or {}
         rows.append({
             "event_id": event.get("event_id"),
             "chain": event.get("chain"),
@@ -1079,6 +1127,12 @@ def build_m8_current_payload(
             "is_realizable": realizable,
             "realizability_reason": reason,
             "blocking_metrics": blocking_metrics,
+            # Phase 2 enrichment fields
+            "phase2_decision": phase2_dec.get("dry_run_decision"),
+            "liquidity_usd": phase2_dec.get("liquidity_usd"),
+            "honeypot_verdict": phase2_dec.get("honeypot_verdict"),
+            "mirror_found": phase2_dec.get("mirror_found"),
+            "slippage_result": phase2_dec.get("slippage_result"),
             "info": {
                 "token0": event.get("token0"),
                 "token1": event.get("token1"),

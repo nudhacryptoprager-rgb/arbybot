@@ -365,6 +365,8 @@ ALLOWED_YAML_FILES = {
     "onboard_zksync_candidate.yaml",
     # M8 Phase 1 — new-pool sniping factory listener config
     "new_pool_factories.yaml",
+    # M8 Phase 2 — entry-candidate enricher config (anchor prices, probe size, etc.)
+    "enricher.yaml",
 }
 
 

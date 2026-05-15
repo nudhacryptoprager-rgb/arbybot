@@ -231,6 +231,10 @@ class FunnelTracker:
         # Run scope (Step 3: identifies full vs isolated --dex runs)
         self._run_scope: str = "all"
         self._dex_filter: Optional[str] = None
+        # Phase 2 decision counters
+        self._phase2_reject_histogram: Dict[str, int] = {}
+        self._phase2_would_enter_count: int = 0
+        self._phase2_expected_pnl_non_null_count: int = 0
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -357,6 +361,23 @@ class FunnelTracker:
             self._run_scope = run_scope
             self._dex_filter = dex_filter
 
+    def inc_phase2_reject(self, reason: str) -> None:
+        """Increment reject histogram for a Phase 2 engine rejection."""
+        with self._lock:
+            self._phase2_reject_histogram[reason] = (
+                self._phase2_reject_histogram.get(reason, 0) + 1
+            )
+
+    def inc_phase2_would_enter(self) -> None:
+        """Increment WOULD_ENTER counter."""
+        with self._lock:
+            self._phase2_would_enter_count += 1
+
+    def inc_phase2_expected_pnl_non_null(self) -> None:
+        """Increment counter of candidates with non-null expected_pnl_usd."""
+        with self._lock:
+            self._phase2_expected_pnl_non_null_count += 1
+
     def record_trace(self, trace: EventTrace) -> None:
         """Append a per-event trace (ring-buffer, drops oldest if full)."""
         with self._lock:
@@ -421,6 +442,10 @@ class FunnelTracker:
                 "self_test_by_dex": dict(self._self_test_by_dex),
                 "run_scope": self._run_scope,
                 "dex_filter": self._dex_filter,
+                # Phase 2 decision metrics
+                "phase2_reject_histogram": dict(self._phase2_reject_histogram),
+                "phase2_would_enter_count": self._phase2_would_enter_count,
+                "phase2_expected_pnl_non_null_count": self._phase2_expected_pnl_non_null_count,
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

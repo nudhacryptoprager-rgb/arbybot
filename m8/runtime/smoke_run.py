@@ -89,6 +89,13 @@ try:
 except ImportError:  # pragma: no cover
     _PHASE2_ENTRY_ENGINE_AVAILABLE = False
 
+# Phase 2 — candidate enricher (on-chain liquidity / spread / mirror / honeypot)
+try:
+    from strategy.entry_candidate_enricher import EntryCandidateEnricher
+    _PHASE2_ENRICHER_AVAILABLE: bool = True
+except ImportError:  # pragma: no cover
+    _PHASE2_ENRICHER_AVAILABLE = False
+
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -239,28 +246,53 @@ def _apply_phase2_decision(
     event: NewPoolEvent,
     engine: Any,
     decisions: Dict[str, Any],
+    enricher: Any = None,
+    funnel: Any = None,
 ) -> None:
     """Run the Phase 2 paper-only entry engine for *event* and store the result.
 
-    Builds a minimal :class:`~strategy.sniper_entry_decision.EntryCandidate`
-    from the available pool event fields (token addresses, dex, block).
-    Liquidity and spread are not yet available at pool-creation time, so the
-    engine will typically return SKIP / INSUFFICIENT_DATA for new events.
-    The key outcome is that ``dry_run_decision`` is **non-null**, proving
-    the Phase 2 engine is actively integrated into the runtime pipeline.
+    When *enricher* is provided (online mode), the candidate is built with
+    real on-chain data (liquidity, spread, mirror, honeypot).  Without an
+    enricher the candidate is bare (identity fields only) and the engine
+    will return SKIP / INSUFFICIENT_DATA, which is the correct conservative
+    fallback for offline / no-RPC mode.
 
-    Results are stored in *decisions* keyed by ``event.event_id``.
+    Results are stored in *decisions* keyed by ``event.event_id``.  When
+    *funnel* is provided, phase2 counters are updated.
+
+    NOTE: Caller is responsible for holding ``phase2_lock`` (if any) around
+    this call to protect both the enricher's ``seen_pairs`` registry and the
+    shared *decisions* dict from concurrent WS + HTTP threads.
     """
     try:
-        cand = EntryCandidate(
-            token0=(event.token0 or "").lower(),
-            token1=(event.token1 or "").lower(),
-            pool=(event.pool or "").lower(),
-            dex=event.dex,
-            block_number=event.block_number,
-        )
+        extra_fields: Dict[str, Any] = {}
+        if enricher is not None:
+            enrich_result = enricher.enrich(event)
+            cand = enrich_result.candidate
+            extra_fields = enrich_result.to_dict()
+        else:
+            cand = EntryCandidate(
+                token0=(event.token0 or "").lower(),
+                token1=(event.token1 or "").lower(),
+                pool=(event.pool or "").lower(),
+                dex=event.dex,
+                block_number=event.block_number,
+            )
         decision = engine.decide(cand)
-        decisions[event.event_id] = decision.to_dict()
+        decisions[event.event_id] = {**decision.to_dict(), **extra_fields}
+        if funnel is not None:
+            reject_reason = decision.reject_reason
+            # Step 6: V4 pools have no per-pool reserves at creation time.
+            # Override INSUFFICIENT_DATA with a distinct reason so that V4
+            # events are excluded from the "real-input proven" denominator.
+            if extra_fields.get("liquidity_note") == "V4_SKIP":
+                reject_reason = "V4_LIQUIDITY_UNSUPPORTED"
+            if reject_reason is not None:
+                funnel.inc_phase2_reject(reject_reason)
+            else:
+                funnel.inc_phase2_would_enter()
+            if extra_fields.get("expected_pnl_usd") is not None:
+                funnel.inc_phase2_expected_pnl_non_null()
     except Exception as exc:
         logger.warning(
             "phase2_entry_decision_error",
@@ -275,12 +307,15 @@ def _make_ws_on_event_callback(
     events_lock: threading.Lock,
     phase2_engine: Any = None,
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
+    phase2_enricher: Any = None,
+    phase2_lock: Optional[threading.Lock] = None,
 ) -> Any:
     """Return an ``on_event(cfg, raw_log)`` callback for WSPoolEventListener.
 
     The callback is thread-safe: it acquires *events_lock* around dedup +
-    recent_events mutations.  It feeds each raw log through the full funnel
-    pipeline via :func:`_process_log_event`.
+    recent_events mutations.  It acquires *phase2_lock* (when provided) around
+    the enricher ``seen_pairs`` update and *decisions* dict write to prevent
+    data races with the concurrent HTTP polling thread.
     """
     def on_event(cfg: FactoryConfig, raw_log: Any) -> None:
         funnel.inc("raw_fetched")
@@ -289,7 +324,16 @@ def _make_ws_on_event_callback(
         if (candidate is not None
                 and phase2_engine is not None
                 and phase2_event_decisions is not None):
-            _apply_phase2_decision(candidate, phase2_engine, phase2_event_decisions)
+            if phase2_lock is not None:
+                phase2_lock.acquire()
+            try:
+                _apply_phase2_decision(
+                    candidate, phase2_engine, phase2_event_decisions,
+                    enricher=phase2_enricher, funnel=funnel,
+                )
+            finally:
+                if phase2_lock is not None:
+                    phase2_lock.release()
     return on_event
 
 
@@ -604,6 +648,7 @@ def _build_and_write_artifact(
     reasons: List[str],
     w3: Optional[Any] = None,
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
+    enricher_config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
@@ -684,12 +729,12 @@ def _build_and_write_artifact(
             dec = phase2_event_decisions.get(e.event_id)
             if dec is not None:
                 phase2_summary = {
-                    "honeypot_result": None,
+                    "honeypot_result": dec.get("honeypot_verdict"),
                     "simulation_result": None,
-                    "realisability_reason": None,
+                    "realisability_reason": dec.get("spread_note") or dec.get("liquidity_note"),
                     "dry_run_decision": dec.get("verdict"),
                     "reject_reason": dec.get("reject_reason"),
-                    "expected_pnl_usd": None,
+                    "expected_pnl_usd": dec.get("expected_pnl_usd"),
                 }
                 break
         if phase2_summary is None and phase2_event_decisions:
@@ -698,12 +743,12 @@ def _build_and_write_artifact(
             if last_eid:
                 dec = phase2_event_decisions[last_eid]
                 phase2_summary = {
-                    "honeypot_result": None,
+                    "honeypot_result": dec.get("honeypot_verdict"),
                     "simulation_result": None,
-                    "realisability_reason": None,
+                    "realisability_reason": dec.get("spread_note") or dec.get("liquidity_note"),
                     "dry_run_decision": dec.get("verdict"),
                     "reject_reason": dec.get("reject_reason"),
-                    "expected_pnl_usd": None,
+                    "expected_pnl_usd": dec.get("expected_pnl_usd"),
                 }
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -719,6 +764,7 @@ def _build_and_write_artifact(
         run_scope=metrics.get("run_scope", "all"),
         dex_filter=metrics.get("dex_filter"),
         phase2_decision=phase2_summary,
+        enricher_config=enricher_config,
     )
     violations = validate_sniper_artifact(artifact)
     if violations:
@@ -801,6 +847,8 @@ def _run_online_loop(
     http_fallback_mode: bool = False,
     phase2_engine: Any = None,
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
+    phase2_enricher: Any = None,
+    phase2_lock: Optional[threading.Lock] = None,
 ) -> None:
     """Main online HTTP polling loop.
 
@@ -887,9 +935,16 @@ def _run_online_loop(
                         cycle_new += 1
                         if (phase2_engine is not None
                                 and phase2_event_decisions is not None):
-                            _apply_phase2_decision(
-                                candidate, phase2_engine, phase2_event_decisions,
-                            )
+                            if phase2_lock is not None:
+                                phase2_lock.acquire()
+                            try:
+                                _apply_phase2_decision(
+                                    candidate, phase2_engine, phase2_event_decisions,
+                                    enricher=phase2_enricher, funnel=funnel,
+                                )
+                            finally:
+                                if phase2_lock is not None:
+                                    phase2_lock.release()
 
         cycle_duration_ms = (time.monotonic() - cycle_start) * 1000.0
         last_processed_block = to_block
@@ -904,6 +959,12 @@ def _run_online_loop(
             elapsed_total = snap["elapsed_s"]
             status = "ACTIVE" if snap["snipe_candidates_total"] > 0 else "EMPTY"
             reasons = [] if snap["snipe_candidates_total"] > 0 else ["NO_EVENTS_YET"]
+            # Step 3: snapshot under lock to prevent concurrent WS mutation.
+            if phase2_lock is not None:
+                with phase2_lock:
+                    decisions_snap = dict(phase2_event_decisions) if phase2_event_decisions else {}
+            else:
+                decisions_snap = dict(phase2_event_decisions) if phase2_event_decisions else {}
             _build_and_write_artifact(
                 funnel=funnel,
                 recent_events=recent_events,
@@ -913,7 +974,7 @@ def _run_online_loop(
                 status=status,
                 reasons=reasons,
                 w3=w3,
-                phase2_event_decisions=phase2_event_decisions,
+                phase2_event_decisions=decisions_snap,
             )
             last_artifact_ts = time.monotonic()
 
@@ -1122,6 +1183,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     phase2_engine: Any = None
     phase2_event_decisions: Dict[str, Any] = {}
+    phase2_enricher: Any = None
     if _paper_mode:
         if _PHASE2_ENTRY_ENGINE_AVAILABLE:
             phase2_engine = make_default_engine()
@@ -1216,7 +1278,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         funnel.set_self_test_results(self_test_results)
 
     # ------------------------------------------------------------------
-    # Main loop
+    # Phase 2 enricher setup (online-only: requires w3)
+    # ------------------------------------------------------------------
+    enricher_config: Optional[Dict[str, Any]] = None
+    if _paper_mode and not offline and w3 is not None and _PHASE2_ENRICHER_AVAILABLE:
+        try:
+            phase2_enricher = EntryCandidateEnricher(w3)
+            enricher_config = phase2_enricher.config_snapshot()
+            logger.info(
+                "phase2_enricher_loaded",
+                extra={"context": {"paper_mode": True, "chain": args.chain,
+                                   "enricher_config": enricher_config}},
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "phase2_enricher_init_failed",
+                extra={"context": {"error": str(exc)[:120]}},
+            )
+
+    # Step 8: seed mirror data via historical probes before the live gate.
+    if phase2_enricher is not None:
+        try:
+            from strategy.mirror_seeder import seed_mirror_data
+            seed_result = seed_mirror_data(phase2_enricher, w3, configs)
+            logger.info(
+                "mirror_seeder_complete",
+                extra={"context": seed_result},
+            )
+        except Exception as exc:
+            logger.warning(
+                "mirror_seeder_failed",
+                extra={"context": {"error": str(exc)[:120]}},
+            )
     # ------------------------------------------------------------------
     duration_s = args.duration_minutes * 60.0
     # Treat 0 duration as "one cycle then exit"; use a small positive value.
@@ -1228,6 +1321,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # HTTP polling runs as a slower reconciliation fallback.
     # ------------------------------------------------------------------
     events_lock = threading.Lock()
+    # Step 2: separate lock protecting the Phase 2 enricher's seen_pairs registry
+    # and the phase2_event_decisions dict from concurrent WS + HTTP mutations.
+    phase2_lock = threading.Lock()
     ws_listener = None
     ws_thread = None
     http_fallback_mode = False
@@ -1241,6 +1337,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     funnel, seen_ids, recent_events, events_lock,
                     phase2_engine=phase2_engine,
                     phase2_event_decisions=phase2_event_decisions,
+                    phase2_enricher=phase2_enricher,
+                    phase2_lock=phase2_lock,
                 )
                 ws_listener = WSPoolEventListener(
                     ws_url=ws_url,
@@ -1300,6 +1398,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 http_fallback_mode=http_fallback_mode,
                 phase2_engine=phase2_engine,
                 phase2_event_decisions=phase2_event_decisions,
+                phase2_enricher=phase2_enricher,
+                phase2_lock=phase2_lock,
             )
     except KeyboardInterrupt:
         logger.info("sniper interrupted by user (KeyboardInterrupt)")
@@ -1352,6 +1452,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     for dex_name in null_topic_factories:
         reasons.append(f"TOPIC_NULL:{dex_name}")
 
+    # Step 3: snapshot decisions under lock before final artifact write.
+    with phase2_lock:
+        final_decisions = dict(phase2_event_decisions) if phase2_event_decisions else {}
+
     _build_and_write_artifact(
         funnel=funnel,
         recent_events=recent_events,
@@ -1361,7 +1465,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         status=status,
         reasons=reasons,
         w3=w3 if not offline else None,
-        phase2_event_decisions=phase2_event_decisions,
+        phase2_event_decisions=final_decisions,
+        enricher_config=enricher_config,
     )
 
     # ------------------------------------------------------------------

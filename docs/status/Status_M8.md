@@ -10,7 +10,7 @@
 `kill_switch_active`: true
 `execution_enabled`: false
 `phase2_short_gates_status`: ALL_PASS (15m+30m+60m 2026-05-14)
-`phase2_24h_soak_allowed`: true
+`phase2_24h_soak_blocked_until_real_inputs`: true
 `step_pivot_md_reconciliation`: REQUIRED_BEFORE_LITERAL_PHASE1_CHECKLIST_TICK
 `multi_factory_coverage_status`: PARTIAL_MARKET_WINDOW
 `phase1_steps_4_9_status`: COMPLETE
@@ -19,7 +19,7 @@
 `close_allowed`: false
 `primary_blocker_of_session`: PHASE2_PAPER_RUNTIME_GATES
 `blocker_status_before`: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
-`blocker_status_after`: PHASE2_SHORT_GATES_PASS_24H_SOAK_AUTHORIZED
+`blocker_status_after`: PHASE2_SHORT_GATES_PASS_REAL_INPUT_GATE_REQUIRED
 `next_phase_blocker`: M8_PHASE2_24H_PAPER_SOAK_NOT_RUN
 `docs_reread_confirmed`: true
 `phase1_verified_at`: 2026-05-13T21:54:59Z
@@ -254,7 +254,7 @@ Phase 2 entry engine wired into `m8/runtime/smoke_run.py`; all 3 short gates PAS
 - `aerodrome: 4 candidates` (first live aerodrome events in this session) ✅
 - `execution_enabled: false` throughout (ARBY_SNIPER_EXECUTE not set) ✅
 
-**Verdict: phase2_status → PAPER_ONLY_STABILIZED; phase2_24h_soak_allowed: true**
+**Verdict: phase2_status → PAPER_ONLY_STABILIZED; phase2_24h_soak_blocked_until_real_inputs: true**
 
 ## Next Required Evidence (Phase 2 → 24h Paper Soak)
 
