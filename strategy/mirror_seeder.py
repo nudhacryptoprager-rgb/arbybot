@@ -42,6 +42,7 @@ def seed_mirror_data(
     configs: List["FactoryConfig"],
     *,
     lookback_blocks: int = 2000,
+    skip_fetch_dexes: Optional[set] = None,
 ) -> Dict[str, Any]:
     """Replay historical pool events to seed the enricher ``seen_pairs`` registry.
 
@@ -58,6 +59,12 @@ def seed_mirror_data(
     lookback_blocks:
         Fallback lookback window when no verification range is configured.
         Set to ``0`` to disable the fallback and only use verification ranges.
+    skip_fetch_dexes:
+        Optional set of dex names for which to skip on-chain reserve fetching and
+        use :meth:`~strategy.entry_candidate_enricher.EntryCandidateEnricher.register_seen_pair`
+        instead.  Defaults to ``{"uniswap_v4"}`` — V4 pools have zero reserves at
+        creation so StateView calls are unproductive during bulk seeding, and calling
+        ~1000 sequential StateView RPCs blocks the startup for several minutes.
 
     Returns
     -------
@@ -65,6 +72,13 @@ def seed_mirror_data(
     ``elapsed_s``, ``per_dex``.
     """
     from discovery.new_pool_listener import parse_raw_log
+
+    # Default: skip on-chain reserve fetching for V4 during bulk seeding.
+    # V4 pools have zero / near-zero reserves at creation (liquidity is added
+    # separately), so StateView calls return nothing useful and 1000+ sequential
+    # RPCs would block startup for several minutes.
+    if skip_fetch_dexes is None:
+        skip_fetch_dexes = {"uniswap_v4"}
 
     t0 = time.monotonic()
     total_fetched = 0
@@ -113,9 +127,21 @@ def seed_mirror_data(
             total_rpc_errors += 1
             continue
 
-        # Parse and enrich
+        # Parse and enrich.
+        #
+        # For dexes in skip_fetch_dexes (default: uniswap_v4), use the fast
+        # ``register_seen_pair`` path that records the pair→dex mapping without
+        # any on-chain RPC calls.  V4 pools have zero reserves at creation, so
+        # StateView calls produce no useful prices and would block startup for
+        # several minutes when seeding ~1000 historical V4 events.
+        #
+        # For V2/V3/Slipstream dexes, use the full ``enrich()`` path so the
+        # mirror registry gets real current prices to compare against new pools.
+        use_fast_path = dex_name in skip_fetch_dexes
         enriched = 0
+        registered = 0
         parse_ok = 0
+        priced = 0
         for raw_log in raw_logs:
             event = parse_raw_log(raw_log, cfg)
             if event is None:
@@ -123,8 +149,14 @@ def seed_mirror_data(
             parse_ok += 1
             total_fetched += 1
             try:
-                enricher.enrich(event)
-                enriched += 1
+                if use_fast_path:
+                    enricher.register_seen_pair(event)
+                    registered += 1
+                else:
+                    result = enricher.enrich(event)
+                    enriched += 1
+                    if result is not None and result.liquidity_usd is not None:
+                        priced += 1
             except Exception:
                 pass
 
@@ -132,10 +164,13 @@ def seed_mirror_data(
             "status": "OK",
             "raw_logs": len(raw_logs),
             "parse_ok": parse_ok,
-            "enriched": enriched,
+            "enriched": enriched if not use_fast_path else 0,
+            "registered_fast": registered if use_fast_path else 0,
+            "priced": priced,
             "from_block": from_block,
             "to_block": to_block,
             "range_source": range_source,
+            "fetch_skipped": use_fast_path,
         }
 
     seeded_pairs_after = sum(len(v) for v in enricher._seen_pairs.values())

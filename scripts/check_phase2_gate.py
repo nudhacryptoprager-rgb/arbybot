@@ -76,7 +76,16 @@ def _check(artifact_path: Path) -> int:
     else:
         hist: dict = metrics.get("phase2_reject_histogram") or {}
         total_decisions = sum(hist.values())
-        bad_decisions = hist.get("INSUFFICIENT_DATA", 0) + hist.get("V4_LIQUIDITY_UNSUPPORTED", 0)
+        # V4-specific rejects (StateView working but no tradeable liquidity) and
+        # generic data-quality rejects are excluded from "real input" count.
+        v4_rejects = (
+            hist.get("V4_LIQUIDITY_UNSUPPORTED", 0)  # StateView disabled (V4_SKIP)
+            + hist.get("V4_ZERO_AT_CREATION", 0)     # StateView OK, zero reserves
+            + hist.get("V4_BAD_POOLID", 0)
+            + hist.get("V4_ZERO_PRICE", 0)
+            + hist.get("V4_RPC_ERR", 0)
+        )
+        bad_decisions = hist.get("INSUFFICIENT_DATA", 0) + v4_rejects
         real_input_decisions = total_decisions - bad_decisions
         pnl_non_null = int(pnl_non_null)
         if total_decisions > 0 and real_input_decisions == 0 and pnl_non_null == 0:

@@ -218,18 +218,77 @@ class TestV3LiquidityFetch:
 
 
 # ---------------------------------------------------------------------------
-# Tests: V4 skip
+# Tests: V4 StateView reserve fetch
 # ---------------------------------------------------------------------------
 
-class TestV4Skip:
-    def test_v4_returns_no_reserves(self):
+class TestV4StateView:
+    def test_v4_returns_no_reserves_when_disabled(self):
+        # When v4_enabled=False, V4 fetch is intentionally skipped (legacy mode).
         w3 = MockW3({})
-        enricher = EntryCandidateEnricher(w3)
+        enricher = EntryCandidateEnricher(w3, config={"v4_enabled": False})
         event = _make_event(pool=POOL_V4, dex="uniswap_v4")
         result = enricher.enrich(event)
         assert result.reserve0_raw is None
         assert result.reserve1_raw is None
         assert result.liquidity_note == "V4_SKIP"
+
+    def test_v4_rpc_error_when_no_stateview_response(self):
+        # With V4 enabled but no StateView mock response, the call raises and
+        # the enricher reports a V4_RPC_ERR note (NOT a silent V4_SKIP).
+        w3 = MockW3({})
+        enricher = EntryCandidateEnricher(w3)  # v4 enabled by default
+        event = _make_event(
+            pool="0x" + "dd" * 32,  # valid 32-byte poolId hex (66 chars)
+            dex="uniswap_v4",
+        )
+        result = enricher.enrich(event)
+        assert result.reserve0_raw is None
+        assert result.liquidity_note is not None
+        assert result.liquidity_note.startswith("V4_RPC_ERR")
+
+    def test_v4_zero_at_creation(self):
+        # StateView returns zero sqrtPriceX96 + zero liquidity → V4_ZERO_AT_CREATION.
+        stateview_addr = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
+        w3 = MockW3({
+            stateview_addr: {"getSlot0": (0, 0, 0, 0), "getLiquidity": 0},
+        })
+        enricher = EntryCandidateEnricher(w3)
+        event = _make_event(pool="0x" + "dd" * 32, dex="uniswap_v4")
+        result = enricher.enrich(event)
+        assert result.liquidity_note == "V4_ZERO_AT_CREATION"
+
+    def test_v4_bad_poolid_too_short(self):
+        # 20-byte address mistakenly passed as poolId.
+        stateview_addr = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
+        w3 = MockW3({stateview_addr: {"getSlot0": (1, 0, 0, 0), "getLiquidity": 1}})
+        enricher = EntryCandidateEnricher(w3)
+        event = _make_event(pool=POOL_V4, dex="uniswap_v4")  # 42 chars, not 66
+        result = enricher.enrich(event)
+        assert result.liquidity_note == "V4_BAD_POOLID"
+
+    def test_v4_nonzero_liquidity_fetches_reserves(self):
+        # With non-zero StateView response, virtual reserves are computed.
+        stateview_addr = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
+        # Pick numbers that survive round-to-2-decimals USD normalisation.
+        # sqrt(P) = 1.0 → P = 1.0; liq large enough that r0/r1 in human units > 0.
+        sqrt_p_raw = 1.0
+        sqrt_x96 = int(sqrt_p_raw * (2**96))
+        liq_raw = 10**24  # large active liquidity
+        w3 = MockW3({
+            stateview_addr: {
+                "getSlot0": (sqrt_x96, 0, 0, 0),
+                "getLiquidity": liq_raw,
+            },
+        })
+        enricher = EntryCandidateEnricher(w3)
+        event = _make_event(
+            token0=USDC, token1=WETH,
+            pool="0x" + "dd" * 32, dex="uniswap_v4",
+        )
+        result = enricher.enrich(event)
+        assert result.reserve0_raw is not None
+        assert result.reserve1_raw is not None
+        assert result.liquidity_usd is not None and result.liquidity_usd > 0
 
 
 # ---------------------------------------------------------------------------
@@ -454,15 +513,84 @@ class TestExpectedPnL:
         result = enricher.enrich(event)
         assert result.expected_pnl_usd is None
 
-    def test_pnl_none_when_honeypot_unknown(self):
-        # RAND_TOKEN/WETH: honeypot = UNKNOWN → PnL not computed
+    def test_pnl_computed_when_honeypot_unknown(self):
+        # New behaviour: UNKNOWN honeypot still produces a paper-only PnL
+        # estimate so we have observability. The decision engine still rejects
+        # entry on UNKNOWN (reject_unknown_honeypot=True), but PnL is exposed.
+        # Force UNKNOWN by patching the honeypot check, keep a clean USDC/WETH
+        # pair so liquidity + spread come from anchor data.
+        from monitoring import sniper_honeypot as _hp
+        from monitoring.sniper_honeypot import HoneypotVerdict
+
+        with patch.object(_hp, "check_token_honeypot", return_value=HoneypotVerdict.UNKNOWN):
+            w3 = MockW3(
+                {POOL_V2: {"getReserves": (2200 * 10**6, 1 * 10**18, 0)}}
+            )
+            enricher = EntryCandidateEnricher(w3)
+            # Re-import in enricher module (it already imported at module load).
+            import strategy.entry_candidate_enricher as _enr
+            with patch.object(_enr, "check_token_honeypot", return_value=HoneypotVerdict.UNKNOWN):
+                event = _make_event(
+                    token0=USDC, token1=WETH, pool=POOL_V2, dex="aerodrome",
+                )
+                result = enricher.enrich(event)
+        assert result.honeypot_verdict == "UNKNOWN"
+        # With anchor USDC/WETH and a usable anchor-ratio spread, PnL is computed.
+        assert result.expected_pnl_usd is not None
+
+    def test_pnl_none_when_honeypot_fail(self):
+        # Burn/DEAD address triggers HoneypotVerdict.FAIL via static registry.
+        DEAD = "0x000000000000000000000000000000000000dead"
         w3 = MockW3(
             {POOL_V2: {"getReserves": (2200 * 10**6, 1 * 10**18, 0)}}
         )
         enricher = EntryCandidateEnricher(w3)
-        event = _make_event(token0=RAND_TOKEN, token1=WETH, pool=POOL_V2, dex="aerodrome")
+        event = _make_event(token0=DEAD, token1=WETH, pool=POOL_V2, dex="aerodrome")
         result = enricher.enrich(event)
+        assert result.honeypot_verdict == "FAIL"
         assert result.expected_pnl_usd is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: Native ETH (0x0) handled as WETH-equivalent anchor
+# ---------------------------------------------------------------------------
+
+class TestNativeEthAnchor:
+    def test_native_eth_priced_as_weth(self):
+        from strategy.entry_candidate_enricher import (
+            ANCHOR_TOKEN_USD as ANCHORS,
+            NATIVE_ETH_ADDR,
+        )
+        # Both anchors map to a positive USD price.
+        assert ANCHORS.get(NATIVE_ETH_ADDR) is not None
+        assert ANCHORS[NATIVE_ETH_ADDR] > 0
+        assert ANCHORS[NATIVE_ETH_ADDR] == ANCHORS[
+            "0x4200000000000000000000000000000000000006"
+        ]
+
+    def test_v4_eth_pair_normalises_to_usd(self):
+        # currency0 = 0x000...000 (native ETH on V4), currency1 = USDC
+        # Mock StateView so the V4 fetch succeeds with non-zero reserves.
+        from strategy.entry_candidate_enricher import NATIVE_ETH_ADDR
+        stateview_addr = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
+        sqrt_p_raw = 20_000.0
+        sqrt_x96 = int(sqrt_p_raw * (2**96))
+        w3 = MockW3({
+            stateview_addr: {
+                "getSlot0": (sqrt_x96, 0, 0, 0),
+                "getLiquidity": 1_000_000,
+            },
+        })
+        enricher = EntryCandidateEnricher(w3)
+        event = _make_event(
+            token0=NATIVE_ETH_ADDR, token1=USDC,
+            pool="0x" + "ee" * 32, dex="uniswap_v4",
+        )
+        result = enricher.enrich(event)
+        assert result.reserve0_raw is not None
+        assert result.liquidity_usd is not None
+        # Native ETH should be treated as anchor → no NO_ANCHOR_IN_PAIR note.
+        assert result.liquidity_note != "NO_ANCHOR_IN_PAIR"
 
 
 # ---------------------------------------------------------------------------

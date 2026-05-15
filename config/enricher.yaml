@@ -16,6 +16,14 @@ anchor_token_usd:
   "0x4200000000000000000000000000000000000006": 2500.0  # WETH  (18 dec)
   "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 1.0    # DAI   (18 dec)
   "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": 1.0    # USDbC (6 dec)
+  "0x0000000000000000000000000000000000000000": 2500.0  # Native ETH sentinel (V4) → priced as WETH
+
+# Uniswap V4 state access. The StateView lens contract exposes per-pool
+# slot0 / liquidity from the PoolManager singleton, which lets us treat
+# V4 like V3 (virtual-reserve approximation). Set v4_enabled: false to
+# fall back to the legacy V4_SKIP behaviour (no V4 reserves fetched).
+v4_enabled: true
+v4_stateview_address: "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"  # Base mainnet
 
 # USD amount used for the SlippageGuard $-probe trade.
 slippage_probe_usd: 100.0

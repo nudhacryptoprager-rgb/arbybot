@@ -282,11 +282,22 @@ def _apply_phase2_decision(
         decisions[event.event_id] = {**decision.to_dict(), **extra_fields}
         if funnel is not None:
             reject_reason = decision.reject_reason
-            # Step 6: V4 pools have no per-pool reserves at creation time.
-            # Override INSUFFICIENT_DATA with a distinct reason so that V4
-            # events are excluded from the "real-input proven" denominator.
-            if extra_fields.get("liquidity_note") == "V4_SKIP":
+            liq_note = extra_fields.get("liquidity_note") or ""
+            # V4 family: bucket reject reasons with finer granularity to expose
+            # whether the StateView lens is actually being called:
+            #   V4_SKIP             → StateView disabled / not configured (legacy)
+            #   V4_ZERO_AT_CREATION → StateView called, pool has zero reserves (expected)
+            #   V4_BAD_POOLID       → PoolId format unexpected
+            #   V4_ZERO_PRICE       → sqrtPriceX96 == 0 after liquidity is non-zero
+            #   V4_RPC_ERR:*        → StateView RPC error
+            # V4_SKIP folds into the generic V4_LIQUIDITY_UNSUPPORTED bucket;
+            # the StateView-specific notes get their own buckets for observability.
+            if liq_note == "V4_SKIP":
                 reject_reason = "V4_LIQUIDITY_UNSUPPORTED"
+            elif liq_note in ("V4_ZERO_AT_CREATION", "V4_BAD_POOLID", "V4_ZERO_PRICE"):
+                reject_reason = liq_note
+            elif liq_note.startswith("V4_RPC_ERR"):
+                reject_reason = "V4_RPC_ERR"
             if reject_reason is not None:
                 funnel.inc_phase2_reject(reject_reason)
             else:
@@ -721,35 +732,49 @@ def _build_and_write_artifact(
             ),
         })
 
-    # Phase 2 top-level summary: last non-null decision, or all-null stub.
+    # Phase 2 top-level summary: prefer the most informative event, not just the
+    # chronologically last one. Priority:
+    #   1. Any WOULD_ENTER decision (always interesting).
+    #   2. Any SKIP with a populated liquidity_usd (real on-chain data).
+    #   3. The last decision overall (legacy behaviour).
+    # This keeps the dashboard / gate from being dominated by V4_LIQUIDITY_UNSUPPORTED
+    # noise when ~90% of Base events are V4 with zero reserves at creation.
+    def _summarise(dec: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "honeypot_result": dec.get("honeypot_verdict"),
+            "simulation_result": None,
+            "realisability_reason": dec.get("spread_note") or dec.get("liquidity_note"),
+            "dry_run_decision": dec.get("verdict"),
+            "reject_reason": dec.get("reject_reason"),
+            "expected_pnl_usd": dec.get("expected_pnl_usd"),
+        }
+
     phase2_summary: Optional[Dict[str, Any]] = None
     if phase2_event_decisions:
-        # Build summary from the most recently evaluated event in the window
-        for e in reversed(recent_window):
-            dec = phase2_event_decisions.get(e.event_id)
-            if dec is not None:
-                phase2_summary = {
-                    "honeypot_result": dec.get("honeypot_verdict"),
-                    "simulation_result": None,
-                    "realisability_reason": dec.get("spread_note") or dec.get("liquidity_note"),
-                    "dry_run_decision": dec.get("verdict"),
-                    "reject_reason": dec.get("reject_reason"),
-                    "expected_pnl_usd": dec.get("expected_pnl_usd"),
-                }
+        window_decs: List[Dict[str, Any]] = []
+        for e in recent_window:
+            d = phase2_event_decisions.get(e.event_id)
+            if d is not None:
+                window_decs.append(d)
+        # 1. Prefer WOULD_ENTER if any.
+        for d in reversed(window_decs):
+            if d.get("verdict") == "WOULD_ENTER":
+                phase2_summary = _summarise(d)
                 break
-        if phase2_summary is None and phase2_event_decisions:
-            # Decisions exist but none in recent window — use latest overall
+        # 2. Prefer a SKIP that still had real liquidity data.
+        if phase2_summary is None:
+            for d in reversed(window_decs):
+                if d.get("liquidity_usd") is not None:
+                    phase2_summary = _summarise(d)
+                    break
+        # 3. Fallback: last in window.
+        if phase2_summary is None and window_decs:
+            phase2_summary = _summarise(window_decs[-1])
+        # 4. Decisions exist but none in recent window: use latest overall.
+        if phase2_summary is None:
             last_eid = next(reversed(list(phase2_event_decisions.keys())), None)
             if last_eid:
-                dec = phase2_event_decisions[last_eid]
-                phase2_summary = {
-                    "honeypot_result": dec.get("honeypot_verdict"),
-                    "simulation_result": None,
-                    "realisability_reason": dec.get("spread_note") or dec.get("liquidity_note"),
-                    "dry_run_decision": dec.get("verdict"),
-                    "reject_reason": dec.get("reject_reason"),
-                    "expected_pnl_usd": dec.get("expected_pnl_usd"),
-                }
+                phase2_summary = _summarise(phase2_event_decisions[last_eid])
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     artifact = make_sniper_artifact(

@@ -23,8 +23,11 @@ Liquidity fetch strategy
 - V2 / Aerodrome ve33 / solidly forks  → ``getReserves()``
 - V3 / Slipstream / Pancakeswap V3     → ``slot0()`` + ``liquidity()``
   with full-range virtual-reserve approximation
-- Uniswap V4                           → skipped (pools share PoolManager;
-  no per-pool reserves at creation time → returns ``None``)
+- Uniswap V4                           → ``StateView.getSlot0(poolId)`` +
+  ``StateView.getLiquidity(poolId)`` (Base mainnet StateView at
+  ``0xa3c0c9b65bad0b08107aa264b0f3db444b867a71``). Same full-range virtual
+  reserve formula as V3. Falls back to ``V4_SKIP`` when the StateView
+  address is not configured.
 
 USD normalization
 -----------------
@@ -80,6 +83,8 @@ __all__ = [
     "EnrichmentResult",
     "ANCHOR_TOKEN_USD",
     "ANCHOR_ADDRESSES",
+    "NATIVE_ETH_ADDR",
+    "V4_STATEVIEW_ADDR_BASE",
 ]
 
 # ---------------------------------------------------------------------------
@@ -118,12 +123,19 @@ ANCHOR_ADDRESSES: FrozenSet[str] = frozenset(
     }
 )
 
+# Native ETH sentinel — Uniswap V4 uses 0x000...000 as currency0 for native ETH.
+# We treat it as WETH-equivalent for anchor pricing.
+NATIVE_ETH_ADDR: str = "0x0000000000000000000000000000000000000000"
+_WETH_BASE: str = "0x4200000000000000000000000000000000000006"
+
 # Conservative USD prices — updated manually, no live oracle in Phase 2.
 ANCHOR_TOKEN_USD: Dict[str, float] = {
     "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 1.0,
     "0x4200000000000000000000000000000000000006": 2500.0,
     "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 1.0,
     "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": 1.0,
+    # Native ETH (V4 zero address) priced as WETH.
+    NATIVE_ETH_ADDR: 2500.0,
 }
 
 # Decimal overrides so we skip an RPC ``decimals()`` call for anchors.
@@ -132,9 +144,51 @@ _ANCHOR_DECIMALS: Dict[str, int] = {
     "0x4200000000000000000000000000000000000006": 18,
     "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 18,
     "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": 6,
+    NATIVE_ETH_ADDR: 18,  # native ETH has 18 decimals like WETH
 }
 
 _DEFAULT_DECIMALS = 18
+
+# ---------------------------------------------------------------------------
+# Uniswap V4 StateView contract (Base mainnet).
+# Lets us read per-pool state (slot0 / liquidity) by poolId (bytes32) from the
+# PoolManager singleton without per-pool contracts. See:
+#   https://docs.uniswap.org/contracts/v4/reference/periphery/lens/StateView
+# ---------------------------------------------------------------------------
+
+V4_STATEVIEW_ADDR_BASE: str = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
+
+_V4_STATEVIEW_ABI = [
+    {
+        "inputs": [{"internalType": "bytes32", "name": "poolId", "type": "bytes32"}],
+        "name": "getSlot0",
+        "outputs": [
+            {"internalType": "uint160", "name": "sqrtPriceX96", "type": "uint160"},
+            {"internalType": "int24", "name": "tick", "type": "int24"},
+            {"internalType": "uint24", "name": "protocolFee", "type": "uint24"},
+            {"internalType": "uint24", "name": "lpFee", "type": "uint24"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "bytes32", "name": "poolId", "type": "bytes32"}],
+        "name": "getLiquidity",
+        "outputs": [{"internalType": "uint128", "name": "liquidity", "type": "uint128"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+_ERC20_TOTAL_SUPPLY_ABI = [
+    {
+        "inputs": [],
+        "name": "totalSupply",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
 
 # ---------------------------------------------------------------------------
 # Minimal ABIs (no external JSON files)
@@ -302,6 +356,17 @@ class EntryCandidateEnricher:
         self._seen_pairs: Dict[FrozenSet, List[Tuple[str, str, Optional[float]]]] = {}
         # decimals cache to avoid repeated RPC calls for unknown tokens
         self._decimals: Dict[str, int] = {}
+        # On-chain honeypot probe cache: token_addr → "PASS" | "FAIL" | "UNKNOWN"
+        # Avoids repeated eth_getCode / totalSupply RPCs for the same token.
+        self._honeypot_probe_cache: Dict[str, str] = {}
+        # V4 StateView address (config-driven; falls back to Base mainnet default).
+        self._v4_stateview_addr: Optional[str] = (
+            str(self._config.get("v4_stateview_address", V4_STATEVIEW_ADDR_BASE)).lower()
+            if self._config.get("v4_stateview_address", V4_STATEVIEW_ADDR_BASE)
+            else None
+        )
+        # Flag: when False, V4 reserves fetch is intentionally skipped (legacy behaviour).
+        self._v4_enabled: bool = bool(self._config.get("v4_enabled", True))
 
     def config_snapshot(self) -> Dict[str, Any]:
         """Return the effective enricher config for artifact export."""
@@ -317,7 +382,26 @@ class EntryCandidateEnricher:
     # Public API
     # ------------------------------------------------------------------
 
-    def enrich(self, event: NewPoolEvent) -> EnrichmentResult:
+    def register_seen_pair(self, event: "NewPoolEvent") -> None:
+        """Register *event* in the ``seen_pairs`` mirror registry WITHOUT
+        fetching on-chain reserves.
+
+        This is a lightweight alternative to :meth:`enrich` intended for
+        bulk historical seeding (e.g. mirror_seeder) where we only need the
+        pair→dex mapping and do NOT want to issue per-pool RPC calls.
+        The implied price is recorded as ``None``; live events arriving later
+        will populate real prices via the normal :meth:`enrich` path.
+        """
+        token0 = (event.token0 or "").lower()
+        token1 = (event.token1 or "").lower()
+        pool = (event.pool or "").lower()
+        dex = event.dex or ""
+        pair_key: FrozenSet = frozenset([token0, token1])
+        if pair_key not in self._seen_pairs:
+            self._seen_pairs[pair_key] = []
+        self._seen_pairs[pair_key].append((dex, pool, None))
+
+    def enrich(self, event: "NewPoolEvent") -> EnrichmentResult:
         """Return :class:`EnrichmentResult` for *event*.  Never raises."""
         token0 = (event.token0 or "").lower()
         token1 = (event.token1 or "").lower()
@@ -432,11 +516,58 @@ class EntryCandidateEnricher:
         dex_l = (dex or "").lower()
         # Classify DEX family
         if any(kw in dex_l for kw in ("_v4", "uniswap_v4")):
-            return None, None, "V4_SKIP"
+            if not self._v4_enabled or not self._v4_stateview_addr:
+                return None, None, "V4_SKIP"
+            return self._fetch_v4(pool, token0, token1)
         if any(kw in dex_l for kw in ("_v3", "slipstream", "pancakeswap")):
             return self._fetch_v3(pool, token0, token1)
         # Default: V2-style (Uniswap V2, Aerodrome ve33, SushiSwap V2, etc.)
         return self._fetch_v2(pool, token0, token1)
+
+    def _fetch_v4(
+        self,
+        pool: str,
+        token0: str,
+        token1: str,
+    ) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+        """Fetch V4 pool state via the StateView lens contract.
+
+        ``pool`` is the 32-byte ``PoolId`` (hex-encoded, 66 chars with 0x).
+        Uses the same full-range virtual-reserve approximation as V3:
+            token0_virtual = L / sqrt(P),  token1_virtual = L * sqrt(P)
+
+        Returns None when the pool is freshly created with zero liquidity
+        (the most common case at the Initialize event block).
+        """
+        try:
+            # PoolId is bytes32 — must be a 32-byte string (66 hex chars incl. 0x).
+            pool_id_hex = pool if pool.startswith("0x") else "0x" + pool
+            if len(pool_id_hex) != 66:
+                return None, None, "V4_BAD_POOLID"
+            pool_id_bytes = bytes.fromhex(pool_id_hex[2:])
+
+            contract = self._w3.eth.contract(
+                address=self._w3.to_checksum_address(self._v4_stateview_addr),
+                abi=_V4_STATEVIEW_ABI,
+            )
+            slot0 = contract.functions.getSlot0(pool_id_bytes).call()
+            sqrt_x96 = int(slot0[0])
+            liq_raw = int(contract.functions.getLiquidity(pool_id_bytes).call())
+
+            if sqrt_x96 == 0 or liq_raw == 0:
+                return None, None, "V4_ZERO_AT_CREATION"
+
+            sqrt_p = sqrt_x96 / (2**96)
+            if sqrt_p <= 0:
+                return None, None, "V4_ZERO_PRICE"
+
+            r0_raw = liq_raw / sqrt_p
+            r1_raw = liq_raw * sqrt_p
+            dec0 = self._get_decimals(token0)
+            dec1 = self._get_decimals(token1)
+            return r0_raw / 10**dec0, r1_raw / 10**dec1, None
+        except Exception as exc:
+            return None, None, f"V4_RPC_ERR:{str(exc)[:50]}"
 
     def _fetch_v2(
         self,
@@ -587,21 +718,97 @@ class EntryCandidateEnricher:
     def _check_honeypot(self, token0: str, token1: str) -> Optional[str]:
         """Combined honeypot verdict for both tokens of a pool.
 
-        Returns "PASS" only when both tokens are known-legit.
-        Returns "FAIL" when either is a known scam.
-        Returns "UNKNOWN" for any other combination.
-        Returns ``None`` on unexpected exception.
+        Combines the static registry (KNOWN_SCAM / KNOWN_LEGIT) with two
+        cheap on-chain probes (eth_getCode + totalSupply) so that brand-new
+        tokens which look like normal ERC20 contracts get a more useful
+        verdict than the static-only UNKNOWN.
+
+        Verdict matrix per token:
+          registry FAIL → FAIL
+          registry PASS → PASS
+          registry UNKNOWN + on-chain probe FAIL → FAIL
+          registry UNKNOWN + on-chain probe PASS → PASS (best-effort)
+          registry UNKNOWN + on-chain probe UNKNOWN → UNKNOWN
+
+        Combined verdict for the pool:
+          - either FAIL  → FAIL
+          - both PASS    → PASS
+          - otherwise    → UNKNOWN
+
+        Returns ``None`` only on unexpected internal exception.
         """
         try:
-            v0 = check_token_honeypot(token0)
-            v1 = check_token_honeypot(token1)
-            if v0 == HoneypotVerdict.FAIL or v1 == HoneypotVerdict.FAIL:
+            v0 = self._token_honeypot_verdict(token0)
+            v1 = self._token_honeypot_verdict(token1)
+            if v0 == "FAIL" or v1 == "FAIL":
                 return "FAIL"
-            if v0 == HoneypotVerdict.PASS and v1 == HoneypotVerdict.PASS:
+            if v0 == "PASS" and v1 == "PASS":
                 return "PASS"
             return "UNKNOWN"
         except Exception:
             return None
+
+    def _token_honeypot_verdict(self, token: str) -> str:
+        """Return ``PASS`` | ``FAIL`` | ``UNKNOWN`` for a single token.
+
+        Combines the static registry with cheap on-chain probes. Cached.
+        """
+        token = (token or "").lower()
+        # Native ETH sentinel — always safe.
+        if token == NATIVE_ETH_ADDR:
+            return "PASS"
+        cached = self._honeypot_probe_cache.get(token)
+        if cached is not None:
+            return cached
+
+        # 1. Static registry first (cheap, deterministic).
+        try:
+            registry = check_token_honeypot(token)
+        except Exception:
+            registry = HoneypotVerdict.UNKNOWN
+        if registry == HoneypotVerdict.FAIL:
+            self._honeypot_probe_cache[token] = "FAIL"
+            return "FAIL"
+        if registry == HoneypotVerdict.PASS:
+            self._honeypot_probe_cache[token] = "PASS"
+            return "PASS"
+
+        # 2. On-chain probes (only when registry is UNKNOWN and w3 is available).
+        if self._w3 is None:
+            self._honeypot_probe_cache[token] = "UNKNOWN"
+            return "UNKNOWN"
+
+        # 2a. eth_getCode — empty bytecode means EOA / non-contract → FAIL.
+        try:
+            code = self._w3.eth.get_code(self._w3.to_checksum_address(token))
+            code_hex = code.hex() if hasattr(code, "hex") else str(code)
+            if not code_hex or code_hex in ("0x", "", "0x0"):
+                self._honeypot_probe_cache[token] = "FAIL"
+                return "FAIL"
+        except Exception:
+            # RPC error → don't conclude FAIL; fall through to UNKNOWN.
+            self._honeypot_probe_cache[token] = "UNKNOWN"
+            return "UNKNOWN"
+
+        # 2b. totalSupply() call — reverts on broken ERC20 → FAIL.
+        try:
+            erc20 = self._w3.eth.contract(
+                address=self._w3.to_checksum_address(token),
+                abi=_ERC20_TOTAL_SUPPLY_ABI,
+            )
+            supply = int(erc20.functions.totalSupply().call())
+            if supply <= 0:
+                # zero supply tokens cannot be traded
+                self._honeypot_probe_cache[token] = "FAIL"
+                return "FAIL"
+        except Exception:
+            # totalSupply revert is suspicious but not definitive scam.
+            self._honeypot_probe_cache[token] = "UNKNOWN"
+            return "UNKNOWN"
+
+        # Passed both probes: looks like a normal ERC20.  Mark as best-effort PASS.
+        self._honeypot_probe_cache[token] = "PASS"
+        return "PASS"
 
     # ------------------------------------------------------------------
     # Slippage guard
@@ -668,10 +875,20 @@ class EntryCandidateEnricher:
             return None
         if spread_bps is None or spread_bps <= 0:
             return None
-        if not (mirror_found or token0 in ANCHOR_ADDRESSES or token1 in ANCHOR_ADDRESSES):
+        if not (
+            mirror_found
+            or token0 in ANCHOR_ADDRESSES
+            or token1 in ANCHOR_ADDRESSES
+            or token0 == NATIVE_ETH_ADDR
+            or token1 == NATIVE_ETH_ADDR
+        ):
             return None
-        # Don't compute PnL if honeypot is explicitly FAIL or UNKNOWN
-        if honeypot_verdict in ("FAIL", "UNKNOWN"):
+        # Only HONEYPOT_FAIL blocks PnL estimation. UNKNOWN is the conservative
+        # default for any token outside the static registry and would suppress
+        # all observability — so we *compute* PnL for UNKNOWN as a paper-only
+        # what-if number. The decision engine still refuses to enter on UNKNOWN
+        # (via ``reject_unknown_honeypot=True``), keeping safety unchanged.
+        if honeypot_verdict == "FAIL":
             return None
 
         gross = liquidity_usd * (spread_bps / 10_000.0) * self._capture_rate
