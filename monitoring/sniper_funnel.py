@@ -235,6 +235,11 @@ class FunnelTracker:
         self._phase2_reject_histogram: Dict[str, int] = {}
         self._phase2_would_enter_count: int = 0
         self._phase2_expected_pnl_non_null_count: int = 0
+        # Discovery vs arb split:
+        #   discovery = reference_source NONE (no spread reference found)
+        #   arb       = reference_source not NONE (MIRROR_POOL / ANCHOR_RATIO / TRIANGULAR_ROUTE)
+        self._discovery_candidates_total: int = 0
+        self._arb_candidates_total: int = 0
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -378,6 +383,26 @@ class FunnelTracker:
         with self._lock:
             self._phase2_expected_pnl_non_null_count += 1
 
+    def inc_discovery_candidate(self) -> None:
+        """Increment discovery-only counter (reference_source == NONE).
+
+        Discovery candidates are new pools where no spread reference was found
+        (no mirror, no dual-anchor, no triangular route).  They are useful for
+        listener health but do NOT prove arbitrage economics.
+        """
+        with self._lock:
+            self._discovery_candidates_total += 1
+
+    def inc_arb_candidate(self) -> None:
+        """Increment arb-candidate counter (reference_source != NONE).
+
+        Arb candidates have a price reference (mirror pool, anchor ratio, or
+        triangular route) and are eligible for PnL estimation.  A non-zero
+        count is the minimum requirement for the ARB gate.
+        """
+        with self._lock:
+            self._arb_candidates_total += 1
+
     def record_trace(self, trace: EventTrace) -> None:
         """Append a per-event trace (ring-buffer, drops oldest if full)."""
         with self._lock:
@@ -446,6 +471,9 @@ class FunnelTracker:
                 "phase2_reject_histogram": dict(self._phase2_reject_histogram),
                 "phase2_would_enter_count": self._phase2_would_enter_count,
                 "phase2_expected_pnl_non_null_count": self._phase2_expected_pnl_non_null_count,
+                # Discovery vs arb split
+                "discovery_candidates_total": self._discovery_candidates_total,
+                "arb_candidates_total": self._arb_candidates_total,
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

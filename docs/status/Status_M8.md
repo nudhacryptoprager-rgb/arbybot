@@ -11,6 +11,17 @@
 `execution_enabled`: false
 `phase2_short_gates_status`: ALL_PASS (15m+30m+60m 2026-05-14)
 `phase2_24h_soak_blocked_until_real_inputs`: true
+`discovery_runtime_status`: PROVEN
+`phase2_discovery_gate`: PASS
+`phase2_arb_gate`: BLOCKED_ZERO_SPREAD_MIRROR_AND_PNL_NULL
+`phase2_24h_soak_allowed`: false
+`next_focus`: MIRROR_LIQUIDITY_AND_QUOTED_TRIANGULAR_FOR_MEME_TOKENS
+`phase2_arb_gate_triangular_fix`: DEPLOYED
+`phase2_discovery_gate_429_tolerance`: ENABLED
+`phase2_dashboard_schema`: phase2.dashboard (arb_blocked_warning + top_arb_candidates confirmed)
+`phase2_dashboard_port`: 8099 (default; 8109 not active)
+`phase2_r2_gate_result`: DISC_PASS rpc_errors=0 arb_candidates_total=1 pnl_non_null=0 (zero-spread mirror, no anchor liquidity — correct behaviour)
+`phase2_arb_pass_criteria`: expected_pnl_usd!=null AND spread_bps!=null AND liquidity_usd!=null AND slippage_bps!=null (all 4 required in single candidate)
 `step_pivot_md_reconciliation`: REQUIRED_BEFORE_LITERAL_PHASE1_CHECKLIST_TICK
 `multi_factory_coverage_status`: PARTIAL_MARKET_WINDOW
 `phase1_steps_4_9_status`: COMPLETE

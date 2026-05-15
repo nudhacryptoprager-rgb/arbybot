@@ -283,6 +283,15 @@ class EnrichmentResult:
     slippage_result: Optional[Dict[str, Any]] = None
     # Economics
     expected_pnl_usd: Optional[float] = None
+    # Reference classification: how spread was (or could be) estimated.
+    # MIRROR_POOL    — same pair found on another DEX (most reliable)
+    # ANCHOR_RATIO   — both tokens have known USD anchor prices
+    # TRIANGULAR_ROUTE — non-anchor seen in another anchor pair with actual quoted price
+    # NONE           — no price reference found; discovery event only
+    reference_source: str = "NONE"
+    # Route edges for top_arb_candidates export (None when reference_source=="NONE").
+    # Schema: {"type": ..., ...extra context fields...}
+    route_edges: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialisable dict for inclusion in rolling artifact per-event entries."""
@@ -297,6 +306,8 @@ class EnrichmentResult:
             "honeypot_verdict": self.honeypot_verdict,
             "slippage_result": self.slippage_result,
             "expected_pnl_usd": self.expected_pnl_usd,
+            "reference_source": self.reference_source,
+            "route_edges": self.route_edges,
         }
 
 
@@ -438,6 +449,44 @@ class EntryCandidateEnricher:
             token0, token1, reserve0, reserve1, mirror_price=mirror_price
         )
 
+        # Step 5b: map spread_note to reference_source.
+        # FROM_TRIANGULAR means spread was actually computed via cross-anchor
+        # route — this is the only triangular state that proves arb economics.
+        _NOTE_TO_SOURCE = {
+            "FROM_MIRROR": "MIRROR_POOL",
+            "FROM_ANCHOR_RATIO": "ANCHOR_RATIO",
+            "FROM_TRIANGULAR": "TRIANGULAR_ROUTE",
+        }
+        reference_source = _NOTE_TO_SOURCE.get(spread_note or "", "NONE")
+
+        # Step 5c: build route_edges for per-candidate economics trace.
+        route_edges: Optional[Dict[str, Any]] = None
+        if reference_source == "MIRROR_POOL":
+            route_edges = {
+                "type": "MIRROR",
+                "mirror_dex": mirror_dex,
+                "mirror_pool": mirror_pool,
+            }
+        elif reference_source == "ANCHOR_RATIO":
+            route_edges = {
+                "type": "ANCHOR_RATIO",
+                "token0_usd": self._anchor_prices.get(token0),
+                "token1_usd": self._anchor_prices.get(token1),
+            }
+        elif reference_source == "TRIANGULAR_ROUTE":
+            # Identify the anchor and non-anchor for the trace.
+            _tri_anchor = next(
+                (t for t in (token0, token1) if t in self._anchor_prices), None
+            )
+            _tri_non_anchor = next(
+                (t for t in (token0, token1) if t not in self._anchor_prices), None
+            )
+            route_edges = {
+                "type": "TRIANGULAR",
+                "current_anchor": _tri_anchor,
+                "non_anchor": _tri_non_anchor,
+            }
+
         # Step 6: honeypot check.
         honeypot_verdict = self._check_honeypot(token0, token1)
 
@@ -445,6 +494,33 @@ class EntryCandidateEnricher:
         slippage_result: Optional[Dict[str, Any]] = None
         if reserve0 is not None and reserve1 is not None and reserve0 > 0 and reserve1 > 0:
             slippage_result = self._check_slippage(pool, token0, token1, reserve0, reserve1)
+
+        # Step 7b: per-edge reject taxonomy — augment route_edges with edge_issues.
+        # Classifies WHY a candidate with a price reference still cannot produce PnL.
+        _edge_issues: List[str] = []
+        if reference_source == "MIRROR_POOL":
+            if liquidity_usd is None:
+                _edge_issues.append("EDGE_NO_LIQUIDITY")
+            if estimated_spread_bps is not None and estimated_spread_bps == 0.0:
+                _edge_issues.append("ZERO_SPREAD_MIRROR")
+            if slippage_result is not None and slippage_result.get("verdict") == "REJECT":
+                _edge_issues.append("EDGE_SLIPPAGE_TOO_HIGH")
+            if slippage_result is None and (reserve0 is None or reserve1 is None):
+                _edge_issues.append("EDGE_QUOTE_FAILED")
+        elif reference_source == "TRIANGULAR_ROUTE":
+            if liquidity_usd is None:
+                _edge_issues.append("EDGE_NO_LIQUIDITY")
+            if slippage_result is not None and slippage_result.get("verdict") == "REJECT":
+                _edge_issues.append("EDGE_SLIPPAGE_TOO_HIGH")
+        elif spread_note == "NO_TRIANGULAR_ROUTE":
+            _edge_issues.append("EDGE_POOL_MISSING")
+        elif spread_note == "TRIANGULAR_NO_QUOTED_PRICE":
+            _edge_issues.append("EDGE_QUOTE_FAILED")
+        if _edge_issues:
+            if route_edges is not None:
+                route_edges["edge_issues"] = _edge_issues
+            else:
+                route_edges = {"type": "NONE", "edge_issues": _edge_issues}
 
         # Step 8: expected PnL estimate (paper-mode only).
         expected_pnl_usd = self._compute_expected_pnl(
@@ -482,6 +558,8 @@ class EntryCandidateEnricher:
             honeypot_verdict=honeypot_verdict,
             slippage_result=slippage_result,
             expected_pnl_usd=expected_pnl_usd,
+            reference_source=reference_source,
+            route_edges=route_edges,
         )
 
     # ------------------------------------------------------------------
@@ -498,6 +576,37 @@ class EntryCandidateEnricher:
             if seen_dex != dex:
                 return True, seen_dex, seen_pool, seen_price
         return False, None, None, None
+
+    def _probe_triangular_route(
+        self, non_anchor_token: str, current_anchor: Optional[str] = None
+    ) -> bool:
+        """Return True if *non_anchor_token* has a seen pair with a *different* anchor.
+
+        This indicates a triangular reference route exists in the intra-session
+        registry.  For example, if we are enriching TOKEN/WETH and TOKEN/USDC
+        was already seen on another DEX, we have a triangular route:
+
+            TOKEN/WETH (current) + TOKEN/USDC (seen) → can cross-price TOKEN.
+
+        ``current_anchor`` must be the anchor of the pair currently being enriched
+        so it is excluded from the search (to avoid the current pool matching
+        itself and producing a false-positive).
+
+        Note: the spread is not computed here — only route existence is checked.
+        The ``reference_source`` field is set to ``"TRIANGULAR_ROUTE"`` when this
+        returns True, signalling that the event is an arb *candidate* even though
+        ``estimated_spread_bps`` may still be None.
+        """
+        for anchor in self._anchor_prices:
+            if anchor == non_anchor_token:
+                continue
+            if anchor == current_anchor:
+                # This IS the current pool — skip to avoid self-matching.
+                continue
+            pair_key: FrozenSet = frozenset([non_anchor_token, anchor])
+            if self._seen_pairs.get(pair_key):
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Reserve fetch
@@ -675,6 +784,102 @@ class EntryCandidateEnricher:
     # Spread estimation
     # ------------------------------------------------------------------
 
+    def _try_triangular_spread(
+        self,
+        token0: str,
+        token1: str,
+        r0: float,
+        r1: float,
+    ) -> Tuple[Optional[float], str]:
+        """Compute spread via a cross-anchor triangular route.
+
+        Requires that exactly one token in the current pair is a known anchor.
+        Looks for the non-anchor token in a previously-seen pool paired with a
+        *different* anchor.  The seen pool must have a recorded non-None implied
+        price so that we can quantify the deviation.
+
+        Example (TOKEN/WETH current pool, TOKEN/USDC seen earlier):
+
+            token_usd_A = WETH_price * (r_weth / r_token)   # from current pool
+            token_usd_B = usdc_price / implied_usdc_per_token  # from seen pool
+            spread_bps  = |A - B| / B * 10 000
+
+        Address ordering follows the Uniswap canonical sort (token0 < token1),
+        so we infer the direction of ``implied_price`` from the address comparison.
+
+        Returns
+        -------
+        ``(spread_bps, "FROM_TRIANGULAR")``
+            Spread successfully computed.
+        ``(None, "TRIANGULAR_NO_QUOTED_PRICE")``
+            Route exists in seen_pairs but all entries have ``implied_price=None``
+            (fast-path seeded via ``register_seen_pair`` without reserve fetch).
+        ``(None, "NO_TRIANGULAR_ROUTE")``
+            No matching seen pair found at all.
+        ``(None, "NO_REFERENCE_PRICE")``
+            Both tokens are anchors (anchor-ratio already handles this) or
+            neither is an anchor (triangular not applicable).
+        """
+        # Identify anchor/non-anchor in the current pair.
+        if token0 in self._anchor_prices and token1 not in self._anchor_prices:
+            anchor_token, non_anchor = token0, token1
+            anchor_usd = self._anchor_prices[anchor_token]
+            # current pool: token0=anchor, token1=non_anchor
+            # current_price = r1/r0 = non_anchor_per_anchor
+            # 1 non_anchor = anchor_usd / (r1/r0) = anchor_usd * r0/r1
+            if r1 <= 0:
+                return None, "TRIANGULAR_ZERO_RESERVES"
+            token_usd_current = anchor_usd * r0 / r1
+        elif token1 in self._anchor_prices and token0 not in self._anchor_prices:
+            anchor_token, non_anchor = token1, token0
+            anchor_usd = self._anchor_prices[anchor_token]
+            # current pool: token0=non_anchor, token1=anchor
+            # current_price = r1/r0 = anchor_per_non_anchor
+            # 1 non_anchor = current_price * anchor_usd
+            if r0 <= 0:
+                return None, "TRIANGULAR_ZERO_RESERVES"
+            token_usd_current = (r1 / r0) * anchor_usd
+        else:
+            # Both anchors (handled upstream) or neither anchor.
+            return None, "NO_REFERENCE_PRICE"
+
+        if token_usd_current <= 0:
+            return None, "TRIANGULAR_ZERO_TOKEN_PRICE"
+
+        # Search seen pairs for non_anchor paired with a *different* anchor.
+        found_route = False
+        for other_anchor, other_anchor_usd in self._anchor_prices.items():
+            if other_anchor == non_anchor or other_anchor == anchor_token:
+                continue
+            pair_key: FrozenSet = frozenset([non_anchor, other_anchor])
+            seen_entries = self._seen_pairs.get(pair_key)
+            if not seen_entries:
+                continue
+            found_route = True
+            for _seen_dex, _seen_pool, implied_price in seen_entries:
+                if implied_price is None or implied_price <= 0:
+                    continue
+                # Infer direction from Uniswap canonical address ordering.
+                # token0 < token1 by address (lexicographic).
+                if non_anchor < other_anchor:
+                    # non_anchor is token0, other_anchor is token1 in the seen pool.
+                    # implied_price = other_anchor_per_non_anchor
+                    token_usd_seen = implied_price * other_anchor_usd
+                else:
+                    # other_anchor is token0, non_anchor is token1 in the seen pool.
+                    # implied_price = non_anchor_per_other_anchor
+                    token_usd_seen = other_anchor_usd / implied_price
+                if token_usd_seen <= 0:
+                    continue
+                deviation = abs(token_usd_current - token_usd_seen) / token_usd_seen
+                spread_bps = round(deviation * 10_000.0, 1)
+                return spread_bps, "FROM_TRIANGULAR"
+
+        if found_route:
+            # Route(s) found but all implied_prices are None (seeded without reserves).
+            return None, "TRIANGULAR_NO_QUOTED_PRICE"
+        return None, "NO_TRIANGULAR_ROUTE"
+
     def _estimate_spread(
         self,
         token0: str,
@@ -688,7 +893,16 @@ class EntryCandidateEnricher:
         Priority:
           1. Mirror spread (same pair, different DEX price)
           2. Anchor-ratio spread (both tokens have known USD prices)
-          3. None if no reference is available
+          3. Triangular spread (one anchor, non-anchor seen in another anchor pair)
+          4. None if no reference is available
+
+        Notes returned:
+          ``FROM_MIRROR``             — mirror pool found on different DEX
+          ``FROM_ANCHOR_RATIO``       — both tokens are known anchors
+          ``FROM_TRIANGULAR``         — spread computed via triangular cross-anchor route
+          ``TRIANGULAR_DETECTED``     — route exists but seen pool has no recorded price
+          ``NO_REFERENCE_PRICE``      — no reference path available
+          ``ZERO_OR_MISSING_RESERVES`` — reserves unavailable / zero
         """
         if r0 is None or r1 is None or r0 <= 0 or r1 <= 0:
             return None, "ZERO_OR_MISSING_RESERVES"
@@ -708,6 +922,14 @@ class EntryCandidateEnricher:
             if expected_price > 0:
                 deviation = abs(current_price - expected_price) / expected_price
                 return round(deviation * 10_000.0, 1), "FROM_ANCHOR_RATIO"
+
+        # 3. Triangular spread (one anchor in pair, non-anchor seen elsewhere)
+        tri_spread, tri_note = self._try_triangular_spread(token0, token1, r0, r1)
+        if tri_spread is not None:
+            return tri_spread, "FROM_TRIANGULAR"
+        if tri_note == "TRIANGULAR_NO_QUOTED_PRICE":
+            # Route exists in seen_pairs but no recorded price yet.
+            return None, "TRIANGULAR_DETECTED"
 
         return None, "NO_REFERENCE_PRICE"
 

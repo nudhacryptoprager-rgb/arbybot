@@ -1061,6 +1061,14 @@ def _build_m8_funnel(metrics: dict) -> dict:
         "phase2_expected_pnl_non_null_count": _safe_int(
             metrics.get("phase2_expected_pnl_non_null_count")
         ),
+        # Discovery vs arb split (SNIPING_DISCOVERY vs ARBITRAGE_CANDIDATE)
+        "discovery_candidates_total": _safe_int(metrics.get("discovery_candidates_total")),
+        "arb_candidates_total": _safe_int(metrics.get("arb_candidates_total")),
+        # True when economics are proven for at least one candidate in this session.
+        "arb_economics_proven": (
+            _safe_int(metrics.get("arb_candidates_total")) >= 1
+            and _safe_int(metrics.get("phase2_expected_pnl_non_null_count")) >= 1
+        ),
     }
 
 
@@ -1143,9 +1151,11 @@ def build_m8_current_payload(
         })
 
     realizable_count = sum(1 for row in rows if row["is_realizable"])
+    funnel_data = _build_m8_funnel(metrics)
+    arb_economics_proven = funnel_data.get("arb_economics_proven", False)
     return {
         "schema_family": "m8_dashboard",
-        "schema_revision": "phase1.dashboard",
+        "schema_revision": "phase2.dashboard",
         "now_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "artifact": {
             "exists": bool(artifact),
@@ -1173,7 +1183,18 @@ def build_m8_current_payload(
                 for row in rows
             ),
         },
-        "funnel": _build_m8_funnel(metrics),
+        # Top arb candidates: events with a price reference (from artifact).
+        # Empty until mirror / anchor-ratio / triangular route events appear.
+        "top_arb_candidates": artifact.get("top_arb_candidates") or [],
+        # Warning flag: shown as banner when True (arb gate not yet passed).
+        "arb_blocked_warning": not arb_economics_proven,
+        "arb_blocked_reason": (
+            None if arb_economics_proven else
+            "No arb candidates with proven PnL yet. "
+            "Listener works (DISCOVERY mode) but no price reference found. "
+            "24h soak NOT authorized."
+        ),
+        "funnel": funnel_data,
         "metrics": metrics,
     }
 

@@ -248,6 +248,7 @@ def _apply_phase2_decision(
     decisions: Dict[str, Any],
     enricher: Any = None,
     funnel: Any = None,
+    arb_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Run the Phase 2 paper-only entry engine for *event* and store the result.
 
@@ -298,12 +299,61 @@ def _apply_phase2_decision(
                 reject_reason = liq_note
             elif liq_note.startswith("V4_RPC_ERR"):
                 reject_reason = "V4_RPC_ERR"
+            # ------------------------------------------------------------------
+            # DISCOVERY vs ARB split (Step 6 / 10-step fix plan).
+            # reference_source captures whether a price reference was found:
+            #   NONE             → discovery only (no arb economics available)
+            #   MIRROR_POOL      → same pair on another DEX
+            #   ANCHOR_RATIO     → both tokens are known anchors
+            #   TRIANGULAR_ROUTE → non-anchor token seen in another seen pair
+            # Events with reference_source=NONE are DISCOVERY candidates; their
+            # reject_reason is overridden to NO_ARBITRAGE_REFERENCE so the
+            # histogram clearly separates infra noise from economics failures.
+            # ------------------------------------------------------------------
+            ref_src = extra_fields.get("reference_source", "NONE")
+            if ref_src != "NONE":
+                funnel.inc_arb_candidate()
+            else:
+                funnel.inc_discovery_candidate()
+                # Override reject_reason so histogram separates "no price reference"
+                # from other reject types (INSUFFICIENT_DATA, V4_ZERO_AT_CREATION…).
+                if reject_reason is None:
+                    reject_reason = "NO_ARBITRAGE_REFERENCE"
+                elif reject_reason not in (
+                    "V4_LIQUIDITY_UNSUPPORTED", "V4_ZERO_AT_CREATION",
+                    "V4_BAD_POOLID", "V4_ZERO_PRICE", "V4_RPC_ERR",
+                    "INSUFFICIENT_DATA",
+                ):
+                    reject_reason = "NO_ARBITRAGE_REFERENCE"
             if reject_reason is not None:
                 funnel.inc_phase2_reject(reject_reason)
             else:
                 funnel.inc_phase2_would_enter()
             if extra_fields.get("expected_pnl_usd") is not None:
                 funnel.inc_phase2_expected_pnl_non_null()
+            # Append to run-wide arb trace so gate sees candidates beyond
+            # the recent_events window (last 20 events in artifact).
+            if arb_trace is not None and ref_src != "NONE":
+                _slip = extra_fields.get("slippage_result") or {}
+                arb_trace.append({
+                    "event_id": event.event_id,
+                    "pair": None,  # symbol resolution happens in artifact builder
+                    "dex": event.dex,
+                    "block_number": event.block_number,
+                    "token0": event.token0,
+                    "token1": event.token1,
+                    "liquidity_usd": extra_fields.get("liquidity_usd"),
+                    "reference_source": ref_src,
+                    "spread_bps": extra_fields.get("estimated_spread_bps"),
+                    "spread_note": extra_fields.get("spread_note"),
+                    "gas_usd": 0.30,
+                    "slippage_bps": _slip.get("predicted_bps"),
+                    "expected_pnl_usd": extra_fields.get("expected_pnl_usd"),
+                    "honeypot_verdict": extra_fields.get("honeypot_verdict"),
+                    "route_edges": extra_fields.get("route_edges"),
+                    "reject_reason": decision.reject_reason,
+                    "verdict": extra_fields.get("verdict"),
+                })
     except Exception as exc:
         logger.warning(
             "phase2_entry_decision_error",
@@ -320,6 +370,7 @@ def _make_ws_on_event_callback(
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
     phase2_enricher: Any = None,
     phase2_lock: Optional[threading.Lock] = None,
+    arb_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> Any:
     """Return an ``on_event(cfg, raw_log)`` callback for WSPoolEventListener.
 
@@ -341,6 +392,7 @@ def _make_ws_on_event_callback(
                 _apply_phase2_decision(
                     candidate, phase2_engine, phase2_event_decisions,
                     enricher=phase2_enricher, funnel=funnel,
+                    arb_trace=arb_trace,
                 )
             finally:
                 if phase2_lock is not None:
@@ -660,6 +712,7 @@ def _build_and_write_artifact(
     w3: Optional[Any] = None,
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
     enricher_config: Optional[Dict[str, Any]] = None,
+    arb_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
@@ -791,6 +844,40 @@ def _build_and_write_artifact(
         phase2_decision=phase2_summary,
         enricher_config=enricher_config,
     )
+
+    # Per-candidate economics trace for events with a known price reference.
+    # Use the run-wide arb_trace when available (covers all candidates, not
+    # just the last 20 in the artifact window).  Fall back to recent_list for
+    # offline / test scenarios where arb_trace is not threaded through.
+    _MAX_ARB_TRACE = 50
+    if arb_trace is not None:
+        # arb_trace already contains compact dicts; cap to most recent _MAX_ARB_TRACE
+        top_arb_candidates: List[Dict[str, Any]] = arb_trace[-_MAX_ARB_TRACE:]
+    else:
+        top_arb_candidates = []
+        for entry in recent_list:
+            dec = entry.get("phase2_decision") or {}
+            if dec.get("reference_source", "NONE") != "NONE":
+                _slip = dec.get("slippage_result") or {}
+                top_arb_candidates.append({
+                    "event_id": entry.get("event_id"),
+                    "pair": entry.get("pair"),
+                    "dex": entry.get("dex"),
+                    "block_number": entry.get("block_number"),
+                    "liquidity_usd": dec.get("liquidity_usd"),
+                    "reference_source": dec.get("reference_source"),
+                    "spread_bps": dec.get("estimated_spread_bps"),
+                    "spread_note": dec.get("spread_note"),
+                    "gas_usd": 0.30,
+                    "slippage_bps": _slip.get("predicted_bps"),
+                    "expected_pnl_usd": dec.get("expected_pnl_usd"),
+                    "honeypot_verdict": dec.get("honeypot_verdict"),
+                    "route_edges": dec.get("route_edges"),
+                    "reject_reason": dec.get("reject_reason"),
+                    "verdict": dec.get("verdict"),
+                })
+    artifact["top_arb_candidates"] = top_arb_candidates
+
     violations = validate_sniper_artifact(artifact)
     if violations:
         logger.warning(
@@ -966,6 +1053,7 @@ def _run_online_loop(
                                 _apply_phase2_decision(
                                     candidate, phase2_engine, phase2_event_decisions,
                                     enricher=phase2_enricher, funnel=funnel,
+                                    arb_trace=arb_trace,
                                 )
                             finally:
                                 if phase2_lock is not None:
@@ -1000,6 +1088,7 @@ def _run_online_loop(
                 reasons=reasons,
                 w3=w3,
                 phase2_event_decisions=decisions_snap,
+                arb_trace=list(arb_trace),
             )
             last_artifact_ts = time.monotonic()
 
@@ -1349,6 +1438,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Step 2: separate lock protecting the Phase 2 enricher's seen_pairs registry
     # and the phase2_event_decisions dict from concurrent WS + HTTP mutations.
     phase2_lock = threading.Lock()
+    # Run-wide list of all arb candidates (reference_source != NONE).
+    # Unlike recent_events (capped at last 20), this persists the full run.
+    arb_trace: List[Dict[str, Any]] = []
     ws_listener = None
     ws_thread = None
     http_fallback_mode = False
@@ -1364,6 +1456,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     phase2_event_decisions=phase2_event_decisions,
                     phase2_enricher=phase2_enricher,
                     phase2_lock=phase2_lock,
+                    arb_trace=arb_trace,
                 )
                 ws_listener = WSPoolEventListener(
                     ws_url=ws_url,
@@ -1492,6 +1585,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         w3=w3 if not offline else None,
         phase2_event_decisions=final_decisions,
         enricher_config=enricher_config,
+        arb_trace=list(arb_trace),
     )
 
     # ------------------------------------------------------------------
