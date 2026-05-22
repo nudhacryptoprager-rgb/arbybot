@@ -95,6 +95,10 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "pool_family_truth.json",
             # M8 Phase 1: new pool sniper rolling artifact
             "new_pool_sniper_latest.json",
+            # M8.1: stable-anchor rolling artifact
+            "m8_1_stable_anchor_latest.json",
+            # M9: graph-arb shadow scanner rolling artifact
+            "m9_graph_latest.json",
         }
         
         # Archive files are allowed (created on reset)

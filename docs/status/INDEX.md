@@ -15,6 +15,8 @@
 | M5_0 - Infrastructure Hardening | [DONE] | [Status_M5_0.md](Status_M5_0.md) |
 | M7 - Triangular Feasibility (M7.A) | [IN PROGRESS] | [Status_M7.md](Status_M7.md) |
 | M8 - New-Pool Sniping Pivot | [OPEN] | [Status_M8.md](Status_M8.md) |
+| M8.1 - Stable-Anchor Inventory & Diagnostics | [ACTIVE] | [Status_M8_1.md](Status_M8_1.md) |
+| M9 - Graph-Arb Long-Tail Shadow Scanner | [IN PROGRESS] | [Status_M9.md](Status_M9.md) |
 
 ## Current Focus
 
@@ -23,6 +25,10 @@
 **M7 - Triangular Feasibility (M7.A)**: bounded R&D branch with verdict-ready no-graduate result for the current `arbitrum_one` narrow-universe scope. Live measured scoring, size sweep, blocker RCA, and bounded verdict are complete; `M7.B` remains closed. See [Status_M7.md](Status_M7.md).
 
 **M8 - New-Pool Sniping Pivot**: next production-profit path after M7 economics evidence; starts as documentation-aligned OPEN milestone and must produce its own artifacts before any production claim. See [Status_M8.md](Status_M8.md).
+
+**M8.1 - Stable-Anchor Inventory & Diagnostics**: inventory layer for stable/near-peg pairs; feeds M9 graph builder. `gate_acceptance=true`, `strategy_gate_acceptance=false` (NO_STABLE_EDGE). See [Status_M8_1.md](Status_M8_1.md).
+
+**M9 - Graph-Arb Long-Tail Shadow Scanner**: shadow scanner finding 3–4-hop cycles in token exchange graph. `cycles_found=1100`, `cycles_positive_gross=0`, `economics_gate_status=BLOCKED_NO_POSITIVE_GROSS`. Execution disabled. See [Status_M9.md](Status_M9.md).
 
 ## Related
 
