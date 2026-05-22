@@ -1204,21 +1204,20 @@ def build_m9_current_payload(
     # M8.1 stable-anchor inventory summary
     _m8_1_metrics = m8_1.get("metrics") if isinstance(m8_1.get("metrics"), dict) else {}
     _m8_1_pairs = m8_1.get("pairs_probed", [])
+    _m8_1_available = bool(m8_1)  # False when artifact file is absent/empty
+    _m8_1_pool_raw = (
+        m8_1.get("pools_found_total")
+        or _m8_1_metrics.get("stable_anchor_candidates_total")
+        or m8_1.get("pool_count")
+    )
+    _m8_1_pair_raw = len(_m8_1_pairs) if isinstance(_m8_1_pairs, list) else m8_1.get("pair_count")
+    _m8_1_edge_raw = m8_1.get("active_routes_count") or m8_1.get("edge_count")
     m8_1_summary = {
-        "pool_count": _safe_int(
-            m8_1.get("pools_found_total")
-            or _m8_1_metrics.get("stable_anchor_candidates_total")
-            or m8_1.get("pool_count")
-        ),
-        "pair_count": _safe_int(
-            len(_m8_1_pairs) if isinstance(_m8_1_pairs, list) else m8_1.get("pair_count")
-        ),
+        "pool_count": _safe_int(_m8_1_pool_raw) if (_m8_1_available and _m8_1_pool_raw is not None) else None,
+        "pair_count": _safe_int(_m8_1_pair_raw) if (_m8_1_available and _m8_1_pair_raw) else None,
         "gate_acceptance": m8_1.get("gate_acceptance"),
         "strategy_gate_acceptance": m8_1.get("strategy_gate_acceptance"),
-        "edge_count": _safe_int(
-            m8_1.get("active_routes_count")
-            or m8_1.get("edge_count")
-        ),
+        "edge_count": _safe_int(_m8_1_edge_raw) if (_m8_1_available and _m8_1_edge_raw is not None) else None,
         "generated_at_utc": m8_1.get("generated_at_utc") or m8_1.get("run_timestamp"),
     }
 

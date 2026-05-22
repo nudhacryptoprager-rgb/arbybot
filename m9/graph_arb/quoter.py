@@ -10,6 +10,12 @@ from m8_1.stable_anchor.pool_discovery import DexRoute
 from m8_1.stable_anchor.quote_probe import probe_quote, QuoteResult
 from m9.graph_arb.models import CycleQuoteResult, GraphCycle, GraphEdge
 
+# Quote backend identifiers
+BACKEND_DIRECT_HTTP = "direct_http"
+BACKEND_RAW_HTTP = "raw_http"
+BACKEND_ANVIL_FORK = "anvil_fork"
+_VALID_BACKENDS = (BACKEND_DIRECT_HTTP, BACKEND_RAW_HTTP, BACKEND_ANVIL_FORK)
+
 _REJECT_CYCLE_QUOTE_FAILED = "CYCLE_QUOTE_FAILED"
 _REJECT_CYCLE_ZERO_OUTPUT = "CYCLE_ZERO_OUTPUT"
 
@@ -18,6 +24,33 @@ STATUS_ZERO_AMOUNT_IN = "ZERO_AMOUNT_IN"
 STATUS_POSITIVE_GROSS = "POSITIVE_GROSS"
 STATUS_NEGATIVE_GROSS = "NEGATIVE_GROSS"
 STATUS_CYCLE_QUOTE_TIMEOUT = "CYCLE_QUOTE_TIMEOUT"
+
+
+def _probe_leg(
+    w3: Any,
+    route: DexRoute,
+    token_in: TokenInfo,
+    token_out: TokenInfo,
+    amount_in: int,
+    quote_backend: str = BACKEND_DIRECT_HTTP,
+    rpc_url: Optional[str] = None,
+) -> QuoteResult:
+    """Route a single leg probe to the correct backend."""
+    if quote_backend == BACKEND_RAW_HTTP:
+        from m9.graph_arb.raw_http_probe import probe_quote_raw_http
+        if rpc_url is None:
+            raise ValueError("rpc_url is required for raw_http backend")
+        return probe_quote_raw_http(rpc_url, route, token_in, token_out, amount_in)
+    elif quote_backend == BACKEND_ANVIL_FORK:
+        # anvil_fork always routes to Anvil local fork — ignores rpc_url to avoid
+        # accidentally hitting the external RPC when runner resolves BASE_RPC first.
+        import os as _os
+        from m9.graph_arb.raw_http_probe import probe_quote_raw_http
+        anvil_url = _os.environ.get("ARBY_ANVIL_RPC_URL", "http://127.0.0.1:8545")
+        return probe_quote_raw_http(anvil_url, route, token_in, token_out, amount_in)
+    else:
+        # default: direct_http (web3 path)
+        return probe_quote(w3, route, token_in, token_out, amount_in)
 
 
 def _make_dex_route(edge: GraphEdge) -> DexRoute:
@@ -43,6 +76,8 @@ def quote_cycle_sync(
     w3: Any,
     token_price_usd: Optional[Dict[str, float]] = None,
     timeout_s: float = 10.0,
+    quote_backend: str = BACKEND_DIRECT_HTTP,
+    rpc_url: Optional[str] = None,
 ) -> CycleQuoteResult:
     """Quote all legs of a cycle synchronously and return cumulative result."""
     started = time.monotonic()
@@ -88,7 +123,7 @@ def quote_cycle_sync(
         token_in = _make_token_info(edge.token_in_sym, edge.token_in_addr, edge.token_in_decimals)
         token_out = _make_token_info(edge.token_out_sym, edge.token_out_addr, edge.token_out_decimals)
 
-        leg_result = probe_quote(w3, route, token_in, token_out, current_amount)
+        leg_result = _probe_leg(w3, route, token_in, token_out, current_amount, quote_backend, rpc_url)
         leg_results.append(leg_result)
 
         if not leg_result.ok:
@@ -132,9 +167,11 @@ async def quote_cycle_async(
     w3: Any,
     token_prices: Optional[Dict[str, float]] = None,
     timeout_s: float = 10.0,
+    quote_backend: str = BACKEND_DIRECT_HTTP,
+    rpc_url: Optional[str] = None,
 ) -> CycleQuoteResult:
     """Async wrapper around quote_cycle_sync."""
-    return quote_cycle_sync(cycle, size_usd, w3, token_prices, timeout_s)
+    return quote_cycle_sync(cycle, size_usd, w3, token_prices, timeout_s, quote_backend, rpc_url)
 
 
 def schedule_cycle_quotes(
@@ -144,27 +181,34 @@ def schedule_cycle_quotes(
     max_workers: int = 4,
     token_prices: Optional[Dict[str, float]] = None,
     timeout_s: float = 10.0,
+    quote_backend: str = BACKEND_DIRECT_HTTP,
+    rpc_url: Optional[str] = None,
 ) -> List[CycleQuoteResult]:
-    """Quote all cycles in parallel using ThreadPoolExecutor."""
+    """Quote all cycles in parallel using ThreadPoolExecutor.
+
+    Args:
+        max_workers: number of parallel quote threads (reduce to 1-2 for dRPC free tier)
+        quote_backend: "direct_http" (web3 + eth_chainId), "raw_http" (JSON-RPC only),
+                       or "anvil_fork" (local fork)
+        rpc_url: required for raw_http and anvil_fork backends
+    """
     results: List[CycleQuoteResult] = []
     size_usd = sizes_usd[0] if sizes_usd else 1000.0
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [
-            pool.submit(quote_cycle_sync, cycle, size_usd, w3, token_prices, timeout_s)
+            pool.submit(
+                quote_cycle_sync, cycle, size_usd, w3, token_prices, timeout_s,
+                quote_backend, rpc_url,
+            )
             for cycle in cycles
         ]
-        for future in futures:
+        for i, future in enumerate(futures):
             try:
                 result = future.result(timeout=30.0)
                 results.append(result)
             except Exception as exc:
-                # Build a failed result for this cycle
-                if futures:
-                    idx = futures.index(future) if future in futures else 0
-                    cycle = cycles[idx] if idx < len(cycles) else cycles[0]
-                else:
-                    continue
+                cycle = cycles[i] if i < len(cycles) else cycles[0]
                 results.append(
                     CycleQuoteResult(
                         cycle=cycle,

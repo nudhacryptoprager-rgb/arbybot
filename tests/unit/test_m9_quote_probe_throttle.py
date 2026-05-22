@@ -46,7 +46,7 @@ class TestProbeQuoteCallsThrottle:
                 _make_token("USDT"),
                 1_000_000,
             )
-        mock_throttle.acquire.assert_called_once()
+        mock_throttle.acquire.assert_called_once_with(n=2)
 
     def test_throttle_called_on_rpc_error(self):
         """Even when eth_call raises, acquire() must be called first."""
@@ -60,7 +60,7 @@ class TestProbeQuoteCallsThrottle:
                 _make_token("USDT"),
                 1_000_000,
             )
-        mock_throttle.acquire.assert_called_once()
+        mock_throttle.acquire.assert_called_once_with(n=2)
         assert result.ok is False
         assert result.reject_reason == "QUOTE_RPC_ERROR"
 
@@ -76,4 +76,4 @@ class TestProbeQuoteCallsThrottle:
         w3 = _make_w3(result=b"\x00" * 63 + b"\x01" + b"\x00" * 32)
         with patch("m8_1.stable_anchor.quote_probe.rpc_throttle") as mock_throttle:
             probe_quote(w3, route, _make_token("USDC"), _make_token("WETH"), 1_000_000)
-        mock_throttle.acquire.assert_called_once()
+        mock_throttle.acquire.assert_called_once_with(n=2)

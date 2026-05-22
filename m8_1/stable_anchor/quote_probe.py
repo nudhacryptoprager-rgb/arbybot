@@ -86,7 +86,7 @@ def probe_quote(w3: Any, route: DexRoute, token_in: TokenInfo, token_out: TokenI
     """Run a single quote via ``eth_call`` against ``route.quoter``."""
     route_id = f"{route.dex_id}:{token_in.symbol}-{token_out.symbol}@{route.fee}"
     try:
-        rpc_throttle.acquire()  # rate-limit before every eth_call
+        rpc_throttle.acquire(n=2)  # rate-limit: 2 tokens for eth_chainId + eth_call (web3 v6 pattern)
         if route.adapter_type in ("uniswap_v3",):
             calldata = _encode_v3_call(token_in.address, token_out.address, amount_in, route.fee)
             result = w3.eth.call({"to": route.quoter, "data": calldata})

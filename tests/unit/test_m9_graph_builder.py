@@ -178,3 +178,118 @@ class TestExtractInventoryStats:
         # pools list = 10 (loop) + 1 (BAD_PAIR) = 11 items
         # raw_hints = len(pools) = 11
         assert stats["funnel_a"]["raw_hints"] == 11
+
+
+class TestBuildGraphFromInventory:
+    """Tests that build_graph_from_inventory() enforces config requirements.
+
+    Safety contract: no edge with quoter_addr=0x000...000 may be emitted.
+    """
+
+    _ZERO_ADDR = "0x" + "0" * 40
+
+    def _make_minimal_inventory(self, tmp_path, dex_id: str = "uniswap_v3") -> str:
+        inv = {
+            "active_routes": [
+                {
+                    "pair_id": "WETH_USDC",
+                    "dex_id": dex_id,
+                    "fee": 500,
+                    "factory_class": "EFFICIENT_BASELINE",
+                    "pool_address": "0x" + "a" * 40,
+                    "route_id": f"{dex_id}:WETH_USDC@500",
+                }
+            ],
+            "pools": [],
+        }
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        return str(p)
+
+    def _make_minimal_config(self, tmp_path) -> str:
+        cfg = {
+            "schema_version": "m8_1.0",
+            "chain": "base",
+            "chain_id": 8453,
+            "dexes": {
+                "uniswap_v3": {
+                    "adapter_type": "uniswap_v3",
+                    "factory": "0x33128a8fc17869897dce68ed026d694621f6fdfd",
+                    "quoter": "0x3d4e44eb1374240ce5f1b871ab261cd16335b76a",
+                    "fee_tiers": [100, 500, 3000, 10000],
+                    "enabled": True,
+                }
+            },
+            "tokens": {
+                "WETH": {"address": "0x4200000000000000000000000000000000000006", "decimals": 18},
+                "USDC": {"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "decimals": 6},
+            },
+        }
+        import yaml
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml.dump(cfg))
+        return str(p)
+
+    def test_missing_config_raises_runtime_error(self, tmp_path):
+        """CONFIG_MISSING: missing config file must raise RuntimeError, not build zero-quoter graph."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        inv = self._make_minimal_inventory(tmp_path)
+        missing_cfg = str(tmp_path / "nonexistent_config.yaml")
+        with pytest.raises(RuntimeError, match="CONFIG_MISSING"):
+            build_graph_from_inventory(inventory_path=inv, config_path=missing_cfg)
+
+    def test_no_zero_quoter_edges_with_valid_config(self, tmp_path):
+        """Safety contract: every emitted edge must have non-zero quoter_addr."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        inv = self._make_minimal_inventory(tmp_path)
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(inventory_path=inv, config_path=cfg)
+        all_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+        assert all_edges, "Expected at least one edge to be built"
+        zero_quoter_edges = [e for e in all_edges if e.quoter_addr == self._ZERO_ADDR]
+        assert not zero_quoter_edges, (
+            f"Found {len(zero_quoter_edges)} edges with zero-address quoter: "
+            + ", ".join(e.route_id for e in zero_quoter_edges)
+        )
+
+    def test_unknown_dex_in_inventory_emits_zero_quoter(self, tmp_path):
+        """Edge with unknown dex_id gets zero quoter (expected and logged, not silently correct)."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        inv = self._make_minimal_inventory(tmp_path, dex_id="unknown_dex_xyz")
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(inventory_path=inv, config_path=cfg)
+        all_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+        # Unknown dex → zero quoter is documented behavior (caller must handle)
+        assert all(e.quoter_addr == self._ZERO_ADDR for e in all_edges)
+
+    def test_real_config_no_zero_quoter(self):
+        """Integration: real config/exotic_base_anchor.yaml produces no zero-quoter edges."""
+        import os
+        cfg_path = "config/exotic_base_anchor.yaml"
+        inv_path = "data/tmp/m9_shadow_inventory_with_gap_edges.json"
+        if not (os.path.exists(cfg_path) and os.path.exists(inv_path)):
+            pytest.skip("Real config/inventory not available in this environment")
+        from m9.graph_arb.builder import build_graph_from_inventory
+        adjacency = build_graph_from_inventory(inventory_path=inv_path, config_path=cfg_path)
+        all_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+        assert all_edges, "Expected edges from real inventory"
+        zero_quoter = [e for e in all_edges if e.quoter_addr == "0x" + "0" * 40]
+        assert not zero_quoter, (
+            f"Real config produced {len(zero_quoter)} zero-quoter edges: "
+            + ", ".join(e.route_id for e in zero_quoter[:5])
+        )

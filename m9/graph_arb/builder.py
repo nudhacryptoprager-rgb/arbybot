@@ -68,8 +68,15 @@ def build_graph_from_inventory(
 
     try:
         cfg: M8_1Config = load_config(config_path)
-    except Exception:
-        cfg = None  # type: ignore[assignment]
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"CONFIG_MISSING: M9 graph builder requires config at {config_path!r}. "
+            f"Create the file or pass --config explicitly. Original error: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"CONFIG_INVALID: Failed to load M9 config from {config_path!r}: {exc}"
+        ) from exc
 
     try:
         with inv_path.open("r", encoding="utf-8") as fh:
@@ -88,9 +95,8 @@ def build_graph_from_inventory(
 
     # Build token lookup: symbol → TokenInfo
     token_map: Dict[str, TokenInfo] = {}
-    if cfg is not None:
-        for sym, tc in cfg.tokens.items():
-            token_map[sym] = TokenInfo(symbol=sym, address=tc.address, decimals=tc.decimals)
+    for sym, tc in cfg.tokens.items():
+        token_map[sym] = TokenInfo(symbol=sym, address=tc.address, decimals=tc.decimals)
 
     adjacency: Dict[str, Dict[str, List[GraphEdge]]] = defaultdict(lambda: defaultdict(list))
     built_count = 0
@@ -118,22 +124,21 @@ def build_graph_from_inventory(
         tick_spacing: Optional[int] = None
         quoter_addr = "0x0000000000000000000000000000000000000000"
 
-        if cfg is not None:
-            dex_cfg = cfg.dexes.get(dex_id)
-            if dex_cfg is None:
-                logger.debug(
-                    "Unknown dex in inventory",
-                    extra={"context": {"dex_id": dex_id, "event": "graph_build_unknown_dex"}},
-                )
-            else:
-                adapter_type = dex_cfg.adapter_type
-                quoter_addr = dex_cfg.quoter
-                if adapter_type == "aerodrome_slipstream" and dex_cfg.tick_spacings:
-                    # Use first tick spacing (or match by fee)
-                    tick_spacing = dex_cfg.tick_spacings[0]
-                    tick_key = entry.get("tick_spacing")
-                    if tick_key is not None:
-                        tick_spacing = int(tick_key)
+        dex_cfg = cfg.dexes.get(dex_id)
+        if dex_cfg is None:
+            logger.debug(
+                "Unknown dex in inventory",
+                extra={"context": {"dex_id": dex_id, "event": "graph_build_unknown_dex"}},
+            )
+        else:
+            adapter_type = dex_cfg.adapter_type
+            quoter_addr = dex_cfg.quoter
+            if adapter_type == "aerodrome_slipstream" and dex_cfg.tick_spacings:
+                # Use first tick spacing (or match by fee)
+                tick_spacing = dex_cfg.tick_spacings[0]
+                tick_key = entry.get("tick_spacing")
+                if tick_key is not None:
+                    tick_spacing = int(tick_key)
 
         fee_bps = _fee_bps_from_edge(adapter_type, fee, tick_spacing)
 

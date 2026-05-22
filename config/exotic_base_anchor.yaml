@@ -1,0 +1,108 @@
+# M9 Graph-Arb exotic pairs config — Base chain
+# Used by m9/graph_arb/builder.py via M8_1Config (m8_1.stable_anchor.config_loader)
+# Schema: m8_1.0  NOTE: use "quoter:" key (not "quoter_v2:") — _parse_dex reads raw.get("quoter")
+# ALL addresses MUST be lowercase 0x + 40 hex chars (_ADDR_RE = r"^0x[0-9a-f]{40}$")
+schema_version: "m8_1.0"
+chain: base
+chain_id: 8453
+
+dexes:
+  uniswap_v3:
+    adapter_type: uniswap_v3
+    factory: "0x33128a8fc17869897dce68ed026d694621f6fdfd"
+    quoter: "0x3d4e44eb1374240ce5f1b871ab261cd16335b76a"
+    fee_tiers: [100, 500, 3000, 10000]
+    enabled: true
+
+  pancakeswap_v3:
+    adapter_type: uniswap_v3
+    factory: "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865"
+    quoter: "0xb048bbc1ee6b733fffcfb9e9cef7375518e25997"
+    fee_tiers: [100, 500, 2500, 10000]
+    enabled: true
+
+  sushiswap_v3:
+    adapter_type: uniswap_v3
+    factory: "0xc35dadb65012ec5796536bd9864ed8773abc74c4"
+    quoter: "0xb1e835dc2785b52265711e17fccb0fd018226a6e"
+    fee_tiers: [100, 500, 3000, 10000]
+    enabled: true
+
+  aerodrome_slipstream:
+    adapter_type: aerodrome_slipstream
+    factory: "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a"
+    quoter: "0x254cf9e1e6e233aa1ac962cb9b05b2cfeaae15b0"
+    tick_spacings: [1, 50, 100, 200, 2000]
+    fee_tiers: [1, 50, 100, 200, 2000]
+    enabled: true
+
+tokens:
+  WETH:
+    address: "0x4200000000000000000000000000000000000006"
+    decimals: 18
+  USDC:
+    address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    decimals: 6
+  EURC:
+    address: "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42"
+    decimals: 6
+  cbBTC:
+    address: "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+    decimals: 8
+  AERO:
+    address: "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+    decimals: 18
+  TOSHI:
+    address: "0xac1bd2486aaf3b5c0fc3fd868558b082a531b2b4"
+    decimals: 18
+  VIRTUAL:
+    address: "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b"
+    decimals: 18
+  LBTC:
+    address: "0xecac9c5f704e954931349da37f60e39f515c11c1"
+    decimals: 8
+
+# Minimal required sections (defaults used by config_loader.py)
+pairs: []
+
+factory_ladder: {}
+
+health_filter:
+  min_liquidity: 0
+  require_slot0_unlocked: false
+  require_sqrt_price_positive: false
+
+quote_gate:
+  target_quote_success_rate: 0.5
+  target_rpc_error_rate_max: 0.3
+  async_max_workers: 4
+  async_timeout_s: 10
+  retry_backoff_s: 1.0
+
+sizes_usd: [100.0]
+
+cost_model:
+  default_profile: default
+  profiles:
+    default:
+      gas_usd: 0.05
+      l1_fee_usd: 0.01
+      slippage_bps: 5.0
+  gas_mode_default: static
+  paper_haircut: 0.0
+  slippage_mode_default: static
+
+replay:
+  enabled_by_default: false
+  top_n_near_misses: 0
+  anvil_url_default: "http://127.0.0.1:8545"
+  fork_block_default: "latest"
+  require_non_stub: false
+
+simulation:
+  univ3_router02: "0x0000000000000000000000000000000000000000"
+  aero_router: "0x0000000000000000000000000000000000000000"
+  simulation_test_addr: "0x0000000000000000000000000000000000000000"
+  usdc_usdt_v3_pool: "0x0000000000000000000000000000000000000000"
+
+public_rpc_blocklist: []

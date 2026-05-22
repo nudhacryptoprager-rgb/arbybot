@@ -184,6 +184,11 @@ def build_artifact(
     cycles_found_topology: Optional[int] = None,
     funnel_a: Optional[Dict[str, Any]] = None,
     inventory_reject_histogram: Optional[Dict[str, int]] = None,
+    # Infra telemetry (Step 5 — M9 quote infrastructure slice)
+    quote_backend: str = "direct_http",
+    quote_workers: int = 4,
+    provider_throttle_snapshot: Optional[Dict[str, Any]] = None,
+    ws_freshness: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -396,14 +401,60 @@ def build_artifact(
         artifact["funnel_a"] = funnel_a
     if inventory_reject_histogram is not None:
         artifact["inventory_reject_histogram"] = inventory_reject_histogram
+
+    # Infra telemetry block (quote infrastructure slice)
+    infra_telemetry: Dict[str, Any] = {
+        "quote_backend": quote_backend,
+        "quote_workers": quote_workers,
+    }
+    # Expose effective RPC rate-limiter settings (separate from provider_throttle budgets)
+    try:
+        from core.rpc_rate_limiter import rpc_throttle as _rt
+        infra_telemetry["effective_rpc_rps_limit"] = _rt.rps
+        infra_telemetry["effective_rpc_burst"] = _rt.burst
+        infra_telemetry["actual_http_calls"] = _rt.stats()["total_acquired"]
+    except Exception:
+        infra_telemetry["effective_rpc_rps_limit"] = None
+        infra_telemetry["effective_rpc_burst"] = None
+        infra_telemetry["actual_http_calls"] = None
+    if provider_throttle_snapshot is not None:
+        # Derive top-level 429 count from "calls" bucket for quick access
+        calls_snap = provider_throttle_snapshot.get("calls", {})
+        infra_telemetry["http_429_count"] = calls_snap.get("total_429", 0)
+        infra_telemetry["blocked_by_breaker"] = calls_snap.get("total_blocked", 0)
+        infra_telemetry["provider_throttle_rps_budget"] = calls_snap.get("rps_limit", None)
+        infra_telemetry["provider_throttle_snapshot"] = provider_throttle_snapshot
+    else:
+        infra_telemetry["http_429_count"] = 0
+        infra_telemetry["blocked_by_breaker"] = 0
+        infra_telemetry["provider_throttle_rps_budget"] = None
+        infra_telemetry["provider_throttle_snapshot"] = None
+    # Surface quote_revert_rate at infra level (convenience: avoids digging into diagnostics)
+    infra_telemetry["quote_revert_rate"] = quote_revert_rate
+    if ws_freshness is not None:
+        infra_telemetry["ws_freshness"] = ws_freshness
+    artifact["infra_telemetry"] = infra_telemetry
+
     return artifact
 
 
 def write_artifact(artifact: Dict[str, Any], artifact_path: str = ROLLING_PATH) -> None:
     """Write artifact atomically to artifact_path (via .tmp rename)."""
+    import time as _time
+
     path = os.path.abspath(artifact_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(artifact, fh, indent=2)
-    os.replace(tmp_path, path)
+    # On Windows, os.replace can raise PermissionError if antivirus scans
+    # the .tmp file between write and rename.  Retry with backoff.
+    for attempt in range(6):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if attempt < 5:
+                _time.sleep(0.5 * (attempt + 1))
+            else:
+                raise

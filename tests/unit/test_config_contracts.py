@@ -367,6 +367,8 @@ ALLOWED_YAML_FILES = {
     "new_pool_factories.yaml",
     # M8 Phase 2 — entry-candidate enricher config (anchor prices, probe size, etc.)
     "enricher.yaml",
+    # M9 Graph-Arb — exotic pairs config for Base chain (builder.py default)
+    "exotic_base_anchor.yaml",
 }
 
 

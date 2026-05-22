@@ -85,9 +85,19 @@ def atomic_write_json(
             f.flush()
             os.fsync(f.fileno())  # Force write to disk
         
-        # Atomic replace
-        # On Windows, this may fail if target is open; os.replace handles it
-        os.replace(temp_path, path)
+        # Atomic replace — on Windows, antivirus can briefly lock the .tmp
+        # file between write and rename, causing PermissionError; retry.
+        import time as _time
+
+        for _attempt in range(6):
+            try:
+                os.replace(temp_path, path)
+                break
+            except PermissionError:
+                if _attempt < 5:
+                    _time.sleep(0.5 * (_attempt + 1))
+                else:
+                    raise
         
         return path
         
