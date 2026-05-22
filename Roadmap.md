@@ -32,7 +32,31 @@ Triangular, Cross-chain — тільки після того, як Truth Engine 
 
 ---
 
-## 2.1) Core Truth & Release Priority (2026-02)
+## 2.1) Current Active Strategy Alignment
+
+> **Поточний активний стратегічний напрямок:** `M9_GRAPH_LONG_TAIL_SHADOW`
+
+Це не скасовує `M4` як release-truth для execution. Це означає інше:
+- `M4` залишається канонічним execution / profitability gate перед будь-якою розмовою про real money;
+- `M8` більше не є окремою “profit thesis”, а є discovery-layer;
+- `M8_1` більше не є самостійним proof lane, а є inventory + diagnostics layer;
+- `M9` є головним shadow-напрямком для пошуку long-tail / exotic arbitrage через multi-pair graph;
+- real execution залишається вимкненим, доки `M9` не дасть repeatable positive economics і доки execution gates не будуть пройдені.
+
+Поточна правильна послідовність:
+1. розширити verified inventory через `M8` і `M8_1`;
+2. збудувати або оновити graph inventory;
+3. запускати короткі wide multi-pair graph sweeps;
+4. ранжувати цикли за gross, QSR, liquidity, cost sensitivity, repeatability;
+5. симулювати лише credible positive або near-breakeven cycles;
+6. не переходити до real execution без окремого підтвердження execution readiness.
+
+Детальний operational документ для цього напрямку:
+- `docs/m9/M9_GRAPH_LONG_TAIL_SHADOW.md`
+
+---
+
+## 2.2) Core Truth & Release Priority (2026-02)
 
 > **M4 execution gate є "core truth" для релізу.**
 
@@ -474,63 +498,149 @@ Done Criteria:
 
 ---
 
-### Milestone 8 — New-Pool Sniping (STRATEGIC PIVOT)
+### Milestone 8 — New-Pool Listener & Discovery Foundation (SUPPORTING_LAYER)
 
-> **Pivot rationale:** після 4 послідовних soak-ів (E1.81 → E1.84) підтверджено
-> **FUNDAMENTAL_DISCOVERY_GAP** на bluechip парах Base через public RPC.
-> Поточна DEX-DEX backrun thesis заморожена як economics-blocked
-> (structural disadvantages: latency 200–400ms vs <50ms у топ searchers,
-> mempool blindness, no bundle access, capital efficiency).
-> Повне обґрунтування + roadmap-таблиця: [docs/STRATEGIC_PIVOT.md](docs/STRATEGIC_PIVOT.md).
-> Детальний phase-by-phase operational guide: [docs/step_pivot.md](docs/step_pivot.md).
+**Роль:** `M8` більше не є standalone profit thesis. Це supporting-layer для виявлення нових пулів,
+long-tail token sources та route hints, які потім переходять у `M8_1` і `M9`.
 
-**Мета:** перейти від event-reactive backrun до **first-mover new-pool discovery**
-з reuse ~70–75% існуючої infra (factory enumeration, family truth, scout, M7 supervisor).
+**Що має робити M8:**
+- слухати `PoolCreated` / `PairCreated` / релевантні liquidity events;
+- підтягувати verified pool hints з Base-focused factory coverage;
+- виявляти ранні long-tail / exotic edges без ручного pair-sprawl у коді;
+- подавати verified candidates у downstream inventory, а не одразу в execution thesis.
 
-**Primary niche:** New-Pool Sniping (Aerodrome / Uniswap V3+V4 / Pancake on Base).
-**Anchor niche:** Stable-stable peg arb (cbETH/WETH, USDC/USDbC, wstETH/ETH).
-**Optional secondary:** Liquidation MEV (Moonwell / Aave V3 / Seamless).
+**Що M8 не має більше заявляти:**
+- production profit;
+- real execution readiness;
+- standalone sniping thesis як головний напрямок проєкту.
 
-#### M8.1 — Foundation (Тижні 1–2)
-- `PoolCreated` / `PairCreated` event listener (Aerodrome PoolFactory, Uniswap V3/V4 Factory, Pancake)
-- Honeypot detector (eth_call simulate: `transfer`, `balanceOf`, ownership, blacklist)
-- Inventory module: USDC balance tracker + auto top-up
-- Switch cold-lane primary purpose: backrun-on-event → new-pool-watch
-- New rolling artifact: `new_pool_sniper_latest.json`
-
-#### M8.2 — Sniping Live (Тижні 3–4)
-- Per-snipe exit strategy (TWAP, stop-loss, max-hold-blocks)
-- Stable-stable pair list додано до scout
-- 24-hour paper soak: ≥1 successful snipe simulation + ≥2 stable-pair fills
-
-#### M8.3 — Production-Ready (Тижні 5–6)
-- Real $200–$500 capital trial run
-- Telemetry: per-snipe PnL, slippage realized vs predicted
-- Backout policy: stop after 3 consecutive losses
-- M8 execution gate (offline + online)
-
-#### M8.4 — Scale (Тижні 7–8)
-- Migrate до private RPC (Alchemy/QuickNode Growth)
-- Add Flashbots Protect / Coinbase MEV-Share submission
-- Scale capital: $500 → $2,000 → $10,000 gradually
-
-**Acceptance / Done (M8 close-out):**
-- New-pool listener в production, ≥3 DEX factory джерел
-- ≥30 unit tests + ≥3 contract tests для honeypot detector
-- 24h paper soak: ≥5 simulated snipes, ≥1 з positive expected_profit_usd
-- Real trial: ≥10 real snipes за 7 днів, net P&L ≥ $0
-- Stable anchor: ≥$20 net за 7 днів
-- Dashboard: `/api/m8/sniper_current` endpoint з per-pool stats
-
-**Non-goals для M8:**
-- Не продовжуємо public-RPC backrun на bluechip парах
-- Не реалізуємо >2 ніш одночасно (focus: Primary + Anchor)
-- Не лити >$500 капіталу до завершення M8.2
+**Acceptance / Done для supporting-layer ролі:**
+- listener стабільно працює на кількох factory-джерелах;
+- нові pool / token hints потрапляють у rolling artifact;
+- candidate discovery доведено як discovery input, а не як прибуткова стратегія;
+- output M8 придатний для інвентаризації в `M8_1` і graph expansion у `M9`.
 
 ---
 
-### Milestone 9 (R&D) — Cross-chain
+### Milestone 8.1 — Inventory, Route Health, and Exotic Coverage (SUPPORTING_LAYER)
+
+**Роль:** `M8_1` є inventory + diagnostics layer, а не окремим proof lane.
+
+**Що має робити M8_1:**
+- тримати config-driven token / pair universe;
+- будувати verified active routes по exotic / long-tail lanes;
+- рахувати route health, quote success, size frontier, pool quarantine;
+- давати ranking і diagnostics для того, які edges варто подавати в graph sweep;
+- зупиняти повернення до single-pair proof logic як primary strategy.
+
+**Acceptance / Done для supporting-layer ролі:**
+- inventory регулярно оновлюється без hardcoded sprawl;
+- route health і quote quality придатні для wide graph sweeps;
+- stable / LST / pair-level exotic lanes використовуються як diagnostics, не як primary proof;
+- downstream M9 отримує active routes, gap candidates і coverage ranking.
+
+---
+
+### Milestone 9 — M9_GRAPH_LONG_TAIL_SHADOW (ACTIVE_SHADOW_STRATEGY)
+
+> **Це поточний головний стратегічний етап.**
+> `M9` консолідує результати `M8`, `M8_1` і корисні lessons learned з `M7`
+> у єдиний wide-coverage shadow-напрямок для `long-tail / exotic / multi-pair graph arbitrage`.
+
+**Мета:**
+- перейти від pair-by-pair diagnostics до inventory-driven graph search;
+- шукати не “ідеальну пару”, а repeatable multi-pair cycles;
+- відокремити topology proof від economics proof;
+- залишатися paper / shadow mode, доки economics і simulation gates не пройдені.
+
+**Канонічні input layers для M9:**
+- `M8` → new-pool listener, fresh pool hints, factory events;
+- `M8_1` → verified inventory, route health, active routes, size diagnostics;
+- `M7` → simulation backend patterns, provider / WS / Anvil lessons;
+- `config/*` → declared anchors, supported adapters, core execution constraints.
+
+**Канонічні output artifacts для M9:**
+- `data/runs/_rolling/m9_graph_latest.json`
+- `data/tmp/m9_shadow_inventory_with_gap_edges.json`
+
+**Етапи M9:**
+
+#### M9.1 — Inventory Consolidation
+- звести `M8` event-source discovery і `M8_1` verified routes у єдиний graph inventory;
+- не допускати manual pair-sprawl як основного методу growth;
+- ввести gap-resolver edges лише після verify.
+
+**Gate:**
+- inventory growth відбувається через verify + artifacts, не через ручні кодові винятки;
+- active routes і unique pairs ростуть без деградації quote quality.
+
+#### M9.2 — Graph Topology Proof
+- будувати directed graph з verified edges;
+- запускати multi-pair sweeps замість вузьких single-pair gates;
+- довести `cycles_found > 0` і прийнятний `QSR`.
+
+**Gate:**
+- topology gate = PASS (`cycles_found > 0`);
+- quote graph придатний до регулярного короткого sweep-режиму.
+
+#### M9.3 — Economics Discovery
+- ранжувати цикли за `gross`, `net_bps`, `QSR`, `liquidity`, `cost sensitivity`, `repeatability`;
+- перейти до long-tail / exotic token families, де stable / LST lanes вже не дають edge;
+- не форсувати router sim, якщо economics ще нульова або системно негативна.
+
+**Gate:**
+- з’являються credible positive-gross або near-breakeven cycles;
+- economics gate перестає бути постійно `BLOCKED_NO_POSITIVE_GROSS`.
+
+#### M9.4 — Risk Layer for Long-Tail Tokens
+- honeypot / transfer tax / transfer restriction / blacklist / liquidity sanity gates;
+- динамічні token price anchors для long-tail assets;
+- quarantine policy для toxic pools / tokens / routes.
+
+**Gate:**
+- top cycles мають risk verdict;
+- unsafe tokens відсікаються до router simulation.
+
+#### M9.5 — Router Simulation Shadow
+- full-cycle router simulation для top positive cycles;
+- per-leg reason taxonomy, gas, slippage, token-basis breakdown;
+- підтвердження, що positive gross не розпадається на full execution path.
+
+**Gate:**
+- є хоча б один cycle з positive або credible near-breakeven economics після simulation;
+- simulation pass стає repeatable, а не одноразовим lucky event.
+
+#### M9.6 — Pre-Production Hold
+- repeated short sweeps з позитивними economics;
+- human-reviewed operator policy;
+- execution kill switch лишається увімкненим, доки всі release gates не пройдені.
+
+**Gate:**
+- `M9` може перейти лише до “production discussion”, але не до auto-execution без окремого manual unlock.
+
+**Критерії успіху для M9 як активного етапу:**
+- `cycles_found > 0` у fresh short sweeps;
+- `QSR` стабільний і не деградує при wide inventory;
+- з’являються `positive-gross` cycles у fresh artifacts;
+- positive cycles витримують router simulation;
+- long-tail risk layer блокує unsafe assets до execution-level thinking;
+- repeatability доведена на кількох коротких сесіях, а не на одному lucky window.
+
+**Що M9 не має права заявляти:**
+- no real profit claim без execution evidence;
+- no production-readiness claim без repeated positive simulation;
+- no kill-switch disable без explicit human approval;
+- no cross-chain expansion як заміну незакритій economics проблемі на same-chain graph lane.
+
+**Детальний базовий документ:**
+- `docs/m9/M9_GRAPH_LONG_TAIL_SHADOW.md`
+
+---
+
+### Milestone 10 (Future R&D) — Cross-chain
 - Bridge adapters + time-risk model + settlement tracker
+- Розблоковується тільки після того, як same-chain `M9_GRAPH_LONG_TAIL_SHADOW`
+  дасть repeatable positive economics і пройде simulation-level proof.
 
 ---
 
