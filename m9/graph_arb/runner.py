@@ -59,20 +59,36 @@ def main(argv: "list[str] | None" = None) -> int:
     )
     parser.add_argument(
         "--inventory",
-        default="data/tmp/m8_1_exotic_inventory_latest.json",
-        help="Inventory artifact JSON path",
+        default=None,
+        help=(
+            "Inventory artifact JSON path. "
+            "If omitted, uses shadow inventory with gap edges if available, "
+            "else m8_1 exotic inventory fallback."
+        ),
     )
     parser.add_argument(
         "--duration-minutes",
         type=float,
         default=1.0,
-        help="Target scan duration in minutes",
+        help="Wall-clock scan duration in minutes (hard deadline)",
     )
     parser.add_argument(
         "--cycles-limit",
         type=int,
         default=5000,
-        help="Maximum cycles to find per sweep",
+        help="Maximum cycles to find per topology sweep",
+    )
+    parser.add_argument(
+        "--max-cycles-per-sweep",
+        type=int,
+        default=200,
+        help="Maximum cycles to quote per sweep iteration (deadline loop)",
+    )
+    parser.add_argument(
+        "--quote-timeout-s",
+        type=float,
+        default=10.0,
+        help="Per-cycle quote timeout in seconds",
     )
     parser.add_argument(
         "--sizes-usd",
@@ -114,7 +130,10 @@ def main(argv: "list[str] | None" = None) -> int:
 
 def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     import logging
-    from m9.graph_arb.builder import build_graph_from_inventory, graph_token_count, graph_edge_count, graph_route_count
+    from m9.graph_arb.builder import (
+        build_graph_from_inventory, graph_token_count, graph_edge_count, graph_route_count,
+        extract_inventory_stats, best_inventory_path,
+    )
     from m9.graph_arb.finder import find_cycles, analyze_topology, rank_cycles
     from m9.graph_arb.artifacts import build_artifact, write_artifact
 
@@ -123,12 +142,22 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     sweeps_completed = 0
     process_id = os.getpid()
 
-    log.info("M9 graph-arb runner starting: chain=%s config=%s", args.chain, args.config)
+    # Prefer merged shadow inventory if available
+    inventory_path = best_inventory_path(preferred=args.inventory)
+    log.info(
+        "M9 graph-arb runner starting: chain=%s config=%s inventory=%s",
+        args.chain, args.config, inventory_path,
+    )
+
+    # Extract inventory stats (Funnel A + reject taxonomy) before building graph
+    inv_stats = extract_inventory_stats(inventory_path)
+    funnel_a = inv_stats.get("funnel_a")
+    inventory_reject_histogram = inv_stats.get("reject_histogram") or None
 
     # Build graph
     try:
         adjacency = build_graph_from_inventory(
-            inventory_path=args.inventory,
+            inventory_path=inventory_path,
             config_path=args.config,
         )
     except Exception as exc:
@@ -136,7 +165,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         return EXIT_CONFIG_ERROR
 
     if not adjacency:
-        log.error("Empty graph — check inventory path: %s", args.inventory)
+        log.error("Empty graph — check inventory path: %s", inventory_path)
         from m9.graph_arb.models import GraphTopology
         topology = GraphTopology(
             token_count=0, edge_count=0, route_count=0,
@@ -152,12 +181,14 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             run_timestamp=run_timestamp,
             started_at_mono=started_at,
             elapsed_s=time.monotonic() - started_at,
-            inventory_path=args.inventory,
+            inventory_path=inventory_path,
             config_path=args.config,
             sweeps_completed=0,
             process_id=process_id,
             python_executable=sys.executable,
             venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+            funnel_a=funnel_a,
+            inventory_reject_histogram=inventory_reject_histogram,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_CONFIG_ERROR
@@ -180,18 +211,20 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             run_timestamp=run_timestamp,
             started_at_mono=started_at,
             elapsed_s=time.monotonic() - started_at,
-            inventory_path=args.inventory,
+            inventory_path=inventory_path,
             config_path=args.config,
             sweeps_completed=sweeps_completed,
             process_id=process_id,
             python_executable=sys.executable,
             venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+            funnel_a=funnel_a,
+            inventory_reject_histogram=inventory_reject_histogram,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_NO_CYCLES
 
     if args.dry_run:
-        log.info("Dry-run mode: skipping quoting")
+        log.info("Dry-run mode: skipping quoting (topology cycles_found=%d)", len(cycles))
         artifact = build_artifact(
             chain=args.chain,
             duration_minutes=args.duration_minutes,
@@ -201,12 +234,16 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             run_timestamp=run_timestamp,
             started_at_mono=started_at,
             elapsed_s=time.monotonic() - started_at,
-            inventory_path=args.inventory,
+            inventory_path=inventory_path,
             config_path=args.config,
             sweeps_completed=sweeps_completed,
             process_id=process_id,
             python_executable=sys.executable,
             venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+            # Preserve topology cycle count even though quote results are empty
+            cycles_found_topology=len(cycles),
+            funnel_a=funnel_a,
+            inventory_reject_histogram=inventory_reject_histogram,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_OK
@@ -216,16 +253,68 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     if w3 is None:
         log.warning("Could not connect to RPC for chain %s — quoting will fail", args.chain)
 
-    # Quote cycles
+    # Deadline-aware quote loop: run sweeps until wall-clock deadline expires.
+    # Each sweep quotes a batch of max_cycles_per_sweep cycles, then writes a
+    # partial artifact so the rolling artifact stays fresh even mid-soak.
     from m9.graph_arb.quoter import schedule_cycle_quotes
-    cycle_results = schedule_cycle_quotes(
-        ranked,
-        w3=w3,
-        sizes_usd=tuple(args.sizes_usd),
-    )
-    sweeps_completed = 1
+    deadline = started_at + args.duration_minutes * 60.0
+    max_per_sweep = getattr(args, "max_cycles_per_sweep", 200)
+    cycle_count = len(ranked)
+    all_results: list = []
+    sweep_num = 0
 
-    # Build and write artifact
+    while time.monotonic() < deadline:
+        start_idx = (sweep_num * max_per_sweep) % cycle_count
+        end_idx = min(start_idx + max_per_sweep, cycle_count)
+        batch = ranked[start_idx:end_idx]
+        if not batch:
+            # cycle_count < max_per_sweep — all cycles covered in one sweep
+            if sweep_num > 0:
+                break
+        new_results = schedule_cycle_quotes(
+            batch,
+            w3=w3,
+            sizes_usd=tuple(args.sizes_usd),
+            timeout_s=getattr(args, "quote_timeout_s", 10.0),
+        )
+        all_results.extend(new_results)
+        sweeps_completed += 1
+        sweep_num += 1
+
+        # Write partial artifact after every sweep so rolling stays current
+        elapsed_so_far = time.monotonic() - started_at
+        partial = build_artifact(
+            chain=args.chain,
+            duration_minutes=args.duration_minutes,
+            cycle_results=all_results,
+            topology=topology,
+            sizes_usd=tuple(args.sizes_usd),
+            run_timestamp=run_timestamp,
+            started_at_mono=started_at,
+            elapsed_s=elapsed_so_far,
+            inventory_path=inventory_path,
+            config_path=args.config,
+            sweeps_completed=sweeps_completed,
+            process_id=process_id,
+            python_executable=sys.executable,
+            venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+            funnel_a=funnel_a,
+            inventory_reject_histogram=inventory_reject_histogram,
+        )
+        write_artifact(partial, args.artifact_path)
+        positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
+        log.info(
+            "Sweep %d done: %d new, %d total, %d positive, elapsed=%.1fs/%.0fs",
+            sweeps_completed, len(new_results), len(all_results),
+            positive_so_far, elapsed_so_far, args.duration_minutes * 60,
+        )
+
+        if time.monotonic() >= deadline:
+            break
+
+    cycle_results = all_results
+
+    # Build and write final artifact with full elapsed_s
     artifact = build_artifact(
         chain=args.chain,
         duration_minutes=args.duration_minutes,
@@ -235,12 +324,14 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         run_timestamp=run_timestamp,
         started_at_mono=started_at,
         elapsed_s=time.monotonic() - started_at,
-        inventory_path=args.inventory,
+        inventory_path=inventory_path,
         config_path=args.config,
         sweeps_completed=sweeps_completed,
         process_id=process_id,
         python_executable=sys.executable,
         venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+        funnel_a=funnel_a,
+        inventory_reject_histogram=inventory_reject_histogram,
     )
     write_artifact(artifact, args.artifact_path)
 

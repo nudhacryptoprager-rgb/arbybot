@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from core.rpc_rate_limiter import rpc_throttle
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
 
@@ -85,6 +86,7 @@ def probe_quote(w3: Any, route: DexRoute, token_in: TokenInfo, token_out: TokenI
     """Run a single quote via ``eth_call`` against ``route.quoter``."""
     route_id = f"{route.dex_id}:{token_in.symbol}-{token_out.symbol}@{route.fee}"
     try:
+        rpc_throttle.acquire()  # rate-limit before every eth_call
         if route.adapter_type in ("uniswap_v3",):
             calldata = _encode_v3_call(token_in.address, token_out.address, amount_in, route.fee)
             result = w3.eth.call({"to": route.quoter, "data": calldata})

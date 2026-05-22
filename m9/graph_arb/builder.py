@@ -14,6 +14,8 @@ from m9.graph_arb.models import GraphEdge
 logger = logging.getLogger(__name__)
 
 _DEFAULT_INVENTORY = "data/tmp/m8_1_exotic_inventory_latest.json"
+# Merged shadow inventory (M8 + M8.1 + gap edges) takes priority when present
+_SHADOW_INVENTORY = "data/tmp/m9_shadow_inventory_with_gap_edges.json"
 _DEFAULT_CONFIG = "config/exotic_base_anchor.yaml"
 
 
@@ -249,3 +251,107 @@ def graph_route_count(adjacency: "Dict[str, Dict[str, List[GraphEdge]]]") -> int
             for e in edges:
                 seen.add(e.route_id)
     return len(seen)
+
+
+# ---------------------------------------------------------------------------
+# Funnel A counters + Inventory reject taxonomy
+# ---------------------------------------------------------------------------
+
+def extract_inventory_stats(inventory_path: str) -> "Dict[str, object]":
+    """Extract Funnel A counters and inventory reject taxonomy from inventory JSON.
+
+    Returns a dict with two top-level keys:
+      ``funnel_a``   — pipeline stage counts (raw→graph_ready)
+      ``reject_histogram`` — categorised inventory reject counts
+
+    Safe to call independently of build_graph_from_inventory; returns empty
+    dicts if the file cannot be opened.
+    """
+    inv_path = Path(inventory_path)
+    if not inv_path.exists():
+        return {"funnel_a": {}, "reject_histogram": {}}
+
+    try:
+        with inv_path.open("r", encoding="utf-8") as fh:
+            inventory = json.load(fh)
+    except Exception:
+        return {"funnel_a": {}, "reject_histogram": {}}
+
+    pools: list = inventory.get("pools", [])
+    active_routes: list = inventory.get("active_routes", [])
+    pairs_probed: list = inventory.get("pairs_probed", [])
+    dexes_probed: list = inventory.get("dexes_probed", [])
+
+    # --- Funnel A counts ---
+    raw_hints = len(pools)  # every pool candidate considered
+    verified_pools = sum(
+        1 for p in pools if p.get("pool_exists") and p.get("active") and not p.get("error")
+    )
+    verified_tokens = len({
+        sym
+        for pair_id in pairs_probed
+        for sym in pair_id.split("_")
+        if "_" in pair_id
+    })
+    ar_count = len(active_routes)
+    # graph_ready_edges is computed separately (we can't fully know without running builder)
+    # Use active_routes * 2 as a reasonable proxy (forward + reverse for each route)
+    graph_ready_edges_proxy = ar_count * 2
+
+    funnel_a = {
+        "raw_hints": raw_hints,
+        "pairs_probed": len(pairs_probed),
+        "dexes_probed": len(dexes_probed),
+        "verified_tokens": verified_tokens,
+        "verified_pools": verified_pools,
+        "active_routes": ar_count,
+        "graph_ready_edges_proxy": graph_ready_edges_proxy,
+    }
+
+    # --- Inventory reject taxonomy ---
+    reject: "Dict[str, int]" = {}
+
+    def _inc(key: str) -> None:
+        reject[key] = reject.get(key, 0) + 1
+
+    zero_addr = "0x" + "0" * 40
+    for p in pools:
+        if not p.get("pool_exists"):
+            _inc("missing_pool")
+            continue
+        qr = p.get("quarantine_reason")
+        if qr:
+            if qr == "LOW_LIQUIDITY":
+                _inc("bad_liquidity")
+            elif qr == "STALE_QUOTE":
+                _inc("stale_quote")
+            else:
+                _inc("quarantine_other")
+        if p.get("error"):
+            _inc("rpc_error")
+
+    # Count active routes where token symbols can't be parsed
+    for entry in active_routes:
+        pair_id = entry.get("pair_id", "")
+        if "_" not in pair_id:
+            _inc("unknown_token")
+            continue
+        addr = entry.get("pool_address", "")
+        if not addr or addr == zero_addr:
+            _inc("missing_pool_address")
+
+    return {"funnel_a": funnel_a, "reject_histogram": reject}
+
+
+def best_inventory_path(
+    preferred: Optional[str] = None,
+    fallback: Optional[str] = None,
+) -> str:
+    """Return the best available inventory path.
+
+    Checks ``preferred`` first (defaults to shadow inventory), then
+    ``fallback`` (defaults to m8_1 exotic inventory).
+    """
+    p = preferred or _SHADOW_INVENTORY
+    f = fallback or _DEFAULT_INVENTORY
+    return p if Path(p).exists() else f

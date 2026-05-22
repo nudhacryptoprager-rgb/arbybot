@@ -815,8 +815,9 @@ def check_intent_tier_limits(allow_edit: bool = False) -> List[str]:
     Returns:
         List of error messages if tier limits exceeded
     """
-    # Calibration tier baseline (R39h; bumped 42->51 per E1.30/E1.31, then 51->64 per E1.48)
-    CALIBRATION_TIER_BASELINE = 64
+    # Calibration tier baseline (R39h; bumped 42->51 per E1.30/E1.31, then 51->64 per E1.48,
+    # then 64->77 per M9 Base-chain expansion 2026-05-22 to cover M9 long-tail shadow inventory)
+    CALIBRATION_TIER_BASELINE = 77
     
     if allow_edit:
         return []  # Explicit permission granted

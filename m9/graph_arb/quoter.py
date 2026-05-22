@@ -143,6 +143,7 @@ def schedule_cycle_quotes(
     sizes_usd: "tuple[float, ...]",
     max_workers: int = 4,
     token_prices: Optional[Dict[str, float]] = None,
+    timeout_s: float = 10.0,
 ) -> List[CycleQuoteResult]:
     """Quote all cycles in parallel using ThreadPoolExecutor."""
     results: List[CycleQuoteResult] = []
@@ -150,7 +151,7 @@ def schedule_cycle_quotes(
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [
-            pool.submit(quote_cycle_sync, cycle, size_usd, w3, token_prices)
+            pool.submit(quote_cycle_sync, cycle, size_usd, w3, token_prices, timeout_s)
             for cycle in cycles
         ]
         for future in futures:

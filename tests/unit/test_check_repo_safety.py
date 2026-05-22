@@ -1639,7 +1639,7 @@ class TestCheckIntentTierLimits(unittest.TestCase):
         from scripts.check_repo_safety import check_intent_tier_limits
         import tempfile
 
-        # Create intent.txt with 80 pairs (exceeds baseline 64)
+        # Create intent.txt with 80 pairs (exceeds baseline 77)
         pairs = [f"chain{i % 6}:TOKEN{i}/USDC" for i in range(80)]
         content = "# intent.txt v3.6.0\n" + "\n".join(pairs)
 
@@ -1653,7 +1653,7 @@ class TestCheckIntentTierLimits(unittest.TestCase):
         tier_issues = [i for i in issues if "INTENT_TIER_LIMIT" in i]
         self.assertEqual(len(tier_issues), 1, f"Expected tier limit issue, got: {issues}")
         self.assertIn("80 pairs", tier_issues[0])
-        self.assertIn("baseline: 64", tier_issues[0])
+        self.assertIn("baseline: 77", tier_issues[0])
 
     def test_exceeds_limits_allowed_with_flag(self):
         """Intent file with >64 pairs should pass with --allow-intent-edit."""

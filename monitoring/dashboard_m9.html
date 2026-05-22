@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARBY M9 — Graph-Arb Shadow Scanner</title>
+<style>
+  :root {
+    --bg: #0e1117; --bg2: #161b22; --bg3: #21262d;
+    --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    --blue: #58a6ff; --purple: #bc8cff; --orange: #f0883e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; padding: 16px; }
+  h1 { font-size: 18px; color: var(--blue); margin-bottom: 4px; }
+  h2 { font-size: 14px; color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 4px; margin: 14px 0 8px; text-transform: uppercase; letter-spacing: .05em; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; min-width: 140px; }
+  .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .card .val { font-size: 20px; font-weight: bold; margin-top: 2px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+  .badge-green { background: #1b3a1b; color: var(--green); }
+  .badge-red { background: #3a1b1b; color: var(--red); }
+  .badge-yellow { background: #3a2e1b; color: var(--yellow); }
+  .badge-blue { background: #1b2a3a; color: var(--blue); }
+  .badge-muted { background: var(--bg3); color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  th { background: var(--bg3); color: var(--muted); text-align: left; padding: 6px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tr:hover td { background: var(--bg3); }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .neu { color: var(--muted); }
+  #header-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  #scan-timer { font-size: 12px; color: var(--muted); }
+  #elapsed-clock { color: var(--yellow); font-weight: bold; }
+  #status-badge { margin-left: 10px; }
+  .nav { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .nav a { color: var(--blue); text-decoration: none; margin-right: 12px; }
+  .nav a:hover { text-decoration: underline; }
+  #last-refresh { font-size: 11px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="header-bar">
+  <div>
+    <h1>ARBY M9 — Graph-Arb Shadow Scanner</h1>
+    <div id="scan-timer">Artifact age: <span id="elapsed-clock">—</span></div>
+  </div>
+  <div id="status-badge"></div>
+</div>
+<div class="nav">
+  <a href="/m7">M7 Triangular</a>
+  <a href="/m8">M8 New-Pool Sniper</a>
+  <a href="/m9">M9 Graph-Arb</a>
+</div>
+
+<h2>Scan Coverage</h2>
+<div class="row" id="coverage-row"></div>
+
+<h2>M8.1 Inventory → M9 Funnel</h2>
+<div class="row" id="funnel-row"></div>
+
+<h2>M9 Economics Gate</h2>
+<div class="row" id="economics-row"></div>
+
+<h2>Top Opportunities (up to 10)</h2>
+<div id="opps-block">
+  <table id="opps-table">
+    <thead>
+      <tr>
+        <th>#</th><th>Pair</th><th>Dex</th><th>Factory</th>
+        <th>Market $</th><th>Spread bps</th><th>Spread $</th><th>Profit $</th>
+        <th>Main Blocker</th>
+      </tr>
+    </thead>
+    <tbody id="opps-body"></tbody>
+  </table>
+</div>
+
+<h2>M8 New-Pool Scout</h2>
+<div class="row" id="m8-row"></div>
+
+<h2>Risk Metrics</h2>
+<div class="row" id="risk-row"></div>
+
+<div id="last-refresh"></div>
+
+<script>
+const POLL_MS = 10000;
+let artifactAgeS = null;
+let ageIntervalId = null;
+
+function badge(text, cls) {
+  return `<span class="badge badge-${cls}">${text}</span>`;
+}
+
+function gateBadge(val) {
+  if (!val) return badge("UNKNOWN", "muted");
+  if (val.includes("PASS") || val === "CYCLES_FOUND" || val === "NOT_BLOCKED") return badge(val, "green");
+  if (val.includes("BLOCKED") || val.includes("FAIL")) return badge(val, "red");
+  return badge(val, "yellow");
+}
+
+function card(label, val, cls) {
+  return `<div class="card"><div class="label">${label}</div><div class="val ${cls||''}">${val}</div></div>`;
+}
+
+function fmtNum(v, decimals=2) {
+  if (v == null) return '<span class="neu">—</span>';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '<span class="neu">—</span>';
+  const s = n.toFixed(decimals);
+  if (n > 0) return `<span class="pos">${s}</span>`;
+  if (n < 0) return `<span class="neg">${s}</span>`;
+  return s;
+}
+
+function fmtUsd(v) {
+  if (v == null) return '<span class="neu">—</span>';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '<span class="neu">—</span>';
+  const s = '$' + n.toFixed(2);
+  return n > 0 ? `<span class="pos">${s}</span>` : `<span class="neg">${s}</span>`;
+}
+
+function startAgeTimer(ageS) {
+  artifactAgeS = ageS;
+  if (ageIntervalId) clearInterval(ageIntervalId);
+  ageIntervalId = setInterval(() => {
+    if (artifactAgeS == null) return;
+    artifactAgeS++;
+    const el = document.getElementById('elapsed-clock');
+    if (!el) return;
+    if (artifactAgeS < 120) el.textContent = artifactAgeS + 's';
+    else el.textContent = (artifactAgeS / 60).toFixed(1) + 'min';
+    if (artifactAgeS > 600) el.style.color = 'var(--red)';
+    else if (artifactAgeS > 300) el.style.color = 'var(--yellow)';
+    else el.style.color = 'var(--yellow)';
+  }, 1000);
+}
+
+async function load() {
+  let d;
+  try {
+    const r = await fetch('/api/m9/current', {cache: 'no-store'});
+    d = await r.json();
+  } catch(e) {
+    document.getElementById('status-badge').innerHTML = badge('FETCH ERROR', 'red');
+    return;
+  }
+
+  // Header status
+  document.getElementById('status-badge').innerHTML = gateBadge(d.scan_status);
+
+  // Age timer
+  if (d.artifact_age_s != null) startAgeTimer(d.artifact_age_s);
+
+  // Coverage row
+  const cov = d.coverage || {};
+  const covEl = document.getElementById('coverage-row');
+  covEl.innerHTML = [
+    card('Edge count', cov.edge_count ?? '—', ''),
+    card('Active routes', cov.active_routes ?? '—', ''),
+    card('Verified pools', cov.verified_pools ?? '—', ''),
+    card('Pairs probed', cov.pairs_probed ?? '—', ''),
+    card('Dexes probed', cov.dexes_probed ?? '—', ''),
+    card('Raw hints', cov.raw_hints ?? '—', ''),
+  ].join('');
+
+  // Funnel row from m9_summary
+  const s = d.m9_summary || {};
+  const funnelEl = document.getElementById('funnel-row');
+  funnelEl.innerHTML = [
+    card('Cycles found', s.cycles_found ?? '—', ''),
+    card('Sweeps done', s.sweeps_completed ?? '—', ''),
+    card('Duration target', s.duration_minutes != null ? s.duration_minutes + 'min' : '—', ''),
+    card('Topology gate', s.topology_gate ?? '—', s.topology_gate === 'CYCLES_FOUND' ? 'pos' : 'neg'),
+  ].join('');
+
+  // Economics row
+  const ec = d.economics || {};
+  const econEl = document.getElementById('economics-row');
+  econEl.innerHTML = [
+    `<div class="card"><div class="label">Economics gate</div><div class="val">${gateBadge(ec.economics_gate_status)}</div></div>`,
+    `<div class="card"><div class="label">Blocker class</div><div class="val" style="font-size:13px">${ec.economics_blocker_class ?? '—'}</div></div>`,
+    card('Cycles quoteable', ec.cycles_quoteable ?? '—', ''),
+    card('Cycles positive', ec.cycles_positive_gross ?? '—', ec.cycles_positive_gross > 0 ? 'pos' : ''),
+    card('QSR', ec.qsr != null ? ec.qsr.toFixed(3) : '—', ec.qsr >= 0.85 ? 'pos' : 'neg'),
+    card('p50 gross bps', ec.p50_gross_bps != null ? ec.p50_gross_bps.toFixed(2) : '—', ''),
+    card('p90 gross bps', ec.p90_gross_bps != null ? ec.p90_gross_bps.toFixed(2) : '—', ''),
+  ].join('');
+
+  // Opportunities table
+  const opps = d.top_opportunities || [];
+  const tbody = document.getElementById('opps-body');
+  if (opps.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="neu" style="text-align:center">No opportunities in current artifact</td></tr>';
+  } else {
+    tbody.innerHTML = opps.map((o, i) => {
+      const blocker = o.main_blocker ? `<span class="neg">${o.main_blocker}</span>` : '<span class="pos">NONE</span>';
+      return `<tr>
+        <td>${i+1}</td>
+        <td>${o.pair || '—'}</td>
+        <td>${o.dex || '—'}</td>
+        <td>${o.factory || '—'}</td>
+        <td>${o.market_size_usd != null ? '$'+parseFloat(o.market_size_usd).toFixed(0) : '—'}</td>
+        <td>${fmtNum(o.spread_bps, 2)}</td>
+        <td>${fmtUsd(o.spread_usd)}</td>
+        <td>${fmtUsd(o.profit_usd)}</td>
+        <td>${blocker}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // M8 sniper row
+  const m8 = d.m8_sniper || {};
+  document.getElementById('m8-row').innerHTML = [
+    card('New pools found', m8.new_pools_found ?? '—', ''),
+    `<div class="card"><div class="label">Last scout</div><div class="val" style="font-size:11px">${m8.generated_at_utc ? m8.generated_at_utc.replace('T', ' ').slice(0,19)+'Z' : '—'}</div></div>`,
+  ].join('');
+
+  // Risk metrics row
+  const rm = d.risk_metrics || {};
+  const riskKeys = Object.keys(rm).filter(k => k !== 'schema_family');
+  const riskEl = document.getElementById('risk-row');
+  if (riskKeys.length === 0) {
+    riskEl.innerHTML = '<div class="card"><div class="label">Risk metrics</div><div class="val neu" style="font-size:12px">Not yet computed (requires cycles_positive_gross > 0)</div></div>';
+  } else {
+    riskEl.innerHTML = riskKeys.map(k => card(k.replace(/_/g,' '), rm[k] ?? '—', '')).join('');
+  }
+
+  // Last refresh timestamp
+  document.getElementById('last-refresh').textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
+}
+
+load();
+setInterval(load, POLL_MS);
+</script>
+</body>
+</html>

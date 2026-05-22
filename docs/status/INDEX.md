@@ -28,7 +28,7 @@
 
 **M8.1 - Stable-Anchor Inventory & Diagnostics**: inventory layer for stable/near-peg pairs; feeds M9 graph builder. `gate_acceptance=true`, `strategy_gate_acceptance=false` (NO_STABLE_EDGE). See [Status_M8_1.md](Status_M8_1.md).
 
-**M9 - Graph-Arb Long-Tail Shadow Scanner**: shadow scanner finding 3–4-hop cycles in token exchange graph. `cycles_found=1100`, `cycles_positive_gross=0`, `economics_gate_status=BLOCKED_NO_POSITIVE_GROSS`. Execution disabled. See [Status_M9.md](Status_M9.md).
+**M9 - Graph-Arb Long-Tail Shadow Scanner**: 15-min soak2 complete (6 sweeps, 1200 cycles, elapsed=987.3s, duration_fulfilled=true). `economics_blocker_class=PROVIDER_QUALITY_BLOCKED` — `mainnet.base.org` rate limits (HTTP 429, 58.5%) and empty quoter responses (eth_call→'0x', 41.5%) block all quoting. `qsr=0.0` stable across both soak1 (10-min) and soak2 (15-min). Topology confirmed: CYCLES_FOUND, 13 routes, edge_count=102. Unblock: premium RPC endpoint (dRPC/Alchemy/QuickNode). Dashboard operational at port 8099. See [Status_M9.md](Status_M9.md).
 
 ## Related
 

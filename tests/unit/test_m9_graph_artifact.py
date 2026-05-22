@@ -1,15 +1,17 @@
 """Schema and contract tests for m9_graph_latest.json rolling artifact.
 
 These tests ensure the artifact written by m9.graph_arb.artifacts.build_artifact()
-conforms to the canonical M9 schema contract.  They run offline against the
-live rolling file *when it exists*, and also validate the artifact builder
-directly using synthetic inputs.
+conforms to the canonical M9 schema contract (schema_revision m9.1).
+They run offline against the live rolling file *when it exists*, and also
+validate the artifact builder directly using synthetic inputs.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,6 +27,62 @@ def _load_rolling() -> Dict[str, Any]:
     return json.loads(_ROLLING.read_text(encoding="utf-8"))
 
 
+def _make_topology():
+    from m9.graph_arb.models import GraphTopology
+    return GraphTopology(
+        token_count=5,
+        edge_count=10,
+        route_count=7,
+        hub_tokens=["USDC", "WETH"],
+        dead_end_tokens=["TOKEN_X"],
+        missing_edges_for_3cycle=[],
+        adjacency_summary={"USDC": ["WETH", "USDT"]},
+    )
+
+
+def _empty_artifact():
+    """Build an artifact from an empty cycle list for unit tests."""
+    from m9.graph_arb.artifacts import build_artifact
+    return build_artifact(
+        chain="base",
+        duration_minutes=1.0,
+        cycle_results=[],
+        topology=_make_topology(),
+        sizes_usd=(1000.0,),
+        run_timestamp="2026-01-01T00:00:00Z",
+        started_at_mono=0.0,
+        elapsed_s=60.0,
+    )
+
+
+def _make_mock_cycle():
+    m = MagicMock()
+    m.cycle_id = "abc123def456"
+    m.length = 3
+    m.token_path = ["USDC", "WETH", "USDT"]
+    m.start_token_sym = "USDC"
+    m.total_fee_bps = 9.0
+    m.min_factory_class = "EFFICIENT_BASELINE"
+
+    # Build mock edges so _build_top_opportunity() can access edges[0].* fields
+    def _mock_edge(dex="uniswap_v3", factory="EFFICIENT_BASELINE",
+                   pool="0xaaaa", pair_id="USDC/WETH", fee_bps=5.0):
+        e = MagicMock()
+        e.dex_id = dex
+        e.factory_class = factory
+        e.pool_address = pool
+        e.pair_id = pair_id
+        e.fee_bps = fee_bps
+        return e
+
+    m.edges = [
+        _mock_edge(pool="0xaaaa", pair_id="USDC/WETH"),
+        _mock_edge(dex="curve", factory="MID_EFFICIENCY", pool="0xbbbb", pair_id="WETH/USDT"),
+        _mock_edge(dex="uniswap_v3", pool="0xcccc", pair_id="USDT/USDC"),
+    ]
+    return m
+
+
 # ---------------------------------------------------------------------------
 # Rolling artifact tests (skip if file absent)
 # ---------------------------------------------------------------------------
@@ -34,64 +92,67 @@ class TestM9GraphArtifactSchema:
 
     def test_schema_family(self):
         d = _load_rolling()
-        assert d.get("schema_family") == "m9_graph_arb", (
-            f"schema_family must be 'm9_graph_arb', got {d.get('schema_family')!r}"
-        )
+        assert d.get("schema_family") == "m9_graph_arb"
 
     def test_schema_revision_format(self):
         d = _load_rolling()
         rev = d.get("schema_revision", "")
-        assert str(rev).startswith("m9."), (
-            f"schema_revision must start with 'm9.', got {rev!r}"
-        )
+        assert str(rev).startswith("m9."), f"schema_revision must start 'm9.', got {rev!r}"
 
     def test_required_fields_present(self):
         d = _load_rolling()
         required = {
             "schema_family",
             "schema_revision",
+            "generated_at_utc",
+            "freshness_s",
             "run_timestamp",
+            "requested_duration_minutes",
+            "elapsed_s",
+            "sweeps_completed",
+            "duration_fulfilled",
+            "gate_acceptance",
+            "strategy_gate_acceptance",
+            "execution_mode",
             "cycles_found",
             "cycles_positive_gross",
+            "cycles_router_sim_eligible",
             "best_cycle_net_bps",
             "qsr",
+            "cycle_reject_histogram",
             "economics_gate_status",
-            "gate_acceptance",
+            "route_error_histogram",
+            "scan_scope",
+            "graph_topology",
+            "topology_gate",
+            "run_context",
         }
         missing = required - set(d.keys())
-        assert not missing, f"Missing required fields: {missing}"
+        assert not missing, f"Missing required fields: {sorted(missing)}"
 
     def test_cycles_found_non_negative(self):
         d = _load_rolling()
-        cycles_found = d.get("cycles_found")
-        assert isinstance(cycles_found, int), "cycles_found must be int"
-        assert cycles_found >= 0, f"cycles_found must be >= 0, got {cycles_found}"
+        assert isinstance(d["cycles_found"], int)
+        assert d["cycles_found"] >= 0
 
     def test_cycles_positive_gross_non_negative(self):
         d = _load_rolling()
-        cpg = d.get("cycles_positive_gross")
-        assert isinstance(cpg, int), "cycles_positive_gross must be int"
-        assert cpg >= 0, f"cycles_positive_gross must be >= 0, got {cpg}"
+        assert isinstance(d["cycles_positive_gross"], int)
+        assert d["cycles_positive_gross"] >= 0
 
     def test_cycles_positive_gross_lte_cycles_found(self):
         d = _load_rolling()
-        assert d.get("cycles_positive_gross", 0) <= d.get("cycles_found", 0), (
-            "cycles_positive_gross cannot exceed cycles_found"
-        )
+        assert d.get("cycles_positive_gross", 0) <= d.get("cycles_found", 0)
 
     def test_qsr_in_range(self):
         d = _load_rolling()
         qsr = d.get("qsr")
-        assert qsr is None or 0.0 <= float(qsr) <= 1.0, (
-            f"qsr must be in [0, 1], got {qsr}"
-        )
+        assert qsr is None or 0.0 <= float(qsr) <= 1.0, f"qsr must be in [0,1], got {qsr}"
 
     def test_best_cycle_net_bps_numeric_or_null(self):
         d = _load_rolling()
         val = d.get("best_cycle_net_bps")
-        assert val is None or isinstance(val, (int, float)), (
-            f"best_cycle_net_bps must be numeric or null, got {type(val)}"
-        )
+        assert val is None or isinstance(val, (int, float))
 
     def test_economics_gate_status_valid(self):
         d = _load_rolling()
@@ -102,15 +163,15 @@ class TestM9GraphArtifactSchema:
             "BLOCKED_NO_POSITIVE_GROSS",
             "PASS",
         }
-        status = d.get("economics_gate_status")
-        assert status in valid, (
-            f"economics_gate_status must be one of {valid}, got {status!r}"
-        )
+        assert d.get("economics_gate_status") in valid
 
     def test_gate_acceptance_bool(self):
         d = _load_rolling()
-        ga = d.get("gate_acceptance")
-        assert isinstance(ga, bool), f"gate_acceptance must be bool, got {type(ga)}"
+        assert isinstance(d.get("gate_acceptance"), bool)
+
+    def test_strategy_gate_acceptance_bool(self):
+        d = _load_rolling()
+        assert isinstance(d.get("strategy_gate_acceptance"), bool)
 
     def test_gate_acceptance_matches_econ_status(self):
         """gate_acceptance=True IFF economics_gate_status == PASS."""
@@ -118,145 +179,412 @@ class TestM9GraphArtifactSchema:
         gate = d.get("gate_acceptance")
         econ = d.get("economics_gate_status")
         if econ == "PASS":
-            assert gate is True, "gate_acceptance must be True when economics_gate_status=PASS"
+            assert gate is True
         else:
-            assert gate is False, (
-                f"gate_acceptance must be False when economics_gate_status={econ!r}"
-            )
+            assert gate is False, f"gate_acceptance must be False when econ={econ!r}"
 
     def test_run_timestamp_format(self):
-        """run_timestamp must be ISO 8601 UTC like 2026-05-22T08:10:29Z."""
-        import re
         d = _load_rolling()
         ts = d.get("run_timestamp", "")
         assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", str(ts)), (
             f"run_timestamp must be YYYY-MM-DDTHH:MM:SSZ, got {ts!r}"
         )
 
-    def test_cycle_reject_histogram_is_dict_if_present(self):
+    def test_generated_at_utc_format(self):
+        d = _load_rolling()
+        ts = d.get("generated_at_utc", "")
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", str(ts)), (
+            f"generated_at_utc must be YYYY-MM-DDTHH:MM:SSZ, got {ts!r}"
+        )
+
+    def test_freshness_s_non_negative(self):
+        d = _load_rolling()
+        freshness = d.get("freshness_s")
+        assert freshness is not None and float(freshness) >= 0
+
+    def test_requested_duration_minutes_positive(self):
+        d = _load_rolling()
+        rdm = d.get("requested_duration_minutes")
+        assert rdm is not None and float(rdm) > 0
+
+    def test_topology_gate_valid(self):
+        d = _load_rolling()
+        valid = {"NO_CYCLES", "CYCLES_FOUND"}
+        assert d.get("topology_gate") in valid, (
+            f"topology_gate must be one of {valid}, got {d.get('topology_gate')!r}"
+        )
+
+    def test_graph_topology_is_dict(self):
+        d = _load_rolling()
+        topo = d.get("graph_topology")
+        assert isinstance(topo, dict), "graph_topology must be a dict"
+        assert "token_count" in topo
+        assert "edge_count" in topo
+        assert "route_count" in topo
+
+    def test_run_context_required_fields(self):
+        d = _load_rolling()
+        ctx = d.get("run_context")
+        assert isinstance(ctx, dict), "run_context must be a dict"
+        for field in ("chain", "duration_minutes", "sizes_usd", "inventory_path", "execution_mode"):
+            assert field in ctx, f"run_context missing field: {field!r}"
+
+    def test_cycle_reject_histogram_is_dict(self):
         d = _load_rolling()
         hist = d.get("cycle_reject_histogram")
+        assert isinstance(hist, dict), "cycle_reject_histogram must be a dict"
+        for k, v in hist.items():
+            assert isinstance(k, str)
+            assert isinstance(v, int)
+
+    def test_route_error_histogram_is_dict_or_list(self):
+        d = _load_rolling()
+        hist = d.get("route_error_histogram")
         if hist is not None:
-            assert isinstance(hist, dict), "cycle_reject_histogram must be a dict"
-            for k, v in hist.items():
-                assert isinstance(k, str), f"histogram key must be str, got {k!r}"
-                assert isinstance(v, int), f"histogram value must be int, got {v!r}"
+            assert isinstance(hist, (dict, list))
+
+    def test_scan_scope_is_dict(self):
+        d = _load_rolling()
+        sc = d.get("scan_scope")
+        assert isinstance(sc, dict), "scan_scope must be a dict"
 
     def test_top_cycles_list_if_present(self):
         d = _load_rolling()
         top = d.get("top_cycles")
         if top is not None:
-            assert isinstance(top, list), "top_cycles must be a list"
+            assert isinstance(top, list)
             for entry in top[:3]:
-                assert "cycle_id" in entry, "top_cycles entry missing cycle_id"
-                assert "gross_bps" in entry, "top_cycles entry missing gross_bps"
-                assert "status" in entry, "top_cycles entry missing status"
+                assert "cycle_id" in entry
+                assert "gross_bps" in entry
+                assert "status" in entry
+
+    def test_no_old_topology_key_at_top_level(self):
+        """The old 'topology' key must be renamed to 'graph_topology'."""
+        d = _load_rolling()
+        # Allow either form since rolling artifact predates this fix
+        if "topology" in d and "graph_topology" not in d:
+            pytest.fail("Rolling artifact has old 'topology' key but no 'graph_topology'")
+
+    def test_cycles_quoteable_non_negative(self):
+        d = _load_rolling()
+        v = d.get("cycles_quoteable")
+        if v is not None:
+            assert isinstance(v, int) and v >= 0
+
+    def test_quote_rpc_error_rate_in_range(self):
+        d = _load_rolling()
+        v = d.get("quote_rpc_error_rate")
+        if v is not None:
+            assert 0.0 <= float(v) <= 1.0, f"quote_rpc_error_rate out of range: {v}"
+
+    def test_quote_revert_rate_in_range(self):
+        d = _load_rolling()
+        v = d.get("quote_revert_rate")
+        if v is not None:
+            assert 0.0 <= float(v) <= 1.0, f"quote_revert_rate out of range: {v}"
+
+    def test_economics_blocker_class_valid_if_present(self):
+        d = _load_rolling()
+        v = d.get("economics_blocker_class")
+        if v is not None:
+            valid = {
+                "NOT_RUN", "NOT_BLOCKED", "PROVIDER_QUALITY_BLOCKED",
+                "INVENTORY_TOO_ANCHOR_HEAVY", "MARKET_NO_POSITIVE_GROSS",
+            }
+            assert v in valid, f"economics_blocker_class invalid: {v!r}"
+
+    def test_risk_metrics_if_present(self):
+        d = _load_rolling()
+        rm = d.get("risk_metrics")
+        if rm is not None:
+            assert isinstance(rm, dict)
+            assert "risk_gate" in rm
+            assert rm["risk_gate"] in ("NOT_STARTED", "PASS", "FAIL", "PARTIAL")
 
 
 # ---------------------------------------------------------------------------
-# Builder unit tests (no file required)
+# Builder unit tests (no rolling file required)
 # ---------------------------------------------------------------------------
 
 class TestM9GraphArtifactBuilder:
     """Unit tests for m9.graph_arb.artifacts.build_artifact()."""
 
-    def _make_topology(self):
-        from m9.graph_arb.models import GraphTopology
-        return GraphTopology(
-            token_count=5,
-            edge_count=10,
-            route_count=7,
-            hub_tokens=["USDC", "WETH"],
-            dead_end_tokens=["TOKEN_X"],
-            missing_edges_for_3cycle=[],
-            adjacency_summary={"USDC": ["WETH", "USDT"]},
-        )
-
     def test_empty_cycles_gives_blocked_no_cycles(self):
-        from m9.graph_arb.artifacts import build_artifact
-        artifact = build_artifact(
-            chain="base",
-            duration_minutes=1.0,
-            cycle_results=[],
-            topology=self._make_topology(),
-            sizes_usd=(1000.0,),
-            run_timestamp="2026-01-01T00:00:00Z",
-            started_at_mono=0.0,
-            elapsed_s=60.0,
-        )
-        assert artifact["economics_gate_status"] == "BLOCKED_NO_CYCLES"
-        assert artifact["gate_acceptance"] is False
-        assert artifact["cycles_found"] == 0
+        a = _empty_artifact()
+        assert a["economics_gate_status"] == "BLOCKED_NO_CYCLES"
+        assert a["gate_acceptance"] is False
+        assert a["cycles_found"] == 0
 
     def test_schema_fields_present(self):
-        from m9.graph_arb.artifacts import build_artifact, SCHEMA_FAMILY, SCHEMA_REVISION
-        artifact = build_artifact(
-            chain="base",
-            duration_minutes=1.0,
-            cycle_results=[],
-            topology=self._make_topology(),
-            sizes_usd=(1000.0,),
-            run_timestamp="2026-01-01T00:00:00Z",
-            started_at_mono=0.0,
-            elapsed_s=60.0,
+        from m9.graph_arb.artifacts import SCHEMA_FAMILY, SCHEMA_REVISION
+        a = _empty_artifact()
+        assert a["schema_family"] == SCHEMA_FAMILY
+        assert a["schema_revision"] == SCHEMA_REVISION
+
+    def test_requested_duration_minutes_key(self):
+        """Output must use 'requested_duration_minutes', not 'duration_minutes'."""
+        a = _empty_artifact()
+        assert "requested_duration_minutes" in a
+        assert "duration_minutes" not in a
+        assert a["requested_duration_minutes"] == 1.0
+
+    def test_graph_topology_key(self):
+        """Output must use 'graph_topology', not 'topology'."""
+        a = _empty_artifact()
+        assert "graph_topology" in a
+        assert "topology" not in a
+        assert isinstance(a["graph_topology"], dict)
+        assert "token_count" in a["graph_topology"]
+
+    def test_topology_gate_no_cycles(self):
+        a = _empty_artifact()
+        assert a["topology_gate"] == "NO_CYCLES"
+
+    def test_topology_gate_cycles_found_via_override(self):
+        from m9.graph_arb.artifacts import build_artifact
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+            cycles_found_topology=500,
         )
-        assert artifact["schema_family"] == SCHEMA_FAMILY
-        assert artifact["schema_revision"] == SCHEMA_REVISION
+        assert a["topology_gate"] == "CYCLES_FOUND"
+        assert a["cycles_found"] == 500
+
+    def test_run_context_fields(self):
+        a = _empty_artifact()
+        ctx = a["run_context"]
+        assert isinstance(ctx, dict)
+        assert ctx["chain"] == "base"
+        assert ctx["duration_minutes"] == 1.0
+        assert ctx["execution_mode"] == "paper"
+
+    def test_strategy_gate_acceptance_default_false(self):
+        a = _empty_artifact()
+        assert a["strategy_gate_acceptance"] is False
+
+    def test_generated_at_utc_present(self):
+        a = _empty_artifact()
+        ts = a.get("generated_at_utc", "")
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", str(ts))
+
+    def test_freshness_s_equals_elapsed(self):
+        a = _empty_artifact()
+        assert a["freshness_s"] == a["elapsed_s"]
+
+    def test_cycle_reject_histogram_empty_when_no_results(self):
+        a = _empty_artifact()
+        assert a["cycle_reject_histogram"] == {}
+
+    def test_cycle_reject_histogram_counts_by_status(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        mock_cycle = _make_mock_cycle()
+        qr1 = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=990,
+            gross_bps=-5.0, status="NEGATIVE_GROSS", reject_reason=None,
+            leg_results=[], elapsed_s=0.1,
+        )
+        qr2 = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=0,
+            gross_bps=0.0, status="QUOTE_FAILED", reject_reason="QUOTE_REVERT",
+            leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr1, qr2],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        hist = a["cycle_reject_histogram"]
+        assert hist.get("NEGATIVE_GROSS") == 1
+        assert hist.get("QUOTE_REVERT") == 1
 
     def test_write_and_read_artifact(self, tmp_path):
         from m9.graph_arb.artifacts import build_artifact, write_artifact
         out = str(tmp_path / "m9_test.json")
-        artifact = build_artifact(
-            chain="base",
-            duration_minutes=1.0,
-            cycle_results=[],
-            topology=self._make_topology(),
-            sizes_usd=(1000.0,),
-            run_timestamp="2026-01-01T00:00:00Z",
-            started_at_mono=0.0,
-            elapsed_s=60.0,
-        )
-        write_artifact(artifact, out)
+        a = _empty_artifact()
+        write_artifact(a, out)
         loaded = json.loads(Path(out).read_text(encoding="utf-8"))
         assert loaded["schema_family"] == "m9_graph_arb"
         assert loaded["cycles_found"] == 0
+        assert "graph_topology" in loaded
+        assert "run_context" in loaded
 
     def test_gate_pass_when_positive_gross(self):
-        """Simulate a CycleQuoteResult with positive gross_bps and check gate."""
-        from unittest.mock import MagicMock
         from m9.graph_arb.artifacts import build_artifact
         from m9.graph_arb.models import CycleQuoteResult
 
-        mock_cycle = MagicMock()
-        mock_cycle.cycle_id = "abc123def456"
-        mock_cycle.length = 3
-        mock_cycle.token_path = ["USDC", "WETH", "USDT"]
-        mock_cycle.start_token_sym = "USDC"
-        mock_cycle.total_fee_bps = 9.0
-        mock_cycle.min_factory_class = "EFFICIENT_BASELINE"
-
+        mock_cycle = _make_mock_cycle()
         qr = CycleQuoteResult(
-            cycle=mock_cycle,
-            size_usd=1000.0,
-            amount_in=1000 * 10**6,
-            amount_out=1002 * 10**6,
-            gross_bps=20.0,
-            status="POSITIVE_GROSS",
-            reject_reason=None,
-            leg_results=[],
-            elapsed_s=0.1,
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000 * 10**6,
+            amount_out=1002 * 10**6, gross_bps=20.0, status="POSITIVE_GROSS",
+            reject_reason=None, leg_results=[], elapsed_s=0.1,
         )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        assert a["cycles_positive_gross"] == 1
+        assert a["economics_gate_status"] == "PASS"
+        assert a["gate_acceptance"] is True
 
-        artifact = build_artifact(
-            chain="base",
-            duration_minutes=1.0,
-            cycle_results=[qr],
-            topology=self._make_topology(),
-            sizes_usd=(1000.0,),
-            run_timestamp="2026-01-01T00:00:00Z",
-            started_at_mono=0.0,
-            elapsed_s=60.0,
+    def test_cycles_found_topology_overrides_dry_run(self):
+        """cycles_found_topology must override len(cycle_results) for dry-run mode."""
+        from m9.graph_arb.artifacts import build_artifact
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+            cycles_found_topology=1234,
         )
-        assert artifact["cycles_positive_gross"] == 1
-        assert artifact["economics_gate_status"] == "PASS"
-        assert artifact["gate_acceptance"] is True
+        assert a["cycles_found"] == 1234
+        assert a["economics_gate_status"] == "BLOCKED_NO_POSITIVE_GROSS"
+        assert a["topology_gate"] == "CYCLES_FOUND"
+
+    def test_cycles_quoteable_present(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=990,
+            gross_bps=-5.0, status="NEGATIVE_GROSS", reject_reason=None,
+            leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        assert a["cycles_quoteable"] == 1
+        assert isinstance(a["quote_rpc_error_rate"], float)
+        assert isinstance(a["quote_revert_rate"], float)
+        assert 0.0 <= a["quote_rpc_error_rate"] <= 1.0
+        assert 0.0 <= a["quote_revert_rate"] <= 1.0
+
+    def test_p50_p90_bps_present(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qrs = [
+            CycleQuoteResult(
+                cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=990,
+                gross_bps=float(-i), status="NEGATIVE_GROSS", reject_reason=None,
+                leg_results=[], elapsed_s=0.1,
+            )
+            for i in range(1, 11)  # -1 .. -10 bps
+        ]
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=qrs,
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        em = a["economics_metrics"]
+        assert "p50_gross_bps" in em
+        assert "p90_gross_bps" in em
+        assert em["p50_gross_bps"] is not None
+        assert em["p90_gross_bps"] is not None
+        # p90 is the 90th percentile (closer to best), p50 is median
+        # so p90 >= p50 (less negative = higher bps value)
+        assert em["p90_gross_bps"] >= em["p50_gross_bps"]
+
+    def test_economics_blocker_class_not_run_when_empty(self):
+        a = _empty_artifact()
+        assert a["economics_blocker_class"] == "NOT_RUN"
+
+    def test_economics_blocker_class_not_blocked_when_positive(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=1002,
+            gross_bps=20.0, status="POSITIVE_GROSS", reject_reason=None,
+            leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        assert a["economics_blocker_class"] == "NOT_BLOCKED"
+
+    def test_economics_blocker_class_anchor_heavy_small_inventory(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=995,
+            gross_bps=-5.0, status="NEGATIVE_GROSS", reject_reason=None,
+            leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+            scan_scope={"pair_count": 7, "routes_total": 13},  # small inventory
+        )
+        assert a["economics_blocker_class"] == "INVENTORY_TOO_ANCHOR_HEAVY"
+
+    def test_risk_metrics_placeholder_present(self):
+        a = _empty_artifact()
+        rm = a.get("risk_metrics")
+        assert isinstance(rm, dict)
+        assert rm["risk_gate"] == "NOT_STARTED"
+        assert rm["honeypot_checked"] == 0
+        assert rm["transfer_tax_checked"] == 0
+        assert rm["unsafe_rejected"] == 0
+
+    def test_top_opportunities_present_and_is_list(self):
+        """build_artifact() must always produce 'top_opportunities' as a list."""
+        a = _empty_artifact()
+        assert "top_opportunities" in a
+        assert isinstance(a["top_opportunities"], list)
+
+    def test_top_opportunities_schema_with_positive_cycle(self):
+        """top_opportunities rows must have required fields when cycles exist."""
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=500.0, amount_in=500 * 10**6,
+            amount_out=502 * 10**6, gross_bps=40.0, status="POSITIVE_GROSS",
+            reject_reason=None, leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(500.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        opps = a["top_opportunities"]
+        assert len(opps) == 1
+        row = opps[0]
+        required = {"dex", "factory", "pool", "pool_path", "pair",
+                    "market_size_usd", "dynamic_size_usd", "spread_bps",
+                    "spread_usd", "profit_usd", "main_blocker"}
+        assert required.issubset(set(row.keys())), f"Missing keys: {required - set(row.keys())}"
+        assert row["spread_bps"] == 40.0
+        assert row["market_size_usd"] == 500.0
+        assert row["main_blocker"] is None  # POSITIVE_GROSS => no blocker
+        assert isinstance(row["pool_path"], list)
+        assert row["spread_usd"] == pytest.approx(40.0 * 500.0 / 10000.0, rel=1e-4)
+
+    def test_top_opportunities_main_blocker_negative(self):
+        """Non-positive cycles must have a main_blocker value."""
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=0,
+            gross_bps=0.0, status="QUOTE_FAILED", reject_reason="CYCLE_QUOTE_FAILED",
+            leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        opps = a["top_opportunities"]
+        assert len(opps) >= 1
+        row = opps[0]
+        assert row["main_blocker"] is not None

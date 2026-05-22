@@ -118,6 +118,8 @@ ARTIFACT_FILES = {
 }
 
 SNIPER_ARTIFACT_PATH = ROLLING_DIR / "new_pool_sniper_latest.json"
+M9_ARTIFACT_PATH = ROLLING_DIR / "m9_graph_latest.json"
+M8_1_ARTIFACT_PATH = ROLLING_DIR / "m8_1_stable_anchor_latest.json"
 
 # E1.9.3: Discovery namespace artifacts (parallel to production)
 DISCOVERY_ARTIFACT_FILES = {
@@ -131,6 +133,7 @@ DISCOVERY_ARTIFACT_FILES = {
 
 DASHBOARD_HTML = Path(__file__).parent / "dashboard_m7.html"
 DASHBOARD_M8_HTML = Path(__file__).parent / "dashboard_m8.html"
+DASHBOARD_M9_HTML = Path(__file__).parent / "dashboard_m9.html"
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -140,7 +143,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/" or path == "/index.html":
-            self._serve_file(DASHBOARD_HTML, "text/html")
+            self._serve_file(DASHBOARD_M9_HTML, "text/html")
         elif path == "/api/rolling":
             self._serve_rolling_data()
         elif path == "/api/hot":
@@ -184,10 +187,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._serve_family_table(profile=profile)
         elif path == "/api/m8/current":
             self._serve_m8_current()
+        elif path == "/api/m9/current":
+            self._serve_m9_current()
         elif path == "/m7" or path == "/m7/":
             self._serve_file(Path(__file__).parent / "dashboard_m7.html", "text/html")
         elif path == "/m8" or path == "/m8/":
             self._serve_file(DASHBOARD_M8_HTML, "text/html")
+        elif path == "/m9" or path == "/m9/":
+            self._serve_file(DASHBOARD_M9_HTML, "text/html")
         else:
             self.send_error(404)
 
@@ -784,6 +791,62 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _serve_m9_current(self):
+        """Serve M9 graph-arb shadow scanner operator dashboard data.
+
+        Merges the canonical M9 rolling artifact with M8.1 inventory stats
+        to give an operator a combined view of the scanning pipeline.
+        """
+        artifact: dict = {}
+        file_age_s = None
+        if M9_ARTIFACT_PATH.is_file():
+            try:
+                with open(M9_ARTIFACT_PATH, encoding="utf-8") as fh:
+                    artifact = json.load(fh) or {}
+                try:
+                    file_age_s = max(
+                        0,
+                        int(
+                            datetime.now(timezone.utc).timestamp()
+                            - os.path.getmtime(M9_ARTIFACT_PATH)
+                        ),
+                    )
+                except OSError:
+                    file_age_s = None
+            except (json.JSONDecodeError, OSError):
+                artifact = {}
+
+        m8_1_artifact: dict = {}
+        if M8_1_ARTIFACT_PATH.is_file():
+            try:
+                with open(M8_1_ARTIFACT_PATH, encoding="utf-8") as fh:
+                    m8_1_artifact = json.load(fh) or {}
+            except (json.JSONDecodeError, OSError):
+                m8_1_artifact = {}
+
+        sniper_artifact: dict = {}
+        if SNIPER_ARTIFACT_PATH.is_file():
+            try:
+                with open(SNIPER_ARTIFACT_PATH, encoding="utf-8") as fh:
+                    sniper_artifact = json.load(fh) or {}
+            except (json.JSONDecodeError, OSError):
+                sniper_artifact = {}
+
+        result = build_m9_current_payload(
+            artifact=artifact,
+            m8_1_artifact=m8_1_artifact,
+            sniper_artifact=sniper_artifact,
+            now_utc=datetime.now(timezone.utc),
+            file_age_s=file_age_s,
+        )
+        payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def _serve_m8_current(self):
         """Serve M8 new-pool sniper dashboard data.
 
@@ -1069,6 +1132,128 @@ def _build_m8_funnel(metrics: dict) -> dict:
             _safe_int(metrics.get("arb_candidates_total")) >= 1
             and _safe_int(metrics.get("phase2_expected_pnl_non_null_count")) >= 1
         ),
+    }
+
+
+def build_m9_current_payload(
+    *,
+    artifact: dict | None,
+    m8_1_artifact: dict | None = None,
+    sniper_artifact: dict | None = None,
+    now_utc: datetime,
+    file_age_s: int | None = None,
+) -> dict:
+    """Build M9 graph-arb operator dashboard payload.
+
+    Merges data from:
+      - m9_graph_latest.json  — M9 shadow scanner rolling artifact
+      - m8_1_exotic_inventory_latest.json  — M8.1 inventory summary
+      - new_pool_sniper_latest.json  — M8 new-pool scout (pool count)
+    """
+    a = artifact or {}
+    m8_1 = m8_1_artifact or {}
+    m8 = sniper_artifact or {}
+
+    # M9 scan summary
+    scan_status = a.get("economics_gate_status", "UNKNOWN")
+    cycles_found = _safe_int(a.get("cycles_found"))
+    cycles_positive = _safe_int(a.get("cycles_positive_gross"))
+    qsr = a.get("qsr") if a.get("qsr") is not None else a.get("quote_success_rate")
+    sweeps = _safe_int(a.get("sweeps_completed"))
+    duration_min = a.get("requested_duration_minutes") or a.get("duration_minutes")
+    elapsed_s = a.get("elapsed_s")
+    generated_at = a.get("generated_at_utc") or a.get("run_timestamp")
+    freshness_s: int | None = None
+    if generated_at and file_age_s is not None:
+        freshness_s = file_age_s
+
+    # Coverage from funnel_a block
+    funnel_a = a.get("funnel_a") or {}
+    coverage = {
+        "edge_count": _safe_int(a.get("graph_topology", {}).get("edge_count") if isinstance(a.get("graph_topology"), dict) else None),
+        "active_routes": _safe_int(funnel_a.get("active_routes")),
+        "pairs_probed": _safe_int(funnel_a.get("pairs_probed")),
+        "dexes_probed": _safe_int(funnel_a.get("dexes_probed")),
+        "verified_tokens": _safe_int(funnel_a.get("verified_tokens")),
+        "verified_pools": _safe_int(funnel_a.get("verified_pools")),
+        "raw_hints": _safe_int(funnel_a.get("raw_hints")),
+    }
+
+    # Economics metrics
+    econ = a.get("economics_metrics") or {}
+    economics = {
+        "economics_gate_status": scan_status,
+        "economics_blocker_class": a.get("economics_blocker_class", "NOT_RUN"),
+        "cycles_quoteable": _safe_int(a.get("cycles_quoteable")),
+        "cycles_positive_gross": cycles_positive,
+        "qsr": float(qsr) if qsr is not None else None,
+        "p50_gross_bps": econ.get("p50_gross_bps"),
+        "p90_gross_bps": econ.get("p90_gross_bps"),
+        "quote_rpc_error_rate": a.get("quote_rpc_error_rate"),
+        "quote_revert_rate": a.get("quote_revert_rate"),
+        "provider_rpc_error_count": a.get("provider_rpc_error_count"),
+        "provider_decode_error_count": a.get("provider_decode_error_count"),
+    }
+
+    # Risk metrics
+    risk_metrics = a.get("risk_metrics") or {}
+
+    # Top opportunities (from artifact field or empty list)
+    top_opportunities = a.get("top_opportunities") or []
+
+    # M8.1 stable-anchor inventory summary
+    _m8_1_metrics = m8_1.get("metrics") if isinstance(m8_1.get("metrics"), dict) else {}
+    _m8_1_pairs = m8_1.get("pairs_probed", [])
+    m8_1_summary = {
+        "pool_count": _safe_int(
+            m8_1.get("pools_found_total")
+            or _m8_1_metrics.get("stable_anchor_candidates_total")
+            or m8_1.get("pool_count")
+        ),
+        "pair_count": _safe_int(
+            len(_m8_1_pairs) if isinstance(_m8_1_pairs, list) else m8_1.get("pair_count")
+        ),
+        "gate_acceptance": m8_1.get("gate_acceptance"),
+        "strategy_gate_acceptance": m8_1.get("strategy_gate_acceptance"),
+        "edge_count": _safe_int(
+            m8_1.get("active_routes_count")
+            or m8_1.get("edge_count")
+        ),
+        "generated_at_utc": m8_1.get("generated_at_utc") or m8_1.get("run_timestamp"),
+    }
+
+    # M8 new-pool scout summary
+    m8_sniper_summary = {
+        "new_pools_found": _safe_int(m8.get("new_pools_found") or m8.get("pools_found")),
+        "generated_at_utc": m8.get("generated_at_utc") or m8.get("run_timestamp"),
+    }
+
+    return {
+        "schema_family": "m9_dashboard",
+        "schema_revision": "m9_dashboard.1",
+        "now_utc": now_utc.isoformat(),
+        "artifact_exists": bool(a),
+        "artifact_age_s": file_age_s,
+        "freshness_s": freshness_s,
+        "generated_at_utc": generated_at,
+        "m9_summary": {
+            "chain": a.get("chain", "base"),
+            "cycles_found": cycles_found,
+            "cycles_positive_gross": cycles_positive,
+            "sweeps_completed": sweeps,
+            "duration_minutes": duration_min,
+            "elapsed_s": elapsed_s,
+            "topology_gate": a.get("topology_gate", "UNKNOWN"),
+        },
+        "scan_status": scan_status,
+        "coverage": coverage,
+        "funnel": funnel_a,
+        "economics": economics,
+        "risk_metrics": risk_metrics,
+        "top_opportunities": top_opportunities,
+        "m8_1_inventory": m8_1_summary,
+        "m8_sniper": m8_sniper_summary,
+        "scan_scope": a.get("scan_scope") or {},
     }
 
 
