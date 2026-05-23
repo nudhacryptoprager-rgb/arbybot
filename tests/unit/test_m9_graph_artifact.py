@@ -569,6 +569,37 @@ class TestM9GraphArtifactBuilder:
         assert isinstance(row["pool_path"], list)
         assert row["spread_usd"] == pytest.approx(40.0 * 500.0 / 10000.0, rel=1e-4)
 
+    def test_top_opportunities_surface_dynamic_size_fields(self):
+        """Dynamic-size sweep metadata must be visible to the operator surface."""
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=250.0, amount_in=250 * 10**6,
+            amount_out=251 * 10**6, gross_bps=40.0, status="POSITIVE_GROSS",
+            reject_reason=None, leg_results=[], elapsed_s=0.1,
+            dynamic_size_usd=250.0,
+            size_candidates_usd=(100.0, 250.0, 500.0),
+            depth_curve=[
+                {"size_usd": 100.0, "gross_bps": 30.0, "status": "NEGATIVE_GROSS"},
+                {"size_usd": 250.0, "gross_bps": 40.0, "status": "POSITIVE_GROSS"},
+            ],
+            dynamic_size_source="multi_size_quote",
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(100.0, 250.0, 500.0),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        row = a["top_opportunities"][0]
+        assert a["sizes_usd"] == [100.0, 250.0, 500.0]
+        assert row["dynamic_size_usd"] == 250.0
+        assert row["size_candidates_usd"] == [100.0, 250.0, 500.0]
+        assert row["depth_curve"][1]["size_usd"] == 250.0
+        assert row["dynamic_size_source"] == "multi_size_quote"
+        assert a["infra_telemetry"]["dynamic_size_enabled"] is True
+        assert a["infra_telemetry"]["dynamic_size_selected_count"] == 1
+
     def test_top_opportunities_main_blocker_negative(self):
         """Non-positive cycles must have a main_blocker value."""
         from m9.graph_arb.artifacts import build_artifact

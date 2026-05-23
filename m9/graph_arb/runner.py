@@ -225,6 +225,23 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Quote sizes in USD",
     )
     parser.add_argument(
+        "--dynamic-sizes",
+        action="store_true",
+        help=(
+            "Quote each cycle across the supplied --sizes-usd ladder and select "
+            "the best gross_bps size. Off by default to protect RPC budget."
+        ),
+    )
+    parser.add_argument(
+        "--dynamic-size-max-cycles",
+        type=int,
+        default=5,
+        help=(
+            "Maximum prioritized cycles per sweep to quote across the full "
+            "--sizes-usd ladder when --dynamic-sizes is enabled."
+        ),
+    )
+    parser.add_argument(
         "--artifact-path",
         default="data/runs/_rolling/m9_graph_latest.json",
         help="Rolling artifact output path",
@@ -407,11 +424,13 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _VERIFIED_INVENTORY,
             )
         else:
-            log.warning(
-                "--require-factory-verified set but verified inventory not found at %s. "
-                "Run: py -3.11 -m m9.graph_arb.pool_verifier --chain %s --config %s",
+            log.error(
+                "HARD FAIL: --require-factory-verified set but verified inventory "
+                "not found at %s. Run pool_verifier first: "
+                "py -3.11 -m m9.graph_arb.pool_verifier --chain %s --config %s",
                 _VERIFIED_INVENTORY, args.chain, args.config,
             )
+            return EXIT_CONFIG_ERROR
 
     # Prefer merged shadow inventory if available
     inventory_path = best_inventory_path(preferred=args.inventory)
@@ -672,6 +691,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             quote_backend=getattr(args, "quote_backend", "direct_http"),
             rpc_url=_active_rpc,
             token_prices=_TOKEN_PRICE_USD_BASE,
+            dynamic_sizes=getattr(args, "dynamic_sizes", False),
+            dynamic_size_limit=getattr(args, "dynamic_size_max_cycles", 5),
         )
         all_results.extend(new_results)
         # Feed results back to priority scheduler for adaptive score update

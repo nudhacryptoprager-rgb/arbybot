@@ -81,7 +81,7 @@ class MulticallBatcher:
         stats: Execution statistics
     """
     
-    def __init__(self, rpc_url: str, block_num: Optional[int] = None, rpc_limiter: Any = None):
+    def __init__(self, rpc_url: str, block_num: Optional[int] = None, rpc_limiter: Any = None, chunk_scale: float = 1.0):
         self.rpc_url = rpc_url
         self.block_num = block_num  # None = "latest" in web3.py eth_call
         self._rpc_limiter = rpc_limiter  # None → use rpc_throttle singleton
@@ -110,6 +110,9 @@ class MulticallBatcher:
         }
         self.call_success: Dict[str, int] = {k: 0 for k in self.call_types}
         self.call_fail: Dict[str, int] = {k: 0 for k in self.call_types}
+        # Adaptive chunk scale: [0.25, 1.0]; reduces initial chunk size when
+        # high 429 rate detected by caller (multicall_snapshot._update_chunk_scale).
+        self._chunk_scale: float = max(0.25, min(1.0, float(chunk_scale)))
         self._w3 = None
         self._multicall = None
     
@@ -239,7 +242,9 @@ class MulticallBatcher:
 
         _limiter = self._rpc_limiter if self._rpc_limiter is not None else _default_limiter
         all_results: List[Tuple[bool, bytes]] = []
-        chunk_size = MULTICALL_MAX_BATCH
+        # Proactively reduce chunk size when adaptive scale < 1.0 (high 429 rate detected)
+        _min_chunk = max(int(os.environ.get("ARBY_MULTICALL_MIN_SUBCHUNK", "3")) * 4, 8)
+        chunk_size = max(int(MULTICALL_MAX_BATCH * self._chunk_scale), _min_chunk)
 
         for start in range(0, len(calls), chunk_size):
             chunk = calls[start : start + chunk_size]

@@ -52,6 +52,7 @@ class TestRuntimeGatesInvariant:
 
     _REQUIRED_GATE_KEYS = {
         "multicall_success_rate",
+        "data_completeness",
         "unverified_active_routes",
         "qsr",
         "quote_revert_rate",
@@ -100,6 +101,9 @@ class TestRuntimeGatesInvariant:
         rg = art["runtime_gates"]
         assert rg["multicall_success_rate"]["pass"] is True
         assert rg["multicall_success_rate"]["value"] == 1.0
+        # Step 7: data_completeness gate should pass at 100% completeness
+        assert rg["data_completeness"]["pass"] is True
+        assert rg["data_completeness"]["value"] == 1.0
 
     def test_runtime_gates_with_multicall_stats_low_success(self):
         """When multicall_stats shows 70% success rate, gate fails."""
@@ -110,11 +114,14 @@ class TestRuntimeGatesInvariant:
         assert rg["multicall_success_rate"]["pass"] is False
 
     def test_runtime_gates_no_multicall_stats(self):
-        """When multicall_stats=None, multicall_success_rate gate has value=None and pass=False."""
+        """When multicall_stats=None, multicall_success_rate and data_completeness gates have value=None and pass=False."""
         art = build_artifact(**_base_kwargs())
         rg = art["runtime_gates"]
         assert rg["multicall_success_rate"]["value"] is None
         assert rg["multicall_success_rate"]["pass"] is False
+        # Step 7: data_completeness also None / fail without multicall_stats
+        assert rg["data_completeness"]["value"] is None
+        assert rg["data_completeness"]["pass"] is False
 
     def test_runtime_gates_unverified_zero_passes(self):
         """When unverified_active_routes=0, gate passes."""

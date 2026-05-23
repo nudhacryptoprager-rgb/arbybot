@@ -72,8 +72,8 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
       pool          — pool_address of first edge
       pool_path     — ordered list of pool addresses through cycle
       pair          — token path as "A/B/C"
-      market_size_usd — quote size used (from sizes_usd[0])
-      dynamic_size_usd — null (M9.5 router-sim will fill this)
+      market_size_usd — quote size used for the selected row
+      dynamic_size_usd — selected best size when dynamic sizing is enabled
       spread_bps    — gross_bps from quote
       spread_usd    — gross_bps * market_size_usd / 10000
       profit_usd    — gross_usd (gas model not yet implemented)
@@ -99,7 +99,10 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
         "pool_path": pools,
         "pair": pair,
         "market_size_usd": qr.size_usd,
-        "dynamic_size_usd": None,
+        "dynamic_size_usd": qr.dynamic_size_usd,
+        "size_candidates_usd": list(qr.size_candidates_usd or ()),
+        "depth_curve": list(qr.depth_curve or []),
+        "dynamic_size_source": qr.dynamic_size_source,
         "spread_bps": spread_bps,
         "spread_usd": spread_usd,
         "profit_usd": profit_usd,
@@ -392,6 +395,7 @@ def build_artifact(
         "elapsed_s": round(elapsed_s, 1),
         "sweeps_completed": sweeps_completed,
         "duration_fulfilled": elapsed_s >= duration_minutes * 60 * 0.9,
+        "sizes_usd": list(sizes_usd),
         "gate_acceptance": gate_acceptance,
         "strategy_gate_acceptance": strategy_gate_acceptance,
         "execution_mode": execution_mode,
@@ -497,6 +501,12 @@ def build_artifact(
             infra_telemetry["multicall_success_rate"] = round(
                 multicall_stats.get("success", 0) / _mc_attempted, 4
             )
+        # Data completeness: fetched / requested (1.0 = no data lost via failed chunks)
+        _mc_requested = multicall_stats.get("requested_total", 0)
+        if _mc_requested > 0:
+            infra_telemetry["data_completeness"] = round(
+                multicall_stats.get("fetched_total", 0) / _mc_requested, 4
+            )
         # Adaptive split counter (Steps 2+3 GPT fix)
         if multicall_stats.get("subchunk_splits", 0) > 0:
             infra_telemetry["multicall_subchunk_splits"] = multicall_stats["subchunk_splits"]
@@ -511,12 +521,22 @@ def build_artifact(
     # Scheduler name
     if scheduler_name is not None:
         infra_telemetry["scheduler_name"] = scheduler_name
+    _dynamic_results = [qr for qr in cycle_results if qr.dynamic_size_usd is not None]
+    infra_telemetry["dynamic_size_enabled"] = bool(
+        any(qr.size_candidates_usd for qr in cycle_results)
+    )
+    infra_telemetry["dynamic_size_selected_count"] = len(_dynamic_results)
+    if _dynamic_results:
+        infra_telemetry["dynamic_size_selection_rate"] = round(
+            len(_dynamic_results) / max(len(cycle_results), 1), 4
+        )
     # Verified inventory availability (Step 4 GPT fix)
     infra_telemetry["verified_inventory_exists"] = verified_inventory_exists
     artifact["infra_telemetry"] = infra_telemetry
 
     # Runtime gates block (Step 6 GPT fix) — explicit pass/fail for each quality threshold
     _mc_rate = infra_telemetry.get("multicall_success_rate")
+    _dc_val = infra_telemetry.get("data_completeness")
     _unverified = infra_telemetry.get("unverified_active_routes", 0) or 0
     _qsr_val = round(qsr, 4) if isinstance(qsr, float) else 0.0
     _revert_val = quote_revert_rate if isinstance(quote_revert_rate, float) else 0.0
@@ -525,6 +545,11 @@ def build_artifact(
             "value": _mc_rate,
             "threshold": 0.9,
             "pass": bool(_mc_rate is not None and _mc_rate >= 0.9),
+        },
+        "data_completeness": {
+            "value": _dc_val,
+            "threshold": 0.98,
+            "pass": bool(_dc_val is not None and _dc_val >= 0.98),
         },
         "unverified_active_routes": {
             "value": _unverified,

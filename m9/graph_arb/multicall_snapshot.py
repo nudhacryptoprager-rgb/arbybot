@@ -69,6 +69,27 @@ _cumulative_multicall_stats: dict = {
     "subchunk_splits": 0,
 }
 
+# Adaptive chunk scale: EMA of (1 - 429_rate). Range [0.25, 1.0].
+# Reduced proactively when RPC returns many 429s → more first-attempt successes
+# → higher multicall_success_rate (success/attempted).
+_adaptive_chunk_scale: float = 1.0
+
+
+def _update_chunk_scale(attempted: int, http_429: int) -> None:
+    """Update module-level chunk scale as EMA of (1 - 429_rate)."""
+    global _adaptive_chunk_scale
+    try:
+        attempted = int(attempted)
+        http_429 = int(http_429)
+    except (TypeError, ValueError):
+        return  # skip if values are non-numeric (e.g. in tests with MagicMock)
+    if attempted == 0:
+        return
+    rate_429 = min(1.0, http_429 / attempted)
+    # 80% historical weight, 20% latest observation
+    new_scale = _adaptive_chunk_scale * 0.8 + (1.0 - rate_429) * 0.2
+    _adaptive_chunk_scale = max(0.25, min(1.0, new_scale))
+
 
 def get_multicall_stats() -> dict:
     """Return cumulative multicall snapshot stats for this process (copy)."""
@@ -140,7 +161,7 @@ def _batch_fetch(
         return {a.lower(): None for a in pool_addresses}
 
     _block = block_num  # None → web3.py defaults to "latest"
-    batcher = MulticallBatcher(rpc_url=rpc_url, block_num=_block, rpc_limiter=_get_multicall_limiter())
+    batcher = MulticallBatcher(rpc_url=rpc_url, block_num=_block, rpc_limiter=_get_multicall_limiter(), chunk_scale=_adaptive_chunk_scale)
 
     # Two batched calls: slot0 + liquidity
     # slot0 returns (sqrtPriceX96, tick, ...) via MulticallBatcher.batch_slot0()
@@ -187,5 +208,8 @@ def _batch_fetch(
     _fetched = sum(1 for v in output.values() if v is not None)
     _cumulative_multicall_stats["fetched_total"] += _fetched
     _cumulative_multicall_stats["requested_total"] += len(pool_addresses)
+
+    # Update adaptive chunk scale for next snapshot
+    _update_chunk_scale(_bs.get("multicall_attempted", 0), _bs.get("multicall_429", 0))
 
     return output

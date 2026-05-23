@@ -1,6 +1,6 @@
 # Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: INFRA_STABILIZATION — smoke17 run completed (qsr=0.8992 ✅ +12.3%, 0 data loss ✅); GPT-10-fixes validated (adaptive chunking, runtime_gates, 429-adaptive scheduler, verified_inventory tracking, productive-state gate, dashboard infra_quality); 3 stable proof-runs required before M8/M8.1 bridge unlock; 2 gates still fail (multicall_success_rate + unverified_active_routes — structural, not regression).
+**Status**: INFRA_STABILIZATION — smoke19 dynamic-sizes 10-min run + micro-smoke completed (factory-verified, dynamic_size_enabled=true ✅, dynamic_size_selected_count=167 ✅, qsr=0.8544 ✅ PASS, data_completeness=1.0 ✅, unverified_active_routes=0 ✅); GPT-10-steps (all 10) implemented (dynamic sizes engine, depth_curve, ci_m9_productive_gate Step 8 invariant, sizes_usd contract); 1 gate still fails (multicall_success_rate — structural free-tier dRPC).
 
 `goal_status`: IN_PROGRESS
 `schema_family`: m9_graph_arb
@@ -19,15 +19,134 @@
 - Перевірка: `py -3.11 scripts/ci_m9_productive_gate.py` має вертати `EXIT 0`
 - Мінімальні пороги (вбудовані в `runtime_gates`):
   - `multicall_success_rate >= 0.90`
+  - `data_completeness >= 0.98`  ← NEW (Step 7)
   - `unverified_active_routes == 0`
   - `qsr >= 0.80`
   - `quote_revert_rate < 0.05`
 
-Поточний стан (smoke17): `multicall_success_rate=75.61%` (FAIL — free-tier RPC структурне обмеження), `unverified_active_routes=51` (FAIL — потрібен factory-verify).
-`qsr=0.8992` ✅, `quote_revert_rate=0.0` ✅, `fetched_total=requested_total=277` (**0 data loss** ✅).
+Поточний стан (smoke19 dynamic-sizes): `multicall_success_rate=0.8364` (FAIL — free-tier RPC структурне), `qsr=0.8544` ✅ PASS (відновлено! smoke18 мав 0.7953), `data_completeness=1.0` ✅ PASS, `unverified_active_routes=0` ✅, `quote_revert_rate=0.0` ✅, `dynamic_size_enabled=true` ✅, `dynamic_size_selected_count=167` ✅.
 
-Адаптивне дроблення (Step 2+3) реалізовано та ПІДТВЕРДЖЕНО (20 subchunk splits, 0 втрат даних).
-Гейт `all_pass` ще False — потрібен RPC апгрейд (для success_rate) та factory-verify pass (для unverified).
+---
+
+## Smoke19 Results — Dynamic Sizes 10-min Proof Run (2026-05-23) ✅
+
+### Config: raw_http, 1 worker, RPS=3/burst=1, lb.drpc.live free-tier, Base, 10-min, --require-factory-verified --dynamic-sizes --dynamic-size-max-cycles 5 --sizes-usd 100 250 500
+```
+run_timestamp:              smoke19 (elapsed=617.9s, sweeps=37, cycles=371)
+duration_fulfilled:         true   ✅  (617.9s)
+cycles_positive_gross:      0
+scheduler:                  priority
+data_completeness:          1.0    ✅ PASS (threshold=0.98)
+multicall_success_rate:     0.8364  ⚠️ FAIL (<0.90) — structural free-tier
+unverified_active_routes:   0  ✅ PASS
+qsr:                        0.8544  ✅ PASS (was 0.7953 in smoke18 — IMPROVED!)
+quote_revert_rate:          0.0  ✅ PASS
+verified_inventory_exists:  true  ✅
+prequote_cycles_skipped:    369 (0.4986 skip ratio)
+http_429_count:             41
+dynamic_size_enabled:       true  ✅ (GPT Step 3)
+dynamic_size_selected_count: 167  ✅ (GPT Step 3 + Step 8 invariant)
+dynamic_size_selection_rate: 0.4501 (45%)
+sizes_usd:                  [100.0, 250.0, 500.0]  (GPT Step 6 contract)
+runtime_gates.all_pass:     false (1 gate fails: multicall_success_rate)
+```
+
+### Micro-Smoke Results (GPT Step 2 — 5-min, --dynamic-size-max-cycles 3)
+```
+elapsed_s:               311.5s, sweeps=27, cycles=140
+dynamic_size_enabled:    true ✅
+dynamic_size_selected_count: 75  ✅
+qsr:                     0.9071 ✅ PASS (huge improvement vs smoke18 0.7953!)
+http_429_count:          12 (was 43 in smoke18 — 72% reduction with smaller sizes!)
+multicall_success_rate:  0.8571 ⚠️ FAIL (structural)
+data_completeness:       0.9908 ✅ PASS
+depth_curve:             present in top_opportunities ✅ (GPT Step 3)
+```
+
+### GPT 10 Steps — Dynamic Sizes Implementation (2026-05-23)
+- ✅ Step 1: M8/M8.1 bridge locked (productive gate enforces)
+- ✅ Step 2: micro-smoke з --dynamic-sizes --dynamic-size-max-cycles 3 --sizes-usd 100 250 500
+- ✅ Step 3: artifact fields verified: dynamic_size_enabled, dynamic_size_selected_count, depth_curve
+- ✅ Step 4: QSR/429 no regression — qsr 0.7953→0.8544 IMPROVED, 429: 43→41 ≈ same
+- ✅ Step 5: 10-min smoke19 з --dynamic-size-max-cycles 5 (completed, 617.9s)
+- ✅ Step 6: sizes_usd contract — ЗАВЖДИ --sizes-usd 100 250 500 явно (не default 1000/5000/10000)
+- ✅ Step 7: dynamic sizes тільки після prequote shortlist (підтверджено в runner.py: schedule_cycle_quotes(batch, ...))
+- ✅ Step 8: gate/invariant в ci_m9_productive_gate.py: if dynamic_size_enabled, dynamic_size_selected_count > 0
+- ✅ Step 9: market_size_usd vs dynamic_size_usd — обидва в artifact; рівні коли встановлені; 100 USD оптимально для тонкого ринку
+- ✅ Step 10: docs оновлені (цей блок)
+
+### Smoke18 vs Smoke19 (dynamic-sizes) порівняння
+| Метрика | smoke18 | micro-smoke (dyn3) | smoke19 (dyn5) | Δ (18→19) |
+|---------|---------|-------------------|----------------|----------|
+| qsr | 0.7953 ❌ | **0.9071** ✅ | **0.8544** ✅ | **+7.4%** ✅ |
+| data_completeness | 0.9993 ✅ | 0.9908 ✅ | **1.0** ✅ | **+0.07%** ✅ |
+| multicall_success_rate | 0.8851 ⚠️ | 0.8571 ⚠️ | 0.8364 ⚠️ | -5.5% (structural) |
+| http_429_count | 43 | **12** | 41 | ≈ same |
+| unverified_active_routes | 0 ✅ | 0 ✅ | 0 ✅ | = |
+| dynamic_size_enabled | N/A | **true** ✅ | **true** ✅ | NEW |
+| dynamic_size_selected_count | N/A | **75** ✅ | **167** ✅ | NEW |
+
+### Активні блокери після smoke19
+1. **multicall_success_rate=0.8364 < 0.90**: структурне — free-tier dRPC; потрібен RPC апгрейд або paid tier
+
+### Досягнені цілі (всі 10 GPT кроків + dynamic sizes)
+- ✅ Всі 10 GPT steps виконані
+- ✅ Dynamic sizes engine: quoter.py + artifacts.py + runner.py
+- ✅ Gate invariant: ci_m9_productive_gate.py Step 8
+- ✅ sizes_usd contract: завжди явний CLI параметр
+- ✅ Factory-verified inventory: 119 active, unverified=0
+
+---
+
+## Smoke18 Results — Factory-Verified 10-min Proof Run (2026-05-23) ✅
+
+### Config: raw_http, 1 worker, RPS=3/burst=1, lb.drpc.live free-tier, Base, 10-min, --require-factory-verified
+```
+run_timestamp:              smoke18 (elapsed=611.6s)
+duration_fulfilled:         true   ✅  (611.6s / 62 sweeps / 430 cycles)
+qsr:                        0.7953  ❌ FAIL (<0.80; was 0.8992 in smoke17)
+cycles_positive_gross:      0
+scheduler:                  priority
+fetched_total:              1395 / requested_total=1396  (data_completeness=0.9993)
+subchunk_splits:            15  (adaptive chunking active)
+multicall_success_rate:     0.8851  ⚠️ FAIL (<0.90) — +12.9% vs smoke17
+data_completeness:          0.9993  ✅ PASS (new gate, threshold=0.98)
+unverified_active_routes:   0  ✅ PASS (was 51 in smoke17 — FIXED!)
+quote_revert_rate:          0.0  ✅ PASS
+verified_inventory_exists:  true  ✅ (was False in smoke17)
+prequote_cycles_skipped:    810 (0.6532 skip ratio)
+runtime_gates.all_pass:     false (2 gates fail)
+```
+
+### Pool Verifier Results (передумова smoke18, 2026-05-23)
+```
+active_routes:      119 (all factory_verified=True) ✅
+quarantined_routes: 357
+reject histogram:   pool_not_found=300, low_liquidity=54, rpc_error=3
+```
+
+### Smoke17 vs Smoke18 порівняння
+| Метрика | smoke17 (після GPT-10) | smoke18 (після Steps 5/7/8/9) | Δ |
+|---------|------------------------|-------------------------------|---|
+| unverified_active_routes | 51 ❌ | **0** ✅ | **FIXED** 🎯 |
+| verified_inventory_exists | False ❌ | **True** ✅ | **FIXED** 🎯 |
+| data_completeness | N/A | **0.9993** ✅ | **NEW** ✅ |
+| multicall_success_rate | 0.7561 ⚠️ | 0.8851 ⚠️ | **+12.9%** ✅ |
+| qsr | 0.8992 ✅ | 0.7953 ❌ | -10.4% (quota) |
+| quote_revert_rate | 0.0 ✅ | 0.0 ✅ | = |
+| subchunk_splits | 20 | 15 | -25% ✅ |
+
+### Активні блокери після smoke18
+1. **multicall_success_rate=0.8851 < 0.90**: структурне — free-tier dRPC; потрібен RPC апгрейд
+2. **qsr=0.7953 < 0.80**: quota exhaustion near end of run; повторний прогін у свіжу годину
+
+### Досягнені цілі Steps 5/7/8/9 + pool_verifier
+- ✅ Step 5: runner hard-fail для missing verified inventory
+- ✅ Step 7: `data_completeness` gate (fetched/requested, threshold=0.98)
+- ✅ Step 8: `_write_reject_histogram()` → окремий JSON файл
+- ✅ Step 9: adaptive chunk scale EMA (0.25–1.0) в multicall_snapshot + Multicall3
+- ✅ pool_verifier: 119 active, 357 quarantined
+- ✅ `test_m9_invariants.py` (5871 passed, 6 skipped)
 
 ---
 
@@ -39,51 +158,28 @@ run_timestamp:              smoke17 (generated_at_utc=2026-05-23T13:46:04Z)
 duration_fulfilled:         true   ✅  (626.6s / 21 sweeps / 367 cycles)
 qsr:                        0.8992 ✅  (was 0.8003 in smoke16, +12.3%)
 cycles_positive_gross:      0
-scheduler:                  priority
 fetched_total:              277 = requested_total=277  ✅ (0 data loss!)
 subchunk_splits:            20  (adaptive chunking active)
 multicall_success_rate:     0.7561  ⚠️ FAIL (<0.90)
 unverified_active_routes:   51  ❌ FAIL (>0)
 quote_revert_rate:          0.0 ✅
 verified_inventory_exists:  false
-prequote_cycles_skipped:    53 (adaptive prequote active)
+prequote_cycles_skipped:    53
 runtime_gates.all_pass:     false (2 gates fail)
 ```
 
-### Smoke16 vs Smoke17 порівняння
 | Метрика | smoke16 (до GPT-10) | smoke17 (після GPT-10) | Δ |
 |---------|--------------------|------------------------|---|
 | qsr | 0.8003 | **0.8992** | **+12.3%** ✅ |
 | multicall_success_rate | 0.7097 | 0.7561 | +6.5% ⚠️ |
+| fetched_total / requested_total | 210/411 | 277/277 | **0 data loss** 🎯 |
 | http_429_count | 78 | 60 | -23% ✅ |
-| retry_count | 60 | 40 | -33% ✅ |
 | subchunk_splits | N/A | 20 | NEW ✅ |
-| **fetched_total** | **210** | **277** | +32% ✅ |
-| **requested_total** | **411** | **277** | `fetched=requested` ✅ |
-| **data_loss** | **201 calls** | **0 calls** | **-100%** 🎯 |
 | unverified_active_routes | 51 | 51 | = (needs factory-verify) |
-
-### Активні блокери після smoke17
-1. **multicall_success_rate=0.7561 < 0.90**: структурне — free-tier RPC (3 RPS) генерує 429-и; потрібен RPC апгрейд або перегляд threshold
-2. **unverified_active_routes=51**: потрібен factory verification pass (створити `data/tmp/m9_verified_inventory.json`)
-
-### Досягнені цілі GPT-10 фіксів
-- ✅ Adaptive subchunk splitting (`_try_chunk_adaptive`) — 0 data loss
-- ✅ `runtime_gates` блок в артефакті
-- ✅ `infra_quality` блок в dashboard (`schema_revision=m9_dashboard.2`)
-- ✅ `verified_inventory_exists` поле
-- ✅ `ci_m9_productive_gate.py` — новий CI gate скрипт
-- ✅ `prequote_cycles_skipped` + адаптивний scheduler
-- ✅ `test_m9_invariants.py` (18 тестів)
-- ✅ `config/soak_30m_base.yaml` + `config/soak_60m_base.yaml`
 
 ---
 
 ## Smoke13 Results — ABI Bug Fixes Validated; Quote Engine Breakthrough (10-min run, 2026-05-23)
-
-### Config: raw_http, 1 worker, RPS=3/burst=1, dRPC free-tier, Base, 10-min
-```
-run_timestamp:         smoke13 (2026-05-23T10:19–10:29 UTC)
 duration_fulfilled:    true   ✅  (617.5s / 63 sweeps)
 cycles_quoted_total:   1260
 cycles_quoteable:      338    ✅  (all legs quoted, up from 1 in smoke12!)

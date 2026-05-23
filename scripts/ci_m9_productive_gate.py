@@ -67,6 +67,16 @@ def run_gate(artifact_path: Path) -> int:
                     t = val.get("threshold")
                     issues.append(f"runtime_gates.{key}: FAIL (value={v}, threshold={t})")
 
+    # GPT Step 8 invariant: if dynamic_size_enabled=True, dynamic_size_selected_count must be > 0
+    it = art.get("infra_telemetry") or {}
+    if it.get("dynamic_size_enabled"):
+        dsc = it.get("dynamic_size_selected_count", 0)
+        if dsc == 0:
+            issues.append(
+                "dynamic_size_enabled=True but dynamic_size_selected_count=0 "
+                "(no successful dynamic-size quotes; all dynamic cycles may have failed)"
+            )
+
     if issues:
         print("FAIL — M9 productive-state gate:", flush=True)
         for issue in issues:
@@ -84,12 +94,20 @@ def run_gate(artifact_path: Path) -> int:
     mc_rate = (art.get("infra_telemetry") or {}).get("multicall_success_rate")
     qsr = art.get("qsr")
     sweeps = art.get("sweeps_completed", "?")
+    dyn_enabled = it.get("dynamic_size_enabled", False)
+    dyn_count = it.get("dynamic_size_selected_count", 0)
+    dyn_rate = it.get("dynamic_size_selection_rate")
+    dyn_info = (
+        f"  dynamic_size_enabled={dyn_enabled}, selected_count={dyn_count}"
+        + (f", selection_rate={dyn_rate}" if dyn_rate is not None else "")
+    )
     print(
         f"PASS — M9 productive-state gate\n"
         f"  multicall_success_rate={mc_rate}\n"
         f"  qsr={qsr}\n"
         f"  sweeps={sweeps}\n"
-        f"  runtime_gates.all_pass=True",
+        f"  runtime_gates.all_pass=True\n"
+        f"{dyn_info}",
         flush=True,
     )
     return EXIT_PASS

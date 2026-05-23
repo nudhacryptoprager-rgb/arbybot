@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,10 @@ class CycleQuoteResult:
     reject_reason: Optional[str]
     leg_results: list  # List of per-leg QuoteResult
     elapsed_s: float
+    dynamic_size_usd: Optional[float] = None
+    size_candidates_usd: tuple = ()
+    depth_curve: Optional[List[Dict[str, Any]]] = None
+    dynamic_size_source: Optional[str] = None
 
 
 @dataclass

@@ -213,6 +213,87 @@ def test_schedule_cycle_quotes_accepts_backend_params():
     assert "max_workers" in params
     assert "quote_backend" in params
     assert "rpc_url" in params
+    assert "dynamic_sizes" in params
+    assert "dynamic_size_limit" in params
+
+
+def test_schedule_cycle_quotes_dynamic_sizes_selects_best(monkeypatch):
+    """Opt-in dynamic sizing must return the best gross_bps quote by size."""
+    from unittest.mock import MagicMock
+    from m9.graph_arb.models import CycleQuoteResult
+    from m9.graph_arb import quoter
+
+    cycle = MagicMock()
+    cycle.edges = []
+
+    def _fake_quote_cycle_sync(cycle_arg, size_usd, *_args, **_kwargs):
+        gross_by_size = {100.0: -5.0, 250.0: 12.0, 500.0: 8.0}
+        gross = gross_by_size[float(size_usd)]
+        return CycleQuoteResult(
+            cycle=cycle_arg,
+            size_usd=float(size_usd),
+            amount_in=int(size_usd),
+            amount_out=int(size_usd),
+            gross_bps=gross,
+            status="POSITIVE_GROSS" if gross > 0 else "NEGATIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.01,
+        )
+
+    monkeypatch.setattr(quoter, "quote_cycle_sync", _fake_quote_cycle_sync)
+    results = quoter.schedule_cycle_quotes(
+        [cycle],
+        w3=None,
+        sizes_usd=(100.0, 250.0, 500.0),
+        max_workers=1,
+        dynamic_sizes=True,
+    )
+    assert len(results) == 1
+    result = results[0]
+    assert result.size_usd == 250.0
+    assert result.dynamic_size_usd == 250.0
+    assert result.size_candidates_usd == (100.0, 250.0, 500.0)
+    assert result.depth_curve is not None
+    assert [row["size_usd"] for row in result.depth_curve] == [100.0, 250.0, 500.0]
+    assert result.dynamic_size_source == "multi_size_quote"
+
+
+def test_schedule_cycle_quotes_dynamic_size_limit(monkeypatch):
+    """Only the prioritized prefix should consume multi-size RPC budget."""
+    from unittest.mock import MagicMock
+    from m9.graph_arb.models import CycleQuoteResult
+    from m9.graph_arb import quoter
+
+    cycles = [MagicMock(), MagicMock(), MagicMock()]
+
+    def _fake_quote_cycle_sync(cycle_arg, size_usd, *_args, **_kwargs):
+        return CycleQuoteResult(
+            cycle=cycle_arg,
+            size_usd=float(size_usd),
+            amount_in=int(size_usd),
+            amount_out=int(size_usd),
+            gross_bps=1.0,
+            status="POSITIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.01,
+        )
+
+    monkeypatch.setattr(quoter, "quote_cycle_sync", _fake_quote_cycle_sync)
+    results = quoter.schedule_cycle_quotes(
+        cycles,
+        w3=None,
+        sizes_usd=(100.0, 250.0),
+        max_workers=1,
+        dynamic_sizes=True,
+        dynamic_size_limit=1,
+    )
+    assert results[0].dynamic_size_usd == 100.0
+    assert results[0].size_candidates_usd == (100.0, 250.0)
+    assert results[1].dynamic_size_usd is None
+    assert results[1].size_candidates_usd == ()
+    assert results[2].dynamic_size_usd is None
 
 
 # ---------------------------------------------------------------------------

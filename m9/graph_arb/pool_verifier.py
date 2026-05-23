@@ -595,11 +595,57 @@ def write_verified_inventory(
         _t.sleep(0.5)
         os.replace(tmp, str(path))
 
+    # Write separate reject histogram for quick CI and monitoring access
+    _write_reject_histogram(quarantined, output_path)
+
     logger.info(
         "pool_verifier: verified inventory written to %s "
         "(%d active, %d quarantined)",
         output_path, len(active), len(quarantined),
     )
+
+
+def _write_reject_histogram(
+    quarantined: List[Dict[str, Any]],
+    output_path: str,
+) -> None:
+    """Write a reject histogram JSON alongside the verified inventory.
+
+    Maps canonical reason names (FACTORY_RPC_ERROR etc.) and normalized aliases
+    (rpc_error, pool_not_found, low_liquidity, missing_factory, token_mismatch)
+    into a standalone file for CI and monitoring.
+    """
+    _REASON_ALIASES: Dict[str, str] = {
+        "FACTORY_RPC_ERROR": "rpc_error",
+        "FACTORY_NO_POOL": "pool_not_found",
+        "POOL_ZERO_LIQUIDITY": "low_liquidity",
+        "MISSING_FACTORY_ADDRESS": "missing_factory",
+        "MISSING_TOKEN_ADDRESS": "token_mismatch",
+        "FEE_MISMATCH": "fee_mismatch",
+    }
+    histogram = _count_quarantine_reasons(quarantined)
+    normalized: Dict[str, int] = {}
+    for raw_reason, count in histogram.items():
+        key = _REASON_ALIASES.get(raw_reason, raw_reason.lower())
+        normalized[key] = normalized.get(key, 0) + count
+
+    payload = {
+        "schema_version": "m9_verifier_reject_histogram.1",
+        "generated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+        "quarantined_count": len(quarantined),
+        "histogram": histogram,
+        "histogram_normalized": normalized,
+    }
+
+    hist_path = Path(output_path).parent / "m9_verifier_reject_histogram.json"
+    tmp = str(hist_path) + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        os.replace(tmp, str(hist_path))
+        logger.info("pool_verifier: reject histogram written to %s", hist_path)
+    except Exception as exc:
+        logger.warning("pool_verifier: failed to write reject histogram: %s", exc)
 
 
 def _count_quarantine_reasons(quarantined: List[Dict[str, Any]]) -> Dict[str, int]:

@@ -245,6 +245,62 @@ def quote_cycle_sync(
     )
 
 
+def quote_cycle_dynamic_sync(
+    cycle: GraphCycle,
+    sizes_usd: "tuple[float, ...]",
+    w3: Any,
+    token_price_usd: Optional[Dict[str, float]] = None,
+    timeout_s: float = 10.0,
+    quote_backend: str = BACKEND_DIRECT_HTTP,
+    rpc_url: Optional[str] = None,
+) -> CycleQuoteResult:
+    """Quote a cycle across a bounded USD ladder and select the best size.
+
+    This is opt-in because each extra size can add RPC pressure.  The selected
+    result is the quoteable size with the highest gross_bps.  If no size is
+    quoteable, return the first failed quote with the depth_curve attached.
+    """
+    candidates = tuple(float(s) for s in sizes_usd if float(s) > 0)
+    if not candidates:
+        candidates = (1000.0,)
+
+    results: List[CycleQuoteResult] = []
+    depth_curve: List[Dict[str, Any]] = []
+    per_size_timeout = max(timeout_s / max(len(candidates), 1), 1.0)
+
+    for size_usd in candidates:
+        result = quote_cycle_sync(
+            cycle,
+            size_usd,
+            w3,
+            token_price_usd,
+            per_size_timeout,
+            quote_backend,
+            rpc_url,
+        )
+        results.append(result)
+        depth_curve.append(
+            {
+                "size_usd": size_usd,
+                "gross_bps": round(result.gross_bps, 6),
+                "status": result.status,
+                "reject_reason": result.reject_reason,
+                "profit_usd": round(size_usd * result.gross_bps / 10000.0, 6),
+            }
+        )
+
+    quoteable = [
+        r for r in results
+        if r.status in (STATUS_POSITIVE_GROSS, STATUS_NEGATIVE_GROSS)
+    ]
+    selected = max(quoteable, key=lambda r: r.gross_bps) if quoteable else results[0]
+    selected.dynamic_size_usd = selected.size_usd if quoteable else None
+    selected.size_candidates_usd = candidates
+    selected.depth_curve = depth_curve
+    selected.dynamic_size_source = "multi_size_quote" if quoteable else "multi_size_no_quoteable"
+    return selected
+
+
 async def quote_cycle_async(
     cycle: GraphCycle,
     size_usd: float,
@@ -267,6 +323,8 @@ def schedule_cycle_quotes(
     timeout_s: float = 10.0,
     quote_backend: str = BACKEND_DIRECT_HTTP,
     rpc_url: Optional[str] = None,
+    dynamic_sizes: bool = False,
+    dynamic_size_limit: Optional[int] = None,
 ) -> List[CycleQuoteResult]:
     """Quote all cycles in parallel using ThreadPoolExecutor.
 
@@ -278,14 +336,32 @@ def schedule_cycle_quotes(
     """
     results: List[CycleQuoteResult] = []
     size_usd = sizes_usd[0] if sizes_usd else 1000.0
+    dynamic_limit = (
+        len(cycles)
+        if dynamic_sizes and dynamic_size_limit is None
+        else max(int(dynamic_size_limit or 0), 0)
+    )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = []
+        for i, cycle in enumerate(cycles):
+            if dynamic_sizes and i < dynamic_limit:
+                futures.append(
+                    pool.submit(
+                        quote_cycle_dynamic_sync, cycle, tuple(sizes_usd), w3,
+                        token_prices, timeout_s, quote_backend, rpc_url,
+                    )
+                )
+            else:
+                futures.append(
+                    pool.submit(
+                        quote_cycle_sync, cycle, size_usd, w3, token_prices,
+                        timeout_s, quote_backend, rpc_url,
+                    )
+                )
         futures = [
-            pool.submit(
-                quote_cycle_sync, cycle, size_usd, w3, token_prices, timeout_s,
-                quote_backend, rpc_url,
-            )
-            for cycle in cycles
+            future
+            for future in futures
         ]
         for i, future in enumerate(futures):
             try:
