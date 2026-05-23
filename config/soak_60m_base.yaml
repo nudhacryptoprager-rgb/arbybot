@@ -1,0 +1,15 @@
+# Soak profile 60 minutes — Base chain (Step 7 GPT fix)
+# Use: py -3.11 -m m9.graph_arb.runner --chain base --config config/soak_60m_base.yaml
+# Same acceptance thresholds as exotic_base_anchor.yaml; only duration differs.
+# Extends exotic_base_anchor.yaml (same DEXes, same tokens, same config_path logic).
+extends: "config/exotic_base_anchor.yaml"
+
+# Override: 60-minute soak duration
+duration_minutes: 60
+
+# Acceptance thresholds (must match exotic_base_anchor.yaml — do not loosen)
+acceptance:
+  min_qsr: 0.80
+  max_quote_revert_rate: 0.05
+  min_multicall_success_rate: 0.90
+  max_unverified_active_routes: 0

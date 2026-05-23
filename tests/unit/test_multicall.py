@@ -339,7 +339,8 @@ class TestMulticallBackoffStats:
     def test_backoff_stats_in_init(self):
         """Backoff stats are initialised to 0 in new batcher."""
         batcher = MulticallBatcher("http://localhost:8545", 12345)
-        for key in ("multicall_attempted", "multicall_success", "multicall_429", "multicall_retry_count"):
+        for key in ("multicall_attempted", "multicall_success", "multicall_429",
+                    "multicall_retry_count", "multicall_subchunk_splits"):
             assert key in batcher.stats, f"Missing stat: {key}"
             assert batcher.stats[key] == 0
 
@@ -370,3 +371,15 @@ class TestMulticallBackoffStats:
         # _ensure_web3 returns False → returns None without calling limiter
         assert result is None
         mock_limiter.acquire.assert_not_called()
+
+    def test_subchunk_splits_in_init(self):
+        """multicall_subchunk_splits starts at 0."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        assert batcher.stats["multicall_subchunk_splits"] == 0
+
+    def test_subchunk_splits_in_get_stats(self):
+        """get_stats() surfaces multicall_subchunk_splits."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        batcher.stats["multicall_subchunk_splits"] = 3
+        stats = batcher.get_stats()
+        assert stats["multicall_subchunk_splits"] == 3

@@ -201,6 +201,8 @@ def build_artifact(
     prequote_cycles_skipped: int = 0,
     # Scheduler name for telemetry (Step 7 GPT fix)
     scheduler_name: Optional[str] = None,
+    # Verified inventory present flag (Step 4 GPT fix)
+    verified_inventory_exists: bool = False,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -495,6 +497,9 @@ def build_artifact(
             infra_telemetry["multicall_success_rate"] = round(
                 multicall_stats.get("success", 0) / _mc_attempted, 4
             )
+        # Adaptive split counter (Steps 2+3 GPT fix)
+        if multicall_stats.get("subchunk_splits", 0) > 0:
+            infra_telemetry["multicall_subchunk_splits"] = multicall_stats["subchunk_splits"]
     # Prequote funnel skip metrics
     if prequote_cycles_skipped > 0:
         infra_telemetry["prequote_cycles_skipped"] = prequote_cycles_skipped
@@ -506,7 +511,41 @@ def build_artifact(
     # Scheduler name
     if scheduler_name is not None:
         infra_telemetry["scheduler_name"] = scheduler_name
+    # Verified inventory availability (Step 4 GPT fix)
+    infra_telemetry["verified_inventory_exists"] = verified_inventory_exists
     artifact["infra_telemetry"] = infra_telemetry
+
+    # Runtime gates block (Step 6 GPT fix) — explicit pass/fail for each quality threshold
+    _mc_rate = infra_telemetry.get("multicall_success_rate")
+    _unverified = infra_telemetry.get("unverified_active_routes", 0) or 0
+    _qsr_val = round(qsr, 4) if isinstance(qsr, float) else 0.0
+    _revert_val = quote_revert_rate if isinstance(quote_revert_rate, float) else 0.0
+    runtime_gates: Dict[str, Any] = {
+        "multicall_success_rate": {
+            "value": _mc_rate,
+            "threshold": 0.9,
+            "pass": bool(_mc_rate is not None and _mc_rate >= 0.9),
+        },
+        "unverified_active_routes": {
+            "value": _unverified,
+            "threshold": 0,
+            "pass": _unverified == 0,
+        },
+        "qsr": {
+            "value": _qsr_val,
+            "threshold": 0.8,
+            "pass": _qsr_val >= 0.8,
+        },
+        "quote_revert_rate": {
+            "value": _revert_val,
+            "threshold": 0.05,
+            "pass": _revert_val < 0.05,
+        },
+    }
+    runtime_gates["all_pass"] = all(
+        v["pass"] for v in runtime_gates.values() if isinstance(v, dict) and "pass" in v
+    )
+    artifact["runtime_gates"] = runtime_gates
 
     return artifact
 

@@ -369,6 +369,9 @@ ALLOWED_YAML_FILES = {
     "enricher.yaml",
     # M9 Graph-Arb — exotic pairs config for Base chain (builder.py default)
     "exotic_base_anchor.yaml",
+    # M9 soak profiles (Step 7 GPT fix)
+    "soak_30m_base.yaml",
+    "soak_60m_base.yaml",
 }
 
 

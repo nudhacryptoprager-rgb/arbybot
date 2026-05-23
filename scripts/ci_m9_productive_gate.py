@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""ci_m9_productive_gate.py — M9 productive-state lock gate (Step 1 GPT fix).
+
+Reads data/runs/_rolling/m9_graph_latest.json and verifies that all runtime
+quality gates pass.  Until all gates pass, the M8/M8.1→M9 bridge remains
+locked (M9_INFRA_STABILIZATION_BEFORE_M8_BRIDGE policy).
+
+Exit codes:
+  0 — PASS: all runtime_gates pass, duration_fulfilled=True
+  1 — FAIL: one or more gates failed (details printed to stdout)
+  2 — MISSING: artifact does not exist or is unreadable
+
+Usage:
+  py -3.11 scripts/ci_m9_productive_gate.py
+  py -3.11 scripts/ci_m9_productive_gate.py --artifact path/to/m9_graph.json
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+_DEFAULT_ARTIFACT = Path("data/runs/_rolling/m9_graph_latest.json")
+
+EXIT_PASS = 0
+EXIT_FAIL = 1
+EXIT_MISSING = 2
+
+
+def _load_artifact(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def run_gate(artifact_path: Path) -> int:
+    art = _load_artifact(artifact_path)
+    if art is None:
+        print(f"MISSING: artifact not found or unreadable: {artifact_path}", flush=True)
+        return EXIT_MISSING
+
+    issues: list[str] = []
+
+    # Check duration_fulfilled
+    if not art.get("duration_fulfilled"):
+        elapsed = art.get("elapsed_s", 0)
+        dur_s = (art.get("requested_duration_minutes") or art.get("duration_minutes") or 0) * 60
+        issues.append(
+            f"duration_fulfilled=False (elapsed={elapsed:.0f}s / target={dur_s:.0f}s)"
+        )
+
+    # Check runtime_gates
+    rg = art.get("runtime_gates") or {}
+    if not rg:
+        issues.append("runtime_gates block missing from artifact")
+    else:
+        if rg.get("all_pass") is not True:
+            for key, val in rg.items():
+                if isinstance(val, dict) and not val.get("pass"):
+                    v = val.get("value")
+                    t = val.get("threshold")
+                    issues.append(f"runtime_gates.{key}: FAIL (value={v}, threshold={t})")
+
+    if issues:
+        print("FAIL — M9 productive-state gate:", flush=True)
+        for issue in issues:
+            print(f"  ! {issue}", flush=True)
+        print("", flush=True)
+        print(
+            "Policy: M8/M8.1→M9 bridge is locked until all runtime_gates pass.\n"
+            "Run smoke soak to verify: py -3.11 -m m9.graph_arb.runner --chain base "
+            "--config config/exotic_base_anchor.yaml --duration-minutes 15",
+            flush=True,
+        )
+        return EXIT_FAIL
+
+    # PASS
+    mc_rate = (art.get("infra_telemetry") or {}).get("multicall_success_rate")
+    qsr = art.get("qsr")
+    sweeps = art.get("sweeps_completed", "?")
+    print(
+        f"PASS — M9 productive-state gate\n"
+        f"  multicall_success_rate={mc_rate}\n"
+        f"  qsr={qsr}\n"
+        f"  sweeps={sweeps}\n"
+        f"  runtime_gates.all_pass=True",
+        flush=True,
+    )
+    return EXIT_PASS
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--artifact",
+        type=Path,
+        default=_DEFAULT_ARTIFACT,
+        help="Path to m9_graph_latest.json (default: data/runs/_rolling/m9_graph_latest.json)",
+    )
+    args = parser.parse_args()
+    sys.exit(run_gate(args.artifact))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,6 +1,6 @@
 # Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: QUOTE_ENGINE_VALIDATED — 4 ABI/encoding bugs fixed; QSR breakthrough confirmed (0.0056→0.268, ×48 improvement); quote_revert_rate dropped from 37.7% to 0.0%; 338 cycles fully quoted in 10-min smoke13; no profitable arb found at this time (market efficient); next action: upgrade RPC tier to eliminate 429s (currently 73% of cycles blocked by rate limiting) and expand cycle universe.
+**Status**: INFRA_STABILIZATION — smoke17 run completed (qsr=0.8992 ✅ +12.3%, 0 data loss ✅); GPT-10-fixes validated (adaptive chunking, runtime_gates, 429-adaptive scheduler, verified_inventory tracking, productive-state gate, dashboard infra_quality); 3 stable proof-runs required before M8/M8.1 bridge unlock; 2 gates still fail (multicall_success_rate + unverified_active_routes — structural, not regression).
 
 `goal_status`: IN_PROGRESS
 `schema_family`: m9_graph_arb
@@ -8,6 +8,76 @@
 `execution_enabled`: false
 `kill_switch_active`: true
 `execution_mode`: paper
+
+---
+
+## Policy: M9_INFRA_STABILIZATION_BEFORE_M8_BRIDGE
+
+**Transition до M8/M8.1 інтеграції заморожено до стабільних proof-runs:**
+
+- `runtime_gates.all_pass == True` в **3 consecutive** proof-runs (15+ хвилин кожен)
+- Перевірка: `py -3.11 scripts/ci_m9_productive_gate.py` має вертати `EXIT 0`
+- Мінімальні пороги (вбудовані в `runtime_gates`):
+  - `multicall_success_rate >= 0.90`
+  - `unverified_active_routes == 0`
+  - `qsr >= 0.80`
+  - `quote_revert_rate < 0.05`
+
+Поточний стан (smoke17): `multicall_success_rate=75.61%` (FAIL — free-tier RPC структурне обмеження), `unverified_active_routes=51` (FAIL — потрібен factory-verify).
+`qsr=0.8992` ✅, `quote_revert_rate=0.0` ✅, `fetched_total=requested_total=277` (**0 data loss** ✅).
+
+Адаптивне дроблення (Step 2+3) реалізовано та ПІДТВЕРДЖЕНО (20 subchunk splits, 0 втрат даних).
+Гейт `all_pass` ще False — потрібен RPC апгрейд (для success_rate) та factory-verify pass (для unverified).
+
+---
+
+## Smoke17 Results — GPT-10-Fixes Validated (10-min proof run, 2026-05-23) ✅
+
+### Config: raw_http, 1 worker, RPS=3/burst=1, lb.drpc.live free-tier, Base, 10-min
+```
+run_timestamp:              smoke17 (generated_at_utc=2026-05-23T13:46:04Z)
+duration_fulfilled:         true   ✅  (626.6s / 21 sweeps / 367 cycles)
+qsr:                        0.8992 ✅  (was 0.8003 in smoke16, +12.3%)
+cycles_positive_gross:      0
+scheduler:                  priority
+fetched_total:              277 = requested_total=277  ✅ (0 data loss!)
+subchunk_splits:            20  (adaptive chunking active)
+multicall_success_rate:     0.7561  ⚠️ FAIL (<0.90)
+unverified_active_routes:   51  ❌ FAIL (>0)
+quote_revert_rate:          0.0 ✅
+verified_inventory_exists:  false
+prequote_cycles_skipped:    53 (adaptive prequote active)
+runtime_gates.all_pass:     false (2 gates fail)
+```
+
+### Smoke16 vs Smoke17 порівняння
+| Метрика | smoke16 (до GPT-10) | smoke17 (після GPT-10) | Δ |
+|---------|--------------------|------------------------|---|
+| qsr | 0.8003 | **0.8992** | **+12.3%** ✅ |
+| multicall_success_rate | 0.7097 | 0.7561 | +6.5% ⚠️ |
+| http_429_count | 78 | 60 | -23% ✅ |
+| retry_count | 60 | 40 | -33% ✅ |
+| subchunk_splits | N/A | 20 | NEW ✅ |
+| **fetched_total** | **210** | **277** | +32% ✅ |
+| **requested_total** | **411** | **277** | `fetched=requested` ✅ |
+| **data_loss** | **201 calls** | **0 calls** | **-100%** 🎯 |
+| unverified_active_routes | 51 | 51 | = (needs factory-verify) |
+
+### Активні блокери після smoke17
+1. **multicall_success_rate=0.7561 < 0.90**: структурне — free-tier RPC (3 RPS) генерує 429-и; потрібен RPC апгрейд або перегляд threshold
+2. **unverified_active_routes=51**: потрібен factory verification pass (створити `data/tmp/m9_verified_inventory.json`)
+
+### Досягнені цілі GPT-10 фіксів
+- ✅ Adaptive subchunk splitting (`_try_chunk_adaptive`) — 0 data loss
+- ✅ `runtime_gates` блок в артефакті
+- ✅ `infra_quality` блок в dashboard (`schema_revision=m9_dashboard.2`)
+- ✅ `verified_inventory_exists` поле
+- ✅ `ci_m9_productive_gate.py` — новий CI gate скрипт
+- ✅ `prequote_cycles_skipped` + адаптивний scheduler
+- ✅ `test_m9_invariants.py` (18 тестів)
+- ✅ `config/soak_30m_base.yaml` + `config/soak_60m_base.yaml`
+
+---
 
 ## Smoke13 Results — ABI Bug Fixes Validated; Quote Engine Breakthrough (10-min run, 2026-05-23)
 

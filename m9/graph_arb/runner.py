@@ -398,6 +398,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # pool_verifier.py (py -3.11 -m m9.graph_arb.pool_verifier ...) and only contains
     # routes confirmed on-chain via factory.getPool().
     _VERIFIED_INVENTORY = "data/tmp/m9_verified_inventory.json"
+    _verified_inventory_exists: bool = os.path.exists(_VERIFIED_INVENTORY)
     if getattr(args, "require_factory_verified", False) and args.inventory is None:
         if os.path.exists(_VERIFIED_INVENTORY):
             args.inventory = _VERIFIED_INVENTORY
@@ -607,6 +608,17 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         _get_multicall_stats = lambda: None  # type: ignore[assignment]
 
     _total_prequote_skipped = 0
+    # Step 9 (GPT fix): 429-adaptive prequote threshold.
+    # When multicall 429 rate spikes (>=10 per sweep), raise _prequote_min_bps to shed load.
+    # After 5 stable sweeps (delta_429 < 5 each), relax back toward original value.
+    _prequote_min_bps_orig = _prequote_min_bps
+    _prev_mc_429: int = 0
+    _stable_sweep_count: int = 0
+    _ADAPT_SPIKE_THRESHOLD = 10  # 429s per sweep that triggers tightening
+    _ADAPT_STABLE_THRESHOLD = 5  # 429s per sweep to count as "stable"
+    _ADAPT_STABLE_WINDOW = 5     # consecutive stable sweeps before relaxing
+    _ADAPT_STEP_UP = 50.0        # bps increase on spike
+    _ADAPT_STEP_DOWN = 25.0      # bps decrease on stable window
 
     while time.monotonic() < deadline:
         if _cycle_scheduler is not None:
@@ -676,6 +688,32 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         sweeps_completed += 1
         sweep_num += 1
 
+        # Step 9 (GPT fix): 429-adaptive prequote threshold.
+        # Read current cumulative 429 count from multicall stats.
+        if _prequote_enabled:
+            _cur_mc_stats = _get_multicall_stats() or {}
+            _cur_mc_429 = _cur_mc_stats.get("http_429", 0)
+            _delta_429 = _cur_mc_429 - _prev_mc_429
+            _prev_mc_429 = _cur_mc_429
+            if _delta_429 >= _ADAPT_SPIKE_THRESHOLD:
+                _prequote_min_bps = min(_prequote_min_bps + _ADAPT_STEP_UP, _prequote_min_bps_orig + 200.0)
+                _stable_sweep_count = 0
+                log.debug(
+                    "429-adaptive: delta_429=%d >=threshold=%d, min_bps raised to %.1f",
+                    _delta_429, _ADAPT_SPIKE_THRESHOLD, _prequote_min_bps,
+                )
+            elif _delta_429 < _ADAPT_STABLE_THRESHOLD:
+                _stable_sweep_count += 1
+                if _stable_sweep_count >= _ADAPT_STABLE_WINDOW and _prequote_min_bps > _prequote_min_bps_orig:
+                    _prequote_min_bps = max(_prequote_min_bps - _ADAPT_STEP_DOWN, _prequote_min_bps_orig)
+                    _stable_sweep_count = 0
+                    log.debug(
+                        "429-adaptive: %d stable sweeps, min_bps relaxed to %.1f",
+                        _ADAPT_STABLE_WINDOW, _prequote_min_bps,
+                    )
+            else:
+                _stable_sweep_count = 0
+
         # Write partial artifact after every sweep so rolling stays current
         elapsed_so_far = time.monotonic() - started_at
         _pt_snap = _get_provider_throttle_snapshot()
@@ -708,6 +746,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             prequote_cycles_skipped=_total_prequote_skipped,
             scheduler_name=getattr(args, "scheduler", "priority"),
             multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
+            verified_inventory_exists=_verified_inventory_exists,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -777,6 +816,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         prequote_cycles_skipped=_total_prequote_skipped,
         scheduler_name=getattr(args, "scheduler", "priority"),
         multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
+        verified_inventory_exists=_verified_inventory_exists,
     )
     write_artifact(artifact, args.artifact_path)
 

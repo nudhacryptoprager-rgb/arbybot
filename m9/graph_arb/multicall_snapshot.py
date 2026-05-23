@@ -66,6 +66,7 @@ _cumulative_multicall_stats: dict = {
     "retry_count": 0,
     "fetched_total": 0,
     "requested_total": 0,
+    "subchunk_splits": 0,
 }
 
 
@@ -182,6 +183,7 @@ def _batch_fetch(
     _cumulative_multicall_stats["success"] += _bs.get("multicall_success", 0)
     _cumulative_multicall_stats["http_429"] += _bs.get("multicall_429", 0)
     _cumulative_multicall_stats["retry_count"] += _bs.get("multicall_retry_count", 0)
+    _cumulative_multicall_stats["subchunk_splits"] += _bs.get("multicall_subchunk_splits", 0)
     _fetched = sum(1 for v in output.values() if v is not None)
     _cumulative_multicall_stats["fetched_total"] += _fetched
     _cumulative_multicall_stats["requested_total"] += len(pool_addresses)

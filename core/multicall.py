@@ -95,6 +95,7 @@ class MulticallBatcher:
             "multicall_success": 0,
             "multicall_429": 0,
             "multicall_retry_count": 0,
+            "multicall_subchunk_splits": 0,
         }
         # v2.2.0 Fix Step 4: Track call types explicitly
         # v2.3.0: Track success/fail per field
@@ -144,11 +145,88 @@ class MulticallBatcher:
             ))
         return calls
     
-    def _execute_multicall(self, calls: List[Tuple[str, bool, bytes]]) -> Optional[List[Tuple[bool, bytes]]]:
-        """Execute multicall, chunking large batches to avoid RPC rejection.
+    def _try_chunk_adaptive(
+        self,
+        chunk: List[Tuple[str, bool, bytes]],
+        limiter: Any,
+        depth: int = 0,
+    ) -> List[Tuple[bool, bytes]]:
+        """Try one multicall chunk with backoff; split into halves on persistent failure.
 
-        Retries up to 3 times on HTTP 429 with jittered exponential backoff.
-        Respects Retry-After header if present in the error message.
+        Steps 2+3 (GPT review): adaptive chunking + partial result caching.
+        Successful sub-chunks are returned immediately; only failed sub-chunks
+        are split further.  Controls: ARBY_MULTICALL_MIN_SUBCHUNK (default 3),
+        _MAX_SPLIT_DEPTH=2.
+        """
+        import random
+        import re
+        import time as _time
+
+        _MAX_ATTEMPTS = 3
+        _MIN_SUBCHUNK = int(os.environ.get("ARBY_MULTICALL_MIN_SUBCHUNK", "3"))
+        _MAX_SPLIT_DEPTH = 2
+
+        self.stats["multicall_attempted"] += 1
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(_MAX_ATTEMPTS):
+            try:
+                limiter.acquire()  # 1 RPC call per chunk
+                self.stats["rpc_calls"] += 1
+                _t0 = _time.monotonic()
+                results = self._multicall.functions.aggregate3(chunk).call(
+                    block_identifier=self.block_num if self.block_num is not None else "latest"
+                )
+                _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+                self.stats["latency_ms_total"] += _elapsed_ms
+                self.stats["multicall_success"] += 1
+                return list(results)
+            except Exception as e:
+                last_exc = e
+                e_str = str(e)
+                is_429 = "429" in e_str
+                if is_429:
+                    self.stats["multicall_429"] += 1
+                if is_429 and attempt < _MAX_ATTEMPTS - 1:
+                    self.stats["multicall_retry_count"] += 1
+                    # Respect Retry-After header if dRPC includes it
+                    _m = re.search(r"Retry-After[:\s]+(\d+)", e_str, re.IGNORECASE)
+                    if _m:
+                        sleep_s = int(_m.group(1)) + random.uniform(0.0, 0.5)
+                    else:
+                        sleep_s = (1.5 ** attempt) + random.uniform(0.0, 0.5)
+                    logger.debug(
+                        "Multicall 429 (attempt %d/%d), sleeping %.2fs",
+                        attempt + 1, _MAX_ATTEMPTS, sleep_s,
+                    )
+                    _time.sleep(sleep_s)
+                    continue
+                # Non-429 or exhausted 429 retries — fall through to split
+                break
+
+        # Retries exhausted — try adaptive split if chunk is large enough
+        if len(chunk) > _MIN_SUBCHUNK and depth < _MAX_SPLIT_DEPTH:
+            mid = len(chunk) // 2
+            self.stats["multicall_subchunk_splits"] += 1
+            logger.debug(
+                "Multicall chunk failed (%d calls) depth=%d — splitting %d+%d",
+                len(chunk), depth, mid, len(chunk) - mid,
+            )
+            left = self._try_chunk_adaptive(chunk[:mid], limiter, depth + 1)
+            right = self._try_chunk_adaptive(chunk[mid:], limiter, depth + 1)
+            return left + right
+        else:
+            logger.debug("Multicall chunk failed (%d calls): %s", len(chunk), last_exc)
+            self.stats["calls_failed"] += len(chunk)
+            return [(False, b"")] * len(chunk)
+
+    def _execute_multicall(self, calls: List[Tuple[str, bool, bytes]]) -> Optional[List[Tuple[bool, bytes]]]:
+        """Execute multicall with adaptive chunking on persistent 429 failures.
+
+        Retries up to 3 times per chunk with jittered exponential backoff.
+        If all retries fail, splits the chunk in half and retries each half
+        independently (up to _MAX_SPLIT_DEPTH=2 recursion levels).  This reduces
+        the blast radius from a single failing chunk from N→0 to at most N/4.
         Uses self._rpc_limiter if set, otherwise falls back to rpc_throttle singleton.
         """
         if not self._ensure_web3():
@@ -157,58 +235,15 @@ class MulticallBatcher:
         if not calls:
             return []
 
-        import random
-        import re
-        import time as _time
         from core.rpc_rate_limiter import rpc_throttle as _default_limiter
 
         _limiter = self._rpc_limiter if self._rpc_limiter is not None else _default_limiter
         all_results: List[Tuple[bool, bytes]] = []
         chunk_size = MULTICALL_MAX_BATCH
-        _MAX_ATTEMPTS = 3
 
         for start in range(0, len(calls), chunk_size):
             chunk = calls[start : start + chunk_size]
-            self.stats["multicall_attempted"] += 1
-            success = False
-            for attempt in range(_MAX_ATTEMPTS):
-                try:
-                    _limiter.acquire()  # 1 RPC call per chunk
-                    self.stats["rpc_calls"] += 1
-                    _t0 = _time.monotonic()
-                    results = self._multicall.functions.aggregate3(chunk).call(
-                        block_identifier=self.block_num if self.block_num is not None else "latest"
-                    )
-                    _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
-                    self.stats["latency_ms_total"] += _elapsed_ms
-                    all_results.extend(results)
-                    self.stats["multicall_success"] += 1
-                    success = True
-                    break
-                except Exception as e:
-                    e_str = str(e)
-                    is_429 = "429" in e_str
-                    if is_429:
-                        self.stats["multicall_429"] += 1
-                    if is_429 and attempt < _MAX_ATTEMPTS - 1:
-                        self.stats["multicall_retry_count"] += 1
-                        # Respect Retry-After header if dRPC includes it
-                        _m = re.search(r"Retry-After[:\s]+(\d+)", e_str, re.IGNORECASE)
-                        if _m:
-                            sleep_s = int(_m.group(1)) + random.uniform(0.0, 0.5)
-                        else:
-                            sleep_s = (1.5 ** attempt) + random.uniform(0.0, 0.5)
-                        logger.debug(
-                            "Multicall 429 (attempt %d/%d), sleeping %.2fs",
-                            attempt + 1, _MAX_ATTEMPTS, sleep_s,
-                        )
-                        _time.sleep(sleep_s)
-                        continue
-                    # Non-429 error or exhausted retries
-                    logger.debug("Multicall chunk failed (%d calls): %s", len(chunk), e)
-                    self.stats["calls_failed"] += len(chunk)
-                    all_results.extend([(False, b"")] * len(chunk))
-                    break
+            all_results.extend(self._try_chunk_adaptive(chunk, _limiter, depth=0))
 
         return all_results
     

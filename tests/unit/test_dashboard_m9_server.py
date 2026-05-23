@@ -188,4 +188,4 @@ class TestBuildM9CurrentPayload:
         from monitoring.dashboard_server import build_m9_current_payload
         payload = build_m9_current_payload(artifact={}, now_utc=_now())
         assert payload["schema_family"] == "m9_dashboard"
-        assert payload["schema_revision"] == "m9_dashboard.1"
+        assert payload["schema_revision"] == "m9_dashboard.2"

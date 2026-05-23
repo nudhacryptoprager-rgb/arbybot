@@ -1227,9 +1227,34 @@ def build_m9_current_payload(
         "generated_at_utc": m8.get("generated_at_utc") or m8.get("run_timestamp"),
     }
 
+    # Infra quality block (Step 8 — GPT fix): multicall health + verified inventory
+    _infra = a.get("infra_telemetry") or {}
+    _rg = a.get("runtime_gates") or {}
+    _run_status: str
+    if not bool(a):
+        _run_status = "no_artifact"
+    elif file_age_s is not None and file_age_s > 600:
+        _run_status = "stale"
+    elif a.get("duration_fulfilled"):
+        _run_status = "completed"
+    else:
+        _run_status = "running"
+    infra_quality = {
+        "run_status": _run_status,
+        "multicall_success_rate": _infra.get("multicall_success_rate"),
+        "multicall_subchunk_splits": _infra.get("multicall_subchunk_splits", 0),
+        "unverified_active_routes": _infra.get("unverified_active_routes"),
+        "verified_inventory_exists": _infra.get("verified_inventory_exists", False),
+        "http_429_count": _infra.get("http_429_count"),
+        "actual_http_calls": _infra.get("actual_http_calls"),
+        "blocked_by_breaker": _infra.get("blocked_by_breaker", 0),
+        "runtime_gates_all_pass": _rg.get("all_pass"),
+        "runtime_gates": _rg if _rg else None,
+    }
+
     return {
         "schema_family": "m9_dashboard",
-        "schema_revision": "m9_dashboard.1",
+        "schema_revision": "m9_dashboard.2",
         "now_utc": now_utc.isoformat(),
         "artifact_exists": bool(a),
         "artifact_age_s": file_age_s,
@@ -1253,6 +1278,7 @@ def build_m9_current_payload(
         "m8_1_inventory": m8_1_summary,
         "m8_sniper": m8_sniper_summary,
         "scan_scope": a.get("scan_scope") or {},
+        "infra_quality": infra_quality,
     }
 
 
