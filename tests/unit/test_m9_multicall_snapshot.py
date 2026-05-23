@@ -125,6 +125,44 @@ class TestSnapshotPoolStates:
         assert result.get(POOL_A.lower()) is None
 
 
+class TestGetMulticallStats:
+    """Tests for the module-level get_multicall_stats() / reset_multicall_stats() (GPT step 5)."""
+
+    def setup_method(self):
+        from m9.graph_arb.multicall_snapshot import reset_multicall_stats
+        reset_multicall_stats()
+
+    def test_returns_dict_with_expected_keys(self):
+        from m9.graph_arb.multicall_snapshot import get_multicall_stats
+        stats = get_multicall_stats()
+        for key in ("attempted", "success", "http_429", "retry_count", "fetched_total", "requested_total"):
+            assert key in stats, f"Missing key in get_multicall_stats(): {key}"
+
+    def test_initial_values_are_zero(self):
+        from m9.graph_arb.multicall_snapshot import get_multicall_stats
+        stats = get_multicall_stats()
+        for v in stats.values():
+            assert v == 0
+
+    def test_reset_clears_values(self):
+        from m9.graph_arb.multicall_snapshot import (
+            get_multicall_stats, reset_multicall_stats, _cumulative_multicall_stats,
+        )
+        _cumulative_multicall_stats["attempted"] = 10
+        _cumulative_multicall_stats["success"] = 7
+        reset_multicall_stats()
+        stats = get_multicall_stats()
+        assert stats["attempted"] == 0
+        assert stats["success"] == 0
+
+    def test_returns_copy(self):
+        """get_multicall_stats() returns a copy, not a live reference."""
+        from m9.graph_arb.multicall_snapshot import get_multicall_stats, _cumulative_multicall_stats
+        stats = get_multicall_stats()
+        stats["attempted"] = 999
+        assert _cumulative_multicall_stats["attempted"] == 0
+
+
 class TestWsMonitorWaitForNewBlock:
     """Tests for the wait_for_new_block() method on WsMonitor."""
 

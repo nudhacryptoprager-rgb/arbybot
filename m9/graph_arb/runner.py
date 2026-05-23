@@ -593,7 +593,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _prequote_min_bps: float = getattr(args, "prequote_min_bps", -500.0)
     if _prequote_enabled:
         from m9.graph_arb.multicall_snapshot import snapshot_pool_states as _snapshot_pool_states
+        from m9.graph_arb.multicall_snapshot import get_multicall_stats as _get_multicall_stats
+        from m9.graph_arb.multicall_snapshot import reset_multicall_stats as _reset_multicall_stats
         from m9.graph_arb.v3_prequote import should_skip_cycle as _should_skip_cycle
+        _reset_multicall_stats()  # start fresh for this run
         log.info(
             "Prequote funnel enabled: min_bps=%.1f (multicall snapshot + V3 pre-filter)",
             _prequote_min_bps,
@@ -601,6 +604,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     else:
         _snapshot_pool_states = None  # type: ignore[assignment]
         _should_skip_cycle = None     # type: ignore[assignment]
+        _get_multicall_stats = lambda: None  # type: ignore[assignment]
 
     _total_prequote_skipped = 0
 
@@ -701,6 +705,9 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_source=rpc_source,
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
+            prequote_cycles_skipped=_total_prequote_skipped,
+            scheduler_name=getattr(args, "scheduler", "priority"),
+            multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -767,6 +774,9 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         rpc_source=rpc_source,
         rpc_public_fallback_used=rpc_public_fallback_used,
         unverified_active_routes=unverified_active_routes,
+        prequote_cycles_skipped=_total_prequote_skipped,
+        scheduler_name=getattr(args, "scheduler", "priority"),
+        multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
     )
     write_artifact(artifact, args.artifact_path)
 

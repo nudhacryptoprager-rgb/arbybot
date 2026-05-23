@@ -41,6 +41,44 @@ log = logging.getLogger(__name__)
 import os as _os
 _SKIP_RPC = _os.environ.get("ARBY_SKIP_RPC") == "1"
 
+# Dedicated rate budget for Multicall3 calls, separate from the quoter budget.
+# Default: 1 RPS keeps multicall from competing with per-leg quoter calls.
+_MULTICALL_RPS = int(_os.environ.get("ARBY_MULTICALL_RPS", "1"))
+_multicall_limiter = None  # lazy-initialised
+
+
+def _get_multicall_limiter():
+    """Return (or create) the dedicated Multicall rate limiter."""
+    global _multicall_limiter
+    if _multicall_limiter is None:
+        from core.rpc_rate_limiter import TokenBucketRateLimiter
+        _multicall_limiter = TokenBucketRateLimiter(
+            rps=_MULTICALL_RPS, burst=max(_MULTICALL_RPS * 2, 2)
+        )
+    return _multicall_limiter
+
+
+# Cumulative per-process stats for artifact reporting.
+_cumulative_multicall_stats: dict = {
+    "attempted": 0,
+    "success": 0,
+    "http_429": 0,
+    "retry_count": 0,
+    "fetched_total": 0,
+    "requested_total": 0,
+}
+
+
+def get_multicall_stats() -> dict:
+    """Return cumulative multicall snapshot stats for this process (copy)."""
+    return dict(_cumulative_multicall_stats)
+
+
+def reset_multicall_stats() -> None:
+    """Reset cumulative stats (call before a new run to avoid cross-run contamination)."""
+    for k in _cumulative_multicall_stats:
+        _cumulative_multicall_stats[k] = 0
+
 
 def snapshot_pool_states(
     pool_addresses: List[str],
@@ -101,7 +139,7 @@ def _batch_fetch(
         return {a.lower(): None for a in pool_addresses}
 
     _block = block_num  # None → web3.py defaults to "latest"
-    batcher = MulticallBatcher(rpc_url=rpc_url, block_num=_block)
+    batcher = MulticallBatcher(rpc_url=rpc_url, block_num=_block, rpc_limiter=_get_multicall_limiter())
 
     # Two batched calls: slot0 + liquidity
     # slot0 returns (sqrtPriceX96, tick, ...) via MulticallBatcher.batch_slot0()
@@ -137,4 +175,15 @@ def _batch_fetch(
         len(pool_addresses),
         rpc_url[:40] if rpc_url else "none",
     )
+
+    # Accumulate into per-process cumulative stats for artifact reporting
+    _bs = batcher.stats
+    _cumulative_multicall_stats["attempted"] += _bs.get("multicall_attempted", 0)
+    _cumulative_multicall_stats["success"] += _bs.get("multicall_success", 0)
+    _cumulative_multicall_stats["http_429"] += _bs.get("multicall_429", 0)
+    _cumulative_multicall_stats["retry_count"] += _bs.get("multicall_retry_count", 0)
+    _fetched = sum(1 for v in output.values() if v is not None)
+    _cumulative_multicall_stats["fetched_total"] += _fetched
+    _cumulative_multicall_stats["requested_total"] += len(pool_addresses)
+
     return output

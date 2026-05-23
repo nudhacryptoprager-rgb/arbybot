@@ -195,6 +195,12 @@ def build_artifact(
     rpc_public_fallback_used: bool = False,
     # Inventory purity metric — count of active_routes without factory_verified=True
     unverified_active_routes: Optional[int] = None,
+    # Multicall snapshot counters (Step 5 GPT fix)
+    multicall_stats: Optional[Dict[str, Any]] = None,
+    # Prequote funnel skip count (Step 6 GPT fix)
+    prequote_cycles_skipped: int = 0,
+    # Scheduler name for telemetry (Step 7 GPT fix)
+    scheduler_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -480,6 +486,26 @@ def build_artifact(
         infra_telemetry["unverified_active_routes"] = unverified_active_routes
     if ws_freshness is not None:
         infra_telemetry["ws_freshness"] = ws_freshness
+    # Multicall snapshot counters
+    if multicall_stats is not None:
+        infra_telemetry["multicall_stats"] = multicall_stats
+        # Derive success_rate for quick access
+        _mc_attempted = multicall_stats.get("attempted", 0)
+        if _mc_attempted > 0:
+            infra_telemetry["multicall_success_rate"] = round(
+                multicall_stats.get("success", 0) / _mc_attempted, 4
+            )
+    # Prequote funnel skip metrics
+    if prequote_cycles_skipped > 0:
+        infra_telemetry["prequote_cycles_skipped"] = prequote_cycles_skipped
+        # skip_ratio = skipped / (skipped + cycles actually quoted)
+        _denom_prequote = max(prequote_cycles_skipped + cycles_found, 1)
+        infra_telemetry["prequote_skip_ratio"] = round(
+            prequote_cycles_skipped / _denom_prequote, 4
+        )
+    # Scheduler name
+    if scheduler_name is not None:
+        infra_telemetry["scheduler_name"] = scheduler_name
     artifact["infra_telemetry"] = infra_telemetry
 
     return artifact

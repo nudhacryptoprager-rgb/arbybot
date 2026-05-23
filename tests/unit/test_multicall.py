@@ -319,3 +319,54 @@ class TestLiquidityDecode:
         
         # Should return 0, not None
         assert result["0x1234567890123456789012345678901234567890"] == 0
+
+
+class TestMulticallBackoffStats:
+    """Tests for rpc_limiter param and backoff-related stats (GPT step 1-5)."""
+
+    def test_custom_rpc_limiter_accepted(self):
+        """MulticallBatcher accepts custom rpc_limiter without error."""
+        from unittest.mock import MagicMock
+        mock_limiter = MagicMock()
+        batcher = MulticallBatcher("http://localhost:8545", 12345, rpc_limiter=mock_limiter)
+        assert batcher._rpc_limiter is mock_limiter
+
+    def test_default_rpc_limiter_is_none(self):
+        """When no rpc_limiter provided, _rpc_limiter is None (uses singleton at call time)."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        assert batcher._rpc_limiter is None
+
+    def test_backoff_stats_in_init(self):
+        """Backoff stats are initialised to 0 in new batcher."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        for key in ("multicall_attempted", "multicall_success", "multicall_429", "multicall_retry_count"):
+            assert key in batcher.stats, f"Missing stat: {key}"
+            assert batcher.stats[key] == 0
+
+    def test_backoff_stats_in_get_stats(self):
+        """get_stats() surfaces backoff counters."""
+        batcher = MulticallBatcher("http://localhost:8545", 12345)
+        batcher.stats["multicall_attempted"] = 5
+        batcher.stats["multicall_success"] = 3
+        batcher.stats["multicall_429"] = 2
+        batcher.stats["multicall_retry_count"] = 2
+        stats = batcher.get_stats()
+        assert stats["multicall_attempted"] == 5
+        assert stats["multicall_success"] == 3
+        assert stats["multicall_429"] == 2
+        assert stats["multicall_retry_count"] == 2
+
+    def test_custom_limiter_used_in_execute(self):
+        """_execute_multicall uses the injected rpc_limiter, not the global singleton."""
+        from unittest.mock import MagicMock, patch
+
+        mock_limiter = MagicMock()
+        batcher = MulticallBatcher("http://localhost:8545", None, rpc_limiter=mock_limiter)
+
+        # Patch _ensure_web3 to return False (no actual RPC needed)
+        with patch.object(batcher, "_ensure_web3", return_value=False):
+            result = batcher._execute_multicall([("0xdeadbeef", True, b"\x00")])
+
+        # _ensure_web3 returns False → returns None without calling limiter
+        assert result is None
+        mock_limiter.acquire.assert_not_called()
