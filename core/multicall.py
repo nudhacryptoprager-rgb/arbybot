@@ -81,9 +81,9 @@ class MulticallBatcher:
         stats: Execution statistics
     """
     
-    def __init__(self, rpc_url: str, block_num: int):
+    def __init__(self, rpc_url: str, block_num: Optional[int] = None):
         self.rpc_url = rpc_url
-        self.block_num = block_num
+        self.block_num = block_num  # None = "latest" in web3.py eth_call
         self.stats = {
             "calls_made": 0,
             "calls_batched": 0,
@@ -160,7 +160,7 @@ class MulticallBatcher:
                 self.stats["rpc_calls"] += 1
                 _t0 = _time.monotonic()
                 results = self._multicall.functions.aggregate3(chunk).call(
-                    block_identifier=self.block_num
+                    block_identifier=self.block_num if self.block_num is not None else "latest"
                 )
                 _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
                 self.stats["latency_ms_total"] += _elapsed_ms

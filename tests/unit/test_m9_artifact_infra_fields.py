@@ -213,3 +213,203 @@ def test_schedule_cycle_quotes_accepts_backend_params():
     assert "max_workers" in params
     assert "quote_backend" in params
     assert "rpc_url" in params
+
+
+# ---------------------------------------------------------------------------
+# Tests: rpc_provider identity fields in infra_telemetry
+# ---------------------------------------------------------------------------
+
+class TestRpcProviderFields:
+    """build_artifact must store rpc_provider, rpc_source, rpc_public_fallback_used."""
+
+    def test_rpc_provider_defaults_to_unknown(self):
+        art = build_artifact(**_base_kwargs())
+        it = art["infra_telemetry"]
+        assert it["rpc_provider"] == "unknown"
+        assert it["rpc_source"] == "unknown"
+        assert it["rpc_public_fallback_used"] is False
+
+    def test_drpc_provider_stored(self):
+        art = build_artifact(**_base_kwargs(), rpc_provider="drpc", rpc_source="chain_env_BASE_RPC")
+        it = art["infra_telemetry"]
+        assert it["rpc_provider"] == "drpc"
+        assert it["rpc_source"] == "chain_env_BASE_RPC"
+        assert it["rpc_public_fallback_used"] is False
+
+    def test_public_fallback_flag_set(self):
+        art = build_artifact(
+            **_base_kwargs(),
+            rpc_provider="public_fallback",
+            rpc_source="public_fallback",
+            rpc_public_fallback_used=True,
+        )
+        it = art["infra_telemetry"]
+        assert it["rpc_provider"] == "public_fallback"
+        assert it["rpc_public_fallback_used"] is True
+
+
+# ---------------------------------------------------------------------------
+# Tests: RPC resolution uses BASE_RPC env var (not public fallback)
+# ---------------------------------------------------------------------------
+
+class TestRpcResolutionFromEnv:
+    """resolve_rpc_http must pick BASE_RPC over public_fallback when env is set."""
+
+    def test_base_rpc_env_gives_drpc_provider(self):
+        """When BASE_RPC is set, resolve_rpc_http returns drpc provider, not public."""
+        from core.rpc_urls import resolve_rpc_http
+        fake_drpc_url = "https://lb.drpc.live/ogrpc?network=base&dkey=FAKE_KEY"
+        env = {"BASE_RPC": fake_drpc_url}
+        url, provider, diag = resolve_rpc_http(chain_id=8453, network="base", env=env)
+        assert url == fake_drpc_url
+        assert provider == "drpc"
+        assert diag["source"] == "chain_env_BASE_RPC"
+
+    def test_no_base_rpc_falls_back_to_public(self):
+        """Without BASE_RPC, resolve_rpc_http uses public_fallback (mainnet.base.org)."""
+        from core.rpc_urls import resolve_rpc_http
+        url, provider, diag = resolve_rpc_http(chain_id=8453, network="base", env={})
+        assert provider in ("public", "public_fallback")
+        assert diag["source"] == "public_fallback"
+        assert "mainnet.base.org" in (url or "")
+
+    def test_alchemy_key_env_gives_alchemy_provider(self):
+        """ALCHEMY_API_KEY in env gives alchemy provider for Base."""
+        from core.rpc_urls import resolve_rpc_http
+        env = {"ALCHEMY_API_KEY": "FAKE_ALCHEMY_KEY"}
+        url, provider, diag = resolve_rpc_http(chain_id=8453, network="base", env=env)
+        assert provider == "alchemy"
+        assert "alchemy.com" in (url or "")
+        assert diag["source"] == "alchemy_api_key"
+
+    def test_base_rpc_takes_priority_over_alchemy_key(self):
+        """BASE_RPC (chain-scoped) takes priority over ALCHEMY_API_KEY."""
+        from core.rpc_urls import resolve_rpc_http
+        fake_drpc_url = "https://lb.drpc.live/ogrpc?network=base&dkey=FAKE_KEY"
+        env = {
+            "BASE_RPC": fake_drpc_url,
+            "ALCHEMY_API_KEY": "FAKE_ALCHEMY_KEY",
+        }
+        url, provider, diag = resolve_rpc_http(chain_id=8453, network="base", env=env)
+        assert url == fake_drpc_url
+        assert provider == "drpc"
+        assert diag["source"] == "chain_env_BASE_RPC"
+
+
+# ---------------------------------------------------------------------------
+# Tests: quote_revert_rate is leg-level (not cycle-level histogram)
+# ---------------------------------------------------------------------------
+
+class TestQuoteRevertRateLegLevel:
+    """quote_revert_rate must be computed from leg_results.reject_reason, not from
+    the cycle-level histogram (which never carries 'QUOTE_REVERT' since cycles
+    fail as CYCLE_QUOTE_FAILED at the cycle level)."""
+
+    def _make_leg(self, reject_reason: "str | None", ok: bool = False):
+        from m8_1.stable_anchor.quote_probe import QuoteResult
+        return QuoteResult(
+            route_id="r1",
+            size_usd=1000.0,
+            amount_in=1_000_000,
+            amount_out=0,
+            ok=ok,
+            reject_reason=reject_reason,
+            gas_estimate=None,
+            raw_error=None,
+        )
+
+    def _make_qr(self, legs: list):
+        from unittest.mock import MagicMock
+        from m9.graph_arb.models import CycleQuoteResult
+        m = MagicMock()
+        m.cycle_id = "test"
+        m.length = len(legs)
+        m.token_path = ["USDC", "WETH", "USDT"][: len(legs) + 1]
+        m.start_token_sym = "USDC"
+        m.total_fee_bps = 9.0
+        m.min_factory_class = "EFFICIENT_BASELINE"
+        edge = MagicMock()
+        edge.dex_id = "uniswap_v3"
+        edge.factory_class = "EFFICIENT_BASELINE"
+        edge.pool_address = "0xaaaa"
+        edge.pair_id = "USDC/WETH"
+        edge.fee_bps = 5.0
+        edge.token_in_sym = "USDC"
+        edge.token_out_sym = "WETH"
+        m.edges = [edge] * len(legs)
+        return CycleQuoteResult(
+            cycle=m,
+            size_usd=1000.0,
+            amount_in=1_000_000,
+            amount_out=0,
+            gross_bps=0.0,
+            status="QUOTE_FAILED",
+            reject_reason="CYCLE_QUOTE_FAILED",
+            leg_results=legs,
+            elapsed_s=0.1,
+        )
+
+    def test_zero_legs_gives_zero_rate(self):
+        art = build_artifact(**_base_kwargs())
+        assert art["quote_revert_rate"] == 0.0
+
+    def test_all_revert_legs_gives_rate_1(self):
+        leg = self._make_leg("QUOTE_REVERT")
+        qr = self._make_qr([leg, leg, leg])
+        art = build_artifact(**{**_base_kwargs(), "cycle_results": [qr]})
+        assert art["quote_revert_rate"] == 1.0
+
+    def test_partial_revert_legs_gives_correct_rate(self):
+        revert = self._make_leg("QUOTE_REVERT")
+        other = self._make_leg("QUOTE_RPC_ERROR")
+        # 1 revert + 3 other = 4 legs total -> rate = 0.25
+        qr = self._make_qr([revert, other, other, other])
+        art = build_artifact(**{**_base_kwargs(), "cycle_results": [qr]})
+        assert abs(art["quote_revert_rate"] - 0.25) < 1e-6
+
+    def test_no_revert_legs_gives_zero_rate(self):
+        other = self._make_leg("QUOTE_RPC_ERROR")
+        qr = self._make_qr([other, other])
+        art = build_artifact(**{**_base_kwargs(), "cycle_results": [qr]})
+        assert art["quote_revert_rate"] == 0.0
+
+    def test_quote_revert_rate_consistent_in_infra_telemetry(self):
+        """infra_telemetry.quote_revert_rate must match top-level quote_revert_rate."""
+        revert = self._make_leg("QUOTE_REVERT")
+        other = self._make_leg("QUOTE_RPC_ERROR")
+        qr = self._make_qr([revert, other])
+        art = build_artifact(**{**_base_kwargs(), "cycle_results": [qr]})
+        assert art["infra_telemetry"]["quote_revert_rate"] == art["quote_revert_rate"]
+
+    def test_cycle_level_histogram_quote_revert_does_not_inflate_rate(self):
+        """Cycles with reject_reason='QUOTE_REVERT' at CYCLE level (empty legs)
+        must NOT contribute to quote_revert_rate."""
+        from unittest.mock import MagicMock
+        from m9.graph_arb.models import CycleQuoteResult
+        m = MagicMock()
+        m.cycle_id = "x"
+        m.length = 2
+        m.token_path = ["USDC", "WETH", "USDT"]
+        m.start_token_sym = "USDC"
+        m.total_fee_bps = 9.0
+        m.min_factory_class = "EFFICIENT_BASELINE"
+        edge = MagicMock()
+        edge.dex_id = "uni"
+        edge.factory_class = "EFFICIENT_BASELINE"
+        edge.pool_address = "0xaaa"
+        edge.pair_id = "X/Y"
+        edge.fee_bps = 5.0
+        edge.token_in_sym = "USDC"
+        edge.token_out_sym = "WETH"
+        m.edges = [edge, edge]
+        qr = CycleQuoteResult(
+            cycle=m, size_usd=1000.0, amount_in=1_000_000, amount_out=0,
+            gross_bps=0.0, status="QUOTE_FAILED", reject_reason="QUOTE_REVERT",
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        art = build_artifact(**{**_base_kwargs(), "cycle_results": [qr]})
+        # quote_revert_rate must be 0 (no leg-level QUOTE_REVERT)
+        assert art["quote_revert_rate"] == 0.0
+        # cycle histogram still has QUOTE_REVERT from cycle.reject_reason
+        assert art["cycle_reject_histogram"].get("QUOTE_REVERT", 0) == 1

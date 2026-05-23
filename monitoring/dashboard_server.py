@@ -2577,7 +2577,17 @@ def main():
 
     os.chdir(Path(__file__).parent.parent)
 
-    server = HTTPServer(("127.0.0.1", args.port), DashboardHandler)
+    class _QuietHTTPServer(HTTPServer):
+        """Suppress noisy client-abort errors (WinError 10053, BrokenPipeError)."""
+
+        def handle_error(self, request, client_address):
+            import sys
+            exc = sys.exc_info()[1]
+            if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+                return  # client disconnected before response was sent — not a server bug
+            super().handle_error(request, client_address)
+
+    server = _QuietHTTPServer(("127.0.0.1", args.port), DashboardHandler)
     print(f"Dashboard: http://127.0.0.1:{args.port}")
     print("Press Ctrl+C to stop.")
     try:

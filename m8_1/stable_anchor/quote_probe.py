@@ -14,7 +14,7 @@ from m8_1.stable_anchor.pool_discovery import DexRoute
 
 # Function selectors
 _V3_SELECTOR = bytes.fromhex("c6a5026a")
-_SLIP_SELECTOR = bytes.fromhex("f6c1b3d3")
+_SLIP_SELECTOR = bytes.fromhex("9e7defe6")  # quoteExactInputSingle((address,address,uint256,int24,uint160))
 
 
 @dataclass(frozen=True)
@@ -47,11 +47,12 @@ def _encode_v3_call(token_in: str, token_out: str, amount_in: int, fee: int) -> 
     """Encode QuoterV2.quoteExactInputSingle struct call."""
     addr_in = int(token_in, 16).to_bytes(32, "big")
     addr_out = int(token_out, 16).to_bytes(32, "big")
-    fee_bytes = fee.to_bytes(32, "big")
     amount_bytes = amount_in.to_bytes(32, "big")
+    fee_bytes = fee.to_bytes(32, "big")
     sqrt_limit = (0).to_bytes(32, "big")
-    payload = addr_in + addr_out + fee_bytes + (0).to_bytes(32, "big") + amount_bytes + sqrt_limit
-    return "0x" + _V3_SELECTOR.hex() + (len(payload).to_bytes(32, "big")).hex() + payload.hex()
+    # QuoterV2 struct: (tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96)
+    payload = addr_in + addr_out + amount_bytes + fee_bytes + sqrt_limit
+    return "0x" + _V3_SELECTOR.hex() + payload.hex()
 
 
 def _encode_slipstream_call(
@@ -60,11 +61,12 @@ def _encode_slipstream_call(
     """Encode Slipstream Quoter.quoteExactInputSingle struct call."""
     addr_in = int(token_in, 16).to_bytes(32, "big")
     addr_out = int(token_out, 16).to_bytes(32, "big")
-    ts_bytes = tick_spacing.to_bytes(32, "big")
     amount_bytes = amount_in.to_bytes(32, "big")
+    ts_bytes = tick_spacing.to_bytes(32, "big")
     sqrt_limit = (0).to_bytes(32, "big")
-    payload = addr_in + addr_out + ts_bytes + (0).to_bytes(32, "big") + amount_bytes + sqrt_limit
-    return "0x" + _SLIP_SELECTOR.hex() + (len(payload).to_bytes(32, "big")).hex() + payload.hex()
+    # Slipstream struct: (tokenIn, tokenOut, amountIn, tickSpacing, sqrtPriceLimitX96)
+    payload = addr_in + addr_out + amount_bytes + ts_bytes + sqrt_limit
+    return "0x" + _SLIP_SELECTOR.hex() + payload.hex()
 
 
 def _decode_quote_response(hex_result: str) -> "tuple[int, Optional[int]]":

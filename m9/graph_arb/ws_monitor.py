@@ -36,6 +36,7 @@ class WsMonitor:
         self._block_number_hex: Optional[str] = None
         self._error: Optional[str] = None
         self._stop_event = threading.Event()
+        self._new_block_event = threading.Event()  # pulsed on each newHead
         self._thread: Optional[threading.Thread] = None
 
     def start(self, ws_url: str) -> None:
@@ -116,6 +117,7 @@ class WsMonitor:
                                     self._latest_block = block_num
                                     self._block_number_hex = block_hex
                                     self._latest_ts = time.monotonic()
+                                self._new_block_event.set()
                     except asyncio.TimeoutError:
                         continue
         except Exception as exc:
@@ -142,6 +144,7 @@ class WsMonitor:
                     with self._lock:
                         self._latest_block = block_num
                         self._latest_ts = time.monotonic()
+                    self._new_block_event.set()
                 except Exception:
                     pass
                 time.sleep(2.0)
@@ -149,6 +152,31 @@ class WsMonitor:
             with self._lock:
                 self._connected = False
                 self._error = str(exc)[:200]
+
+
+    def wait_for_new_block(self, timeout_s: float = 15.0) -> bool:
+        """Block until the next newHead arrives or *timeout_s* elapses.
+
+        Returns True if a new block was received, False on timeout.
+        Safe to call from the sweep loop to pace sweeps to the chain cadence
+        instead of a fixed ``time.sleep()``.
+
+        Note: if not connected (WS disabled or not yet started), returns False
+        immediately so the caller can fall through to its own timer.
+        """
+        if not self._connected:
+            return False
+        # Snapshot current block *before* clearing the event
+        with self._lock:
+            before = self._latest_block
+        # Clear event — set if a new block already arrived since the lock
+        self._new_block_event.clear()
+        # Race guard: block may have arrived between snapshot and clear
+        with self._lock:
+            if self._latest_block != before and self._latest_block is not None:
+                return True
+        # Wait for the event with timeout
+        return self._new_block_event.wait(timeout=timeout_s)
 
 
 # Module-level factory

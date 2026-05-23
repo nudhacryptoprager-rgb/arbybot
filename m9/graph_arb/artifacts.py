@@ -189,6 +189,12 @@ def build_artifact(
     quote_workers: int = 4,
     provider_throttle_snapshot: Optional[Dict[str, Any]] = None,
     ws_freshness: Optional[Dict[str, Any]] = None,
+    # RPC provider identity — filled by runner after resolve_rpc_http()
+    rpc_provider: str = "unknown",
+    rpc_source: str = "unknown",
+    rpc_public_fallback_used: bool = False,
+    # Inventory purity metric — count of active_routes without factory_verified=True
+    unverified_active_routes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -302,8 +308,18 @@ def build_artifact(
     # CYCLE_QUOTE_FAILED so cycle histogram never contains QUOTE_RPC_ERROR.
     _denom = max(cycles_found, 1)
     quote_rpc_error_rate = round(_provider_rpc_error_count / _denom, 6)
+    # quote_revert_rate: leg-level QUOTE_REVERT / total legs attempted.
+    # The cycle-level histogram never carries QUOTE_REVERT (cycles fail as
+    # CYCLE_QUOTE_FAILED), so we must count from leg_results directly.
+    _leg_revert_count_early = sum(
+        1
+        for qr in cycle_results
+        for leg in (qr.leg_results or [])
+        if not leg.ok and leg.reject_reason == "QUOTE_REVERT"
+    )
+    _total_legs_attempted = sum(len(qr.leg_results or []) for qr in cycle_results)
     quote_revert_rate = round(
-        computed_cycle_histogram.get("QUOTE_REVERT", 0) / _denom, 6
+        _leg_revert_count_early / max(_total_legs_attempted, 1), 6
     )
     # Percentile gross bps: p50 and p90 across quoted cycles
     p50_gross_bps: Optional[float] = None
@@ -406,6 +422,10 @@ def build_artifact(
     infra_telemetry: Dict[str, Any] = {
         "quote_backend": quote_backend,
         "quote_workers": quote_workers,
+        # RPC provider identity (no URL — avoids leaking keys)
+        "rpc_provider": rpc_provider,
+        "rpc_source": rpc_source,
+        "rpc_public_fallback_used": rpc_public_fallback_used,
     }
     # Expose effective RPC rate-limiter settings (separate from provider_throttle budgets)
     try:
@@ -420,17 +440,44 @@ def build_artifact(
     if provider_throttle_snapshot is not None:
         # Derive top-level 429 count from "calls" bucket for quick access
         calls_snap = provider_throttle_snapshot.get("calls", {})
-        infra_telemetry["http_429_count"] = calls_snap.get("total_429", 0)
+        _throttle_429_count = calls_snap.get("total_429", 0)
         infra_telemetry["blocked_by_breaker"] = calls_snap.get("total_blocked", 0)
         infra_telemetry["provider_throttle_rps_budget"] = calls_snap.get("rps_limit", None)
         infra_telemetry["provider_throttle_snapshot"] = provider_throttle_snapshot
     else:
-        infra_telemetry["http_429_count"] = 0
+        _throttle_429_count = 0
         infra_telemetry["blocked_by_breaker"] = 0
         infra_telemetry["provider_throttle_rps_budget"] = None
         infra_telemetry["provider_throttle_snapshot"] = None
+
+    # Count 429s from leg_results.raw_error as fallback when throttle is disabled
+    # (ARBY_PROVIDER_THROTTLE defaults to 0, so throttle snapshot is empty).
+    # raw_http_probe sets raw_error="HTTP 429: ..." for HTTP 429 responses.
+    _leg_429_count = sum(
+        1
+        for qr in cycle_results
+        for leg in (qr.leg_results or [])
+        if not leg.ok and leg.raw_error and "429" in leg.raw_error
+    )
+    # Use throttle count if it reported something; otherwise fall back to leg-derived count.
+    if _throttle_429_count > 0:
+        infra_telemetry["http_429_count"] = _throttle_429_count
+        infra_telemetry["http_429_count_source"] = "provider_throttle"
+    else:
+        infra_telemetry["http_429_count"] = _leg_429_count
+        infra_telemetry["http_429_count_source"] = "leg_results"
+
+    # Absolute QUOTE_REVERT count from leg_results (complements quote_revert_rate above)
+    # Re-use the already-computed count (no second iteration needed).
+    _quote_revert_count = _leg_revert_count_early
+    infra_telemetry["quote_revert_count"] = _quote_revert_count
+
     # Surface quote_revert_rate at infra level (convenience: avoids digging into diagnostics)
     infra_telemetry["quote_revert_rate"] = quote_revert_rate
+
+    # Inventory purity: how many active_routes lacked factory_verified=True at scan start
+    if unverified_active_routes is not None:
+        infra_telemetry["unverified_active_routes"] = unverified_active_routes
     if ws_freshness is not None:
         infra_telemetry["ws_freshness"] = ws_freshness
     artifact["infra_telemetry"] = infra_telemetry

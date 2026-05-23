@@ -1,6 +1,6 @@
 # Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: SMOKE10_COMPLETE — QUOTE_DECODE blocker FIXED (root cause: missing `config/exotic_base_anchor.yaml` → `cfg=None` → zero-address quoter → all eth_call revert); QUOTE_DECODE=0 confirmed in smoke10; new blocker: QUOTE_RPC_ERROR from `mainnet.base.org` 429 rate-limiting (circuit breaker trips after ~8 consecutive 429s → 60s cooldown → queued cycles drain as QUOTE_RPC_ERROR); artifact write PermissionError on Windows fixed (retry loop in `m9/graph_arb/artifacts.py` and `core/json_io.py`)
+**Status**: QUOTE_ENGINE_VALIDATED — 4 ABI/encoding bugs fixed; QSR breakthrough confirmed (0.0056→0.268, ×48 improvement); quote_revert_rate dropped from 37.7% to 0.0%; 338 cycles fully quoted in 10-min smoke13; no profitable arb found at this time (market efficient); next action: upgrade RPC tier to eliminate 429s (currently 73% of cycles blocked by rate limiting) and expand cycle universe.
 
 `goal_status`: IN_PROGRESS
 `schema_family`: m9_graph_arb
@@ -8,6 +8,116 @@
 `execution_enabled`: false
 `kill_switch_active`: true
 `execution_mode`: paper
+
+## Smoke13 Results — ABI Bug Fixes Validated; Quote Engine Breakthrough (10-min run, 2026-05-23)
+
+### Config: raw_http, 1 worker, RPS=3/burst=1, dRPC free-tier, Base, 10-min
+```
+run_timestamp:         smoke13 (2026-05-23T10:19–10:29 UTC)
+duration_fulfilled:    true   ✅  (617.5s / 63 sweeps)
+cycles_quoted_total:   1260
+cycles_quoteable:      338    ✅  (all legs quoted, up from 1 in smoke12!)
+cycles_positive_gross: 0
+qsr:                   0.2683 ✅  (up from 0.0056 — ×48 improvement)
+quote_revert_rate:     0.0    ✅  (down from 37.7%!)
+best_cycle_net_bps:    0.0
+http_429_count:        909
+reverts:               0      ✅  (confirmed — zero encoding reverts)
+cycle_reject_histogram: {NEGATIVE_GROSS: 338, CYCLE_QUOTE_FAILED: 922}
+economics_gate_status: BLOCKED_QSR
+```
+
+### Key findings
+- **ABI encoding breakthrough** ✅ — `quote_revert_rate=0.0` confirms all 4 bugs fixed:
+  1. Bug #1: `_encode_v3_call` field order (fee before amountIn + spurious len prefix) → FIXED
+  2. Bug #2: `token_prices` not passed to `schedule_cycle_quotes` → FIXED (added `_TOKEN_PRICE_USD_BASE`)
+  3. Bug #3: Slipstream selector `f6c1b3d3` → FIXED to `9e7defe6`
+  4. Bug #4: `builder.py` always used `tick_spacings[0]=1` for all Slipstream routes → FIXED (reads `fee` field)
+- **QSR = 0.268** — 338/1260 cycles fully quoted. Remaining 922 blocked by dRPC free-tier 429s.
+- **Market efficient** at this time — all 338 quoted cycles have NEGATIVE_GROSS (fees > price spread).
+- **429s = 909** — free-tier dRPC still throttles ~73% of cycles. Not a code bug; upgrade RPC tier.
+- **5761 unit tests pass** (after all 4 fixes applied).
+
+### Bugs fixed (this session — 4 total)
+
+| Bug | File | Description |
+|-----|------|-------------|
+| #1: V3 ABI encoding | `m8_1/stable_anchor/quote_probe.py` | Fixed `_encode_v3_call`: wrong field order (fee before amountIn) + removed spurious `len(payload)` prefix word |
+| #2: Token prices | `m9/graph_arb/runner.py` | Added `_TOKEN_PRICE_USD_BASE` dict; passed as `token_prices=` to `schedule_cycle_quotes` |
+| #3: Slipstream selector | `m8_1/stable_anchor/quote_probe.py` | Fixed `_SLIP_SELECTOR`: `f6c1b3d3` → `9e7defe6` (`quoteExactInputSingle((address,address,uint256,int24,uint160))`) |
+| #4: tick_spacing | `m9/graph_arb/builder.py` | Added `elif fee > 0: tick_spacing = fee` — Slipstream inventory stores tick_spacing in `fee` field |
+
+### Next steps for smoke14
+- Upgrade to dRPC paid tier or use alternative RPC with higher rate limits
+- Reduce 429 rate to <5% (need ~10 RPS sustained)
+- `cycles_positive_gross > 0` should be achievable with full quoting coverage
+- Consider expanding inventory with more Aerodrome/Slipstream pools
+
+## Smoke11 Results — RPC Wiring Fix Verified; Inventory Purity Blocked (10-min run)
+
+### Config: raw_http, 2 workers, dRPC free-tier, Base, 10-min
+```
+run_timestamp:         smoke11 (dRPC)
+duration_fulfilled:    true   ✅  (10 min completed)
+cycles_quoteable:      0      ❌
+cycles_positive_gross: 0
+sweeps_completed:      144
+cycles_found:          2880
+rpc_provider:          drpc   ✅  (wiring fix confirmed)
+rpc_public_fallback_used: false  ✅
+blocked_by_breaker:    0      ✅
+http_429_count:        0 (ARBY_PROVIDER_THROTTLE unset → no-op; real 429s: ~1792)
+cycle_reject_histogram: {QUOTE_REVERT: ~2880, ...}
+economics_blocker:     INVENTORY_PURITY_BLOCKED (all cycles QUOTE_REVERT)
+```
+
+### Key findings
+- **RPC wiring fix CONFIRMED** ✅ — dRPC used, no public fallback, no breaker trips
+- **QUOTE_REVERT = 100%** ❌ — every cycle fails at quote stage
+  - Root cause: active_routes carry fee tiers (@100 = 0.01%, @500 = 0.05%) for pools
+    that do NOT exist on Base (wrong fee tier for the pair)
+  - QUOTE_REVERT is structural (NOT transient — appears in sweep 1 before any 429s)
+- **http_429_count=0** artifact discrepancy: `ARBY_PROVIDER_THROTTLE` was not set →
+  `provider_throttle.snapshot()` returns empty dict → throttle count always 0.
+  Real 429 rate from dRPC free-tier was ~63.3% (1792/2831 requests).
+
+### Fixes implemented (this session — first GPT directive)
+
+| Fix | File | Description |
+|-----|------|-------------|
+| On-chain factory verifier | `m9/graph_arb/pool_verifier.py` (NEW) | Queries factory.getPool() for each (dex, pair, fee) — only non-zero pool addresses enter inventory |
+| Factory verified gate | `m9/graph_arb/builder.py` | `require_factory_verified=True` skips unverified routes; `unverified_active_routes` counter added |
+| http_429_count fix | `m9/graph_arb/artifacts.py` | Count 429s from `leg_results.raw_error` as fallback when provider_throttle disabled |
+| quote_revert_count | `m9/graph_arb/artifacts.py` | Absolute QUOTE_REVERT count from legs (complements rate) |
+| QUOTE_REVERT quarantine | `m9/graph_arb/runner.py` | After run: write `data/tmp/m9_revert_quarantine.json` with QUOTE_REVERT-dominant routes |
+| --require-factory-verified | `m9/graph_arb/runner.py` | CLI flag to enforce factory_verified gate |
+| unverified_active_routes | `m9/graph_arb/artifacts.py` | infra_telemetry field tracking purity of inventory |
+
+### Fixes implemented (second GPT directive — inventory purity expansion)
+
+| Fix | File | Description |
+|-----|------|-------------|
+| `quote_revert_rate` leg-level | `m9/graph_arb/artifacts.py` | Fixed: now computed from leg_results.reject_reason counts / total_legs (not cycle histogram which never carries QUOTE_REVERT) |
+| `pool_verifier` throttle/backoff | `m9/graph_arb/pool_verifier.py` | `_eth_call()` now accepts `request_delay_s` + retry on HTTP 429 with exponential backoff |
+| `pool_verifier` liquidity check | `m9/graph_arb/pool_verifier.py` | `_verify_one()` now calls `pool.liquidity()` after factory confirmation; pools with zero liquidity quarantined as `POOL_ZERO_LIQUIDITY` |
+| `pool_verifier` CLI | `m9/graph_arb/pool_verifier.py` | Added `main()` with `--chain`, `--config`, `--output`, `--max-workers`, `--delay-ms`, `--no-liquidity-check`, `--require-premium-rpc` |
+| Slipstream selector test | `tests/unit/test_m9_pool_verifier.py` | `test_slipstream_selector_exact_value` pins `"e070576f"` against web3 runtime computation |
+| runner auto-prefer verified inv | `m9/graph_arb/runner.py` | When `--require-factory-verified` + no explicit `--inventory`: auto-selects `data/tmp/m9_verified_inventory.json` if it exists |
+| `quote_revert_rate` unit tests | `tests/unit/test_m9_artifact_infra_fields.py` | `TestQuoteRevertRateLegLevel` (6 tests) validates leg-level rate computation |
+| `POOL_ZERO_LIQUIDITY` unit tests | `tests/unit/test_m9_pool_verifier.py` | Tests for `check_liquidity=False` mode and zero-liquidity quarantine |
+
+### Next step: smoke12 acceptance criteria
+Run `python -m m9.graph_arb.verify_and_refresh` (or pool_verifier standalone) to produce
+`data/tmp/m9_verified_inventory.json`, then run smoke12 with:
+```
+python -m m9.graph_arb.runner --require-factory-verified --quote-workers 2 --quote-backend raw_http --duration-minutes 5
+```
+**smoke12 acceptance gates:**
+- `unverified_active_routes = 0`
+- `cycles_quoteable > 0`
+- `quote_revert_rate < 0.05`
+- `rpc_public_fallback_used = false`
+- `http_429_count_source` shows truthful 429 count
 
 ## Smoke10 Results — QUOTE_DECODE Fix Verified (2026-05-22T17:42–17:47 UTC)
 
@@ -62,7 +172,7 @@ edge_error_histogram (top entries):
 | http_429_count | 0 (smoke9 ctrl) | ~8 HTTP 429s | endpoint limit |
 
 ### Next unblock path
-1. Use dRPC premium endpoint (`ARBY_RPC_URL` / .env) — reduces 429s significantly
+1. Use dRPC premium endpoint (`BASE_RPC` in `.env`) — reduces 429s significantly
 2. Or reduce RPS to 1-2 with burst=1 for `mainnet.base.org`
 3. Or use `--quote-backend anvil_fork` with local fork (no network rate limits) for offline testing
 Target: `quote_rpc_error_rate < 0.10` and `cycles_quoteable > 0`
@@ -141,7 +251,7 @@ economics_blocker:     PROVIDER_QUALITY_BLOCKED
 `gate_acceptance`: false
 `strategy_gate_acceptance`: false
 `economics_gate_status`: BLOCKED_QSR
-`economics_blocker_class`: PROVIDER_QUALITY_BLOCKED
+`economics_blocker_class`: RPC_PROVIDER_WIRING_BLOCKED_429_PRIORITY
 `topology_gate`: CYCLES_FOUND
 `scan_scope`: {routes_total: 13, edge_count: 102}
 `cycle_reject_histogram`: {CYCLE_QUOTE_FAILED: 660}
@@ -193,7 +303,7 @@ py -3.11 -m m9.graph_arb.runner --chain base --duration-minutes 5 --max-cycles-p
 `intent_tier_baseline_status`: FIXED (CALIBRATION_TIER_BASELINE bumped 64→77 per M9 Base expansion)
 `top_opportunities_status`: IMPLEMENTED (artifacts.py _build_top_opportunity(); fields: dex/factory/pool/pool_path/pair/market_size_usd/dynamic_size_usd/spread_bps/spread_usd/profit_usd/main_blocker)
 `dashboard_m9_status`: IMPLEMENTED (monitoring/dashboard_m9.html + /api/m9/current endpoint; / route now serves M9 operator surface; M7/M8 at legacy /m7 and /m8 routes)
-`economics_gate_status`: BLOCKED_QSR (qsr=0.0; economics_blocker_class=PROVIDER_QUALITY_BLOCKED)
+`economics_gate_status`: BLOCKED_QSR (qsr=0.0; economics_blocker_class=RPC_PROVIDER_WIRING_BLOCKED_429_PRIORITY)
 `rpc_throttle_status`: FIXED (rpc_throttle.acquire() added to probe_quote() in m8_1/stable_anchor/quote_probe.py; controlled by ARBY_RPC_THROTTLE env; fix #6)
 `quote_rpc_error_rate_status`: FIXED (metric now reads from route histogram per-leg, not cycle histogram; was always 0.0, now shows correct ~0.587; fix #7)
 `dashboard_qsr_status`: FIXED (economics.qsr now returns 0.0 not null; dashboard server restarted with updated code)
@@ -275,7 +385,7 @@ duration_fulfilled=true. exit_code=1 (unhandled exception in cleanup; soak data 
 Root cause: `mainnet.base.org` public RPC rate-limits (HTTP 429) after ~200 concurrent
 requests (QUOTE_RPC_ERROR: 702/1200 = 58.5%); remaining 41.5% return `eth_call→'0x'`
 (QUOTE_DECODE: 498/1200) — empty quoter data for stable/near-peg paths.
-All 1200 cycles classified `CYCLE_QUOTE_FAILED`. blocker_class = PROVIDER_QUALITY_BLOCKED.
+All 1200 cycles classified `CYCLE_QUOTE_FAILED`. blocker_class = RPC_PROVIDER_WIRING_BLOCKED_429_PRIORITY (root cause: runner never loaded .env so BASE_RPC ignored, fell back to public mainnet.base.org which 429s at >3 RPS).
 DECODE share grew +8pp (33.5%→41.5%) from soak1→soak2 — possible thin-tick-range signal.
 Topology health confirmed: CYCLES_FOUND, 1200 cycles from 8-token graph, 13 routes, edge_count=102.
 Top opportunity topology: USDC/WETH/EURC (uniswap_v3 + pancakeswap_v3 + aerodrome_slipstream).

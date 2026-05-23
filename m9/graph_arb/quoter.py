@@ -1,9 +1,10 @@
 """Cycle quoter for M9 graph-arbitrage scanner."""
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
@@ -25,6 +26,65 @@ STATUS_POSITIVE_GROSS = "POSITIVE_GROSS"
 STATUS_NEGATIVE_GROSS = "NEGATIVE_GROSS"
 STATUS_CYCLE_QUOTE_TIMEOUT = "CYCLE_QUOTE_TIMEOUT"
 
+# ---------------------------------------------------------------------------
+# Edge-level quote cache (Step 9)
+# ---------------------------------------------------------------------------
+# A lightweight TTL cache for single-leg quote results, keyed by
+# (pool_addr, token_in_addr, amount_in).  This avoids redundant RPC calls
+# when the same edge appears in multiple cycles within a single sweep.
+#
+# TTL is short (default 2 s) so prices never go stale across sweeps.
+# Thread-safe via a per-cache lock.
+
+_EdgeKey = Tuple[str, str, int]  # (pool_addr_lower, token_in_addr_lower, amount_in)
+
+_EDGE_CACHE_TTL_S: float = 2.0
+
+
+class _EdgeQuoteCache:
+    """Thread-safe TTL cache for single-leg QuoteResult objects."""
+
+    def __init__(self, ttl_s: float = _EDGE_CACHE_TTL_S) -> None:
+        self._ttl = ttl_s
+        self._lock = threading.Lock()
+        # value: (QuoteResult, expires_at_monotonic)
+        self._store: Dict[_EdgeKey, tuple] = {}
+
+    def get(self, key: _EdgeKey) -> Optional["QuoteResult"]:
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            result, expires_at = entry
+            if time.monotonic() > expires_at:
+                del self._store[key]
+                return None
+            return result
+
+    def put(self, key: _EdgeKey, result: "QuoteResult") -> None:
+        with self._lock:
+            self._store[key] = (result, time.monotonic() + self._ttl)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self._store)
+
+
+# Module-level cache shared across all threads within a process.
+# Callers can replace this with a custom instance (e.g. in tests).
+edge_quote_cache: _EdgeQuoteCache = _EdgeQuoteCache()
+
+
+def _edge_cache_key(edge: "GraphEdge", amount_in: int) -> _EdgeKey:
+    """Derive a stable cache key from the edge and input amount."""
+    pool_addr = (edge.pool_address or "").lower()
+    token_in = (edge.token_in_addr or "").lower()
+    return (pool_addr, token_in, amount_in)
+
 
 def _probe_leg(
     w3: Any,
@@ -34,23 +94,44 @@ def _probe_leg(
     amount_in: int,
     quote_backend: str = BACKEND_DIRECT_HTTP,
     rpc_url: Optional[str] = None,
+    edge: Optional["GraphEdge"] = None,
+    use_cache: bool = True,
 ) -> QuoteResult:
-    """Route a single leg probe to the correct backend."""
+    """Route a single leg probe to the correct backend.
+
+    When ``edge`` is supplied and ``use_cache=True`` (default), the result is
+    looked up in / stored to the module-level ``edge_quote_cache`` before
+    issuing an RPC call.  This avoids redundant calls when the same pool
+    appears in multiple cycles within a single sweep.
+    """
+    # Cache read (only when we have a stable pool address to key on)
+    cache_key: Optional[_EdgeKey] = None
+    if use_cache and edge is not None and edge.pool_address:
+        cache_key = _edge_cache_key(edge, amount_in)
+        cached = edge_quote_cache.get(cache_key)
+        if cached is not None:
+            return cached
     if quote_backend == BACKEND_RAW_HTTP:
         from m9.graph_arb.raw_http_probe import probe_quote_raw_http
         if rpc_url is None:
             raise ValueError("rpc_url is required for raw_http backend")
-        return probe_quote_raw_http(rpc_url, route, token_in, token_out, amount_in)
+        result = probe_quote_raw_http(rpc_url, route, token_in, token_out, amount_in)
     elif quote_backend == BACKEND_ANVIL_FORK:
         # anvil_fork always routes to Anvil local fork — ignores rpc_url to avoid
         # accidentally hitting the external RPC when runner resolves BASE_RPC first.
         import os as _os
         from m9.graph_arb.raw_http_probe import probe_quote_raw_http
         anvil_url = _os.environ.get("ARBY_ANVIL_RPC_URL", "http://127.0.0.1:8545")
-        return probe_quote_raw_http(anvil_url, route, token_in, token_out, amount_in)
+        result = probe_quote_raw_http(anvil_url, route, token_in, token_out, amount_in)
     else:
         # default: direct_http (web3 path)
-        return probe_quote(w3, route, token_in, token_out, amount_in)
+        result = probe_quote(w3, route, token_in, token_out, amount_in)
+
+    # Cache write
+    if cache_key is not None:
+        edge_quote_cache.put(cache_key, result)
+
+    return result
 
 
 def _make_dex_route(edge: GraphEdge) -> DexRoute:
@@ -123,7 +204,10 @@ def quote_cycle_sync(
         token_in = _make_token_info(edge.token_in_sym, edge.token_in_addr, edge.token_in_decimals)
         token_out = _make_token_info(edge.token_out_sym, edge.token_out_addr, edge.token_out_decimals)
 
-        leg_result = _probe_leg(w3, route, token_in, token_out, current_amount, quote_backend, rpc_url)
+        leg_result = _probe_leg(
+            w3, route, token_in, token_out, current_amount,
+            quote_backend, rpc_url, edge=edge,
+        )
         leg_results.append(leg_result)
 
         if not leg_result.ok:

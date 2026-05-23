@@ -52,8 +52,16 @@ def build_graph_from_inventory(
     min_qsr_edge: float = 0.0,
     exclude_route_ids: Optional["frozenset[str]"] = None,
     exclude_edge_keys: Optional["frozenset[str]"] = None,
+    require_factory_verified: bool = False,
 ) -> "Dict[str, Dict[str, List[GraphEdge]]]":
     """Build a directed adjacency dict from inventory active_routes.
+
+    Args:
+        require_factory_verified: When True, skip any route whose
+            ``factory_verified`` field is not exactly ``True``.  Routes
+            lacking the field are treated as unverified and filtered out.
+            Use this after running pool_verifier to ensure only on-chain
+            confirmed pools enter the graph.
 
     Returns:
         adjacency[token_in_sym][token_out_sym] = List[GraphEdge]
@@ -100,6 +108,7 @@ def build_graph_from_inventory(
 
     adjacency: Dict[str, Dict[str, List[GraphEdge]]] = defaultdict(lambda: defaultdict(list))
     built_count = 0
+    unverified_skipped = 0
 
     for entry in active_routes:
         pair_id = entry.get("pair_id", "")
@@ -112,6 +121,13 @@ def build_graph_from_inventory(
         if exclude_factory_classes and factory_class in exclude_factory_classes:
             continue
         if exclude_route_ids and route_id in exclude_route_ids:
+            continue
+        if require_factory_verified and entry.get("factory_verified") is not True:
+            unverified_skipped += 1
+            logger.debug(
+                "Skipping unverified route (require_factory_verified=True)",
+                extra={"context": {"route_id": route_id, "event": "graph_build_skip_unverified"}},
+            )
             continue
 
         try:
@@ -134,11 +150,14 @@ def build_graph_from_inventory(
             adapter_type = dex_cfg.adapter_type
             quoter_addr = dex_cfg.quoter
             if adapter_type == "aerodrome_slipstream" and dex_cfg.tick_spacings:
-                # Use first tick spacing (or match by fee)
+                # Use first tick spacing (or match by fee/tick_spacing field)
                 tick_spacing = dex_cfg.tick_spacings[0]
                 tick_key = entry.get("tick_spacing")
                 if tick_key is not None:
                     tick_spacing = int(tick_key)
+                elif fee > 0:
+                    # Aerodrome Slipstream inventory stores tick_spacing in 'fee' field
+                    tick_spacing = fee
 
         fee_bps = _fee_bps_from_edge(adapter_type, fee, tick_spacing)
 
@@ -232,6 +251,7 @@ def build_graph_from_inventory(
                 "token_count": len(adjacency),
                 "edge_count": built_count,
                 "inventory_path": str(inv_path),
+                "unverified_skipped": unverified_skipped,
             }
         },
     )
@@ -299,6 +319,10 @@ def extract_inventory_stats(inventory_path: str) -> "Dict[str, object]":
         if "_" in pair_id
     })
     ar_count = len(active_routes)
+    # Count routes without factory_verified=True (purity metric for M9_INVENTORY_PURITY goal)
+    unverified_active_routes = sum(
+        1 for r in active_routes if r.get("factory_verified") is not True
+    )
     # graph_ready_edges is computed separately (we can't fully know without running builder)
     # Use active_routes * 2 as a reasonable proxy (forward + reverse for each route)
     graph_ready_edges_proxy = ar_count * 2
@@ -310,6 +334,7 @@ def extract_inventory_stats(inventory_path: str) -> "Dict[str, object]":
         "verified_tokens": verified_tokens,
         "verified_pools": verified_pools,
         "active_routes": ar_count,
+        "unverified_active_routes": unverified_active_routes,
         "graph_ready_edges_proxy": graph_ready_edges_proxy,
     }
 
