@@ -103,3 +103,15 @@ class TestProviderRouter:
         router = ProviderRouter(primary=PRIMARY, secondary=SECONDARY)
         assert router.primary == PRIMARY
         assert router.secondary == SECONDARY
+
+    def test_snapshot_does_not_deadlock(self):
+        """Regression: _ProviderStats.snapshot() must not deadlock by calling
+        recent_429_count() while holding self._lock (non-reentrant lock)."""
+        router = ProviderRouter(primary=PRIMARY, secondary=SECONDARY)
+        router.record_429(PRIMARY)
+        router.record_success(PRIMARY)
+        # This call previously deadlocked because snapshot() acquired self._lock
+        # then called recent_429_count() which tried to acquire self._lock again.
+        snap = router.snapshot()
+        primary_masked = _mask(PRIMARY)
+        assert snap["providers"][primary_masked]["recent_429"] >= 1

@@ -356,6 +356,10 @@ def verify_candidates_from_config(
     # Each entry is a kwargs dict for _verify_one
     candidates: List[Dict[str, Any]] = []
 
+    # Step 9 (GPT): collect quarantine records for unsupported adapter_types
+    # so they appear explicitly in the reject histogram with UNSUPPORTED_DEX_TYPE.
+    unsupported_routes: List[Dict[str, Any]] = []
+
     for dex_id, dex_cfg in config.dexes.items():
         if not dex_cfg.enabled:
             continue
@@ -374,10 +378,37 @@ def verify_candidates_from_config(
             # Extend here when PancakeSwap V3 / SushiSwap V3 added to config
         }
         if adapter_type not in supported:
-            logger.debug(
-                "Skipping dex %s adapter=%s: factory query not supported",
+            logger.warning(
+                "dex %s adapter_type=%s: factory query not supported; "
+                "tagging all pairs as UNSUPPORTED_DEX_TYPE",
                 dex_id, adapter_type,
             )
+            # Step 9: emit explicit quarantine records instead of silently skipping
+            for i, sym_a in enumerate(token_syms):
+                for sym_b in token_syms[i + 1:]:
+                    pair_sym = f"{sym_a}_{sym_b}"
+                    unsupported_routes.append({
+                        "route_id": f"{dex_id}:UNSUPPORTED",
+                        "pair_id": pair_sym,
+                        "dex_id": dex_id,
+                        "adapter_type": adapter_type,
+                        "token0": sym_a,
+                        "token1": sym_b,
+                        "token0_addr": token_map.get(sym_a, _ZERO_ADDR),
+                        "token1_addr": token_map.get(sym_b, _ZERO_ADDR),
+                        "fee": None,
+                        "tick_spacing": None,
+                        "factory_address": factory_addr,
+                        "pool_address": _ZERO_ADDR,
+                        "verified_at_block": "latest",
+                        "factory_verified": False,
+                        "factory_match": None,
+                        "token_match": None,
+                        "fee_match": None,
+                        "liquidity_ok": None,
+                        "status": "quarantined",
+                        "quarantine_reason": "UNSUPPORTED_DEX_TYPE",
+                    })
             continue
 
         # Fee tiers or tick spacings to probe
@@ -431,9 +462,17 @@ def verify_candidates_from_config(
 
     verified_count = sum(1 for r in results if r.get("factory_verified"))
     quarantined_count = len(results) - verified_count
+    # Step 9 (GPT): append UNSUPPORTED_DEX_TYPE quarantine records
+    results.extend(unsupported_routes)
+    if unsupported_routes:
+        logger.info(
+            "pool_verifier: %d routes tagged UNSUPPORTED_DEX_TYPE (V2/ve33 or unknown adapter)",
+            len(unsupported_routes),
+        )
     logger.info(
-        "pool_verifier: %d verified (pool exists), %d quarantined, %d total candidates",
-        verified_count, quarantined_count, len(results),
+        "pool_verifier: %d verified (pool exists), %d quarantined, %d total candidates "
+        "(%d UNSUPPORTED_DEX_TYPE)",
+        verified_count, quarantined_count, len(results), len(unsupported_routes),
     )
     return results
 
@@ -622,6 +661,7 @@ def _write_reject_histogram(
         "MISSING_FACTORY_ADDRESS": "missing_factory",
         "MISSING_TOKEN_ADDRESS": "token_mismatch",
         "FEE_MISMATCH": "fee_mismatch",
+        "UNSUPPORTED_DEX_TYPE": "unsupported_dex_type",  # Step 9 (GPT)
     }
     histogram = _count_quarantine_reasons(quarantined)
     normalized: Dict[str, int] = {}

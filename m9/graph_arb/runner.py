@@ -221,8 +221,8 @@ def main(argv: "list[str] | None" = None) -> int:
         "--sizes-usd",
         nargs="+",
         type=float,
-        default=[1000.0, 5000.0, 10000.0],
-        help="Quote sizes in USD",
+        default=[100.0, 250.0, 500.0],
+        help="Quote sizes in USD (free-tier safe defaults; overridden by scan_params.sizes_usd in config YAML)",
     )
     parser.add_argument(
         "--dynamic-sizes",
@@ -235,10 +235,11 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument(
         "--dynamic-size-max-cycles",
         type=int,
-        default=5,
+        default=3,
         help=(
             "Maximum prioritized cycles per sweep to quote across the full "
-            "--sizes-usd ladder when --dynamic-sizes is enabled."
+            "--sizes-usd ladder when --dynamic-sizes is enabled. "
+            "Default 3 — conservative for free-tier RPC. Overridden by scan_params in config YAML."
         ),
     )
     parser.add_argument(
@@ -280,12 +281,13 @@ def main(argv: "list[str] | None" = None) -> int:
     )
     parser.add_argument(
         "--require-factory-verified",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=bool(os.environ.get("ARBY_REQUIRE_FACTORY_VERIFIED")),
         help=(
-            "Skip inventory routes that do not have factory_verified=True. "
-            "Use after running pool_verifier to ensure only on-chain confirmed "
-            "pools enter the graph. Also enabled by ARBY_REQUIRE_FACTORY_VERIFIED=1."
+            "Use verified inventory (data/tmp/m9_verified_inventory.json) produced "
+            "by pool_verifier.  Also enabled by ARBY_REQUIRE_FACTORY_VERIFIED=1 env. "
+            "Use --no-require-factory-verified to override the env var and force "
+            "the default shadow inventory."
         ),
     )
     parser.add_argument(
@@ -338,6 +340,15 @@ def main(argv: "list[str] | None" = None) -> int:
         "--no-prequote",
         action="store_true",
         help="Disable multicall prequote filter (Steps 1+3+4+9). Use when multicall is unavailable.",
+    )
+    parser.add_argument(
+        "--allow-no-prequote-soak",
+        action="store_true",
+        default=False,
+        help=(
+            "Override the --no-prequote + duration>=5 safety gate. "
+            "DEBUG/testing only — productive runs must use --prequote-min-bps instead."
+        ),
     )
 
     args = parser.parse_args(argv)
@@ -410,6 +421,29 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     except Exception as exc:
         log.warning("Could not resolve rpc_url for chain %s: %s", args.chain, exc)
 
+    # Step 8 (GPT): Apply scan_params overrides from YAML config.
+    # Config wins over CLI defaults — only overrides when CLI still holds the compile-time default.
+    _CLI_SIZES_DEFAULT = [100.0, 250.0, 500.0]
+    _CLI_DYN_MAX_DEFAULT = 3
+    # Fix 7: track source of sizes_usd for artifact invariant
+    _sizes_usd_source: str = "cli_default"
+    try:
+        import yaml  # noqa: PLC0415
+        with open(args.config, encoding="utf-8") as _f:
+            _cfg_raw = yaml.safe_load(_f) or {}
+        _sp = _cfg_raw.get("scan_params") or {}
+        if _sp.get("sizes_usd") and list(args.sizes_usd) == _CLI_SIZES_DEFAULT:
+            args.sizes_usd = [float(v) for v in _sp["sizes_usd"]]
+            _sizes_usd_source = "config.scan_params"
+            log.info("scan_params: sizes_usd from config: %s", args.sizes_usd)
+        elif list(args.sizes_usd) != _CLI_SIZES_DEFAULT:
+            _sizes_usd_source = "cli_override"
+        if _sp.get("dynamic_size_max_cycles") and args.dynamic_size_max_cycles == _CLI_DYN_MAX_DEFAULT:
+            args.dynamic_size_max_cycles = int(_sp["dynamic_size_max_cycles"])
+            log.info("scan_params: dynamic_size_max_cycles from config: %d", args.dynamic_size_max_cycles)
+    except Exception as _sp_exc:
+        log.debug("scan_params load skipped: %s", _sp_exc)
+
     # --require-factory-verified: auto-select the pre-verified inventory if the caller
     # did not supply an explicit --inventory path.  The verified inventory is produced by
     # pool_verifier.py (py -3.11 -m m9.graph_arb.pool_verifier ...) and only contains
@@ -431,6 +465,38 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _VERIFIED_INVENTORY, args.chain, args.config,
             )
             return EXIT_CONFIG_ERROR
+
+    # Guard: --no-prequote + --dynamic-sizes is an invalid combination for productive runs.
+    # Without the prequote funnel every cycle in the batch hits the raw-HTTP quoter directly,
+    # which exhausts the dRPC free-tier RPS budget and yields qsr ≈ 0 via 429 floods.
+    if getattr(args, "no_prequote", False) and getattr(args, "dynamic_sizes", False):
+        log.error(
+            "CONFIG_ERROR: --no-prequote and --dynamic-sizes cannot be combined. "
+            "Without the prequote funnel all cycles hit the raw-HTTP quoter, "
+            "burning free-tier RPS and producing qsr≈0. "
+            "Use --prequote-min-bps -500 (permissive) instead of --no-prequote, "
+            "or remove --dynamic-sizes."
+        )
+        return EXIT_CONFIG_ERROR
+
+    # Guard: --no-prequote for soak duration (>=5 min) disables multicall_success_rate
+    # and data_completeness — both runtime gates are null=FAIL without prequote.
+    # This produces invalid productive-state artifacts that cannot pass the M9 gate.
+    # Use --prequote-min-bps -500 (permissive, passes ~95% of cycles) instead.
+    if (
+        getattr(args, "no_prequote", False)
+        and getattr(args, "duration_minutes", 0) >= 5
+        and not getattr(args, "allow_no_prequote_soak", False)
+    ):
+        log.error(
+            "CONFIG_ERROR: --no-prequote with duration_minutes=%s is not allowed for "
+            "productive/soak runs. Removing prequote sets multicall_success_rate=null "
+            "and data_completeness=null, both of which cause runtime_gates.all_pass=False. "
+            "Use --prequote-min-bps -500 (permissive) instead. "
+            "To bypass this guard explicitly use --allow-no-prequote-soak (debug only).",
+            getattr(args, "duration_minutes", 0),
+        )
+        return EXIT_CONFIG_ERROR
 
     # Prefer merged shadow inventory if available
     inventory_path = best_inventory_path(preferred=args.inventory)
@@ -486,6 +552,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_source=rpc_source,
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
+            sizes_usd_source=_sizes_usd_source,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_CONFIG_ERROR
@@ -520,6 +587,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_source=rpc_source,
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
+            sizes_usd_source=_sizes_usd_source,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_NO_CYCLES
@@ -549,6 +617,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_source=rpc_source,
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
+            sizes_usd_source=_sizes_usd_source,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_OK
@@ -660,6 +729,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
         # Steps 1+3+4+9: Multicall pool snapshot → V3 prequote pre-filter
         _sweep_prequote_skipped = 0
+        _prequote_skipped_ids: list = []
         if _prequote_enabled and _snapshot_pool_states is not None and batch:
             try:
                 _pool_addrs = list({e.pool_address for c in batch for e in c.edges})
@@ -670,6 +740,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 for _cyc in batch:
                     if _should_skip_cycle(_cyc, _pool_states, min_spread_bps=_prequote_min_bps):
                         _sweep_prequote_skipped += 1
+                        _prequote_skipped_ids.append(_cyc.cycle_id)
                     else:
                         _filtered.append(_cyc)
                 if _sweep_prequote_skipped:
@@ -692,12 +763,14 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_url=_active_rpc,
             token_prices=_TOKEN_PRICE_USD_BASE,
             dynamic_sizes=getattr(args, "dynamic_sizes", False),
-            dynamic_size_limit=getattr(args, "dynamic_size_max_cycles", 5),
+            dynamic_size_limit=getattr(args, "dynamic_size_max_cycles", 3),
         )
         all_results.extend(new_results)
         # Feed results back to priority scheduler for adaptive score update
         if _cycle_scheduler is not None:
             _cycle_scheduler.record_results(new_results)
+            if _prequote_skipped_ids:
+                _cycle_scheduler.record_prequote_skips(_prequote_skipped_ids)
         # Step 8: record 429s from sweep for provider router
         _sweep_429s = sum(
             1 for qr in new_results
@@ -708,6 +781,20 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _router.record_429(_active_rpc)
         sweeps_completed += 1
         sweep_num += 1
+
+        # Step 6 (GPT): operator surface — log dynamic_size summary per sweep
+        if getattr(args, "dynamic_sizes", False):
+            _sweep_dyn = sum(1 for qr in new_results if qr.dynamic_size_usd is not None)
+            if _sweep_dyn:
+                _dyn_sizes_seen = sorted({
+                    qr.dynamic_size_usd for qr in new_results
+                    if qr.dynamic_size_usd is not None
+                })
+                log.info(
+                    "Sweep %d dynamic_size: %d/%d cycles selected non-default size (sizes: %s)",
+                    sweeps_completed, _sweep_dyn, len(new_results),
+                    [round(s, 1) for s in _dyn_sizes_seen],
+                )
 
         # Step 9 (GPT fix): 429-adaptive prequote threshold.
         # Read current cumulative 429 count from multicall stats.
@@ -768,6 +855,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             scheduler_name=getattr(args, "scheduler", "priority"),
             multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
             verified_inventory_exists=_verified_inventory_exists,
+            sizes_usd_source=_sizes_usd_source,
+            provider_router_snapshot=_router.snapshot(),
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -838,6 +927,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         scheduler_name=getattr(args, "scheduler", "priority"),
         multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
         verified_inventory_exists=_verified_inventory_exists,
+        sizes_usd_source=_sizes_usd_source,
+        provider_router_snapshot=_router.snapshot(),
     )
     write_artifact(artifact, args.artifact_path)
 

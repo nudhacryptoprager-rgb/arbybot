@@ -113,9 +113,17 @@ def test_singleton_exists():
     assert "logs" in snap and "calls" in snap and "sim" in snap
 
 
-def test_other_error_does_not_open_breaker():
+def test_5xx_opens_breaker():
     pt = ProviderThrottle()
     pt.record_response("calls", status_code=500, ok=False)
+    snap = pt.snapshot()["calls"]
+    assert snap["breaker_open"] is True
+    assert snap["total_5xx"] == 1
+
+
+def test_other_error_does_not_open_breaker():
+    pt = ProviderThrottle()
+    pt.record_response("calls", status_code=404, ok=False)
     snap = pt.snapshot()["calls"]
     assert snap["breaker_open"] is False
     assert snap["total_other_errors"] == 1

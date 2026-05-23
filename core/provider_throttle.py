@@ -58,9 +58,11 @@ class _MethodState:
         "consec_failures",
         "consec_failures_408",
         "consec_failures_429",
+        "consec_failures_5xx",
         "cooldown_until",
         "total_408",
         "total_429",
+        "total_5xx",
         "total_other_errors",
         "total_ok",
         "total_blocked",
@@ -71,9 +73,11 @@ class _MethodState:
         self.consec_failures = 0
         self.consec_failures_408 = 0
         self.consec_failures_429 = 0
+        self.consec_failures_5xx = 0
         self.cooldown_until = 0.0
         self.total_408 = 0
         self.total_429 = 0
+        self.total_5xx = 0
         self.total_other_errors = 0
         self.total_ok = 0
         self.total_blocked = 0
@@ -141,11 +145,15 @@ class ProviderThrottle:
             elif status_code == 429:
                 st.total_429 += 1
                 self._open_breaker(st, kind=429)
+            elif status_code is not None and 500 <= status_code < 600:
+                st.total_5xx += 1
+                self._open_breaker(st, kind=500)
             elif ok:
                 st.total_ok += 1
                 st.consec_failures = 0
                 st.consec_failures_408 = 0
                 st.consec_failures_429 = 0
+                st.consec_failures_5xx = 0
                 st.cooldown_until = 0.0
             else:
                 st.total_other_errors += 1
@@ -158,6 +166,11 @@ class ProviderThrottle:
         if kind == 408:
             st.consec_failures_408 += 1
             idx = min(st.consec_failures_408 - 1, len(_BACKOFF_SCHEDULE_408) - 1)
+            cooldown = _BACKOFF_SCHEDULE_408[idx]
+        elif kind == 500:
+            # 5xx server errors: use same soft ladder as 408 (server-side flakiness)
+            st.consec_failures_5xx += 1
+            idx = min(st.consec_failures_5xx - 1, len(_BACKOFF_SCHEDULE_408) - 1)
             cooldown = _BACKOFF_SCHEDULE_408[idx]
         else:
             st.consec_failures_429 += 1
@@ -177,10 +190,12 @@ class ProviderThrottle:
                     "consec_failures": st.consec_failures,
                     "consec_failures_408": st.consec_failures_408,
                     "consec_failures_429": st.consec_failures_429,
+                    "consec_failures_5xx": st.consec_failures_5xx,
                     "cooldown_remaining_s": round(cooldown_remaining, 3),
                     "breaker_open": cooldown_remaining > 0.0,
                     "total_408": st.total_408,
                     "total_429": st.total_429,
+                    "total_5xx": st.total_5xx,
                     "total_other_errors": st.total_other_errors,
                     "total_ok": st.total_ok,
                     "total_blocked": st.total_blocked,
@@ -195,9 +210,11 @@ class ProviderThrottle:
                 st.consec_failures = 0
                 st.consec_failures_408 = 0
                 st.consec_failures_429 = 0
+                st.consec_failures_5xx = 0
                 st.cooldown_until = 0.0
                 st.total_408 = 0
                 st.total_429 = 0
+                st.total_5xx = 0
                 st.total_other_errors = 0
                 st.total_ok = 0
                 st.total_blocked = 0

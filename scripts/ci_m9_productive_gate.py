@@ -17,10 +17,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
 from pathlib import Path
+
+# Ensure stdout uses UTF-8 on Windows consoles (cp1251 raises UnicodeEncodeError
+# when artifact field values contain non-ASCII characters).
+if hasattr(sys.stdout, "buffer") and sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 _DEFAULT_ARTIFACT = Path("data/runs/_rolling/m9_graph_latest.json")
 
@@ -67,6 +73,14 @@ def run_gate(artifact_path: Path) -> int:
                     t = val.get("threshold")
                     issues.append(f"runtime_gates.{key}: FAIL (value={v}, threshold={t})")
 
+    # Fix 8: warn if unverified_active_routes is missing entirely (runner not using --require-factory-verified)
+    it = art.get("infra_telemetry") or {}
+    if "unverified_active_routes" not in it:
+        issues.append(
+            "WARN: infra_telemetry.unverified_active_routes missing — "
+            "run with --require-factory-verified for inventory purity guarantee"
+        )
+
     # GPT Step 8 invariant: if dynamic_size_enabled=True, dynamic_size_selected_count must be > 0
     it = art.get("infra_telemetry") or {}
     if it.get("dynamic_size_enabled"):
@@ -77,10 +91,30 @@ def run_gate(artifact_path: Path) -> int:
                 "(no successful dynamic-size quotes; all dynamic cycles may have failed)"
             )
 
+    # Fix 7: sizes_usd_source invariant — when dynamic_size_enabled, source must be config.scan_params
+    if it.get("dynamic_size_enabled"):
+        sizes_src = it.get("sizes_usd_source")
+        if sizes_src is not None and sizes_src != "config.scan_params":
+            issues.append(
+                f"INVARIANT: dynamic_size_enabled=True but sizes_usd_source={sizes_src!r} "
+                "(expected 'config.scan_params' — set scan_params.sizes_usd in config YAML, "
+                "not via CLI --sizes-usd)"
+            )
+
     if issues:
         print("FAIL — M9 productive-state gate:", flush=True)
         for issue in issues:
             print(f"  ! {issue}", flush=True)
+        # Step 7 (GPT): always show dynamic_size operator info, even on FAIL
+        it_fail = art.get("infra_telemetry") or {}
+        _dyn_e = it_fail.get("dynamic_size_enabled", False)
+        _dyn_c = it_fail.get("dynamic_size_selected_count", 0)
+        _dyn_r = it_fail.get("dynamic_size_selection_rate")
+        print(
+            f"  dynamic_size_enabled={_dyn_e}, selected_count={_dyn_c}"
+            + (f", selection_rate={_dyn_r}" if _dyn_r is not None else ""),
+            flush=True,
+        )
         print("", flush=True)
         print(
             "Policy: M8/M8.1→M9 bridge is locked until all runtime_gates pass.\n"

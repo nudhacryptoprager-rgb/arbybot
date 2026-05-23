@@ -52,6 +52,11 @@ _HISTORY_RANGE: float = 28.0          # total adjustment range (±14 at rate=0/1
 _COLD_PERCENTILE: float = 0.20        # bottom fraction → cold queue
 _COLD_RATIO: int = 5                  # 1 cold slot per COLD_RATIO hot slots
 
+# Route-level RPC error demote constants (step 7 fix)
+_RPC_ERROR_DEMOTE_THRESHOLD: float = 0.5   # >50% QUOTE_RPC_ERROR triggers demotion
+_RPC_ERROR_MIN_SAMPLES: int = 4            # min quotes before demotion applies
+_RPC_ERROR_PENALTY: float = -28.0          # penalty to force cycle into cold queue
+
 # ---------------------------------------------------------------------------
 # Status values treated as "not quoteable" (from quoter.py constants)
 # ---------------------------------------------------------------------------
@@ -117,6 +122,9 @@ class CyclePriorityScheduler:
         }
         # Quoteability history per cycle: list of bool (True = quoteable)
         self._history: Dict[str, List[bool]] = defaultdict(list)
+        # Route-level RPC error tracking for demote logic (step 7 fix)
+        self._route_rpc_errors: Dict[str, int] = {}
+        self._route_rpc_total: Dict[str, int] = {}
         # Counter for cold quota injection
         self._hot_slots_since_cold: int = 0
         # Hot / cold id sets (populated by _reclassify_all)
@@ -182,6 +190,30 @@ class CyclePriorityScheduler:
 
         return result
 
+    def record_prequote_skips(self, cycle_ids: List[str]) -> None:
+        """Demote cycles skipped by prequote estimation.
+
+        Treats each skip as a "not quoteable" event in the history buffer so
+        consistently-skipped cycles gradually fall into the cold queue, making
+        room for other cycles to be sampled.
+        """
+        changed = False
+        for cid in cycle_ids:
+            if cid not in self._scores:
+                continue
+            hist = self._history[cid]
+            hist.append(False)  # treat skip as "not quoteable"
+            if len(hist) > _HISTORY_WINDOW:
+                hist.pop(0)
+            rate = sum(1 for q in hist if q) / len(hist)
+            adj = (rate - 0.5) * _HISTORY_RANGE
+            cycle = self._cycle_by_id.get(cid)
+            if cycle is not None:
+                self._scores[cid] = compute_base_score(cycle) + adj
+                changed = True
+        if changed:
+            self._reclassify_all()
+
     def record_results(self, results: List[CycleQuoteResult]) -> None:
         """Update adaptive scores based on quote results from the last sweep.
 
@@ -202,7 +234,28 @@ class CyclePriorityScheduler:
             # Adaptive adjustment: rate=1.0 → +14, rate=0.5 → 0, rate=0.0 → -14
             rate = sum(1 for q in hist if q) / len(hist)
             adj = (rate - 0.5) * _HISTORY_RANGE
-            self._scores[cid] = compute_base_score(qr.cycle) + adj
+
+            # Route-level RPC error tracking: update per-route counters from leg_results
+            for leg in (qr.leg_results or []):
+                rid = getattr(leg, "route_id", None)
+                if rid:
+                    self._route_rpc_total[rid] = self._route_rpc_total.get(rid, 0) + 1
+                    if getattr(leg, "reject_reason", None) == "QUOTE_RPC_ERROR":
+                        self._route_rpc_errors[rid] = self._route_rpc_errors.get(rid, 0) + 1
+
+            # Apply demote penalty if any route in this cycle has >50% RPC error rate
+            # (requires minimum _RPC_ERROR_MIN_SAMPLES quotes to avoid false positives).
+            rpc_penalty = 0.0
+            for leg in (qr.leg_results or []):
+                rid = getattr(leg, "route_id", None)
+                if rid:
+                    total = self._route_rpc_total.get(rid, 0)
+                    errors = self._route_rpc_errors.get(rid, 0)
+                    if total >= _RPC_ERROR_MIN_SAMPLES and errors / total > _RPC_ERROR_DEMOTE_THRESHOLD:
+                        rpc_penalty = _RPC_ERROR_PENALTY
+                        break
+
+            self._scores[cid] = compute_base_score(qr.cycle) + adj + rpc_penalty
 
         self._reclassify_all()
 

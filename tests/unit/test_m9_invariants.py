@@ -170,6 +170,64 @@ class TestInfraTelemetryInvariant:
         art = build_artifact(**_base_kwargs(multicall_stats=mc))
         assert "multicall_subchunk_splits" not in art["infra_telemetry"]
 
+    # ------------------------------------------------------------------
+    # sizes_usd_source tracking (Fix 7)
+    # ------------------------------------------------------------------
+
+    def test_sizes_usd_source_default_is_cli_default(self):
+        """sizes_usd_source defaults to 'cli_default' when not passed."""
+        art = build_artifact(**_base_kwargs())
+        assert art["infra_telemetry"].get("sizes_usd_source") == "cli_default"
+
+    def test_sizes_usd_source_config_scan_params(self):
+        """sizes_usd_source='config.scan_params' propagates into infra_telemetry."""
+        art = build_artifact(**_base_kwargs(sizes_usd_source="config.scan_params"))
+        assert art["infra_telemetry"]["sizes_usd_source"] == "config.scan_params"
+
+    def test_sizes_usd_source_cli_override(self):
+        """sizes_usd_source='cli_override' propagates into infra_telemetry."""
+        art = build_artifact(**_base_kwargs(sizes_usd_source="cli_override"))
+        assert art["infra_telemetry"]["sizes_usd_source"] == "cli_override"
+
+    # ------------------------------------------------------------------
+    # Normalized 429 counters (Fix 4)
+    # ------------------------------------------------------------------
+
+    def test_normalized_429_counters_zero_by_default(self):
+        """raw_http_429_count, multicall_429_count, quote_429_count default to 0."""
+        art = build_artifact(**_base_kwargs())
+        it = art["infra_telemetry"]
+        assert it.get("raw_http_429_count") == 0
+        assert it.get("multicall_429_count") == 0
+        assert it.get("quote_429_count") == 0
+
+    def test_multicall_429_count_from_multicall_stats(self):
+        """multicall_429_count reads http_429 from multicall_stats dict."""
+        mc = {"attempted": 10, "success": 8, "http_429": 5, "retry_count": 2,
+              "fetched_total": 80, "requested_total": 100, "subchunk_splits": 0}
+        art = build_artifact(**_base_kwargs(multicall_stats=mc))
+        assert art["infra_telemetry"]["multicall_429_count"] == 5
+
+    # ------------------------------------------------------------------
+    # provider_router_snapshot passthrough (Fix 3)
+    # ------------------------------------------------------------------
+
+    def test_provider_router_snapshot_absent_by_default(self):
+        """provider_router_snapshot is absent when not passed."""
+        art = build_artifact(**_base_kwargs())
+        assert "provider_router_snapshot" not in art["infra_telemetry"]
+
+    def test_provider_router_snapshot_propagated_when_passed(self):
+        """provider_router_snapshot passthrough into infra_telemetry."""
+        snap = {
+            "primary": "https://lb.drpc.live/...",
+            "secondary": "",
+            "is_failed_over": False,
+            "providers": {}
+        }
+        art = build_artifact(**_base_kwargs(provider_router_snapshot=snap))
+        assert art["infra_telemetry"]["provider_router_snapshot"] == snap
+
 
 # ---------------------------------------------------------------------------
 # Schema stability: top-level keys don't disappear across parameter variations

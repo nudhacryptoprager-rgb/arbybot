@@ -49,22 +49,41 @@ _SECONDARY_ENV_VAR = {
 
 
 class _ProviderStats:
-    """Per-provider 429 tracking within a sliding time window."""
+    """Per-provider 429 tracking within a sliding time window.
+
+    Tracks both windowed 429 rate (for failover) and lifetime counters
+    (attempts_total, http_429_total) for per-endpoint telemetry (Step 3).
+    Approximate latency percentiles (p50/p90) are computed from the last
+    up to 200 recorded latencies.
+    """
 
     def __init__(self, window_s: float = _DEFAULT_WINDOW_S) -> None:
         self._window = window_s
         self._lock = threading.Lock()
         self._ts: "collections.deque[float]" = collections.deque()
         self._success_count: int = 0
+        # Lifetime counters (not windowed)
+        self._attempts_total: int = 0
+        self._http_429_total: int = 0
+        # Recent latencies for p50/p90 (capped to avoid unbounded growth)
+        self._latencies: "collections.deque[float]" = collections.deque(maxlen=200)
 
     def record_429(self) -> None:
         now = time.monotonic()
         with self._lock:
             self._ts.append(now)
+            self._http_429_total += 1
 
     def record_success(self) -> None:
         with self._lock:
             self._success_count += 1
+
+    def record_attempt(self, latency_s: Optional[float] = None) -> None:
+        """Record one outbound RPC call with optional latency."""
+        with self._lock:
+            self._attempts_total += 1
+            if latency_s is not None and latency_s >= 0:
+                self._latencies.append(latency_s)
 
     def recent_429_count(self) -> int:
         cutoff = time.monotonic() - self._window
@@ -74,10 +93,24 @@ class _ProviderStats:
             return len(self._ts)
 
     def snapshot(self) -> dict:
-        return {
-            "recent_429": self.recent_429_count(),
-            "success_total": self._success_count,
-        }
+        with self._lock:
+            lat = sorted(self._latencies)
+            n = len(lat)
+            p50: Optional[float] = round(lat[n // 2], 3) if n > 0 else None
+            p90: Optional[float] = round(lat[min(int(n * 0.90), n - 1)], 3) if n > 0 else None
+            # Inline recent_429_count to avoid re-acquiring self._lock (deadlock risk).
+            cutoff = time.monotonic() - self._window
+            while self._ts and self._ts[0] < cutoff:
+                self._ts.popleft()
+            recent_429 = len(self._ts)
+            return {
+                "recent_429": recent_429,
+                "success_total": self._success_count,
+                "attempts_total": self._attempts_total,
+                "http_429_total": self._http_429_total,
+                "latency_p50_s": p50,
+                "latency_p90_s": p90,
+            }
 
 
 class ProviderRouter:

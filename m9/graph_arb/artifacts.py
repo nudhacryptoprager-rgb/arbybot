@@ -206,6 +206,10 @@ def build_artifact(
     scheduler_name: Optional[str] = None,
     # Verified inventory present flag (Step 4 GPT fix)
     verified_inventory_exists: bool = False,
+    # Source of sizes_usd: "config.scan_params" | "cli_default" | "cli_override" (Fix 7)
+    sizes_usd_source: str = "cli_default",
+    # Per-endpoint router telemetry snapshot (Fix 2+3)
+    provider_router_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -479,6 +483,35 @@ def build_artifact(
         infra_telemetry["http_429_count"] = _leg_429_count
         infra_telemetry["http_429_count_source"] = "leg_results"
 
+    # Normalized 429 counters (Fix 4): separate quote vs multicall channels.
+    # raw_http_429_count  — 429s from direct quote RPC calls (leg_results)
+    # multicall_429_count — 429s from multicall batch calls (prequote)
+    # quote_429_count     — alias for raw_http_429_count (quote-path 429s only)
+    _mc_429_count = multicall_stats.get("http_429", 0) if multicall_stats else 0
+    infra_telemetry["raw_http_429_count"] = _leg_429_count
+    infra_telemetry["multicall_429_count"] = _mc_429_count
+    infra_telemetry["quote_429_count"] = _leg_429_count
+
+    # HTTP error taxonomy counters (from leg_results.raw_error):
+    # http_408_count  — request timeout (server-side flakiness)
+    # http_500_count  — internal server error (RPC node overload)
+    # http_5xx_count  — all 5xx server errors combined
+    _leg_408_count = sum(
+        1 for qr in cycle_results for leg in (qr.leg_results or [])
+        if not leg.ok and (leg.raw_error or "").startswith("HTTP 408")
+    )
+    _leg_500_count = sum(
+        1 for qr in cycle_results for leg in (qr.leg_results or [])
+        if not leg.ok and (leg.raw_error or "").startswith("HTTP 500")
+    )
+    _leg_5xx_count = sum(
+        1 for qr in cycle_results for leg in (qr.leg_results or [])
+        if not leg.ok and (leg.raw_error or "").startswith("HTTP 5")
+    )
+    infra_telemetry["http_408_count"] = _leg_408_count
+    infra_telemetry["http_500_count"] = _leg_500_count
+    infra_telemetry["http_5xx_count"] = _leg_5xx_count
+
     # Absolute QUOTE_REVERT count from leg_results (complements quote_revert_rate above)
     # Re-use the already-computed count (no second iteration needed).
     _quote_revert_count = _leg_revert_count_early
@@ -532,6 +565,11 @@ def build_artifact(
         )
     # Verified inventory availability (Step 4 GPT fix)
     infra_telemetry["verified_inventory_exists"] = verified_inventory_exists
+    # Source of sizes_usd (Fix 7): "config.scan_params" | "cli_default" | "cli_override"
+    infra_telemetry["sizes_usd_source"] = sizes_usd_source
+    # Per-endpoint provider router telemetry (Fix 2+3)
+    if provider_router_snapshot is not None:
+        infra_telemetry["provider_router_snapshot"] = provider_router_snapshot
     artifact["infra_telemetry"] = infra_telemetry
 
     # Runtime gates block (Step 6 GPT fix) — explicit pass/fail for each quality threshold
