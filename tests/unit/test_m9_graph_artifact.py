@@ -619,3 +619,130 @@ class TestM9GraphArtifactBuilder:
         assert len(opps) >= 1
         row = opps[0]
         assert row["main_blocker"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Step 4 (GPT fix): gross/net semantics contract
+# ---------------------------------------------------------------------------
+
+class TestGrossNetSemantics:
+    """Ensure best_cycle_net_bps vs gross/estimated/router_sim fields are correct.
+
+    Contract (until router_sim is implemented):
+    - best_cycle_gross_bps = raw quote bps (float or None)
+    - best_cycle_net_bps = alias == best_cycle_gross_bps (backward compat)
+    - estimated_cost_bps = None (placeholder, cost model not yet implemented)
+    - router_sim_net_bps = None (placeholder, router simulation not yet enabled)
+    """
+
+    def test_best_cycle_gross_bps_present_in_artifact(self):
+        """best_cycle_gross_bps must be a top-level key in the artifact."""
+        a = _empty_artifact()
+        assert "best_cycle_gross_bps" in a, "best_cycle_gross_bps field missing"
+
+    def test_estimated_cost_bps_is_null_placeholder(self):
+        """estimated_cost_bps must be present and null until cost model exists."""
+        a = _empty_artifact()
+        assert "estimated_cost_bps" in a, "estimated_cost_bps field missing"
+        assert a["estimated_cost_bps"] is None
+
+    def test_router_sim_net_bps_is_null_placeholder(self):
+        """router_sim_net_bps must be present and null until router sim is enabled."""
+        a = _empty_artifact()
+        assert "router_sim_net_bps" in a, "router_sim_net_bps field missing"
+        assert a["router_sim_net_bps"] is None
+
+    def test_net_alias_equals_gross(self):
+        """best_cycle_net_bps must equal best_cycle_gross_bps (alias contract)."""
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle, size_usd=1000.0, amount_in=1000 * 10**6,
+            amount_out=1001 * 10**6, gross_bps=10.0, status="POSITIVE_GROSS",
+            reject_reason=None, leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        assert a["best_cycle_gross_bps"] == a["best_cycle_net_bps"], (
+            "best_cycle_net_bps must equal best_cycle_gross_bps (alias)"
+        )
+        assert a["best_cycle_gross_bps"] == pytest.approx(10.0)
+
+    def test_gross_bps_null_when_no_cycles(self):
+        """Both best_cycle_gross_bps and best_cycle_net_bps must be null when no cycles."""
+        a = _empty_artifact()
+        assert a["best_cycle_gross_bps"] is None
+        assert a["best_cycle_net_bps"] is None
+
+    def test_repeatability_counters_zero_when_no_cycles(self):
+        """Repeatability counters must be 0 when no cycle_results."""
+        a = _empty_artifact()
+        assert a["positive_cycle_multi_hit_count"] == 0
+        assert a["positive_cycle_max_repeat"] == 0
+
+    def test_repeatability_multi_hit_counted(self):
+        """positive_cycle_multi_hit_count counts cycles positive in ≥2 sweeps."""
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        mock_cycle = _make_mock_cycle()
+        mock_cycle.cycle_id = "repeated_cycle_abc"
+        # Same cycle_id appearing positive 3 times (3 sweeps)
+        qrs = [
+            CycleQuoteResult(
+                cycle=mock_cycle, size_usd=1000.0, amount_in=1000, amount_out=1002,
+                gross_bps=10.0, status="POSITIVE_GROSS", reject_reason=None,
+                leg_results=[], elapsed_s=0.1,
+            )
+            for _ in range(3)
+        ]
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=qrs,
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        assert a["positive_cycle_max_repeat"] == 3
+        assert a["positive_cycle_multi_hit_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Step 5 (GPT fix): run_context.inventory_path contract
+# ---------------------------------------------------------------------------
+
+class TestInventoryPathInArtifact:
+    """inventory_path must be recorded in run_context for reproducibility."""
+
+    def test_run_context_has_inventory_path_key(self):
+        """run_context must contain 'inventory_path' key."""
+        a = _empty_artifact()
+        ctx = a.get("run_context", {})
+        assert "inventory_path" in ctx, "run_context.inventory_path key missing"
+
+    def test_inventory_path_is_string(self):
+        """run_context.inventory_path must be a string (may be empty)."""
+        a = _empty_artifact()
+        val = a["run_context"]["inventory_path"]
+        assert isinstance(val, str), f"run_context.inventory_path must be str, got {type(val)}"
+
+    def test_inventory_path_explicit_value_propagated(self):
+        """Explicit inventory_path passed to build_artifact must appear in run_context."""
+        from m9.graph_arb.artifacts import build_artifact
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+            inventory_path="data/tmp/m9_depth_enriched_inventory.json",
+        )
+        assert a["run_context"]["inventory_path"] == "data/tmp/m9_depth_enriched_inventory.json"
+
+    def test_rolling_artifact_inventory_path_present(self):
+        """Live rolling artifact must have run_context.inventory_path set (non-empty)."""
+        d = _load_rolling()
+        ctx = d.get("run_context", {})
+        assert "inventory_path" in ctx, "run_context.inventory_path missing from rolling artifact"
+        inv = ctx["inventory_path"]
+        assert inv, f"run_context.inventory_path is empty in rolling artifact: {inv!r}"
+

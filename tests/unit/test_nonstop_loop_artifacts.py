@@ -99,6 +99,8 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m8_1_stable_anchor_latest.json",
             # M9: graph-arb shadow scanner rolling artifact
             "m9_graph_latest.json",
+            # M9: bridge inventory (M8→M9 pipeline output)
+            "m9_bridge_inventory_latest.json",
         }
         
         # Archive files are allowed (created on reset)

@@ -7,7 +7,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 # Process lock file
 _LOCK_FILE = "data/tmp/m9_runner.lock"
@@ -537,6 +537,24 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Inventory purity metric: active_routes without factory_verified=True
     unverified_active_routes: Optional[int] = (funnel_a or {}).get("unverified_active_routes")
 
+    # M8→M9 bridge provenance: if inventory is a bridge inventory, extract metrics
+    _bridge_source_metrics: Optional[Dict[str, Any]] = None
+    try:
+        import json as _json_bridge
+        with open(inventory_path, encoding="utf-8") as _inv_fh:
+            _inv_raw = _json_bridge.load(_inv_fh)
+        _bsm = _inv_raw.get("bridge_source_metrics")
+        if isinstance(_bsm, dict):
+            _bridge_source_metrics = _bsm
+            log.info(
+                "Bridge inventory detected: graph_ready_total=%s m8_stale=%s m8_1_stale=%s",
+                _bsm.get("graph_ready_total"),
+                _bsm.get("m8_stale"),
+                _bsm.get("m8_1_stale"),
+            )
+    except Exception as _bsm_exc:
+        log.debug("Bridge metrics extraction skipped: %s", _bsm_exc)
+
     # Build graph
     # Productive lane: load quarantined pool addresses (Steps 2+3)
     _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
@@ -600,6 +618,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            bridge_source_metrics=_bridge_source_metrics,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_CONFIG_ERROR
@@ -637,6 +656,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            bridge_source_metrics=_bridge_source_metrics,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_NO_CYCLES
@@ -669,6 +689,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            bridge_source_metrics=_bridge_source_metrics,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_OK
@@ -911,6 +932,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             prequote_min_bps=_prequote_min_bps,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            bridge_source_metrics=_bridge_source_metrics,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -986,6 +1008,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         prequote_min_bps=_prequote_min_bps,
         pool_quality_lane=_lane,
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+        bridge_source_metrics=_bridge_source_metrics,
     )
     write_artifact(artifact, args.artifact_path)
 

@@ -1,0 +1,411 @@
+"""Unit tests for M8→M9 bridge_builder module.
+
+Tests:
+  - BridgeBuilderUnit: pure-logic tests (no filesystem)
+  - BridgeBuilderIntegration: end-to-end with temp files
+  - BridgeArtifactContract: bridge_source_metrics appears in M9 artifact
+"""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Dict
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_sniper_artifact(events: list) -> Dict[str, Any]:
+    return {
+        "schema_family": "m8_sniper",
+        "schema_revision": "1",
+        "generated_at_utc": "2026-05-24T10:00:00",
+        "status": "ACTIVE",
+        "metrics": {},
+        "recent_events": events,
+    }
+
+
+def _make_anchor_artifact(near_miss_count: int = 2) -> Dict[str, Any]:
+    near_miss = [
+        {
+            "pair_id": "AERO_USDC",
+            "route_a_id": "uniswap_v3:f500",
+            "route_b_id": "pancakeswap_v3:f500",
+            "verdict": "REJECT",
+            "reject_reason": "EXCESSIVE_PRICE_IMPACT",
+            "gross_bps": -160.0,
+        }
+        for _ in range(near_miss_count)
+    ]
+    return {
+        "schema_family": "stable_anchor",
+        "generated_at_utc": "2026-05-24T10:00:00",
+        "status": "ACTIVE",
+        "metrics": {},
+        "top_routes": [],
+        "near_miss_routes": near_miss,
+        "pairs_probed": ["AERO_USDC"],
+    }
+
+
+def _make_base_inv(n_active: int = 5) -> Dict[str, Any]:
+    active = [
+        {
+            "route_id": f"uniswap_v3:f3000",
+            "pair_id": "USDC_WETH",
+            "dex_id": "uniswap_v3",
+            "adapter_type": "uniswap_v3",
+            "token0": "USDC",
+            "token1": "WETH",
+            "token0_addr": "0xabc",
+            "token1_addr": "0xdef",
+            "fee": 3000,
+            "pool_address": f"0xpool{i:04d}",
+            "factory_verified": True,
+            "depth_probe_ok": True,
+            "status": "active",
+        }
+        for i in range(n_active)
+    ]
+    return {
+        "schema_version": "m9_verified_inventory.1",
+        "generated_at_utc": "2026-05-24T10:00:00",
+        "active_routes": active,
+        "quarantined_routes": [],
+        "summary": {"active_count": n_active, "quarantined_count": 0},
+    }
+
+
+def _sniper_event(
+    token0: str,
+    token1: str,
+    dex: str = "uniswap_v4",
+    pool: str = "0xabc123",
+    verdict: str = "SKIP",
+) -> Dict[str, Any]:
+    return {
+        "event_id": f"base:{pool}:0xhash:1",
+        "chain": "base",
+        "dex": dex,
+        "pool": pool,
+        "token0_symbol": token0,
+        "token1_symbol": token1,
+        "pair": f"{token0}/{token1}",
+        "phase2_decision": {"verdict": verdict, "reject_reason": "INSUFFICIENT_DATA"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# BridgeBuilderUnit: pure-logic (no file I/O)
+# ---------------------------------------------------------------------------
+
+class TestBridgeBuilderUnit:
+    """Tests for internal bridge_builder helpers."""
+
+    def test_is_symbol_valid_ok(self):
+        from m9.graph_arb.bridge_builder import _is_symbol_valid
+        assert _is_symbol_valid("USDC") is True
+        assert _is_symbol_valid("WETH") is True
+        assert _is_symbol_valid("cbBTC") is True
+
+    def test_is_symbol_valid_rejects_empty(self):
+        from m9.graph_arb.bridge_builder import _is_symbol_valid
+        assert _is_symbol_valid("") is False
+        assert _is_symbol_valid(None) is False  # type: ignore
+
+    def test_is_symbol_valid_rejects_too_long(self):
+        from m9.graph_arb.bridge_builder import _is_symbol_valid
+        assert _is_symbol_valid("A" * 16) is False
+
+    def test_is_symbol_valid_rejects_pure_digits(self):
+        from m9.graph_arb.bridge_builder import _is_symbol_valid
+        assert _is_symbol_valid("12345") is False
+
+    def test_is_anchor_connected_direct(self):
+        from m9.graph_arb.bridge_builder import _is_anchor_connected
+        assert _is_anchor_connected("AERO", "USDC") is True
+        assert _is_anchor_connected("WETH", "NEWTOKEN") is True
+        assert _is_anchor_connected("EURC", "AERO") is True
+
+    def test_is_anchor_connected_both_non_anchor(self):
+        from m9.graph_arb.bridge_builder import _is_anchor_connected
+        assert _is_anchor_connected("AERO", "BRETT") is False
+
+    def test_artifact_age_seconds_fresh(self):
+        from m9.graph_arb.bridge_builder import _artifact_age_seconds
+        import time
+        now = time.time()
+        artifact = {"generated_at_utc": "2099-12-31T00:00:00Z"}
+        age = _artifact_age_seconds(artifact, now)
+        assert age is not None
+        assert age < 0  # future timestamp
+
+    def test_artifact_age_seconds_missing(self):
+        from m9.graph_arb.bridge_builder import _artifact_age_seconds
+        age = _artifact_age_seconds({}, 0.0)
+        assert age is None
+
+
+# ---------------------------------------------------------------------------
+# BridgeBuilderIntegration: end-to-end with temp files
+# ---------------------------------------------------------------------------
+
+class TestBridgeBuilderIntegration:
+    """End-to-end tests using temp JSON files."""
+
+    def _write_json(self, path: Path, data: dict) -> None:
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_empty_sniper_produces_base_inventory(self, tmp_path):
+        """When sniper has no events, output contains base inventory routes."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact([]))
+        self._write_json(anchor, _make_anchor_artifact(2))
+        self._write_json(base, _make_base_inv(5))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        assert out.exists()
+        result = json.loads(out.read_text(encoding="utf-8"))
+        assert result["schema_version"] == "m9_bridge_inventory.1"
+        assert len(result["active_routes"]) == 5
+        assert metrics["graph_ready_total"] == 5
+        assert metrics["m8_new_pools_input"] == 0
+
+    def test_funnel_counts_anchor_connected(self, tmp_path):
+        """Events with USDC/WETH pair are counted as anchor_connected."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        events = [
+            _sniper_event("NEWTOKEN", "USDC", pool="0xpool001"),
+            _sniper_event("AERO", "USDC", pool="0xpool002"),
+            _sniper_event("GARBAGE1", "GARBAGE2", pool="0xpool003"),  # not anchor
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(3))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        assert metrics["m8_new_pools_input"] == 3
+        assert metrics["token_verified_count"] == 3
+        assert metrics["anchor_connected_count"] == 2  # only USDC-paired events
+
+    def test_bridge_metrics_schema_keys_present(self, tmp_path):
+        """All required bridge_source_metrics keys are present in output."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact([]))
+        self._write_json(anchor, _make_anchor_artifact(1))
+        self._write_json(base, _make_base_inv(2))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        required_keys = [
+            "m8_new_pools_input",
+            "m8_1_anchor_routes_input",
+            "token_verified_count",
+            "anchor_connected_count",
+            "cross_dex_seen_count",
+            "factory_verified_count",
+            "depth_ok_count",
+            "anchor_connected_from_base",
+            "graph_ready_from_m8",
+            "graph_ready_total",
+            "m8_stale",
+            "m8_1_stale",
+        ]
+        for key in required_keys:
+            assert key in metrics, f"Missing key: {key}"
+
+    def test_output_artifact_has_bridge_source_metrics(self, tmp_path):
+        """bridge_source_metrics is embedded in the output artifact."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact([]))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(4))
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        assert "bridge_source_metrics" in result
+        bsm = result["bridge_source_metrics"]
+        assert bsm["graph_ready_total"] == 4
+        assert isinstance(bsm["m8_stale"], bool)
+        assert isinstance(bsm["m8_1_stale"], bool)
+
+    def test_missing_sniper_marks_m8_stale(self, tmp_path):
+        """When sniper file doesn't exist, m8_stale=True."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(anchor, _make_anchor_artifact(1))
+        self._write_json(base, _make_base_inv(2))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(tmp_path / "nonexistent_sniper.json"),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        assert metrics["m8_stale"] is True
+        assert metrics["m8_new_pools_input"] == 0
+
+    def test_graph_ready_from_m8_pool_in_base(self, tmp_path):
+        """M8 event whose pool address exists in base inventory is graph_ready_from_m8."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        # Base inventory with a known pool
+        base_data = _make_base_inv(2)
+        base_data["active_routes"][0]["pool_address"] = "0xknownpool"
+        # Sniper event for same pool — appears twice (cross_dex_seen)
+        events = [
+            _sniper_event("AERO", "USDC", dex="uniswap_v4", pool="0xknownpool"),
+            _sniper_event("AERO", "USDC", dex="aerodrome", pool="0xknownpool"),
+        ]
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, base_data)
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        assert metrics["cross_dex_seen_count"] == 2  # AERO seen in 2 events
+        assert metrics["graph_ready_from_m8"] == 2   # both events' pool in base
+
+
+# ---------------------------------------------------------------------------
+# BridgeArtifactContract: bridge_source_metrics in M9 artifact
+# ---------------------------------------------------------------------------
+
+class TestBridgeArtifactContract:
+    """Ensures build_artifact() accepts and propagates bridge_source_metrics."""
+
+    def _make_topology(self):
+        from m9.graph_arb.models import GraphTopology
+        return GraphTopology(
+            token_count=3,
+            edge_count=4,
+            route_count=3,
+            hub_tokens=["USDC"],
+            dead_end_tokens=[],
+            missing_edges_for_3cycle=[],
+            adjacency_summary={},
+        )
+
+    def test_bridge_source_metrics_absent_by_default(self):
+        """Without bridge_source_metrics kwarg, key is absent in artifact."""
+        from m9.graph_arb.artifacts import build_artifact
+        art = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[],
+            topology=self._make_topology(),
+            sizes_usd=(100.0,),
+            run_timestamp="2026-05-24T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+        )
+        assert "bridge_source_metrics" not in art
+
+    def test_bridge_source_metrics_present_when_provided(self):
+        """When bridge_source_metrics kwarg is provided, it appears in artifact."""
+        from m9.graph_arb.artifacts import build_artifact
+        bsm = {
+            "m8_new_pools_input": 5,
+            "graph_ready_total": 119,
+            "m8_stale": True,
+            "m8_1_stale": True,
+        }
+        art = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[],
+            topology=self._make_topology(),
+            sizes_usd=(100.0,),
+            run_timestamp="2026-05-24T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+            bridge_source_metrics=bsm,
+        )
+        assert "bridge_source_metrics" in art
+        assert art["bridge_source_metrics"]["m8_new_pools_input"] == 5
+        assert art["bridge_source_metrics"]["graph_ready_total"] == 119
+        assert art["bridge_source_metrics"]["m8_stale"] is True
+
+    def test_bridge_source_metrics_none_suppressed(self):
+        """Passing bridge_source_metrics=None does not add the key."""
+        from m9.graph_arb.artifacts import build_artifact
+        art = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[],
+            topology=self._make_topology(),
+            sizes_usd=(100.0,),
+            run_timestamp="2026-05-24T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+            bridge_source_metrics=None,
+        )
+        assert "bridge_source_metrics" not in art

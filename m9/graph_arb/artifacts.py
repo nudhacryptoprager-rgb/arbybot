@@ -330,6 +330,8 @@ def build_artifact(
     pool_quality_lane: str = "discovery",
     # Count of pools excluded by productive lane depth/quarantine filter
     depth_quarantine_skipped: int = 0,
+    # M8→M9 bridge provenance block (bridge_builder.build_bridge_inventory output)
+    bridge_source_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -349,10 +351,30 @@ def build_artifact(
         and qr.gross_bps > _ROUTER_SIM_BPS_FLOOR
     )
 
-    best_cycle_net_bps: Optional[float] = None
+    # Step 4 (GPT fix): explicit gross/net distinction.
+    # best_cycle_gross_bps = raw quote bps, no gas/slippage/router simulation.
+    # best_cycle_net_bps   = alias kept for backward compat; equals gross until router_sim exists.
+    # estimated_cost_bps   = gas + router fee estimate (null until cost model implemented).
+    # router_sim_net_bps   = true execution net bps (null until router simulation enabled).
+    best_cycle_gross_bps: Optional[float] = None
     if cycle_results:
         best = max(cycle_results, key=lambda qr: qr.gross_bps)
-        best_cycle_net_bps = round(best.gross_bps, 4)
+        best_cycle_gross_bps = round(best.gross_bps, 4)
+    best_cycle_net_bps = best_cycle_gross_bps  # alias — gross only until router_sim
+    estimated_cost_bps: Optional[float] = None  # TODO: gas + router fee model
+    router_sim_net_bps: Optional[float] = None  # TODO: on-chain router simulation
+
+    # Step 6 (GPT fix): positive-cycle repeatability counters.
+    # Counts how many distinct cycle_ids were POSITIVE_GROSS in ≥2 independent quotes
+    # (sweeps), indicating market-signal stability vs one-off noise.
+    from collections import Counter as _Counter
+    _positive_repeat_counts = _Counter(
+        qr.cycle.cycle_id
+        for qr in cycle_results
+        if qr.gross_bps > 0
+    )
+    positive_cycle_multi_hit_count = sum(1 for v in _positive_repeat_counts.values() if v >= 2)
+    positive_cycle_max_repeat = max(_positive_repeat_counts.values(), default=0)
 
     # QSR: quote success rate (exclude ZERO_AMOUNT_IN — not a quoting attempt)
     quoted = [qr for qr in cycle_results if qr.status != "ZERO_AMOUNT_IN"]
@@ -568,7 +590,12 @@ def build_artifact(
         "cycles_positive_gross": cycles_positive_gross,
         "cycles_quoteable": cycles_quoteable,
         "cycles_router_sim_eligible": cycles_router_sim_eligible,
-        "best_cycle_net_bps": best_cycle_net_bps,
+        "best_cycle_net_bps": best_cycle_net_bps,  # alias for best_cycle_gross_bps; backward compat
+        "best_cycle_gross_bps": best_cycle_gross_bps,  # raw quote bps, no router/gas simulation
+        "estimated_cost_bps": estimated_cost_bps,  # null until cost model implemented
+        "router_sim_net_bps": router_sim_net_bps,  # null until router simulation enabled
+        "positive_cycle_multi_hit_count": positive_cycle_multi_hit_count,  # cycles positive ≥2 sweeps
+        "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id
         "qsr": round(qsr, 4),
         "quote_rpc_error_rate": quote_rpc_error_rate,
         "quote_revert_rate": quote_revert_rate,
@@ -773,6 +800,10 @@ def build_artifact(
         v["pass"] for v in runtime_gates.values() if isinstance(v, dict) and "pass" in v
     )
     artifact["runtime_gates"] = runtime_gates
+
+    # M8→M9 bridge provenance (optional; populated when runner uses bridge inventory)
+    if bridge_source_metrics is not None:
+        artifact["bridge_source_metrics"] = bridge_source_metrics
 
     return artifact
 

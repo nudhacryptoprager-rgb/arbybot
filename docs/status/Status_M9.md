@@ -1,8 +1,8 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: SMOKE29C_QUARANTINE_EXPANSION_PASS — Bridge unlock MET (smoke23+24+25, 3/3 all_pass). smoke29c PASS (2026-05-24): productive lane, quarantine 59 entries, mc=1.0, qsr=0.9642, 0×429, depth_quarantine_skipped=57. toxic_rate 0.9894→0.4183 (×2.4 reduction). cycles_positive_gross=38 (first ever!). best_cycle_net_bps=+1.09. economics_gate_status=NEAR_MISS.
+**Status**: M9_BRIDGE_SMOKE_PASS — M8→M9 bridge pipeline delivered (2026-05-24). bridge_builder.py created, bridge_source_metrics in artifact, 17 new tests. Bridge smoke (10-min, publicnode, raw_http, dynamic-sizes, bridge_inventory 119 routes): gate PASS (all_pass=True, qsr=0.9599, 0x429, 2 positive gross, best_gross=1.0531 bps). m8_stale=True/m8_1_stale=True (stale M8/M8.1 artifacts, graph_ready_from_m8=0) — WARNING only, pending fresh M8/M8.1 runs. economics_gate_status=NEAR_MISS. **Note**: best_cycle_net_bps is alias for gross bps only; true net pending router_sim/cost model.
 
-`goal_status`: M9_SMOKE29C_QUARANTINE_EXPANSION_PASS
+`goal_status`: M9_BRIDGE_SMOKE_PASS
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
@@ -11,7 +11,27 @@
 
 ---
 
-## Current Focus: Pool-Quality Gate (Before M8→M9 Bridge Expansion)
+## Current Focus: M8→M9 Bridge Pipeline (DELIVERED 2026-05-24)
+
+### Зроблено (bridge milestone)
+- ✅ **bridge_builder.py**: `m9/graph_arb/bridge_builder.py` — новий модуль M8→M9 bridge inventory builder; funnel tracking (`m8_new_pools_input → token_verified → anchor_connected → cross_dex_seen → factory_verified → depth_ok → graph_ready_from_m8`)
+- ✅ **bridge_source_metrics**: `m9/graph_arb/artifacts.py` — новий `Optional[Dict]` параметр `bridge_source_metrics`; propagate в artifact JSON
+- ✅ **runner.py**: all 5 `build_artifact` calls updated; bridge extraction block added
+- ✅ **scripts/m9_bridge_build.py** (NEW): CLI для bridge inventory build
+- ✅ **tests/unit/test_m9_bridge_builder.py** (NEW): 17 тестів — all PASS
+- ✅ **canonical set tests**: `test_nonstop_loop_artifacts.py`, `test_orderflow_artifacts.py` — `m9_bridge_inventory_latest.json` додано
+- ✅ **bridge_smoke (10-min)**: gate PASS — `all_pass=True`, `qsr=0.9599`, `0x429`, 2 positive gross, `best_gross=1.0531 bps`, `sweeps=237`
+- ✅ **bridge_source_metrics in m9_graph_latest.json**: `graph_ready_total=119`, `m8_stale=True` (WARNING), `m8_1_stale=True` (WARNING), `graph_ready_from_m8=0`
+
+### Pending (bridge freshness)
+- ⏳ Запустити свіжий M8 sniper run → нові pool events → `m8_stale=False`
+- ⏳ Запустити свіжий M8.1 stable-anchor run → `m8_1_stale=False`
+- ⏳ Пропустити нові M8 пули через `pool_verifier` → `graph_ready_from_m8 > 0`
+- ⏳ Після свіжого bridge rebuild: re-run bridge smoke → GPT acceptance criteria: `m8_stale=false, m8_1_stale=false, graph_ready_from_m8>0, qsr>=0.8, unverified=0`
+
+---
+
+## Previous Focus: Pool-Quality Gate (Before M8→M9 Bridge Expansion)
 
 **Мета**: Перед розширенням через M8→M9 bridge — заблокувати TOXIC/thin пули від домінування `top_opportunities`. Factory_verified=True = пул існує, НЕ = достатня глибина.
 
@@ -318,10 +338,13 @@ Key milestones:
 [DONE]    smoke28 — productive lane PASS (2026-05-24): quarantine_skipped=1, top_opp -9040→-18 bps ✅
 [DONE]    pool_depth_probe run — ok=117/119, toxic=36, low_depth=21 ✅
 [DONE]    quarantine expansion — 3→59 entries (+56 on-chain confirmed) ✅
-[DONE]    smoke29c — toxic_rate=0.4183 (<0.90), cycles_positive_gross=38, best_net=+1.09 bps, EXIT 0 ✅
-[PENDING]  Tighten quarantine further — ~42% toxic cycles remain (more AERO/USDC UV3 variants)
-[PENDING]  Step 6: rebuild pair universe from M8/M8.1 (depth ≥ 2 DEX)
-[PENDING]  router_sim validation on positive_gross shortlist
+[DONE]    smoke29c — toxic_rate=0.4183 (<0.90), cycles_positive_gross=38, best_cycle_gross_bps=+1.09 bps (gross only, no router sim), EXIT 0 ✅
+[DONE]    Steps 4+5+6 merged — best_cycle_gross_bps, estimated_cost_bps, router_sim_net_bps fields; positive_cycle_multi_hit_count, positive_cycle_max_repeat; 65 artifact tests PASS
+[DONE]    pool_verifier refresh — 119 active, 357 quarantined (2026-05-24T16:34:04Z)
+[DONE]    pool_depth_probe refresh — 117 ok, 2 fail, depth $10-$100 USD
+[DONE]    smoke30 — raw_http + dynamic-sizes + depth-enriched inv; toxic_rate=0.0574, cycles_positive_gross=21, best_gross=+1.3499, max_repeat=11, multi_hit=2, EXIT 0 ✅
+[PENDING]  router_sim validation on positive_gross shortlist (estimated_cost_bps still null)
+[PENDING]  Step 6: rebuild pair universe from M8/M8.1 (depth >= 2 DEX)
 ```
 
 ## Scope
