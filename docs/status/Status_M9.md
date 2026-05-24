@@ -1,8 +1,8 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: ALL_PASS_SMOKE23_PUBLICNODE_RPC — FIRST clean 15-min run with 5/5 runtime_gates PASS (qsr=0.9759 ✅, mc_rate=1.0 ✅, data_completeness=1.0 ✅, unverified=0 ✅, quote_revert_rate=0.0 ✅, http_429/408/5xx=0); P0 multicall blocker RESOLVED (publicnode.com, zero rate limiting); scheduler starvation bug fixed (record_prequote_skips()); 5 infra fixes validated. 1/3 consecutive all_pass runs achieved.
+**Status**: ALL_PASS_SMOKE25_PUBLICNODE_RPC — **3/3 consecutive all_pass runs achieved** (smoke23+smoke24+smoke25); qsr=0.9779 ✅, mc_rate=1.0 ✅, data_completeness=1.0 ✅, unverified=0 ✅, quote_revert_rate=0.0 ✅, http_429/408/5xx=0. **M8→M9 bridge unlock condition MET.** Policy gate satisfied — ready for M8/M8.1 integration review.
 
-`goal_status`: IN_PROGRESS
+`goal_status`: BRIDGE_UNLOCK_CONDITION_MET
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
@@ -24,7 +24,62 @@
   - `qsr >= 0.80`
   - `quote_revert_rate < 0.05`
 
-Поточний стан (smoke23 15-min soak, 2026-05-23): **ALL 5 GATES PASS** — `mc_rate=1.0` ✅ (P0 RESOLVED; publicnode.com, no rate limiting), `qsr=0.9759` ✅, `data_completeness=1.0` ✅, `unverified_active_routes=0` ✅, `quote_revert_rate=0.0` ✅, `http_429/408/5xx=0`. **1/3 consecutive all_pass runs achieved.** Scheduler starvation bug fixed (`record_prequote_skips()`), 5xx circuit-breaker added, CONFIG_ERROR gate for `--no-prequote+duration≥5` added.
+Поточний стан (smoke25 15-min soak, 2026-05-23): **ALL 5 GATES PASS** — `mc_rate=1.0` ✅, `qsr=0.9779` ✅, `data_completeness=1.0` ✅, `unverified_active_routes=0` ✅, `quote_revert_rate=0.0` ✅, `http_429/408/5xx=0`. **3/3 consecutive all_pass runs achieved** (smoke23+smoke24+smoke25 all PASS). **M8→M9 bridge unlock condition MET.** Policy gate satisfied.
+
+---
+
+## Smoke25 Results — 3/3 ALL_PASS — M8→M9 Bridge Unlock (2026-05-23) ✅ (5/5 gates)
+
+### Config: `config/exotic_base_anchor.yaml`, `--prequote-min-bps -9999` (bypass), `--dynamic-sizes`, `dynamic_size_max_cycles=3`, raw_http, 1 worker, publicnode.com, Base, 15-min
+```
+elapsed_s:                    900.2  (duration_fulfilled=true ✅)
+sweeps_completed:             450
+cycles_found:                 4483
+cycles_quoteable:             4384
+cycles_positive_gross:        0    (flat market, expected)
+run_timestamp:                2026-05-23T19:21:47Z
+
+# runtime_gates — ALL PASS (3rd consecutive — bridge unlock)
+multicall_success_rate:       1.0     ✅ PASS (≥0.90)
+data_completeness:            1.0     ✅ PASS (≥0.98)
+unverified_active_routes:     0       ✅ PASS
+qsr:                          0.9779  ✅ PASS (≥0.80)
+quote_revert_rate:            0.0     ✅ PASS (<0.05)
+all_pass:                     true    ✅ 3/3 CONSECUTIVE
+
+# infra — zero errors
+rpc_provider:                 publicnode
+http_429_count:               0
+http_408_count:               0
+http_5xx_count:               0
+actual_http_calls:            7626
+
+# dynamic_size telemetry
+dynamic_size_enabled:         true   ✅
+dynamic_size_selected_count:  1329
+dynamic_size_selection_rate:  0.2965  (~30%)
+
+# prequote funnel (bypass mode)
+prequote_cycles_skipped:      17   (0.38% — non-V3/zero-price pools only)
+prequote_min_bps:             -9999 (bypass for smoke validation)
+
+# rejects
+cycle_reject_histogram:
+  NEGATIVE_GROSS:             4384  (97.8%, flat market)
+  CYCLE_QUOTE_FAILED:         99    (2.2% failure rate)
+```
+
+### Verdict
+- ✅ **3/3 CONSECUTIVE ALL-PASS** — policy gate satisfied
+- ✅ **M8→M9 bridge unlock condition MET** — `py -3.11 scripts/ci_m9_productive_gate.py` EXIT 0
+- ✅ **Zero infra errors** across 7626 HTTP calls (publicnode.com, zero rate limiting)
+- ✅ **Stable QSR trend**: smoke23=0.9742, smoke24=0.9766, smoke25=0.9779 (improving)
+- ✅ **mc_rate=1.0 stable** across all 3 runs
+- Ready for M8/M8.1 → M9 bridge integration review
+
+### Artifacts
+- `data/runs/_rolling/m9_graph_latest.json` (rolling, run_ts: 2026-05-23T19:21:47Z)
+- `data/tmp/smoke25_log.txt`
 
 ---
 
@@ -83,7 +138,7 @@ cycle_reject_histogram:
 - ✅ **FIRST ALL-PASS RUN** — all 5 runtime_gates satisfied simultaneously
 - ✅ **P0 blocker RESOLVED** — mc_rate=1.0 (publicnode.com, no rate limiting)
 - ✅ **Scheduler starvation bug fixed** — 11 prequote-skips total (was 5/5 every sweep)
-- ✅ **Zero infra errors** across 4177 HTTP calls
+- ✅ **Zero infra errors** across 4645 HTTP calls
 - ✅ **5883/5883 unit tests pass** (including new test_5xx_opens_breaker)
 - 1/3 consecutive all_pass runs achieved for M8→M9 bridge unlock
 
@@ -157,6 +212,8 @@ cycle_reject_histogram:
 
 | Run | Date | Dur | Sweeps | Cycles | qsr | multicall_sr | unverified | d_complete | all_pass |
 |-----|------|-----|--------|--------|-----|-------------|------------|------------|----------|
+| **smoke25** | 2026-05-23 | 15m | 450 | 4483 | 0.9779✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ | **3/3 UNLOCK** |
+| **smoke24** | 2026-05-23 | 15m | 451 | 4485 | 0.9766✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ |
 | **smoke23** | 2026-05-23 | 15m | 452 | 2248 | 0.9742✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ |
 | **smoke20** | 2026-05-23 | 15m | 83 | 420 | 0.8738✅ | 0.8716❌ | 0✅ | 0.9991✅ | ❌ |
 | smoke19 | 2026-05-23 | 10m | 37 | 371 | 0.8544✅ | 0.8364❌ | 0✅ | 1.0✅ | ❌ |
@@ -175,20 +232,21 @@ Key milestones:
 
 ## Current Blockers
 
-1. ~~**P0**: `multicall_success_rate < 0.90`~~ **RESOLVED** — publicnode.com RPC, mc_rate=1.0 in smoke23.
-2. **P1**: Need **2 more consecutive 15-min all_pass runs** (smoke24, smoke25) for M8→M9 bridge unlock (1/3 done).
+1. ~~**P0**: `multicall_success_rate < 0.90`~~ **RESOLVED** — publicnode.com RPC, mc_rate=1.0.
+2. ~~**P1**: Need 3 consecutive 15-min all_pass runs for bridge unlock~~ **RESOLVED** — smoke23+smoke24+smoke25 all PASS (3/3). Bridge unlock condition MET.
 3. `cycles_positive_gross=0` — flat market; no arb signal at $100-500 sizes on Base. Expected until market conditions change.
 4. `router_sim` NOT_STARTED — requires positive_gross shortlist.
 5. `execution_kill_switch` — `kill_switch_active=true`, no live trades (paper only).
-6. `prequote_min_bps=-9999` used for smoke23 (bypass). Future runs should progressively tighten threshold once scheduler rotation is validated.
+6. `prequote_min_bps=-9999` used for smoke23/24/25 (bypass). Future runs should progressively tighten threshold.
 
 ## Path to PASS
 
 ```
-[DONE]    smoke23 — all_pass=True (1/3 consecutive)  ← current
-[TARGET]  smoke24, smoke25 — all_pass=True (2/3, 3/3)
-  ↓ Proof: py -3.11 scripts/ci_m9_productive_gate.py → EXIT 0
-[UNLOCK]  M8/M8.1 → M9 bridge transition
+[DONE]    smoke23 — all_pass=True (1/3 consecutive)
+[DONE]    smoke24 — all_pass=True (2/3 consecutive)
+[DONE]    smoke25 — all_pass=True (3/3 consecutive)  ← M8→M9 bridge unlock condition MET
+  ↓ Proof: py -3.11 scripts/ci_m9_productive_gate.py → EXIT 0  ✅
+[UNLOCKED] M8/M8.1 → M9 bridge transition — policy gate satisfied
 ```
 
 **Next proof-run command:**

@@ -176,7 +176,7 @@ class PoolStateCache:
                     state = PoolState.from_dict(d, fetched_at_mono=now - self._ttl - 1)
                     self._store[state.pool_addr.lower()] = state
                     loaded += 1
-                except (KeyError, ValueError):
+                except (KeyError, ValueError, TypeError):
                     pass
         return loaded
 

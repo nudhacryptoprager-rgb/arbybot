@@ -1,102 +1,71 @@
-﻿# DEV REPORT LATEST — M9 Smoke23: First ALL-PASS 15-min Soak (5/5 runtime_gates PASS, P0 RPC Blocker RESOLVED)
+﻿# DEV REPORT LATEST — M9 Smoke25: 3/3 Consecutive ALL-PASS — M8→M9 Bridge Unlock (5/5 runtime_gates PASS)
 
-**mode**: M9_SMOKE23_15MIN_SOAK_ALL_PASS
+**mode**: M9_SMOKE25_15MIN_SOAK_ALL_PASS_BRIDGE_UNLOCK
 **session_date**: 2026-05-23
 **schema_family**: m9_graph_arb
 **schema_revision**: m9.1
-**run_label**: smoke23 (15-min real-RPC soak, publicnode.com, prequote-min-bps=-9999 bypass, dynamic_sizes)
+**run_label**: smoke25 (15-min real-RPC soak, publicnode.com, prequote-min-bps=-9999 bypass, dynamic_sizes)
 **execution_enabled**: false
 **kill_switch_active**: true
 
 ---
 
-## Smoke23 Summary
+## Smoke25 Summary
 
-**goal**: Implement 5 GPT infra fixes → validate with clean 15-min proof-run; gate: qsr≥0.8, mc_rate≥0.9, unverified=0, data_completeness≥0.98, quote_revert_rate<0.05.
+**goal**: 3rd consecutive all_pass 15-min proof-run on publicnode.com to satisfy M8→M9 bridge unlock policy (3/3 gate).
 
-**result**: ALL 5 runtime_gates PASS — first ever `all_pass=True`. qsr=0.9742 ✅, mc_rate=1.0 ✅, data_completeness=1.0 ✅, unverified=0 ✅, quote_revert_rate=0.0 ✅. Zero http errors (429/408/5xx). P0 multicall_success_rate blocker RESOLVED (publicnode.com). Scheduler starvation bug fixed. 5883/5883 unit tests pass.
+**result**: ALL 5 runtime_gates PASS. qsr=0.9779 ✅, mc_rate=1.0 ✅, data_completeness=1.0 ✅, unverified=0 ✅, quote_revert_rate=0.0 ✅. Zero http errors (429/408/5xx). **3/3 consecutive all_pass runs achieved. M8→M9 bridge unlock condition MET.**
 
 ### Run stats
-- elapsed=900.7s (full 15 min ✅, duration_fulfilled=True)
-- sweeps=452, cycles_found=2248, cycles_quoteable=2190, positive_gross=0 (flat market)
+- elapsed=900.2s (full 15 min ✅, duration_fulfilled=True)
+- sweeps=450, cycles_found=4483, cycles_quoteable=4384, positive_gross=0 (flat market)
 - sizes_usd=[100, 250, 500] ✅ (from config `scan_params`)
-- dynamic_size_selected_count=1321 (selection_rate=0.5876, ~59%)
+- dynamic_size_selected_count=1329 (selection_rate=0.2965, ~30%)
+- run_timestamp: 2026-05-23T19:21:47Z
 
-### runtime_gates — ALL PASS (first time)
+### runtime_gates — ALL PASS (3rd consecutive — BRIDGE UNLOCK)
 | gate | value | threshold | pass |
 |---|---|---|---|
 | multicall_success_rate | 1.0 | 0.90 | ✅ |
 | data_completeness | 1.0 | 0.98 | ✅ |
 | unverified_active_routes | 0 | 0 | ✅ |
-| qsr | 0.9742 | 0.80 | ✅ |
+| qsr | 0.9779 | 0.80 | ✅ |
 | quote_revert_rate | 0.0 | <0.05 | ✅ |
-| **all_pass** | **true** | | ✅ |
+| **all_pass** | **true** | | ✅ **3/3** |
 
 ### Infra telemetry (zero errors)
-- `http_429_count=0` (was 44 artifact / 715 raw in smoke20)
-- `http_408_count=0` (was many in smoke21e)
+- `http_429_count=0`
+- `http_408_count=0`
 - `http_5xx_count=0`
-- `actual_http_calls=4645`
+- `actual_http_calls=7626`
 - `rpc_provider=publicnode`
 
-### Dynamic-size telemetry
-- `dynamic_size_enabled=true` ✅
-- `dynamic_size_selected_count=1321` (smoke20: 224)
-- `dynamic_size_selection_rate=0.5876` (~59%)
-- `sizes_usd_source=config.scan_params` ✅
-
-### Prequote funnel
-- `prequote_cycles_skipped=12` (0.53% across 452 sweeps — non-V3/zero-price pools only)
-- `prequote_min_bps=-9999` (bypass for smoke validation)
-
-### Rejects
-- `NEGATIVE_GROSS=2190` (97.4%, flat market — expected)
-- `CYCLE_QUOTE_FAILED=58` (2.6% — vs 12.6% in smoke20)
-
-### Fixes validated
-1. ✅ **CONFIG_ERROR gate**: `--no-prequote` + duration≥5 → EXIT_CONFIG_ERROR
-2. ✅ **http_408/500/5xx telemetry**: all counters present and correct (all zero)
-3. ✅ **5xx circuit breaker**: `ProviderThrottle` tracks + soft-breaks on HTTP 5xx
-4. ✅ **Scheduler prequote-skip demotion**: `record_prequote_skips()` prevents hot-queue starvation
-5. ✅ **RPC fix**: publicnode.com → no rate limiting (was dRPC free-tier 429-storm)
-
-### Verdict
-- ✅ **FIRST ALL-PASS RUN** — all 5 runtime_gates satisfied simultaneously
-- ✅ **P0 multicall blocker RESOLVED** — mc_rate=1.0
-- ✅ **5883 unit tests pass** (including new `test_5xx_opens_breaker`)
-- ✅ **Repo safety PASS** (2 pre-existing doc-bloat warnings, unrelated)
-- 1/3 consecutive all_pass runs achieved for M8→M9 bridge unlock
-
-### Artifacts
-- `data/runs/_rolling/m9_graph_latest.json`
-- `data/tmp/smoke23_log.txt`
+### QSR trend (all 3 consecutive runs)
+- smoke23 (1/3): qsr=0.9742 ✅
+- smoke24 (2/3): qsr=0.9766 ✅
+- smoke25 (3/3): qsr=0.9779 ✅ (improving)
 
 ---
 
 ## Session Completion
 
-session_goal: Implement 5 GPT infra fixes (CONFIG_ERROR gate, 5xx telemetry, 5xx circuit-breaker, scheduler prequote-skip demotion, test fix) → run clean 15-min proof-run → all_pass=True.
-goal_status: REACHED
+session_goal: Run smoke25 as 3rd consecutive all_pass proof-run for M8→M9 bridge unlock.
+goal_status: REACHED — bridge unlock condition MET (3/3)
 close_allowed: true
-remaining_blockers: Need 2 more consecutive all_pass runs (smoke24, smoke25) for M8→M9 bridge unlock.
-evidence_session_run_dirs: data/tmp/smoke23_log.txt (rolling artifact: data/runs/_rolling/m9_graph_latest.json)
-primary_blocker_of_session: multicall_success_rate < 0.90 (free-tier dRPC 429-storm) + scheduler starvation
-blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED
+remaining_blockers: None for bridge unlock. Next: M8/M8.1 integration review.
+evidence_session_run_dirs: data/runs/_rolling/m9_graph_latest.json (run_ts: 2026-05-23T19:21:47Z)
+blocker_status_before: smoke25 PENDING (2/3 done)
+blocker_status_after: smoke25 PASS (all_pass=True, 3/3 done)
 docs_reread_confirmed: true
 
-## Code Changes This Session
+## Consecutive All-Pass Record
+- smoke23 (2026-05-23T17:59:55Z): all_pass=True, qsr=0.9742, mc_rate=1.0 ✅
+- smoke24 (2026-05-23T19:04:00Z): all_pass=True, qsr=0.9766, mc_rate=1.0 ✅
+- smoke25 (2026-05-23T19:21:47Z): all_pass=True, qsr=0.9779, mc_rate=1.0 ✅ ← BRIDGE UNLOCK
 
-| File | Change |
-|------|--------|
-| `m9/graph_arb/cycle_scheduler.py` | Added `record_prequote_skips()` — demotes prequote-skipped cycles to prevent hot-queue starvation |
-| `m9/graph_arb/runner.py` | Collects `_prequote_skipped_ids` per sweep; calls `record_prequote_skips()` after `record_results()` |
-| `m9/graph_arb/artifacts.py` | Added `http_408_count`, `http_500_count`, `http_5xx_count` to `infra_telemetry` |
-| `core/provider_throttle.py` | Added `total_5xx`, `consec_failures_5xx`; new 5xx branch: `500<=status<600` opens soft breaker |
-| `m9/graph_arb/runner.py` | CONFIG_ERROR gate: `--no-prequote` + duration≥5min + !allow_no_prequote_soak → EXIT_CONFIG_ERROR |
-| `tests/unit/test_m9_runner_config_gates.py` | Added 3 tests for CONFIG_ERROR gate (all passing) |
-| `tests/unit/test_e1_59_provider_throttle.py` | Split `test_other_error_does_not_open_breaker` into `test_5xx_opens_breaker` (new) + updated existing (uses 404 not 500) |
+## Code Changes This Session
+- `m9/graph_arb/pool_state_cache.py`: added `TypeError` to except clause in `load()` to handle stale cache entries with `block_number=None`
 
 ## Previous Report Reference
-smoke20: dynamic sizes validated, qsr=0.8738 PASS, multicall_success_rate=0.8716 FAIL (dRPC 429-storm), all_pass=false
+smoke24: 2nd all_pass run, qsr=0.9766, mc_rate=1.0, all_pass=true (2/3 consecutive)
 
