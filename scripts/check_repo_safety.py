@@ -1544,6 +1544,39 @@ def check_docs_content_bloat() -> List[str]:
     return issues
 
 
+def check_dev_report_goal_status() -> List[str]:
+    """Check [21]: DEV_REPORT_LATEST.md must have goal_status in {REACHED, BLOCKED, IN_PROGRESS}.
+
+    Per AGENTS.md session closure contract, only these three values are valid.
+    Values like PARTIAL, DONE, COMPLETE, etc. are forbidden and indicate an
+    improperly closed session.
+    """
+    issues: List[str] = []
+    dev_report = PROJECT_ROOT / "docs" / "DEV_REPORT_LATEST.md"
+    if not dev_report.exists():
+        return []
+    try:
+        content = dev_report.read_text(encoding="utf-8")
+        match = re.search(r'goal_status:\s*(\S+)', content)
+        if match:
+            status_val = match.group(1).strip().rstrip(",;")
+            allowed = {"REACHED", "BLOCKED", "IN_PROGRESS"}
+            if status_val not in allowed:
+                issues.append(
+                    f"DEV_REPORT_GOAL_STATUS: goal_status is '{status_val}' "
+                    f"(must be one of {sorted(allowed)}). "
+                    f"Per AGENTS.md session closure contract, only REACHED/BLOCKED/IN_PROGRESS are valid."
+                )
+        else:
+            issues.append(
+                "DEV_REPORT_GOAL_STATUS: docs/DEV_REPORT_LATEST.md has no 'goal_status:' field. "
+                "Required by AGENTS.md session closure contract."
+            )
+    except Exception as e:
+        issues.append(f"ERROR: Could not check DEV_REPORT goal_status: {e}")
+    return issues
+
+
 def main():
     parser = argparse.ArgumentParser(description="Repo Safety Gate")
     parser.add_argument("--strict", action="store_true", help="Fail on warnings too")
@@ -1741,7 +1774,15 @@ def main():
         print(f"  {issue}")
     if not issues:
         print("  OK: Rolling pointer files reference primary chain (NORMAL)")
-    
+
+    print("\n[21] Checking DEV_REPORT goal_status validity...")
+    issues = check_dev_report_goal_status()
+    all_issues.extend(issues)
+    for issue in issues:
+        print(f"  {issue}")
+    if not issues:
+        print("  OK: DEV_REPORT goal_status is one of REACHED/BLOCKED/IN_PROGRESS")
+
     # Summary
     print("\n" + "=" * 50)
     # v1.1.0: INFO messages don't count toward warnings

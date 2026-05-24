@@ -188,4 +188,93 @@ class TestBuildM9CurrentPayload:
         from monitoring.dashboard_server import build_m9_current_payload
         payload = build_m9_current_payload(artifact={}, now_utc=_now())
         assert payload["schema_family"] == "m9_dashboard"
-        assert payload["schema_revision"] == "m9_dashboard.2"
+        assert payload["schema_revision"] == "m9_dashboard.3"
+
+    def test_stale_verdict_when_artifact_old(self):
+        """Stale artifact must expose STALE live verdict, not PASS."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        a = _minimal_m9_artifact(
+            runtime_gates={"all_pass": True},
+            duration_fulfilled=True,
+        )
+        payload = build_m9_current_payload(artifact=a, now_utc=_now(), file_age_s=1800)
+        iq = payload["infra_quality"]
+        assert iq["run_status"] == "stale"
+        assert iq["runtime_gates_live_verdict"] == "STALE"
+        assert iq["staleness_reason"] is not None
+        assert "1800" in iq["staleness_reason"]
+
+    def test_pass_verdict_when_fresh(self):
+        """Fresh completed artifact with all_pass must show live verdict PASS."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        a = _minimal_m9_artifact(
+            runtime_gates={"all_pass": True},
+            duration_fulfilled=True,
+        )
+        payload = build_m9_current_payload(artifact=a, now_utc=_now(), file_age_s=30)
+        iq = payload["infra_quality"]
+        assert iq["run_status"] == "completed"
+        assert iq["runtime_gates_live_verdict"] == "PASS"
+        assert iq["staleness_reason"] is None
+
+    def test_top_opportunities_split(self):
+        """top_opportunities (quoteable) and top_failed_opportunities are split."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        opp_neg = {
+            "dex": "aerodrome_v2", "factory": "EFFICIENT_BASELINE",
+            "pool": "0xaaa", "pool_path": ["0xaaa", "0xbbb", "0xccc"],
+            "pair": "WETH/USDC/AERO",
+            "market_size_usd": 100.0, "dynamic_size_usd": None,
+            "spread_bps": -15.2, "spread_usd": -0.015, "profit_usd": -0.015,
+            "main_blocker": "NEGATIVE_GROSS",
+        }
+        opp_failed = {
+            "dex": "uniswap_v3", "factory": "UNKNOWN",
+            "pool": "0xddd", "pool_path": ["0xddd", "0xeee", "0xfff"],
+            "pair": "USDC/WETH/USDT",
+            "market_size_usd": 100.0, "dynamic_size_usd": None,
+            "spread_bps": 0.0, "spread_usd": None, "profit_usd": None,
+            "main_blocker": "CYCLE_QUOTE_FAILED",
+        }
+        a = _minimal_m9_artifact(top_opportunities=[opp_neg, opp_failed])
+        payload = build_m9_current_payload(artifact=a, now_utc=_now(), file_age_s=10)
+        assert len(payload["top_opportunities"]) == 1
+        assert payload["top_opportunities"][0]["spread_bps"] == pytest.approx(-15.2)
+        assert len(payload["top_failed_opportunities"]) == 1
+        assert payload["top_failed_opportunities"][0]["main_blocker"] == "CYCLE_QUOTE_FAILED"
+
+    def test_m8_1_artifact_age_s(self):
+        """m8_1_inventory.artifact_age_s is computed from generated_at_utc."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        # Artifact is 60 minutes old relative to now_utc
+        old_ts = "2026-05-22T11:00:00Z"  # _now() = 12:00:00
+        m8_1 = {"generated_at_utc": old_ts, "pool_count": 5}
+        payload = build_m9_current_payload(artifact={}, m8_1_artifact=m8_1, now_utc=_now())
+        inv = payload["m8_1_inventory"]
+        assert inv["artifact_age_s"] == 3600  # 60 min = 3600 s
+        assert inv["is_stale"] is False  # 3600 < 86400
+
+    def test_m8_1_artifact_stale_flag(self):
+        """m8_1_inventory.is_stale is True when artifact is older than 24 h."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        old_ts = "2026-05-21T11:00:00Z"  # 25 h before _now() → clearly stale
+        m8_1 = {"generated_at_utc": old_ts}
+        payload = build_m9_current_payload(artifact={}, m8_1_artifact=m8_1, now_utc=_now())
+        assert payload["m8_1_inventory"]["is_stale"] is True
+
+    def test_prequote_min_bps_exposed(self):
+        """prequote_min_bps in infra_telemetry is forwarded to infra_quality."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        a = _minimal_m9_artifact(
+            infra_telemetry={"prequote_min_bps": -9999.0}
+        )
+        payload = build_m9_current_payload(artifact=a, now_utc=_now(), file_age_s=5)
+        assert payload["infra_quality"]["prequote_min_bps"] == pytest.approx(-9999.0)
+
+    def test_top_failed_opportunities_key_always_present(self):
+        """top_failed_opportunities key must always be present even when empty."""
+        from monitoring.dashboard_server import build_m9_current_payload
+        payload = build_m9_current_payload(artifact={}, now_utc=_now())
+        assert "top_failed_opportunities" in payload
+        assert isinstance(payload["top_failed_opportunities"], list)
+

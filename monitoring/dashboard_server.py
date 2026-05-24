@@ -1198,8 +1198,16 @@ def build_m9_current_payload(
     # Risk metrics
     risk_metrics = a.get("risk_metrics") or {}
 
-    # Top opportunities (from artifact field or empty list)
-    top_opportunities = a.get("top_opportunities") or []
+    # Top opportunities: split quoteable (got a valid quote) from failed (quote error).
+    # Quoteable = POSITIVE_GROSS or NEGATIVE_GROSS (spread_bps meaningful).
+    # Failed    = CYCLE_QUOTE_FAILED / CYCLE_QUOTE_TIMEOUT (spread_bps=0, misleading).
+    # The legacy field ``top_opportunities`` is kept for backward-compat (quoteable only).
+    _FAILED_BLOCKERS = {"CYCLE_QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "QUOTE_FAILED"}
+    _all_opps = a.get("top_opportunities") or []
+    top_quoteable = [o for o in _all_opps if o.get("main_blocker") not in _FAILED_BLOCKERS]
+    top_failed = [o for o in _all_opps if o.get("main_blocker") in _FAILED_BLOCKERS]
+    # Sort quoteable by spread_bps desc so best (least negative or most positive) comes first
+    top_quoteable.sort(key=lambda o: float(o.get("spread_bps") or float("-inf")), reverse=True)
 
     # M8.1 stable-anchor inventory summary
     _m8_1_metrics = m8_1.get("metrics") if isinstance(m8_1.get("metrics"), dict) else {}
@@ -1212,22 +1220,38 @@ def build_m9_current_payload(
     )
     _m8_1_pair_raw = len(_m8_1_pairs) if isinstance(_m8_1_pairs, list) else m8_1.get("pair_count")
     _m8_1_edge_raw = m8_1.get("active_routes_count") or m8_1.get("edge_count")
+    _m8_1_ts = m8_1.get("generated_at_utc") or m8_1.get("run_timestamp")
+    _m8_1_age_s: int | None = None
+    if _m8_1_ts:
+        _dt = _parse_iso_utc(_m8_1_ts)
+        if _dt is not None:
+            _m8_1_age_s = max(0, int((now_utc - _dt).total_seconds()))
     m8_1_summary = {
         "pool_count": _safe_int(_m8_1_pool_raw) if (_m8_1_available and _m8_1_pool_raw is not None) else None,
         "pair_count": _safe_int(_m8_1_pair_raw) if (_m8_1_available and _m8_1_pair_raw) else None,
         "gate_acceptance": m8_1.get("gate_acceptance"),
         "strategy_gate_acceptance": m8_1.get("strategy_gate_acceptance"),
         "edge_count": _safe_int(_m8_1_edge_raw) if (_m8_1_available and _m8_1_edge_raw is not None) else None,
-        "generated_at_utc": m8_1.get("generated_at_utc") or m8_1.get("run_timestamp"),
+        "generated_at_utc": _m8_1_ts,
+        "artifact_age_s": _m8_1_age_s,
+        "is_stale": _m8_1_age_s is not None and _m8_1_age_s > 86400,  # stale if >24h
     }
 
     # M8 new-pool scout summary
+    _m8_sniper_ts = m8.get("generated_at_utc") or m8.get("run_timestamp")
+    _m8_sniper_age_s: int | None = None
+    if _m8_sniper_ts:
+        _dt2 = _parse_iso_utc(_m8_sniper_ts)
+        if _dt2 is not None:
+            _m8_sniper_age_s = max(0, int((now_utc - _dt2).total_seconds()))
     m8_sniper_summary = {
         "new_pools_found": _safe_int(m8.get("new_pools_found") or m8.get("pools_found")),
-        "generated_at_utc": m8.get("generated_at_utc") or m8.get("run_timestamp"),
+        "generated_at_utc": _m8_sniper_ts,
+        "artifact_age_s": _m8_sniper_age_s,
+        "is_stale": _m8_sniper_age_s is not None and _m8_sniper_age_s > 86400,  # stale if >24h
     }
 
-    # Infra quality block (Step 8 — GPT fix): multicall health + verified inventory
+    # Infra quality block: multicall health + verified inventory + staleness
     _infra = a.get("infra_telemetry") or {}
     _rg = a.get("runtime_gates") or {}
     _run_status: str
@@ -1239,8 +1263,33 @@ def build_m9_current_payload(
         _run_status = "completed"
     else:
         _run_status = "running"
+
+    # Staleness reason — explains WHY the artifact is considered stale
+    _staleness_reason: str | None = None
+    if not bool(a):
+        _staleness_reason = "NO_ARTIFACT"
+    elif file_age_s is not None and file_age_s > 600:
+        _staleness_reason = f"ARTIFACT_AGE_{file_age_s}s_EXCEEDS_600s_THRESHOLD"
+
+    # Runtime gates live verdict: "STALE" when artifact is stale so the operator
+    # cannot mistake historical all_pass=True for a current passing verdict.
+    _gates_all_pass = _rg.get("all_pass")
+    if not bool(a):
+        _gates_live_verdict = "NO_ARTIFACT"
+    elif _run_status == "stale":
+        _gates_live_verdict = "STALE"
+    elif _gates_all_pass is True:
+        _gates_live_verdict = "PASS"
+    elif _gates_all_pass is False:
+        _gates_live_verdict = "FAIL"
+    else:
+        _gates_live_verdict = "UNKNOWN"
+
     infra_quality = {
         "run_status": _run_status,
+        "last_write_utc": generated_at,
+        "staleness_reason": _staleness_reason,
+        "runtime_gates_live_verdict": _gates_live_verdict,
         "multicall_success_rate": _infra.get("multicall_success_rate"),
         "multicall_subchunk_splits": _infra.get("multicall_subchunk_splits", 0),
         "unverified_active_routes": _infra.get("unverified_active_routes"),
@@ -1248,13 +1297,14 @@ def build_m9_current_payload(
         "http_429_count": _infra.get("http_429_count"),
         "actual_http_calls": _infra.get("actual_http_calls"),
         "blocked_by_breaker": _infra.get("blocked_by_breaker", 0),
-        "runtime_gates_all_pass": _rg.get("all_pass"),
+        "prequote_min_bps": _infra.get("prequote_min_bps"),
+        "runtime_gates_all_pass": _gates_all_pass,
         "runtime_gates": _rg if _rg else None,
     }
 
     return {
         "schema_family": "m9_dashboard",
-        "schema_revision": "m9_dashboard.2",
+        "schema_revision": "m9_dashboard.3",
         "now_utc": now_utc.isoformat(),
         "artifact_exists": bool(a),
         "artifact_age_s": file_age_s,
@@ -1274,7 +1324,8 @@ def build_m9_current_payload(
         "funnel": funnel_a,
         "economics": economics,
         "risk_metrics": risk_metrics,
-        "top_opportunities": top_opportunities,
+        "top_opportunities": top_quoteable,  # backward-compat: quoteable only, sorted best-first
+        "top_failed_opportunities": top_failed,
         "m8_1_inventory": m8_1_summary,
         "m8_sniper": m8_sniper_summary,
         "scan_scope": a.get("scan_scope") or {},

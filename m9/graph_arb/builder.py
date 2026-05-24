@@ -115,6 +115,7 @@ def build_graph_from_inventory(
         dex_id = entry.get("dex_id", "")
         fee = int(entry.get("fee", 0))
         factory_class = entry.get("factory_class", "UNKNOWN")
+        factory_verified_flag: bool = entry.get("factory_verified") is True
         pool_address = entry.get("pool_address", "0x0000000000000000000000000000000000000000")
         route_id = entry.get("route_id", "_")
 
@@ -216,6 +217,7 @@ def build_graph_from_inventory(
                 fee_bps=fee_bps,
                 factory_class=factory_class,
                 pair_id=pair_id,
+                factory_verified=factory_verified_flag,
             )
             adjacency[sym0][sym1].append(fwd_edge)
             built_count += 1
@@ -239,6 +241,7 @@ def build_graph_from_inventory(
                 fee_bps=fee_bps,
                 factory_class=factory_class,
                 pair_id=pair_id,
+                factory_verified=factory_verified_flag,
             )
             adjacency[sym1][sym0].append(rev_edge)
             built_count += 1

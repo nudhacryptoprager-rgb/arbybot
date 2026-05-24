@@ -69,6 +69,8 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
     Fields:
       dex           — dex_id of first edge (or comma-joined if mixed)
       factory       — factory_class of first edge (or comma-joined if mixed)
+      factory_verified — True when all edges have a known (non-UNKNOWN) factory_class
+      fee_tiers_bps — per-edge fee_bps list
       pool          — pool_address of first edge
       pool_path     — ordered list of pool addresses through cycle
       pair          — token path as "A/B/C"
@@ -78,6 +80,9 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
       spread_usd    — gross_bps * market_size_usd / 10000
       profit_usd    — gross_usd (gas model not yet implemented)
       main_blocker  — null when POSITIVE_GROSS, else reject_reason or status
+      fee_drag_bps  — sum of all edge fees (total cost of the cycle)
+      pre_fee_gross_bps — estimated gross before fees (spread_bps + fee_drag_bps)
+      loss_reason   — diagnostic: UNFAVORABLE_PRICES | FEE_DRAG | QUOTE_FAILED | null
     """
     cycle = qr.cycle
     dexes = list(dict.fromkeys(e.dex_id for e in cycle.edges))
@@ -92,9 +97,32 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
     main_blocker: Optional[str] = None
     if qr.status not in ("POSITIVE_GROSS",):
         main_blocker = qr.reject_reason or qr.status
+
+    # Economics RCA fields
+    fee_drag_bps = round(cycle.total_fee_bps, 4)
+    pre_fee_gross_bps = round(spread_bps + fee_drag_bps, 4)
+    # factory_verified: True when ALL edges were on-chain confirmed by pool_verifier.
+    # Uses the edge-level factory_verified flag (propagated from inventory),
+    # NOT factory_class (which may be "UNKNOWN" even after verification).
+    factory_verified = all(e.factory_verified for e in cycle.edges)
+    fee_tiers_bps = [round(e.fee_bps, 4) for e in cycle.edges]
+    # loss_reason: decompose why gross <= 0
+    if qr.status in ("CYCLE_QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "QUOTE_FAILED"):
+        loss_reason: Optional[str] = "QUOTE_FAILED"
+    elif pre_fee_gross_bps < -500:
+        loss_reason = "TOXIC_ROUTE_PRICE_IMPACT"  # catastrophic: prices alone -500+ bps off
+    elif pre_fee_gross_bps < 0:
+        loss_reason = "UNFAVORABLE_PRICES"  # prices don't support arb even before fees
+    elif spread_bps < 0:
+        loss_reason = "FEE_DRAG"  # prices would support arb but fees exceed the gross
+    else:
+        loss_reason = None
+
     return {
         "dex": dexes[0] if len(dexes) == 1 else ",".join(dexes),
         "factory": factories[0] if len(factories) == 1 else ",".join(factories),
+        "factory_verified": factory_verified,
+        "fee_tiers_bps": fee_tiers_bps,
         "pool": cycle.edges[0].pool_address,
         "pool_path": pools,
         "pair": pair,
@@ -107,7 +135,53 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
         "spread_usd": spread_usd,
         "profit_usd": profit_usd,
         "main_blocker": main_blocker,
+        "fee_drag_bps": fee_drag_bps,
+        "pre_fee_gross_bps": pre_fee_gross_bps,
+        "loss_reason": loss_reason,
+        "legs": _build_per_leg_rca(qr),
     }
+
+
+def _build_per_leg_rca(qr: CycleQuoteResult) -> List[Dict[str, Any]]:
+    """Build per-leg RCA list: normalized in/out amounts, implied price, pool, dex, fee."""
+    cycle = qr.cycle
+    result: List[Dict[str, Any]] = []
+    for i, edge in enumerate(cycle.edges):
+        leg_data: Dict[str, Any] = {
+            "leg_idx": i,
+            "token_in": edge.token_in_sym,
+            "token_out": edge.token_out_sym,
+            "pool_address": edge.pool_address,
+            "dex_id": edge.dex_id,
+            "fee_bps": round(edge.fee_bps, 4),
+            "factory_verified": edge.factory_verified,
+        }
+        # Per-leg quote result (ok, reject_reason, raw amounts)
+        leg_result = (qr.leg_results or [])[i] if i < len(qr.leg_results or []) else None
+        if leg_result is not None:
+            leg_data["ok"] = leg_result.ok
+            leg_data["reject_reason"] = leg_result.reject_reason if not leg_result.ok else None
+            # Raw amounts (in token's native decimals)
+            raw_in = getattr(leg_result, "amount_in", None)
+            raw_out = getattr(leg_result, "amount_out", None)
+            leg_data["raw_amount_in"] = raw_in
+            leg_data["raw_amount_out"] = raw_out
+            # Normalized: adjust for decimals to get human-readable amounts
+            dec_in = edge.token_in_decimals
+            dec_out = edge.token_out_decimals
+            if raw_in is not None and raw_in > 0:
+                norm_in = raw_in / (10 ** dec_in)
+                leg_data["norm_amount_in"] = round(norm_in, 8)
+                if raw_out is not None and raw_out > 0:
+                    norm_out = raw_out / (10 ** dec_out)
+                    leg_data["norm_amount_out"] = round(norm_out, 8)
+                    # Implied price: how many token_out per token_in
+                    leg_data["implied_price"] = round(norm_out / norm_in, 8)
+                    # Value change: (out - in) / in as fraction (negative = loss on this leg)
+                    # Only meaningful for same-USD tokens; provided for diagnosis
+                    leg_data["norm_value_ratio"] = round(norm_out / norm_in, 8)
+        result.append(leg_data)
+    return result
 
 
 def _compute_cycle_reject_histogram(cycle_results: List[CycleQuoteResult]) -> Dict[str, int]:
@@ -208,8 +282,10 @@ def build_artifact(
     verified_inventory_exists: bool = False,
     # Source of sizes_usd: "config.scan_params" | "cli_default" | "cli_override" (Fix 7)
     sizes_usd_source: str = "cli_default",
-    # Per-endpoint router telemetry snapshot (Fix 2+3)
+    # Per-endpoint provider router telemetry snapshot (Fix 2+3)
     provider_router_snapshot: Optional[Dict[str, Any]] = None,
+    # Effective prequote filter threshold used during this run
+    prequote_min_bps: float = -500.0,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -361,6 +437,29 @@ def build_artifact(
         "router_sim_bps_floor": _ROUTER_SIM_BPS_FLOOR,
     }
 
+    # Loss reason histogram across all cycle_results (Step 6 — root cause breakdown)
+    _loss_reason_histogram: Dict[str, int] = {}
+    _toxic_route_count = 0
+    for _qr in cycle_results:
+        _fee_drag = _qr.cycle.total_fee_bps
+        _pfgb = round(_qr.gross_bps + _fee_drag, 4)
+        if _qr.status in ("CYCLE_QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "QUOTE_FAILED"):
+            _lr = "QUOTE_FAILED"
+        elif _pfgb < -500:
+            _lr = "TOXIC_ROUTE_PRICE_IMPACT"
+            _toxic_route_count += 1
+        elif _pfgb < 0:
+            _lr = "UNFAVORABLE_PRICES"
+        elif _qr.gross_bps < 0:
+            _lr = "FEE_DRAG"
+        else:
+            _lr = "POSITIVE"
+        _loss_reason_histogram[_lr] = _loss_reason_histogram.get(_lr, 0) + 1
+    economics_metrics["loss_reason_histogram"] = _loss_reason_histogram
+    economics_metrics["toxic_route_count"] = _toxic_route_count
+    if cycles_quoteable > 0:
+        economics_metrics["toxic_route_rate"] = round(_toxic_route_count / cycles_quoteable, 4)
+
     # Economics blocker classification: distinguish inventory quality from market signal
     pair_count = (scan_scope or {}).get("pair_count") or (
         (funnel_a or {}).get("pairs_probed") or 0
@@ -386,8 +485,15 @@ def build_artifact(
         "risk_gate": "NOT_STARTED",
     }
 
-    # Top cycles summary (up to 10 best by gross_bps)
-    top_cycles = sorted(cycle_results, key=lambda qr: -qr.gross_bps)[:10]
+    # Top cycles summary (up to 10 best by gross_bps).
+    # Quoteable cycles (POSITIVE_GROSS / NEGATIVE_GROSS) are ranked first because
+    # their gross_bps is meaningful. CYCLE_QUOTE_FAILED has gross_bps=0 which would
+    # incorrectly sort above all NEGATIVE_GROSS cycles without the is_quoteable flag.
+    def _top_cycle_sort_key(qr: CycleQuoteResult):
+        is_quoteable = 1 if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS") else 0
+        return (is_quoteable, qr.gross_bps)
+
+    top_cycles = sorted(cycle_results, key=_top_cycle_sort_key, reverse=True)[:10]
 
     artifact: Dict[str, Any] = {
         "schema_family": SCHEMA_FAMILY,
@@ -567,6 +673,8 @@ def build_artifact(
     infra_telemetry["verified_inventory_exists"] = verified_inventory_exists
     # Source of sizes_usd (Fix 7): "config.scan_params" | "cli_default" | "cli_override"
     infra_telemetry["sizes_usd_source"] = sizes_usd_source
+    # Prequote filter threshold used during this run (operator-visible)
+    infra_telemetry["prequote_min_bps"] = prequote_min_bps
     # Per-endpoint provider router telemetry (Fix 2+3)
     if provider_router_snapshot is not None:
         infra_telemetry["provider_router_snapshot"] = provider_router_snapshot

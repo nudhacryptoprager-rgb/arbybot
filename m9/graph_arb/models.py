@@ -26,6 +26,7 @@ class GraphEdge:
     fee_bps: float
     factory_class: str
     pair_id: str
+    factory_verified: bool = False  # True when pool_verifier confirmed this route on-chain
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):

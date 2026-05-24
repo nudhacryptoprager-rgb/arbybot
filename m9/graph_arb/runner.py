@@ -857,6 +857,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             verified_inventory_exists=_verified_inventory_exists,
             sizes_usd_source=_sizes_usd_source,
             provider_router_snapshot=_router.snapshot(),
+            prequote_min_bps=_prequote_min_bps,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -929,6 +930,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         verified_inventory_exists=_verified_inventory_exists,
         sizes_usd_source=_sizes_usd_source,
         provider_router_snapshot=_router.snapshot(),
+        prequote_min_bps=_prequote_min_bps,
     )
     write_artifact(artifact, args.artifact_path)
 
