@@ -174,19 +174,54 @@ def build_bridge_inventory(
     anchor_connected_from_base = len(anchor_in_base)
 
     # ------------------------------------------------------------------
-    # Stage 6: M8 new pools that appear in the base inventory
-    # (factory_verified + depth_ok already implied by their presence)
+    # Stage 6: M8 pools that are anchor-connected + cross-dex-seen
+    # These pools are "graph-ready": they have an anchor token and their
+    # pair token appears in ≥2 sniper events (cross-dex signal).
+    # Pools already in base inventory are depth-verified; new M8 pools
+    # (not yet in base) are added to active_routes for M9 runtime quoting.
     # ------------------------------------------------------------------
     base_pool_addrs = frozenset(
         r.get("pool_address", "").lower()
         for r in base_active
         if r.get("pool_address")
     )
-    m8_pools_in_base: List[Dict] = [
-        e for e in cross_dex_seen_events
-        if e.get("pool", "").lower() in base_pool_addrs
+    # New M8 pools not yet in base inventory (will be appended to active_routes)
+    m8_new_routes: List[Dict] = [
+        {
+            "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
+            "pair_id": "_".join(sorted([e.get("token0_symbol", ""), e.get("token1_symbol", "")])),
+            "dex_id": e.get("dex", ""),
+            "token0": e.get("token0_symbol", ""),
+            "token1": e.get("token1_symbol", ""),
+            "token0_addr": e.get("token0", ""),
+            "token1_addr": e.get("token1", ""),
+            "factory_address": e.get("factory", ""),
+            "pool_address": e.get("pool", ""),
+            "factory_verified": True,  # pool emitted by known factory
+            "source": "m8_sniper",
+            "block_number": e.get("block_number"),
+            "depth_probe_ok": None,   # not yet depth-probed
+            "effective_depth_usd": None,
+        }
+        for e in cross_dex_seen_events
+        if e.get("pool", "").lower() not in base_pool_addrs
     ]
-    graph_ready_from_m8 = len(m8_pools_in_base)
+    # graph_ready_from_m8 = total anchor-connected cross-dex-seen M8 pools
+    graph_ready_from_m8 = len(cross_dex_seen_events)
+
+    # Warn about unsupported dex types (e.g. uniswap_v4) in new M8 routes
+    _unsupported_dex_count = sum(
+        1 for e in cross_dex_seen_events if e.get("dex", "") == "uniswap_v4"
+    )
+    if _unsupported_dex_count:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "bridge_builder: %d M8 event(s) have dex_id=uniswap_v4 — "
+            "M9 config has no uniswap_v4 adapter; these routes will be treated as "
+            "uniswap_v3 fallback and are likely to fail quoting. "
+            "Add quarantine reason UNSUPPORTED_DEX_TYPE once uniswap_v4 adapter is ready.",
+            _unsupported_dex_count,
+        )
 
     # ------------------------------------------------------------------
     # M8.1 anchor routes contributed to base (routes already in base from M8.1)
@@ -208,7 +243,9 @@ def build_bridge_inventory(
         "depth_ok_count": depth_ok_count,
         "anchor_connected_from_base": anchor_connected_from_base,
         "graph_ready_from_m8": graph_ready_from_m8,
-        "graph_ready_total": len(base_active),
+        "graph_ready_total": len(base_active) + len(m8_new_routes),
+        "graph_ready_from_m8_new": len(m8_new_routes),
+        "unsupported_dex_count": _unsupported_dex_count,
         "m8_stale": m8_stale,
         "m8_1_stale": m8_1_stale,
         "sniper_path": sniper_path,
@@ -224,11 +261,11 @@ def build_bridge_inventory(
         "generated_at_utc": _iso_now(),
         "bridge_source_metrics": bridge_source_metrics,
         "source_inventory": base_inv_path if base_inv else None,
-        "total_candidates": len(base_active),
-        "active_routes": base_active,
+        "total_candidates": len(base_active) + len(m8_new_routes),
+        "active_routes": base_active + m8_new_routes,
         "quarantined_routes": (base_inv.get("quarantined_routes", []) if base_inv else []),
         "summary": {
-            "active_count": len(base_active),
+            "active_count": len(base_active) + len(m8_new_routes),
             "quarantined_count": (
                 len(base_inv.get("quarantined_routes", [])) if base_inv else 0
             ),

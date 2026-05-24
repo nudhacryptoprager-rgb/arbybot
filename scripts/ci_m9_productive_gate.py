@@ -13,6 +13,8 @@ Exit codes:
 Usage:
   py -3.11 scripts/ci_m9_productive_gate.py
   py -3.11 scripts/ci_m9_productive_gate.py --artifact path/to/m9_graph.json
+  py -3.11 scripts/ci_m9_productive_gate.py --strict-bridge
+    (also checks bridge_source_metrics.graph_ready_from_m8 > 0 and stale=False)
 """
 from __future__ import annotations
 
@@ -45,7 +47,7 @@ def _load_artifact(path: Path) -> dict | None:
         return None
 
 
-def run_gate(artifact_path: Path) -> int:
+def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
     art = _load_artifact(artifact_path)
     if art is None:
         print(f"MISSING: artifact not found or unreadable: {artifact_path}", flush=True)
@@ -112,6 +114,36 @@ def run_gate(artifact_path: Path) -> int:
             f"target: <0.90 for smoke29, <0.50 long-term)"
         )
 
+    # GPT Fix step 4: strict-bridge mode — require live M8/M8.1 inputs
+    if strict_bridge:
+        bsm = art.get("bridge_source_metrics") or {}
+        graph_ready_from_m8 = bsm.get("graph_ready_from_m8", 0)
+        graph_edges_from_m8 = bsm.get("graph_edges_from_m8", None)
+        m8_stale = bsm.get("m8_stale", True)
+        m8_1_stale = bsm.get("m8_1_stale", True)
+        if graph_ready_from_m8 <= 0:
+            issues.append(
+                f"STRICT_BRIDGE: graph_ready_from_m8={graph_ready_from_m8} "
+                "(must be >0 for live bridge acceptance; "
+                "run fresh M8 sniper + m9_bridge_build.py to populate)"
+            )
+        if graph_edges_from_m8 is not None and graph_edges_from_m8 == 0:
+            issues.append(
+                f"STRICT_BRIDGE: graph_edges_from_m8=0 "
+                "(M8 routes not entering graph — check pair_id format uses '_' separator; "
+                "rebuild bridge + re-run runner)"
+            )
+        if m8_stale:
+            issues.append(
+                "STRICT_BRIDGE: m8_stale=True "
+                "(run fresh M8 smoke: ARBY_SNIPER_ENABLE=1 py -3.11 -m m8.runtime.smoke_run --chain base)"
+            )
+        if m8_1_stale:
+            issues.append(
+                "STRICT_BRIDGE: m8_1_stale=True "
+                "(run M8.1 refresh: py -3.11 scripts/m8_1_stable_anchor_run.py)"
+            )
+
     if issues:
         print("FAIL — M9 productive-state gate:", flush=True)
         for issue in issues:
@@ -153,6 +185,18 @@ def run_gate(artifact_path: Path) -> int:
         if toxic_rate_val is not None
         else "  toxic_route_rate=N/A"
     )
+    bridge_info = ""
+    if strict_bridge:
+        bsm_pass = art.get("bridge_source_metrics") or {}
+        bridge_info = (
+            f"\n  bridge: graph_ready_from_m8={bsm_pass.get('graph_ready_from_m8', 'N/A')}"
+            f", graph_edges_from_m8={bsm_pass.get('graph_edges_from_m8', 'N/A')}"
+            f", m8_stale={bsm_pass.get('m8_stale', 'N/A')}"
+            f", m8_1_stale={bsm_pass.get('m8_1_stale', 'N/A')}"
+            f", graph_ready_total={bsm_pass.get('graph_ready_total', 'N/A')}"
+            f", cycles_with_m8_pool={bsm_pass.get('cycles_with_m8_pool', 'N/A')}"
+            f", positive_cycles_with_m8_pool={bsm_pass.get('positive_cycles_with_m8_pool', 'N/A')}"
+        )
     print(
         f"PASS — M9 productive-state gate\n"
         f"  multicall_success_rate={mc_rate}\n"
@@ -160,7 +204,8 @@ def run_gate(artifact_path: Path) -> int:
         f"  sweeps={sweeps}\n"
         f"  runtime_gates.all_pass=True\n"
         f"{dyn_info}\n"
-        f"{toxic_info}",
+        f"{toxic_info}"
+        f"{bridge_info}",
         flush=True,
     )
     return EXIT_PASS
@@ -174,8 +219,18 @@ def main() -> None:
         default=_DEFAULT_ARTIFACT,
         help="Path to m9_graph_latest.json (default: data/runs/_rolling/m9_graph_latest.json)",
     )
+    parser.add_argument(
+        "--strict-bridge",
+        action="store_true",
+        default=False,
+        help=(
+            "Also require bridge_source_metrics.graph_ready_from_m8>0 "
+            "and m8_stale=False, m8_1_stale=False. "
+            "Use for full live bridge acceptance (not just canary smoke)."
+        ),
+    )
     args = parser.parse_args()
-    sys.exit(run_gate(args.artifact))
+    sys.exit(run_gate(args.artifact, strict_bridge=args.strict_bridge))
 
 
 if __name__ == "__main__":

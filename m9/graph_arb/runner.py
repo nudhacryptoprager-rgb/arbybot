@@ -539,6 +539,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     # M8→M9 bridge provenance: if inventory is a bridge inventory, extract metrics
     _bridge_source_metrics: Optional[Dict[str, Any]] = None
+    _m8_pool_addrs: "frozenset[str]" = frozenset()
     try:
         import json as _json_bridge
         with open(inventory_path, encoding="utf-8") as _inv_fh:
@@ -552,6 +553,12 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _bsm.get("m8_stale"),
                 _bsm.get("m8_1_stale"),
             )
+        # Extract M8 pool addresses for cycle participation tracking
+        _m8_pool_addrs = frozenset(
+            r.get("pool_address", "").lower()
+            for r in _inv_raw.get("active_routes", [])
+            if r.get("source") == "m8_sniper" and r.get("pool_address")
+        )
     except Exception as _bsm_exc:
         log.debug("Bridge metrics extraction skipped: %s", _bsm_exc)
 
@@ -625,6 +632,19 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     # Find cycles
     log.info("Finding cycles (limit=%d)...", args.cycles_limit)
+
+    # Count graph edges sourced from M8 sniper routes (requires pair_id with underscore)
+    if _m8_pool_addrs:
+        _graph_edges_from_m8 = sum(
+            1
+            for token_edges in adjacency.values()
+            for edges in token_edges.values()
+            for e in edges
+            if e.pool_address.lower() in _m8_pool_addrs
+        )
+        if _bridge_source_metrics is not None:
+            _bridge_source_metrics["graph_edges_from_m8"] = _graph_edges_from_m8
+        log.info("Graph edges from M8 sniper routes: %d", _graph_edges_from_m8)
     cycles = find_cycles(adjacency, max_cycles=args.cycles_limit)
     topology = analyze_topology(adjacency, cycles)
     ranked = rank_cycles(cycles)
@@ -972,6 +992,24 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _ws_snap_final = ws_monitor.snapshot() if ws_monitor is not None else None
     if ws_monitor is not None:
         ws_monitor.stop()
+
+    # M8 cycle participation metrics — must be computed after all cycle_results are collected
+    if _bridge_source_metrics is not None and _m8_pool_addrs:
+        _cycles_with_m8 = sum(
+            1 for qr in cycle_results
+            if any(e.pool_address.lower() in _m8_pool_addrs for e in qr.cycle.edges)
+        )
+        _positive_cycles_with_m8 = sum(
+            1 for qr in cycle_results
+            if qr.gross_bps > 0
+            and any(e.pool_address.lower() in _m8_pool_addrs for e in qr.cycle.edges)
+        )
+        _bridge_source_metrics["cycles_with_m8_pool"] = _cycles_with_m8
+        _bridge_source_metrics["positive_cycles_with_m8_pool"] = _positive_cycles_with_m8
+        log.info(
+            "M8 pool cycle participation: cycles_with_m8=%d positive_with_m8=%d",
+            _cycles_with_m8, _positive_cycles_with_m8,
+        )
 
     # Build and write final artifact with full elapsed_s
     artifact = build_artifact(

@@ -334,6 +334,125 @@ class TestBridgeBuilderIntegration:
         assert metrics["cross_dex_seen_count"] == 2  # AERO seen in 2 events
         assert metrics["graph_ready_from_m8"] == 2   # both events' pool in base
 
+    def test_pair_id_uses_underscore_not_slash(self, tmp_path):
+        """M8 bridge pair_id must use '_' separator — required by M9 _parse_pair_symbols().
+
+        Old bug: pair_id='WETH/YLDKT' → _parse_pair_symbols splits by '_' → 1 part
+        → ValueError → route silently skipped → graph_edges_from_m8=0.
+        """
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        events = [
+            _sniper_event("WETH", "YLDKT", dex="uniswap_v4", pool="0xpool001"),
+            _sniper_event("USDC", "YLDKT", dex="uniswap_v4", pool="0xpool002"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        m8_routes = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert m8_routes, "Expected at least one M8 sniper route in output"
+        for route in m8_routes:
+            pair_id = route["pair_id"]
+            assert "/" not in pair_id, f"pair_id must use '_', got slash: {pair_id!r}"
+            assert "_" in pair_id, f"pair_id must use '_' separator, got: {pair_id!r}"
+
+    def test_pair_id_is_sorted_alphabetically(self, tmp_path):
+        """M8 bridge pair_id must be alphabetically sorted (canonical form)."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        # WETH > USDC alphabetically, so pair_id must be USDC_WETH not WETH_USDC
+        events = [
+            _sniper_event("WETH", "USDC", dex="uniswap_v2", pool="0xpool001"),
+            _sniper_event("WETH", "USDC", dex="uniswap_v4", pool="0xpool002"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        m8_routes = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        for route in m8_routes:
+            pair_id = route["pair_id"]
+            parts = pair_id.split("_")
+            assert len(parts) == 2, f"pair_id must have exactly 2 parts: {pair_id!r}"
+            assert parts == sorted(parts), (
+                f"pair_id must be alphabetically sorted: {pair_id!r}"
+            )
+
+    def test_m8_pair_id_parseable_by_m9_graph_builder(self, tmp_path):
+        """M8 bridge pair_id must be parseable by M9 graph _parse_pair_symbols().
+
+        This is the graph integration contract: graph_ready_from_m8 > 0 must imply
+        graph_edges_from_m8 > 0 (routes actually enter graph, not silently skipped).
+        """
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+        from m9.graph_arb.builder import _parse_pair_symbols
+
+        events = [
+            _sniper_event("WETH", "YLDKT", dex="uniswap_v4", pool="0xpool_new_001"),
+            _sniper_event("USDC", "YLDKT", dex="uniswap_v4", pool="0xpool_new_002"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        m8_routes = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert metrics["graph_ready_from_m8"] > 0, (
+            "graph_ready_from_m8 must be > 0 to test graph integration"
+        )
+        # Every M8 route pair_id must be parseable — no ValueError → no silent skip
+        parsed_count = 0
+        for route in m8_routes:
+            pair_id = route["pair_id"]
+            try:
+                sym0, sym1 = _parse_pair_symbols(pair_id)
+                assert sym0 and sym1, f"Parsed empty symbol from pair_id: {pair_id!r}"
+                parsed_count += 1
+            except ValueError as exc:
+                raise AssertionError(
+                    f"M8 route pair_id={pair_id!r} is not parseable by M9 graph builder: {exc}"
+                ) from exc
+        assert parsed_count > 0, "No M8 routes were parseable — graph_edges_from_m8 would be 0"
+
 
 # ---------------------------------------------------------------------------
 # BridgeArtifactContract: bridge_source_metrics in M9 artifact
