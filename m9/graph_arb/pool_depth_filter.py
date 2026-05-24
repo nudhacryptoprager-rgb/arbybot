@@ -1,0 +1,122 @@
+"""Pool depth / quality filter for M9 productive graph (Steps 2+5).
+
+Loads evidence-based quarantine entries and provides helpers to check if a
+route's pool should be excluded from the productive lane.
+
+Design principle (per GPT review):
+- NOT a global pair blacklist: other pools for the same pair may remain active.
+- Filters specific pool_address / fee-tier routes confirmed as TOXIC or too shallow.
+- Discovery lane still sees all pools for RCA purposes.
+- Productive lane excludes quarantined + depth-insufficient pools.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import FrozenSet, Optional
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_QUARANTINE_PATH = "data/quarantine/m9_pool_depth_quarantine.json"
+
+# Placeholder addresses used in the quarantine file before depth probe fills them
+_PLACEHOLDER_PREFIXES = {"0x000000000000000000000000000000000000000"}
+
+
+def load_quarantined_pool_addresses(
+    quarantine_path: str = _DEFAULT_QUARANTINE_PATH,
+) -> FrozenSet[str]:
+    """Load pool addresses from the depth quarantine file.
+
+    Returns frozenset of lowercase pool addresses that must be excluded
+    from the M9 productive graph lane.
+
+    Placeholder addresses (0x0000...0001, 0x0000...0002) are silently skipped —
+    they are filled in by pool_depth_probe after an on-chain run.
+    """
+    path = Path(quarantine_path)
+    if not path.exists():
+        logger.debug(
+            "Pool depth quarantine file not found: %s (skipping — no pools excluded)",
+            quarantine_path,
+        )
+        return frozenset()
+
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load pool depth quarantine %s: %s",
+            quarantine_path,
+            exc,
+            extra={"context": {"event": "pool_depth_quarantine_load_error", "error": str(exc)}},
+        )
+        return frozenset()
+
+    addresses: set[str] = set()
+    for entry in data.get("quarantined_pools", []):
+        addr = entry.get("pool_address", "")
+        if not addr or not addr.startswith("0x"):
+            continue
+        # Skip placeholder entries (not yet filled by pool_depth_probe)
+        addr_lower = addr.lower()
+        is_placeholder = any(addr_lower.startswith(p.lower()) for p in _PLACEHOLDER_PREFIXES)
+        if is_placeholder:
+            logger.debug(
+                "Skipping placeholder quarantine entry: pair=%s fee=%s",
+                entry.get("pair_id"),
+                entry.get("fee"),
+            )
+            continue
+        addresses.add(addr_lower)
+
+    if addresses:
+        logger.info(
+            "Pool depth quarantine loaded: %d addresses excluded from productive lane",
+            len(addresses),
+            extra={
+                "context": {
+                    "event": "pool_depth_quarantine_loaded",
+                    "count": len(addresses),
+                    "path": quarantine_path,
+                }
+            },
+        )
+    return frozenset(addresses)
+
+
+def load_quarantine_metadata(
+    quarantine_path: str = _DEFAULT_QUARANTINE_PATH,
+) -> list:
+    """Return full list of quarantine entries for dashboard/artifact display."""
+    path = Path(quarantine_path)
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("quarantined_pools", [])
+    except Exception:
+        return []
+
+
+def is_depth_sufficient(entry: dict, min_effective_depth_usd: float) -> bool:
+    """Return True if an inventory route entry has sufficient on-chain depth.
+
+    Uses the ``effective_depth_usd`` field produced by pool_depth_probe.
+    If the field is absent (probe not yet run), returns True — conservative:
+    unknown depth does not trigger exclusion.
+
+    Args:
+        entry: One dict from inventory active_routes.
+        min_effective_depth_usd: Minimum acceptable depth in USD.
+            0.0 means no filter (always True).
+    """
+    if min_effective_depth_usd <= 0:
+        return True
+    depth = entry.get("effective_depth_usd")
+    if depth is None:
+        return True  # depth unknown → don't exclude (conservative)
+    return float(depth) >= min_effective_depth_usd

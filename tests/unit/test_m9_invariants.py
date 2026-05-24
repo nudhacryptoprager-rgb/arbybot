@@ -426,3 +426,293 @@ class TestEconomicsMetricsInvariant:
         assert leg0["token_out"] == "B"
         assert leg0["fee_bps"] == 5.0
         assert leg0["factory_verified"] is True
+
+
+# ---------------------------------------------------------------------------
+# Toxic pool families invariants (Step 7)
+# ---------------------------------------------------------------------------
+
+class TestToxicPoolFamiliesInvariant:
+    """toxic_pool_families block is always present in artifact (Step 7)."""
+
+    def test_toxic_pool_families_always_present(self):
+        """toxic_pool_families key must always be present in artifact."""
+        art = build_artifact(**_base_kwargs(cycle_results=[]))
+        assert "toxic_pool_families" in art, "artifact missing 'toxic_pool_families' key"
+
+    def test_toxic_pool_families_is_list(self):
+        """toxic_pool_families value must be a list."""
+        art = build_artifact(**_base_kwargs(cycle_results=[]))
+        assert isinstance(art["toxic_pool_families"], list)
+
+    def test_toxic_pool_families_empty_when_no_cycles(self):
+        """toxic_pool_families must be empty when there are no cycle results."""
+        art = build_artifact(**_base_kwargs(cycle_results=[]))
+        assert art["toxic_pool_families"] == []
+
+    def test_toxic_pool_families_empty_when_no_toxic_cycles(self):
+        """toxic_pool_families must be empty when all cycles are healthy."""
+        cycle = _make_cycle(factory_verified=True)
+        qr = _make_qr(cycle, gross_bps=-10.0)  # -10 bps = small loss, not toxic (-500 threshold)
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        assert art["toxic_pool_families"] == [], (
+            "No toxic families expected for cycle with gross_bps=-10 (pfgb > -500)"
+        )
+
+    def test_toxic_pool_families_populated_for_toxic_cycle(self):
+        """toxic_pool_families must contain pools from TOXIC cycles (pfgb < -500)."""
+        cycle = _make_cycle(factory_verified=True)
+        # total_fee_bps = 3 * 5.0 = 15; gross_bps = -9000 → pfgb = -9000 + 15 = -8985 < -500 → toxic
+        qr = _make_qr(cycle, gross_bps=-9000.0)
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        fams = art["toxic_pool_families"]
+        assert len(fams) > 0, "Expected at least one toxic pool family for -9000 bps cycle"
+        # All 3 pools from the cycle should appear
+        pool_addresses = {f["pool_address"].lower() for f in fams}
+        assert _POOL1.lower() in pool_addresses
+        assert _POOL2.lower() in pool_addresses
+        assert _POOL3.lower() in pool_addresses
+
+    def test_toxic_pool_families_fields_present(self):
+        """Each entry in toxic_pool_families must have required fields."""
+        cycle = _make_cycle(factory_verified=True)
+        qr = _make_qr(cycle, gross_bps=-9000.0)
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        fams = art["toxic_pool_families"]
+        required_fields = {"pool_address", "pair_id", "dex_id", "fee_bps", "cycle_count", "min_gross_bps", "max_gross_bps"}
+        for fam in fams:
+            missing = required_fields - set(fam.keys())
+            assert not missing, f"toxic_pool_families entry missing fields: {missing}"
+
+    def test_toxic_pool_families_sorted_by_cycle_count(self):
+        """toxic_pool_families sorted by cycle_count descending (worst offenders first)."""
+        cycle1 = _make_cycle(factory_verified=True)
+        cycle2 = _make_cycle(factory_verified=True)
+        qr1 = _make_qr(cycle1, gross_bps=-9000.0)
+        qr2 = _make_qr(cycle2, gross_bps=-8000.0)
+        art = build_artifact(**_base_kwargs(cycle_results=[qr1, qr2]))
+        fams = art["toxic_pool_families"]
+        cycle_counts = [f["cycle_count"] for f in fams]
+        assert cycle_counts == sorted(cycle_counts, reverse=True), (
+            "toxic_pool_families must be sorted by cycle_count descending"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pool-quality gate lane invariants (Steps 2+3)
+# ---------------------------------------------------------------------------
+
+class TestPoolQualityLaneInvariant:
+    """pool_quality_lane must appear in scan_scope for all artifact builds."""
+
+    def test_scan_scope_pool_quality_lane_default_discovery(self):
+        """By default (no pool_quality_lane arg), scan_scope.pool_quality_lane = 'discovery'."""
+        art = build_artifact(**_base_kwargs(cycle_results=[]))
+        lane = art.get("scan_scope", {}).get("pool_quality_lane")
+        assert lane == "discovery", f"Expected 'discovery', got {lane!r}"
+
+    def test_scan_scope_pool_quality_lane_productive(self):
+        """When pool_quality_lane='productive', scan_scope must reflect that."""
+        art = build_artifact(**_base_kwargs(cycle_results=[], pool_quality_lane="productive"))
+        lane = art.get("scan_scope", {}).get("pool_quality_lane")
+        assert lane == "productive", f"Expected 'productive', got {lane!r}"
+
+    def test_scan_scope_depth_quarantine_skipped_recorded(self):
+        """When depth_quarantine_skipped > 0, it must appear in scan_scope."""
+        art = build_artifact(**_base_kwargs(
+            cycle_results=[],
+            pool_quality_lane="productive",
+            depth_quarantine_skipped=3,
+        ))
+        skipped = art.get("scan_scope", {}).get("depth_quarantine_skipped")
+        assert skipped == 3, f"Expected 3, got {skipped!r}"
+
+    def test_scan_scope_no_depth_quarantine_key_when_zero(self):
+        """When depth_quarantine_skipped=0, key should NOT appear in scan_scope (clean output)."""
+        art = build_artifact(**_base_kwargs(
+            cycle_results=[],
+            pool_quality_lane="discovery",
+            depth_quarantine_skipped=0,
+        ))
+        # Key must be absent (not just 0) to keep scan_scope clean
+        assert "depth_quarantine_skipped" not in art.get("scan_scope", {})
+
+
+# ---------------------------------------------------------------------------
+# ci_m9_productive_gate: toxic_route_rate check (GPT Step 6)
+# ---------------------------------------------------------------------------
+
+class TestProductiveGateToxicRateCheck:
+    """ci_m9_productive_gate must fail when toxic_route_rate >= 0.90."""
+
+    def _make_artifact(self, toxic_rate=None, all_pass=True, duration_fulfilled=True):
+        rg = {
+            "all_pass": all_pass,
+            "multicall_success_rate": {"value": 1.0, "threshold": 0.9, "pass": True},
+            "data_completeness": {"value": 1.0, "threshold": 0.98, "pass": True},
+            "unverified_active_routes": {"value": 0, "threshold": 0, "pass": True},
+            "qsr": {"value": 0.99, "threshold": 0.8, "pass": True},
+            "quote_revert_rate": {"value": 0.0, "threshold": 0.05, "pass": True},
+        }
+        art = {
+            "schema_revision": "m9.1",
+            "sweeps_completed": 10,
+            "elapsed_s": 60.0,
+            "duration_fulfilled": duration_fulfilled,
+            "runtime_gates": rg,
+            "infra_telemetry": {"unverified_active_routes": 0},
+        }
+        if toxic_rate is not None:
+            art["economics_metrics"] = {"toxic_route_rate": toxic_rate}
+        return art
+
+    def test_gate_fails_when_toxic_rate_above_threshold(self, tmp_path):
+        """Gate must EXIT_FAIL when toxic_route_rate >= 0.90."""
+        import json
+        from scripts.ci_m9_productive_gate import run_gate, EXIT_FAIL
+        art = self._make_artifact(toxic_rate=0.9894)
+        p = tmp_path / "m9_art.json"
+        p.write_text(json.dumps(art))
+        result = run_gate(p)
+        assert result == EXIT_FAIL
+
+    def test_gate_passes_when_toxic_rate_below_threshold(self, tmp_path):
+        """Gate must EXIT_PASS when toxic_route_rate < 0.90."""
+        import json
+        from scripts.ci_m9_productive_gate import run_gate, EXIT_PASS
+        art = self._make_artifact(toxic_rate=0.85)
+        p = tmp_path / "m9_art.json"
+        p.write_text(json.dumps(art))
+        result = run_gate(p)
+        assert result == EXIT_PASS
+
+    def test_gate_passes_when_toxic_rate_absent(self, tmp_path):
+        """Gate must EXIT_PASS when economics_metrics.toxic_route_rate is absent (legacy artifact)."""
+        import json
+        from scripts.ci_m9_productive_gate import run_gate, EXIT_PASS
+        art = self._make_artifact(toxic_rate=None)
+        p = tmp_path / "m9_art.json"
+        p.write_text(json.dumps(art))
+        result = run_gate(p)
+        assert result == EXIT_PASS
+
+    def test_gate_fail_message_contains_threshold(self, tmp_path, capsys):
+        """FAIL output must mention the threshold so operator knows what to fix."""
+        import json
+        from scripts.ci_m9_productive_gate import run_gate
+        art = self._make_artifact(toxic_rate=0.9894)
+        p = tmp_path / "m9_art.json"
+        p.write_text(json.dumps(art))
+        run_gate(p)
+        captured = capsys.readouterr()
+        assert "0.90" in captured.out
+        assert "toxic_route_rate" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# pool_depth_probe: _update_quarantine logic (GPT Step 1/2/3)
+# ---------------------------------------------------------------------------
+
+class TestUpdateQuarantine:
+    """_update_quarantine must correctly add new toxic/thin pool entries."""
+
+    def _make_probe_result(self, pool_addr, reject_reason, impact=0.92, depth=10.0):
+        return {
+            "probe_ok": True,
+            "price_impact_at_100usd": impact,
+            "effective_depth_usd": depth,
+            "depth_reject_reason": reject_reason,
+        }
+
+    def test_adds_new_toxic_pool(self, tmp_path):
+        """New TOXIC_PRICE_IMPACT pool must be appended to quarantine."""
+        import json
+        from m9.graph_arb.pool_depth_probe import _update_quarantine
+        q_path = tmp_path / "quarantine.json"
+        q_path.write_text(json.dumps({
+            "schema_version": "m9_pool_depth_quarantine.1",
+            "quarantined_pools": [],
+        }))
+        results = {
+            "0xdeadbeef0000000000000000000000000000000a": self._make_probe_result(
+                "0xdeadbeef0000000000000000000000000000000a", "TOXIC_PRICE_IMPACT"
+            )
+        }
+        routes = [{"pool_address": "0xdeadbeef0000000000000000000000000000000a", "pair_id": "AERO_USDC", "dex_id": "uniswap_v3", "fee": 100}]
+        _update_quarantine(q_path, results, routes, impact_threshold=0.50, rpc_url="https://base-rpc.publicnode.com")
+        updated = json.loads(q_path.read_text())
+        assert len(updated["quarantined_pools"]) == 1
+        assert updated["quarantined_pools"][0]["pool_address"] == "0xdeadbeef0000000000000000000000000000000a"
+        assert updated["quarantined_pools"][0]["reject_reason"] == "TOXIC_PRICE_IMPACT"
+
+    def test_no_duplicate_entries(self, tmp_path):
+        """Pool already in quarantine must not be added again."""
+        import json
+        from m9.graph_arb.pool_depth_probe import _update_quarantine
+        existing_addr = "0xdeadbeef0000000000000000000000000000000b"
+        q_path = tmp_path / "quarantine.json"
+        q_path.write_text(json.dumps({
+            "schema_version": "m9_pool_depth_quarantine.1",
+            "quarantined_pools": [{"pool_address": existing_addr, "pair_id": "AERO_WETH", "reject_reason": "TOXIC_PRICE_IMPACT"}],
+        }))
+        results = {existing_addr: self._make_probe_result(existing_addr, "TOXIC_PRICE_IMPACT")}
+        routes = [{"pool_address": existing_addr, "pair_id": "AERO_WETH", "dex_id": "uniswap_v3", "fee": 100}]
+        _update_quarantine(q_path, results, routes, impact_threshold=0.50, rpc_url="")
+        updated = json.loads(q_path.read_text())
+        assert len(updated["quarantined_pools"]) == 1, "Must not duplicate existing entry"
+
+    def test_skips_clean_pools(self, tmp_path):
+        """Pools with no depth_reject_reason (OK) must not be added to quarantine."""
+        import json
+        from m9.graph_arb.pool_depth_probe import _update_quarantine
+        q_path = tmp_path / "quarantine.json"
+        q_path.write_text(json.dumps({"schema_version": "m9_pool_depth_quarantine.1", "quarantined_pools": []}))
+        results = {
+            "0xabcdef0000000000000000000000000000000001": {
+                "probe_ok": True,
+                "price_impact_at_100usd": 0.02,
+                "effective_depth_usd": 5000.0,
+                "depth_reject_reason": None,
+            }
+        }
+        routes = [{"pool_address": "0xabcdef0000000000000000000000000000000001", "pair_id": "USDC_WETH", "dex_id": "uniswap_v3", "fee": 500}]
+        _update_quarantine(q_path, results, routes, impact_threshold=0.50, rpc_url="")
+        updated = json.loads(q_path.read_text())
+        assert len(updated["quarantined_pools"]) == 0
+
+    def test_skips_failed_probes(self, tmp_path):
+        """Pools where probe_ok=False must not be added even if reject_reason is set."""
+        import json
+        from m9.graph_arb.pool_depth_probe import _update_quarantine
+        q_path = tmp_path / "quarantine.json"
+        q_path.write_text(json.dumps({"schema_version": "m9_pool_depth_quarantine.1", "quarantined_pools": []}))
+        results = {
+            "0xffffff0000000000000000000000000000000002": {
+                "probe_ok": False,
+                "price_impact_at_100usd": None,
+                "effective_depth_usd": None,
+                "depth_reject_reason": "TOXIC_PRICE_IMPACT",
+            }
+        }
+        routes = [{"pool_address": "0xffffff0000000000000000000000000000000002", "pair_id": "EURC_USDC", "dex_id": "aerodrome_slipstream", "fee": 1}]
+        _update_quarantine(q_path, results, routes, impact_threshold=0.50, rpc_url="")
+        updated = json.loads(q_path.read_text())
+        assert len(updated["quarantined_pools"]) == 0
+
+    def test_creates_quarantine_file_if_missing(self, tmp_path):
+        """When quarantine file does not exist, it must be created."""
+        import json
+        from m9.graph_arb.pool_depth_probe import _update_quarantine
+        q_path = tmp_path / "new_quarantine.json"
+        assert not q_path.exists()
+        results = {
+            "0x1234560000000000000000000000000000000003": self._make_probe_result(
+                "0x1234560000000000000000000000000000000003", "TOXIC_PRICE_IMPACT"
+            )
+        }
+        routes = [{"pool_address": "0x1234560000000000000000000000000000000003", "pair_id": "AERO_TOSHI", "dex_id": "uniswap_v3", "fee": 10000}]
+        _update_quarantine(q_path, results, routes, impact_threshold=0.50, rpc_url="")
+        assert q_path.exists()
+        updated = json.loads(q_path.read_text())
+        assert len(updated["quarantined_pools"]) == 1
+

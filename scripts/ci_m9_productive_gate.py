@@ -101,6 +101,17 @@ def run_gate(artifact_path: Path) -> int:
                 "not via CLI --sizes-usd)"
             )
 
+    # GPT Step 6: toxic_route_rate gate (initial threshold 0.90, to be tightened to 0.50)
+    _TOXIC_RATE_THRESHOLD = 0.90
+    em = art.get("economics_metrics") or {}
+    toxic_rate = em.get("toxic_route_rate")
+    if toxic_rate is not None and toxic_rate >= _TOXIC_RATE_THRESHOLD:
+        issues.append(
+            f"toxic_route_rate={toxic_rate:.4f} >= {_TOXIC_RATE_THRESHOLD} "
+            f"(run pool_depth_probe --update-quarantine to expand quarantine coverage; "
+            f"target: <0.90 for smoke29, <0.50 long-term)"
+        )
+
     if issues:
         print("FAIL — M9 productive-state gate:", flush=True)
         for issue in issues:
@@ -131,9 +142,16 @@ def run_gate(artifact_path: Path) -> int:
     dyn_enabled = it.get("dynamic_size_enabled", False)
     dyn_count = it.get("dynamic_size_selected_count", 0)
     dyn_rate = it.get("dynamic_size_selection_rate")
+    em_pass = art.get("economics_metrics") or {}
+    toxic_rate_val = em_pass.get("toxic_route_rate")
     dyn_info = (
         f"  dynamic_size_enabled={dyn_enabled}, selected_count={dyn_count}"
         + (f", selection_rate={dyn_rate}" if dyn_rate is not None else "")
+    )
+    toxic_info = (
+        f"  toxic_route_rate={toxic_rate_val:.4f} (threshold <0.90)"
+        if toxic_rate_val is not None
+        else "  toxic_route_rate=N/A"
     )
     print(
         f"PASS — M9 productive-state gate\n"
@@ -141,7 +159,8 @@ def run_gate(artifact_path: Path) -> int:
         f"  qsr={qsr}\n"
         f"  sweeps={sweeps}\n"
         f"  runtime_gates.all_pass=True\n"
-        f"{dyn_info}",
+        f"{dyn_info}\n"
+        f"{toxic_info}",
         flush=True,
     )
     return EXIT_PASS

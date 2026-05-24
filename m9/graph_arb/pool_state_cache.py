@@ -53,12 +53,25 @@ class PoolState:
 
     @classmethod
     def from_dict(cls, d: dict, *, fetched_at_mono: float = 0.0) -> "PoolState":
+        # Gracefully handle None values written by older cache versions
+        # (e.g. block_number=null in JSON when RPC returned None).
+        _bn = d.get("block_number")
+        _liq = d.get("liquidity")
+        _tick = d.get("tick")
+        _sqrt = d.get("sqrt_price_x96")
+        if _bn is None or _sqrt is None or _liq is None or _tick is None:
+            raise ValueError(
+                f"PoolState.from_dict: stale/corrupt cache entry for pool "
+                f"{d.get('pool_addr', '?')} — missing required field "
+                f"(block_number={_bn}, sqrt_price_x96={_sqrt}, "
+                f"liquidity={_liq}, tick={_tick})"
+            )
         return cls(
             pool_addr=d["pool_addr"],
-            sqrt_price_x96=int(d["sqrt_price_x96"]),
-            tick=int(d["tick"]),
-            liquidity=int(d["liquidity"]),
-            block_number=int(d["block_number"]),
+            sqrt_price_x96=int(_sqrt),
+            tick=int(_tick),
+            liquidity=int(_liq),
+            block_number=int(_bn),
             fetched_at_mono=fetched_at_mono,
         )
 

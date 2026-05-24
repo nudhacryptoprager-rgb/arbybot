@@ -1,8 +1,8 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: ECONOMICS_RCA_COMPLETE — Bridge unlock MET (smoke23+24+25, 3/3 all_pass). smoke27 gate PASS (2026-05-24): mc_rate=1.0, dc=1.0, qsr=0.9776, 0×429. Economics RCA complete: 100% TOXIC_ROUTE_PRICE_IMPACT confirmed on-chain (AERO/TOSHI UV3-1% liquidity=8.57e+20, 91% price impact).
+**Status**: SMOKE29C_QUARANTINE_EXPANSION_PASS — Bridge unlock MET (smoke23+24+25, 3/3 all_pass). smoke29c PASS (2026-05-24): productive lane, quarantine 59 entries, mc=1.0, qsr=0.9642, 0×429, depth_quarantine_skipped=57. toxic_rate 0.9894→0.4183 (×2.4 reduction). cycles_positive_gross=38 (first ever!). best_cycle_net_bps=+1.09. economics_gate_status=NEAR_MISS.
 
-`goal_status`: M9_BRIDGE_UNLOCKED__ECONOMICS_RCA_COMPLETE__GATE_PASS
+`goal_status`: M9_SMOKE29C_QUARANTINE_EXPANSION_PASS
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
@@ -11,22 +11,27 @@
 
 ---
 
-## Current Focus: Dashboard Sync + Economics RCA
+## Current Focus: Pool-Quality Gate (Before M8→M9 Bridge Expansion)
 
-**Мета**: Після досягнення bridge unlock (3/3 all_pass) — усунути виявлені проблеми з точністю та свіжістю M9 dashboard.
+**Мета**: Перед розширенням через M8→M9 bridge — заблокувати TOXIC/thin пули від домінування `top_opportunities`. Factory_verified=True = пул існує, НЕ = достатня глибина.
 
-### Зроблено (цей цикл)
-- ✅ `ws_monitor.py`: asyncio bug (`NameError: name 'asyncio' is not defined`) — виправлено (import на рівні модуля)
-- ✅ `artifacts.py`: Рейтинг `top_cycles` — CYCLE_QUOTE_FAILED (`gross_bps=0`) більше не виходить вище NEGATIVE_GROSS (`gross_bps<0`). Новий ключ сортування `(is_quoteable, gross_bps)` desc.
-- ✅ `artifacts.py`: RCA-поля в `_build_top_opportunity`: `fee_drag_bps`, `pre_fee_gross_bps`, `factory_verified`, `fee_tiers_bps`, `loss_reason`
-- ✅ `artifacts.py` + `runner.py`: `prequote_min_bps` parameter → `infra_telemetry`
-- ✅ `dashboard_server.py` (`build_m9_current_payload`): схема bumped → `m9_dashboard.3`; `top_opportunities` (quoteable only) + `top_failed_opportunities` (CYCLE_QUOTE_FAILED/TIMEOUT); staleness fields (`staleness_reason`, `runtime_gates_live_verdict`, `last_write_utc`); M8/M8.1 `artifact_age_s` + `is_stale`; `prequote_min_bps` у `infra_quality`
-- ✅ `tests/unit/test_dashboard_m9_server.py`: 21 тести, всі PASS; нові тести для stale verdict, top split, RCA fields, M8.1 age_s
-- ✅ `check_repo_safety.py`: PASS (2 pre-existing doc-bloat warnings, M7/M8 статуси)
+### Зроблено (цей цикл — GPT 10 кроків)
+- ✅ **Step 4**: `core/reject_reasons.py` — 3 нові enum members: `LOW_EFFECTIVE_DEPTH`, `TOXIC_PRICE_IMPACT`, `ASYMMETRIC_POOL_DEPTH`
+- ✅ **Step 5**: `data/quarantine/m9_pool_depth_quarantine.json` — evidence-based карантин: AERO/TOSHI UV3-1% (real addr `0x7e904aaf...`, підтверджено on-chain); USDC/VIRTUAL (placeholders, потребує depth probe)
+- ✅ **Step 2+3**: `m9/graph_arb/pool_depth_filter.py` — новий модуль: `load_quarantined_pool_addresses()`, `is_depth_sufficient()`; пропускає placeholder адреси
+- ✅ **Step 2+3**: `m9/graph_arb/builder.py` — нові параметри: `exclude_pool_addresses`, `min_effective_depth_usd`, `lane` (`discovery` | `productive`)
+- ✅ **Step 7**: `m9/graph_arb/artifacts.py` — новий блок `toxic_pool_families` (top-20 пулів з toxic cycles, sorted by cycle_count)
+- ✅ **Step 8**: `m9/graph_arb/artifacts.py` — `_top_cycle_sort_key` оновлено: `(is_quoteable, is_not_toxic, gross_bps)` — toxic cycles більше не домінують `top_opportunities`
+- ✅ **Step 1**: `m9/graph_arb/pool_depth_probe.py` — новий standalone utility для on-chain depth measurement ($100 quote probe → `effective_depth_usd`, `price_impact_at_100usd`)
+- ✅ **Step 3**: `m9/graph_arb/runner.py` — нові CLI args: `--productive-lane`, `--pool-quarantine-path`, `--min-effective-depth-usd`; `pool_quality_lane` в `scan_scope` артефакту
+- ✅ **Тести**: `test_m9_graph_builder.py` — `TestPoolDepthFilter` (8 тестів); `test_m9_invariants.py` — `TestToxicPoolFamiliesInvariant` (6), `TestPoolQualityLaneInvariant` (4)
 
-### Smoke26 RCA (2026-05-24) — DRPC free-tier, GATE FAIL
-
-**smoke26 ≠ regression.** DRPC free-tier: 71 http_429 → mc_rate=0.68 ❌, dc=0.92 ❌. Bridge unlock (smoke23/24/25 publicnode) залишається VALID. smoke27 запущено явно з publicnode → PASS.
+### Pending
+- ✅ **Step 9**: Smoke28 з `--productive-lane` — PASS: `elapsed_s=601.2`, `qsr=0.9985`, `mc=1.0`, `data_completeness=1.0`, `http_429_count=0`, `all_pass=true`
+- ⏳ Розширити depth quarantine: smoke28 показав `toxic_pool_families` top candidates `AERO_USDC`, `AERO_WETH`, `EURC_USDC`, `EURC_WETH`; зараз виключено лише 1 pool address.
+- ⏳ **Step 6**: Rebuild pair universe з M8/M8.1 (pool families з depth ≥ 2 DEX)
+- ⏳ **Step 10**: Розширення discovery coverage (якщо після cleanup все ще немає позитивних)
+- ⏳ Заповнити USDC/VIRTUAL placeholder адреси в quarantine через `pool_depth_probe`
 
 ---
 
@@ -207,10 +212,70 @@ median_gross_bps:             -9991.2
 
 ---
 
+## Smoke29c Results — Quarantine Expansion PASS (2026-05-24) ✅ (5/5 gates + toxic_rate PASS)
+
+### Config: `config/exotic_base_anchor.yaml`, `--prequote-min-bps -9999`, `--productive-lane`, `--pool-quarantine-path data/quarantine/m9_pool_depth_quarantine.json` (59 entries), `--min-effective-depth-usd 1000`, raw_http, 1 worker, publicnode.com, Base, 15-min
+```
+elapsed_s:                    901.8  (duration_fulfilled=true ✅)
+sweeps_completed:             292
+cycles_found:                 1453   (cycles_positive_gross=38, CYCLE_QUOTE_FAILED=52)
+cycles_positive_gross:        38     ✅ (was 0 in smoke28! first positive_gross in M9)
+best_cycle_net_bps:           +1.0854 ✅ (was 0.0 in smoke28! first positive net in M9)
+
+# runtime_gates — ALL PASS
+multicall_success_rate:       1.0     ✅ (≥0.90)
+data_completeness:            1.0     ✅ (≥0.98)
+unverified_active_routes:     0       ✅
+qsr:                          0.9642  ✅ (≥0.80)
+quote_revert_rate:            0.0     ✅ (<0.05)
+all_pass:                     true    ✅
+
+# pool-quality gate
+toxic_route_rate:             0.4183  ✅ (<0.90 threshold)   ← was 0.9894 in smoke28!
+depth_quarantine_skipped:     57      ✅   ← was 1 in smoke28!
+
+# economics
+economics_gate_status:        NEAR_MISS   ← was BLOCKED_NO_POSITIVE_GROSS!
+cycle_reject_histogram:       NEGATIVE_GROSS=1363, POSITIVE_GROSS=38, CYCLE_QUOTE_FAILED=52
+loss_reason_histogram:        TOXIC=586, UNFAVORABLE_PRICES=596, FEE_DRAG=181, POSITIVE=38
+
+# infra — zero errors
+rpc_provider:                 publicnode
+http_429_count:               0       (was 49 mc_429 in smoke29b with dRPC free-tier)
+```
+
+### Pool Depth Probe (ran before smoke29c)
+- ok=117, fail=2 (aerodrome non-CL, no QuoterV2), toxic=36, low_depth=21
+- Quarantine expanded: 3 → 59 entries (+56 new: AERO/EURC, AERO/USDC, AERO/WETH, EURC/USDC, EURC/WETH, TOSHI/WETH, VIRTUAL/WETH, LBTC/WETH, cbBTC/WETH, USDC/WETH (some), etc.)
+- Key fix: `pool_depth_probe.py` now injects `quoter_addr` from config dexes block (was 100% NO_QUOTER before fix)
+
+### Smoke28 vs Smoke29c
+| Metric | smoke28 | smoke29c |
+|---|---|---|
+| quarantine entries | 3 | **59** (+56) |
+| depth_quarantine_skipped | 1 | **57** |
+| toxic_route_rate | 0.9894 | **0.4183** (×2.4 reduction) |
+| cycles_positive_gross | 0 | **38** ✅ |
+| best_cycle_net_bps | 0.0 | **+1.0854** ✅ |
+| economics_gate_status | BLOCKED_NO_POSITIVE_GROSS | **NEAR_MISS** ✅ |
+| all_pass | true | true ✅ |
+
+### Verdict
+- ✅ **ALL 5 RUNTIME GATES PASS** + toxic_rate gate PASS
+- ✅ **First cycles_positive_gross=38 in M9** — quarantine removing toxic pools unblocked near-breakeven cycles
+- ✅ **best_cycle_net_bps=+1.09** — not profitable after gas/slippage yet, but positive gross confirmed
+- ✅ **0×429** publicnode.com confirmed (vs dRPC free-tier 49×mc_429 in smoke29b)
+- ✅ **5928 unit tests pass** (+9 new tests vs smoke28 session)
+- ci_m9_productive_gate.py → EXIT 0
+
+---
+
 ## Historical Smoke Summary (condensed)
 
 | Run | Date | Dur | Sweeps | Cycles | qsr | multicall_sr | unverified | d_complete | all_pass | RPC |
 |-----|------|-----|--------|--------|-----|-------------|------------|------------|----------|-----|
+| **smoke29c** | 2026-05-24 | 15m | 292 | 1453 | 0.9642✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ | publicnode — **quarantine expansion, toxic_rate=0.42, 38 positive_gross** |
+| **smoke28** | 2026-05-24 | 10m | 266 | 2648 | 0.9985✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ | publicnode — **productive lane, gate validated** |
 | **smoke27** | 2026-05-24 | 15m | 412 | 4099 | 0.9776✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ | publicnode — **RCA complete** |
 | **smoke26** | 2026-05-24 | 15m | 76 | 669 | 0.8744✅ | 0.6826❌ | 0✅ | 0.92❌ | ❌ | drpc-free (71×429) |
 | **smoke25** | 2026-05-23 | 15m | 450 | 4483 | 0.9779✅ | 1.0✅ | 0✅ | 1.0✅ | ✅ | publicnode — **3/3 UNLOCK** |
@@ -236,10 +301,11 @@ Key milestones:
 
 1. ~~**P0**: `multicall_success_rate < 0.90`~~ **RESOLVED** — publicnode.com RPC, mc_rate=1.0.
 2. ~~**P1**: Need 3 consecutive 15-min all_pass runs for bridge unlock~~ **RESOLVED** — smoke23+smoke24+smoke25 all PASS (3/3). Bridge unlock condition MET.
-3. `cycles_positive_gross=0` — deep negative route economics due to thin AERO/TOSHI UV3-1% pool (8.57e+20 liquidity, 91% price impact). Confirmed on-chain. NOT a code issue.
-4. `router_sim` NOT_STARTED — requires positive_gross shortlist.
-5. `execution_kill_switch` — `kill_switch_active=true`, no live trades (paper only).
-6. `prequote_min_bps=-9999` used for smoke23/24/25 (bypass). Future runs should progressively tighten threshold.
+3. ~~**P2**: `toxic_route_rate=0.9894`~~ **RESOLVED** — quarantine expansion 3→59 entries; toxic_rate=0.4183 (smoke29c). Pool depth probe on-chain confirmed 36 TOXIC + 21 LOW_DEPTH pools.
+4. `cycles_positive_gross=38, economics_gate_status=NEAR_MISS` — 38 positive gross cycles found, but best_net=+1.09 bps (fees/gas not cleared). Pool universe may need further refinement.
+5. `router_sim` NOT_STARTED — requires confirmed positive_gross shortlist.
+6. `execution_kill_switch` — `kill_switch_active=true`, no live trades (paper only).
+7. `prequote_min_bps=-9999` used for smoke runs (bypass). Future runs should progressively tighten threshold.
 
 ## Path to PASS
 
@@ -249,20 +315,13 @@ Key milestones:
 [DONE]    smoke25 — all_pass=True (3/3 consecutive)  ← M8→M9 bridge unlock condition MET
   ↓ Proof: py -3.11 scripts/ci_m9_productive_gate.py → EXIT 0  ✅
 [UNLOCKED] M8/M8.1 → M9 bridge transition — policy gate satisfied
-```
-
-**Next proof-run command:**
-```powershell
-$env:BASE_RPC="https://base-rpc.publicnode.com"
-$env:ARBY_REQUIRE_FACTORY_VERIFIED="1"
-py -3.11 -m m9.graph_arb.runner `
-  --chain base --config config/exotic_base_anchor.yaml `
-  --duration-minutes 15 --max-cycles-per-sweep 5 `
-  --quote-workers 1 --quote-backend raw_http `
-  --scheduler priority --require-factory-verified `
-  --dynamic-sizes --dynamic-size-max-cycles 3 `
-  --prequote-min-bps -9999 `
-  --artifact-path data/runs/_rolling/m9_graph_latest.json
+[DONE]    smoke28 — productive lane PASS (2026-05-24): quarantine_skipped=1, top_opp -9040→-18 bps ✅
+[DONE]    pool_depth_probe run — ok=117/119, toxic=36, low_depth=21 ✅
+[DONE]    quarantine expansion — 3→59 entries (+56 on-chain confirmed) ✅
+[DONE]    smoke29c — toxic_rate=0.4183 (<0.90), cycles_positive_gross=38, best_net=+1.09 bps, EXIT 0 ✅
+[PENDING]  Tighten quarantine further — ~42% toxic cycles remain (more AERO/USDC UV3 variants)
+[PENDING]  Step 6: rebuild pair universe from M8/M8.1 (depth ≥ 2 DEX)
+[PENDING]  router_sim validation on positive_gross shortlist
 ```
 
 ## Scope

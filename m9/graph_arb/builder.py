@@ -53,6 +53,10 @@ def build_graph_from_inventory(
     exclude_route_ids: Optional["frozenset[str]"] = None,
     exclude_edge_keys: Optional["frozenset[str]"] = None,
     require_factory_verified: bool = False,
+    # Pool-quality gate (Steps 2+3): productive lane filtering
+    exclude_pool_addresses: Optional["frozenset[str]"] = None,
+    min_effective_depth_usd: float = 0.0,
+    lane: str = "discovery",
 ) -> "Dict[str, Dict[str, List[GraphEdge]]]":
     """Build a directed adjacency dict from inventory active_routes.
 
@@ -62,6 +66,17 @@ def build_graph_from_inventory(
             lacking the field are treated as unverified and filtered out.
             Use this after running pool_verifier to ensure only on-chain
             confirmed pools enter the graph.
+        exclude_pool_addresses: Frozenset of lowercase pool addresses to skip.
+            Only applied when ``lane='productive'``. Load from
+            ``pool_depth_filter.load_quarantined_pool_addresses()``.
+        min_effective_depth_usd: Minimum effective depth in USD (from depth probe).
+            Routes with ``effective_depth_usd < threshold`` are excluded.
+            Only applied when ``lane='productive'`` and depth data is present.
+        lane: 'discovery' (default) or 'productive'.
+            Discovery lane sees all pools including thin/quarantined ones — useful
+            for RCA and universe mapping.
+            Productive lane applies ``exclude_pool_addresses`` and
+            ``min_effective_depth_usd`` filters.
 
     Returns:
         adjacency[token_in_sym][token_out_sym] = List[GraphEdge]
@@ -109,6 +124,8 @@ def build_graph_from_inventory(
     adjacency: Dict[str, Dict[str, List[GraphEdge]]] = defaultdict(lambda: defaultdict(list))
     built_count = 0
     unverified_skipped = 0
+    depth_skipped = 0
+    _productive_lane = (lane == "productive")
 
     for entry in active_routes:
         pair_id = entry.get("pair_id", "")
@@ -130,6 +147,40 @@ def build_graph_from_inventory(
                 extra={"context": {"route_id": route_id, "event": "graph_build_skip_unverified"}},
             )
             continue
+
+        # Productive lane: pool-quality gate (Steps 2+3)
+        if _productive_lane:
+            if exclude_pool_addresses and pool_address.lower() in exclude_pool_addresses:
+                depth_skipped += 1
+                logger.debug(
+                    "Productive lane: skipping quarantined pool",
+                    extra={
+                        "context": {
+                            "event": "graph_build_skip_quarantine",
+                            "pool_address": pool_address,
+                            "pair_id": pair_id,
+                            "route_id": route_id,
+                        }
+                    },
+                )
+                continue
+            if min_effective_depth_usd > 0:
+                depth_usd = entry.get("effective_depth_usd")
+                if depth_usd is not None and float(depth_usd) < min_effective_depth_usd:
+                    depth_skipped += 1
+                    logger.debug(
+                        "Productive lane: skipping low-depth pool",
+                        extra={
+                            "context": {
+                                "event": "graph_build_skip_low_depth",
+                                "pool_address": pool_address,
+                                "pair_id": pair_id,
+                                "effective_depth_usd": depth_usd,
+                                "threshold": min_effective_depth_usd,
+                            }
+                        },
+                    )
+                    continue
 
         try:
             sym0, sym1 = _parse_pair_symbols(pair_id)
@@ -251,10 +302,12 @@ def build_graph_from_inventory(
         extra={
             "context": {
                 "event": "graph_built",
+                "lane": lane,
                 "token_count": len(adjacency),
                 "edge_count": built_count,
                 "inventory_path": str(inv_path),
                 "unverified_skipped": unverified_skipped,
+                "depth_skipped": depth_skipped,
             }
         },
     )

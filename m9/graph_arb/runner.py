@@ -350,6 +350,31 @@ def main(argv: "list[str] | None" = None) -> int:
             "DEBUG/testing only — productive runs must use --prequote-min-bps instead."
         ),
     )
+    # Pool-quality gate: productive lane (Steps 2+3)
+    parser.add_argument(
+        "--productive-lane",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable productive lane: exclude quarantined thin pools from graph. "
+            "Discovery lane (default) sees all pools including thin/toxic for RCA. "
+            "Load quarantine from --pool-quarantine-path."
+        ),
+    )
+    parser.add_argument(
+        "--pool-quarantine-path",
+        default="data/quarantine/m9_pool_depth_quarantine.json",
+        help="Evidence-based pool depth quarantine JSON path (used with --productive-lane).",
+    )
+    parser.add_argument(
+        "--min-effective-depth-usd",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum effective depth USD for productive lane filter (0 = disabled). "
+            "Requires effective_depth_usd in inventory entries (run pool_depth_probe first)."
+        ),
+    )
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -513,11 +538,31 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     unverified_active_routes: Optional[int] = (funnel_a or {}).get("unverified_active_routes")
 
     # Build graph
+    # Productive lane: load quarantined pool addresses (Steps 2+3)
+    _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
+    _exclude_pool_addresses: "Optional[frozenset[str]]" = None
+    _depth_quarantine_skipped = 0
+    if _lane == "productive":
+        from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
+        _quarantine_path = getattr(args, "pool_quarantine_path", "data/quarantine/m9_pool_depth_quarantine.json")
+        _loaded = load_quarantined_pool_addresses(_quarantine_path)
+        if _loaded:
+            _exclude_pool_addresses = _loaded
+            log.info(
+                "Productive lane enabled: %d quarantined pools will be excluded from graph",
+                len(_loaded),
+            )
+        else:
+            log.info("Productive lane enabled: no quarantine addresses loaded (check path or placeholders)")
+
     try:
         adjacency = build_graph_from_inventory(
             inventory_path=inventory_path,
             config_path=args.config,
             require_factory_verified=getattr(args, "require_factory_verified", False),
+            exclude_pool_addresses=_exclude_pool_addresses,
+            min_effective_depth_usd=getattr(args, "min_effective_depth_usd", 0.0),
+            lane=_lane,
         )
     except Exception as exc:
         log.error("Failed to build graph: %s", exc)
@@ -553,6 +598,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
+            pool_quality_lane=_lane,
+            depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_CONFIG_ERROR
@@ -588,6 +635,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
+            pool_quality_lane=_lane,
+            depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_NO_CYCLES
@@ -618,6 +667,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
+            pool_quality_lane=_lane,
+            depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_OK
@@ -858,6 +909,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             provider_router_snapshot=_router.snapshot(),
             prequote_min_bps=_prequote_min_bps,
+            pool_quality_lane=_lane,
+            depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -931,6 +984,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         sizes_usd_source=_sizes_usd_source,
         provider_router_snapshot=_router.snapshot(),
         prequote_min_bps=_prequote_min_bps,
+        pool_quality_lane=_lane,
+        depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
     )
     write_artifact(artifact, args.artifact_path)
 

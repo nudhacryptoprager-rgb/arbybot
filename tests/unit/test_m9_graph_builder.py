@@ -293,3 +293,187 @@ class TestBuildGraphFromInventory:
             f"Real config produced {len(zero_quoter)} zero-quoter edges: "
             + ", ".join(e.route_id for e in zero_quoter[:5])
         )
+
+
+class TestPoolDepthFilter:
+    """Tests for pool-quality gate: productive lane filtering (Steps 2+3)."""
+
+    _ZERO_ADDR = "0x" + "0" * 40
+
+    def _make_inventory_with_pool(
+        self, tmp_path, pool_address: str, effective_depth_usd: float = None
+    ) -> str:
+        entry: dict = {
+            "pair_id": "WETH_USDC",
+            "dex_id": "uniswap_v3",
+            "fee": 500,
+            "factory_class": "EFFICIENT_BASELINE",
+            "pool_address": pool_address,
+            "route_id": f"uniswap_v3:WETH_USDC@500",
+        }
+        if effective_depth_usd is not None:
+            entry["effective_depth_usd"] = effective_depth_usd
+        inv = {"active_routes": [entry], "pools": []}
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        return str(p)
+
+    def _make_minimal_config(self, tmp_path) -> str:
+        import yaml
+        cfg = {
+            "schema_version": "m8_1.0",
+            "chain": "base",
+            "chain_id": 8453,
+            "dexes": {
+                "uniswap_v3": {
+                    "adapter_type": "uniswap_v3",
+                    "factory": "0x33128a8fc17869897dce68ed026d694621f6fdfd",
+                    "quoter": "0x3d4e44eb1374240ce5f1b871ab261cd16335b76a",
+                    "fee_tiers": [100, 500, 3000, 10000],
+                    "enabled": True,
+                }
+            },
+            "tokens": {
+                "WETH": {"address": "0x4200000000000000000000000000000000000006", "decimals": 18},
+                "USDC": {"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "decimals": 6},
+            },
+        }
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml.dump(cfg))
+        return str(p)
+
+    def _all_edges(self, adjacency):
+        return [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+
+    def test_productive_lane_excludes_quarantined_pool(self, tmp_path):
+        """Productive lane: quarantined pool address must not appear in graph."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "a" * 40
+        inv = self._make_inventory_with_pool(tmp_path, pool_addr)
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(
+            inventory_path=inv,
+            config_path=cfg,
+            exclude_pool_addresses=frozenset([pool_addr.lower()]),
+            lane="productive",
+        )
+        edges = self._all_edges(adjacency)
+        pool_addrs_in_graph = {e.pool_address.lower() for e in edges}
+        assert pool_addr.lower() not in pool_addrs_in_graph, (
+            "Quarantined pool must not appear in productive lane graph"
+        )
+
+    def test_discovery_lane_keeps_quarantined_pool(self, tmp_path):
+        """Discovery lane: quarantined pool address IS kept in graph for RCA."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "a" * 40
+        inv = self._make_inventory_with_pool(tmp_path, pool_addr)
+        cfg = self._make_minimal_config(tmp_path)
+        # Even with exclude_pool_addresses set, discovery lane ignores it
+        adjacency = build_graph_from_inventory(
+            inventory_path=inv,
+            config_path=cfg,
+            exclude_pool_addresses=frozenset([pool_addr.lower()]),
+            lane="discovery",
+        )
+        edges = self._all_edges(adjacency)
+        pool_addrs_in_graph = {e.pool_address.lower() for e in edges}
+        assert pool_addr.lower() in pool_addrs_in_graph, (
+            "Discovery lane must NOT filter quarantined pool — needed for RCA visibility"
+        )
+
+    def test_productive_lane_filters_low_depth_pool(self, tmp_path):
+        """Productive lane: pool with effective_depth_usd < threshold must be excluded."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "b" * 40
+        inv = self._make_inventory_with_pool(tmp_path, pool_addr, effective_depth_usd=5.0)
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(
+            inventory_path=inv,
+            config_path=cfg,
+            min_effective_depth_usd=50.0,
+            lane="productive",
+        )
+        edges = self._all_edges(adjacency)
+        pool_addrs_in_graph = {e.pool_address.lower() for e in edges}
+        assert pool_addr.lower() not in pool_addrs_in_graph, (
+            "Low-depth pool (depth=5 < threshold=50) must not appear in productive lane"
+        )
+
+    def test_productive_lane_keeps_sufficient_depth_pool(self, tmp_path):
+        """Productive lane: pool with effective_depth_usd >= threshold must be kept."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "c" * 40
+        inv = self._make_inventory_with_pool(tmp_path, pool_addr, effective_depth_usd=500.0)
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(
+            inventory_path=inv,
+            config_path=cfg,
+            min_effective_depth_usd=50.0,
+            lane="productive",
+        )
+        edges = self._all_edges(adjacency)
+        pool_addrs_in_graph = {e.pool_address.lower() for e in edges}
+        assert pool_addr.lower() in pool_addrs_in_graph, (
+            "Sufficient-depth pool (depth=500 >= threshold=50) must be kept in productive lane"
+        )
+
+    def test_discovery_lane_ignores_min_depth_filter(self, tmp_path):
+        """Discovery lane: min_effective_depth_usd is ignored even if pool is thin."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "d" * 40
+        inv = self._make_inventory_with_pool(tmp_path, pool_addr, effective_depth_usd=0.01)
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(
+            inventory_path=inv,
+            config_path=cfg,
+            min_effective_depth_usd=500.0,
+            lane="discovery",
+        )
+        edges = self._all_edges(adjacency)
+        pool_addrs_in_graph = {e.pool_address.lower() for e in edges}
+        assert pool_addr.lower() in pool_addrs_in_graph, (
+            "Discovery lane must not filter by depth — visibility for RCA required"
+        )
+
+    def test_load_quarantined_pool_addresses_skips_placeholders(self, tmp_path):
+        """load_quarantined_pool_addresses must skip placeholder addresses."""
+        from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
+        quarantine = {
+            "schema_version": "m9_pool_depth_quarantine.1",
+            "quarantined_pools": [
+                {
+                    "pool_address": "0x7e904aaf3439402eb21958fe090bd852d5e882cf",
+                    "reject_reason": "TOXIC_PRICE_IMPACT",
+                    "pair_id": "AERO_TOSHI",
+                    "dex_id": "uniswap_v3",
+                },
+                {
+                    "pool_address": "0x0000000000000000000000000000000000000001",
+                    "reject_reason": "TOXIC_PRICE_IMPACT",
+                    "pair_id": "USDC_VIRTUAL",
+                    "dex_id": "uniswap_v3",
+                    "_placeholder": True,
+                },
+            ],
+        }
+        qfile = tmp_path / "quarantine.json"
+        qfile.write_text(json.dumps(quarantine))
+        addresses = load_quarantined_pool_addresses(str(qfile))
+        assert isinstance(addresses, frozenset)
+        # Real address should be included
+        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" in addresses
+        # Placeholder should be skipped
+        assert "0x0000000000000000000000000000000000000001" not in addresses
+        assert len(addresses) == 1
+
+    def test_load_quarantined_pool_addresses_missing_file(self, tmp_path):
+        """Missing quarantine file returns empty frozenset (not error)."""
+        from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
+        result = load_quarantined_pool_addresses(str(tmp_path / "nonexistent.json"))
+        assert result == frozenset()

@@ -38,6 +38,11 @@ class QuoteRejectReason(str, Enum):
     SUSPECT_PRICE_HIGH = "SUSPECT_PRICE_HIGH"  # Price above expected max
     SUSPECT_LIQUIDITY = "SUSPECT_LIQUIDITY"    # Low liquidity warning
 
+    # Pool depth / quality issues (M9 pool-quality gate)
+    LOW_EFFECTIVE_DEPTH = "LOW_EFFECTIVE_DEPTH"        # Pool $100 quote impact > threshold
+    TOXIC_PRICE_IMPACT = "TOXIC_PRICE_IMPACT"          # Extreme price impact (> 50%) at probe size
+    ASYMMETRIC_POOL_DEPTH = "ASYMMETRIC_POOL_DEPTH"    # Imbalanced pool (one side much deeper)
+
 
 class SimRejectReason(str, Enum):
     """Simulation-level rejection reasons (M4 execution phase)."""

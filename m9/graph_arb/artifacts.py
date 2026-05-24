@@ -193,6 +193,46 @@ def _compute_cycle_reject_histogram(cycle_results: List[CycleQuoteResult]) -> Di
     return histogram
 
 
+def _compute_toxic_pool_families(
+    cycle_results: List[CycleQuoteResult],
+) -> List[Dict[str, Any]]:
+    """Aggregate top toxic pool families from TOXIC_ROUTE_PRICE_IMPACT cycles (Step 7).
+
+    A pool is considered toxic when it appears in any cycle whose
+    ``pre_fee_gross_bps < -500`` (catastrophic price impact).
+
+    Returns a list of pool-level dicts sorted by cycle_count descending (top 20).
+    Each entry contains: pool_address, pair_id, dex_id, fee_bps, cycle_count,
+    min_gross_bps, max_gross_bps.
+    """
+    pool_stats: Dict[str, Dict[str, Any]] = {}
+    for qr in cycle_results:
+        fee_drag = qr.cycle.total_fee_bps
+        pfgb = qr.gross_bps + fee_drag
+        if pfgb >= -500:
+            continue  # not a toxic-impact cycle
+        for edge in qr.cycle.edges:
+            key = edge.pool_address.lower()
+            if key not in pool_stats:
+                pool_stats[key] = {
+                    "pool_address": edge.pool_address,
+                    "pair_id": edge.pair_id,
+                    "dex_id": edge.dex_id,
+                    "fee_bps": round(edge.fee_bps, 4),
+                    "cycle_count": 0,
+                    "min_gross_bps": None,
+                    "max_gross_bps": None,
+                }
+            stats = pool_stats[key]
+            stats["cycle_count"] += 1
+            if stats["min_gross_bps"] is None or qr.gross_bps < stats["min_gross_bps"]:
+                stats["min_gross_bps"] = round(qr.gross_bps, 4)
+            if stats["max_gross_bps"] is None or qr.gross_bps > stats["max_gross_bps"]:
+                stats["max_gross_bps"] = round(qr.gross_bps, 4)
+    result = sorted(pool_stats.values(), key=lambda x: -x["cycle_count"])
+    return result[:20]  # top 20 toxic pool families
+
+
 def _compute_route_error_histogram(
     cycle_results: List[CycleQuoteResult],
 ) -> Dict[str, Dict[str, int]]:
@@ -286,6 +326,10 @@ def build_artifact(
     provider_router_snapshot: Optional[Dict[str, Any]] = None,
     # Effective prequote filter threshold used during this run
     prequote_min_bps: float = -500.0,
+    # Pool-quality gate lane: 'discovery' or 'productive' (Steps 2+3)
+    pool_quality_lane: str = "discovery",
+    # Count of pools excluded by productive lane depth/quarantine filter
+    depth_quarantine_skipped: int = 0,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -355,6 +399,10 @@ def build_artifact(
             "routes_total": topology.route_count,
             "edge_count": topology.edge_count,
         }
+    # Inject pool-quality gate lane metadata into scan_scope (Steps 2+3)
+    scan_scope["pool_quality_lane"] = pool_quality_lane
+    if depth_quarantine_skipped > 0:
+        scan_scope["depth_quarantine_skipped"] = depth_quarantine_skipped
 
     # Graph topology dict (canonical key in rolling artifact)
     graph_topology = {
@@ -486,14 +534,21 @@ def build_artifact(
     }
 
     # Top cycles summary (up to 10 best by gross_bps).
-    # Quoteable cycles (POSITIVE_GROSS / NEGATIVE_GROSS) are ranked first because
-    # their gross_bps is meaningful. CYCLE_QUOTE_FAILED has gross_bps=0 which would
-    # incorrectly sort above all NEGATIVE_GROSS cycles without the is_quoteable flag.
+    # Step 8: push TOXIC_ROUTE_PRICE_IMPACT cycles to the bottom of top_opportunities
+    # so operator sees near-breakeven cycles first, not dominated by -9000+ bps toxics.
+    # Sort key: (is_quoteable, is_not_toxic, gross_bps) — all descending.
     def _top_cycle_sort_key(qr: CycleQuoteResult):
         is_quoteable = 1 if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS") else 0
-        return (is_quoteable, qr.gross_bps)
+        # Detect toxic: quoteable cycle with pre_fee_gross < -500 bps
+        _fee_drag_sort = qr.cycle.total_fee_bps
+        _pfgb_sort = qr.gross_bps + _fee_drag_sort
+        is_not_toxic = 0 if (is_quoteable and _pfgb_sort < -500) else 1
+        return (is_quoteable, is_not_toxic, qr.gross_bps)
 
     top_cycles = sorted(cycle_results, key=_top_cycle_sort_key, reverse=True)[:10]
+
+    # Step 7: toxic_pool_families — operator-visible list of pools dominating toxic cycles
+    _toxic_pool_families = _compute_toxic_pool_families(cycle_results)
 
     artifact: Dict[str, Any] = {
         "schema_family": SCHEMA_FAMILY,
@@ -529,6 +584,7 @@ def build_artifact(
         "scan_scope": scan_scope,
         "top_cycles": [_build_cycle_summary(qr) for qr in top_cycles],
         "top_opportunities": [_build_top_opportunity(qr) for qr in top_cycles],
+        "toxic_pool_families": _toxic_pool_families,
         "graph_topology": graph_topology,
         "topology_gate": topology_gate,
         "gap_candidates_path": gap_candidates_path,
