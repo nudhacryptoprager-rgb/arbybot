@@ -13,6 +13,7 @@ _ADDR_RE = re.compile(r"^0x[0-9a-f]{40}$")
 _DEFAULT_CONFIG = "m8_1_stable_anchor.yaml"
 _VALID_ADAPTER_TYPES = {
     "uniswap_v3",
+    "uniswap_v4",
     "aerodrome_slipstream",
     "aerodrome_v2_stable",
     "ve33",

@@ -157,6 +157,51 @@ factories:
     topic0_verified: true
     log_layout: v2_pair_created
     experimental: true
+    discovery_only: true
+    verification_from_block: 45990779
+    verification_to_block: 45990879
+
+  # -------------------------------------------------------------------------
+  # SushiSwap V2 (Base) — UniswapV2 fork.
+  # Address: config/dexes.yaml base.sushiswap_v2.factory
+  # Verified via sushi.com docs + BaseScan:
+  #   https://basescan.org/address/0x71524B4f93c58fcbF659783284E38825f0622859
+  # Event: same PairCreated as Uniswap V2
+  # topic0: 0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9
+  # -------------------------------------------------------------------------
+  - dex: sushiswap_v2
+    adapter_type: uniswap_v2
+    factory: "0x71524B4f93c58fcbF659783284E38825f0622859"
+    event_name: PairCreated
+    event_signature: "PairCreated(address,address,address,uint256)"
+    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    topic0_verified: true
+    log_layout: v2_pair_created
+    experimental: true
+    discovery_only: true
+
+  # -------------------------------------------------------------------------
+  # BaseSwap V2 (Base) — Base-native UniswapV2 fork.
+  # Address: config/dexes.yaml base.baseswap_v2.factory
+  # Verified via basescan.org + baseswap.fi docs:
+  #   https://basescan.org/address/0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB
+  # Event: same PairCreated as Uniswap V2
+  # topic0: 0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9
+  # -------------------------------------------------------------------------
+  - dex: baseswap_v2
+    adapter_type: uniswap_v2
+    factory: "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB"
+    event_name: PairCreated
+    event_signature: "PairCreated(address,address,address,uint256)"
+    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    topic0_verified: true
+    log_layout: v2_pair_created
+    experimental: true
+    discovery_only: true
+    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    topic0_verified: true
+    log_layout: v2_pair_created
+    experimental: true
     discovery_only: true  # experimental lane; requires downstream filters before execution
     # Verified 2026-05-14 via drpc (3 events in blocks 45990779-45990879).
     verification_from_block: 45990779

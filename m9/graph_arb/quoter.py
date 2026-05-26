@@ -143,6 +143,7 @@ def _make_dex_route(edge: GraphEdge) -> DexRoute:
         fee=edge.fee,
         tick_spacing=edge.tick_spacing,
         curve_coin0_sym=None,
+        hooks=edge.hooks,
     )
 
 

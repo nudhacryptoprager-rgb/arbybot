@@ -132,7 +132,7 @@ def build_graph_from_inventory(
     for entry in active_routes:
         pair_id = entry.get("pair_id", "")
         dex_id = entry.get("dex_id", "")
-        fee = int(entry.get("fee", 0))
+        fee = int(entry.get("fee") or 0)
         factory_class = entry.get("factory_class", "UNKNOWN")
         factory_verified_flag: bool = entry.get("factory_verified") is True
         pool_address = entry.get("pool_address", "0x0000000000000000000000000000000000000000")
@@ -193,6 +193,7 @@ def build_graph_from_inventory(
         adapter_type = "uniswap_v3"
         tick_spacing: Optional[int] = None
         quoter_addr = "0x0000000000000000000000000000000000000000"
+        hooks: Optional[str] = None  # V4 only
 
         dex_cfg = cfg.dexes.get(dex_id)
         if dex_cfg is None:
@@ -216,6 +217,12 @@ def build_graph_from_inventory(
                 elif fee > 0:
                     # Aerodrome Slipstream inventory stores tick_spacing in 'fee' field
                     tick_spacing = fee
+            elif adapter_type == "uniswap_v4":
+                # V4 pools: tick_spacing is stored in the inventory entry (from M8 sniper)
+                tick_key = entry.get("tick_spacing")
+                if tick_key is not None:
+                    tick_spacing = int(tick_key)
+                hooks = entry.get("hooks")
 
         fee_bps = _fee_bps_from_edge(adapter_type, fee, tick_spacing)
 
@@ -275,6 +282,7 @@ def build_graph_from_inventory(
                 factory_class=factory_class,
                 pair_id=pair_id,
                 factory_verified=factory_verified_flag,
+                hooks=hooks,
             )
             adjacency[sym0][sym1].append(fwd_edge)
             built_count += 1
@@ -299,6 +307,7 @@ def build_graph_from_inventory(
                 factory_class=factory_class,
                 pair_id=pair_id,
                 factory_verified=factory_verified_flag,
+                hooks=hooks,
             )
             adjacency[sym1][sym0].append(rev_edge)
             built_count += 1

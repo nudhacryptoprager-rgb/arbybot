@@ -1135,6 +1135,29 @@ def _build_m8_funnel(metrics: dict) -> dict:
     }
 
 
+def _build_m8_integration_metrics(artifact: dict) -> dict:
+    """Extract M8→M9 bridge integration metrics from the M9 artifact.
+
+    Returns a dict safe for JSON serialisation — all values are int, float or None.
+    Fields:
+      graph_ready_from_m8        – routes from M8 sniper that entered the M9 graph
+      graph_edges_from_m8        – edge count contributed by M8 pools
+      cycles_with_m8_pool        – M9 cycles that touched an M8-sniped pool
+      positive_cycles_with_m8_pool – … with positive gross spread
+      unsupported_dex_count      – routes rejected because the DEX has no adapter
+      pending_adapter_count      – routes queued for a future adapter (e.g. V4)
+    """
+    bsm = artifact.get("bridge_source_metrics") or {}
+    return {
+        "graph_ready_from_m8": _safe_int(bsm.get("graph_ready_from_m8")),
+        "graph_edges_from_m8": _safe_int(bsm.get("graph_edges_from_m8")),
+        "cycles_with_m8_pool": _safe_int(bsm.get("cycles_with_m8_pool")),
+        "positive_cycles_with_m8_pool": _safe_int(bsm.get("positive_cycles_with_m8_pool")),
+        "unsupported_dex_count": _safe_int(bsm.get("unsupported_dex_count")),
+        "pending_adapter_count": _safe_int(bsm.get("pending_adapter_count")),
+    }
+
+
 def build_m9_current_payload(
     *,
     artifact: dict | None,
@@ -1262,7 +1285,10 @@ def build_m9_current_payload(
     elif a.get("duration_fulfilled"):
         _run_status = "completed"
     else:
-        _run_status = "running"
+        # duration_fulfilled=False and file is recent: the artifact is from an incomplete/
+        # interrupted run. Show "incomplete" — NOT "running" — because there is no live
+        # process check here; claiming "running" would be misleading.
+        _run_status = "incomplete"
 
     # Staleness reason — explains WHY the artifact is considered stale
     _staleness_reason: str | None = None
@@ -1298,6 +1324,9 @@ def build_m9_current_payload(
         "actual_http_calls": _infra.get("actual_http_calls"),
         "blocked_by_breaker": _infra.get("blocked_by_breaker", 0),
         "prequote_min_bps": _infra.get("prequote_min_bps"),
+        "dynamic_size_enabled": _infra.get("dynamic_size_enabled"),
+        "dynamic_size_selected_count": _infra.get("dynamic_size_selected_count"),
+        "dynamic_size_selection_rate": _infra.get("dynamic_size_selection_rate"),
         "runtime_gates_all_pass": _gates_all_pass,
         "runtime_gates": _rg if _rg else None,
     }
@@ -1330,6 +1359,7 @@ def build_m9_current_payload(
         "m8_sniper": m8_sniper_summary,
         "scan_scope": a.get("scan_scope") or {},
         "infra_quality": infra_quality,
+        "m8_integration": _build_m8_integration_metrics(a),
     }
 
 

@@ -233,7 +233,14 @@ def _write_artifact(
         "metrics": metrics,
         "top_routes": [],
         "near_miss_routes": near_miss,
+        # M8.1 scope: quote-probing only.  active_routes is intentionally [] because
+        # M8.1 validates that on-chain quotes succeed for stable-anchor candidates — it
+        # does NOT build cross-DEX arb routes.  Route assembly is done downstream by the
+        # M9 bridge builder (scripts/m9_bridge_build.py), which reads M8.1 passes as
+        # anchor inputs.  A non-empty active_routes here would indicate a regression.
         "active_routes": [],
+        "active_routes_count": 0,
+        "route_discovery_scope": "quote_probe_only",
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -359,13 +366,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     passes = metrics.get("stable_anchor_passes_total", 0)
     candidates = metrics.get("stable_anchor_candidates_total", 0)
     qsr = metrics.get("quote_success_rate", 0.0)
-    print(
-        f"{'PASS' if gate_acceptance else 'WARN'} — M8.1 stable-anchor run\n"
+    _summary = (
+        f"{'PASS' if gate_acceptance else 'WARN'} - M8.1 stable-anchor run\n"
         f"  candidates={candidates}, passes={passes}, qsr={qsr:.4f}\n"
         f"  near_miss={len(near_miss)}, elapsed={elapsed_s:.1f}s\n"
-        f"  artifact → {output_path}",
-        flush=True,
+        f"  artifact -> {output_path}"
     )
+    sys.stdout.buffer.write((_summary + "\n").encode("utf-8", errors="replace"))
+    sys.stdout.buffer.flush()
     return 0 if gate_acceptance else 1
 
 

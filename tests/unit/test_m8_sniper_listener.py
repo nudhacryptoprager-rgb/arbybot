@@ -1057,9 +1057,9 @@ class TestFactoryConfigR8Extensions:
         assert configs["uniswap_v2"].factory.lower() == "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"
 
     def test_total_factory_count_is_six(self):
-        """Regression: exactly 6 factories after R8 additions."""
+        """Regression: exactly 8 factories after R8 + SushiSwap/BaseSwap additions."""
         configs = load_factory_config()
-        assert len(configs) == 6
+        assert len(configs) == 8
 
     def test_all_new_configs_have_verification_blocks(self):
         configs = {c.dex: c for c in load_factory_config()}

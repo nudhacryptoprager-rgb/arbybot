@@ -1,13 +1,33 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: DEX_EXPANSION_SMOKE_PASS_WITH_ADAPTER_GAPS — Збір стабільний (`all_pass=True`, `qsr=0.9506`, `sweeps=330`, `best_gross=1.4841 bps`). Bridge активний (`m8_stale=False`, `m8_1_stale=False`). Позитивний gross є (20 cycles). M8-derived позитивних циклів ще 0: V4 routes (7 events) тепер явно quarantined як `UNSUPPORTED_DEX_TYPE` замість QUOTE_DECODE fallback. `adapter_type` propagated для всіх M8 routes. Наступне P0: `positive_cycles_with_m8_pool > 0`.
+**Status**: HEALTH_PASS__STRATEGIC_BRIDGE_PARTIAL — Збір стабільний (`all_pass=True`, `qsr=0.9629`, `sweeps=402`, `bridge active`). Здоров'я системи PASS (всі runtime gates пройшли, strict-bridge gate EXIT 0). Стратегічна ціль: збільшити `cycles_with_m8_pool > 0`. V4 adapter реалізований (Quoter `0x0d5e0f971ed27fbff6c2837bf31316121532048d`, vanilla-only hooks==0x0). SushiSwap V2 + BaseSwap V2 додані до factory sniping. Наступна ціль: `positive_cycles_with_m8_pool > 0`.
 
-`goal_status`: DEX_EXPANSION_SMOKE_PASS_WITH_ADAPTER_GAPS
+`goal_status`: HEALTH_PASS__STRATEGIC_BRIDGE_PARTIAL
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
 `kill_switch_active`: true
 `execution_mode`: paper
+
+---
+
+## M8 Factory Polling Cadence
+
+M8 smoke_run polling cadence:
+- **Factory polling**: ~30s interval (`m8.runtime.smoke_run` polls `eth_getLogs` per block batch)
+- **Bridge rebuild**: triggered after each M8/M8.1 scan cycle via `scripts/m9_bridge_build.py`
+- **Rolling orchestrator**: `scripts/m9_rolling_orchestrator.py` — M8 scan → M8.1 refresh → bridge rebuild → M9 scan, no manual gaps between steps
+- Target: M8 runs every 15–30 min, bridge rebuild runs immediately after, M9 scanner consumes live bridge artifact
+
+## Strategic Goal Sequence
+
+| Step | Target | Status |
+|------|--------|--------|
+| Health PASS | `all_pass=True`, `qsr>=0.8`, `bridge_active` | ✅ DONE |
+| V4 Adapter | `uniswap_v4` quote path (hooks==0x0) | ✅ DONE (this session) |
+| **Next** | `cycles_with_m8_pool > 0` | ⏳ PENDING |
+| Then | `positive_cycles_with_m8_pool > 0` | ⏳ PENDING |
+| Final | `economics_gate_status=POSITIVE` | ⏳ PENDING |
 
 ---
 

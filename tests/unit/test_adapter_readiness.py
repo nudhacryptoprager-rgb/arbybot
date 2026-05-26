@@ -312,11 +312,11 @@ class TestM8ToM9BridgeCoverage:
         )
 
     def test_v4_in_pending_adapter_types(self):
-        """uniswap_v4 must be in _PENDING_ADAPTER_TYPES until M9 quote adapter is ready."""
+        """uniswap_v4 must NOT be in _PENDING_ADAPTER_TYPES once M9 quote adapter is active."""
         from m9.graph_arb.bridge_builder import _PENDING_ADAPTER_TYPES
-        assert "uniswap_v4" in _PENDING_ADAPTER_TYPES, (
-            "uniswap_v4 must be in _PENDING_ADAPTER_TYPES so it gets explicit quarantine reason "
-            "instead of entering active_routes (which would cause QUOTE_DECODE errors)"
+        assert "uniswap_v4" not in _PENDING_ADAPTER_TYPES, (
+            "uniswap_v4 has an active M9 quote adapter (aa9d21cb selector, V4 Quoter). "
+            "Remove it from _PENDING_ADAPTER_TYPES so V4 pools enter active_routes."
         )
 
     def test_pending_adapters_have_quarantine_reason(self):
@@ -356,11 +356,12 @@ class TestPoolVerifierCoverage:
         )
 
     def test_v4_in_pending_quote_adapters(self):
-        """uniswap_v4 must be in pool_verifier._PENDING_QUOTE_ADAPTERS."""
+        """uniswap_v4 must NOT be in pool_verifier._PENDING_QUOTE_ADAPTERS once adapter is active."""
         from m9.graph_arb.pool_verifier import _PENDING_QUOTE_ADAPTERS
-        assert "uniswap_v4" in _PENDING_QUOTE_ADAPTERS, (
-            "uniswap_v4 must be in pool_verifier._PENDING_QUOTE_ADAPTERS so it "
-            "gets reason NO_V4_QUOTE_ADAPTER_PENDING_P3 instead of UNSUPPORTED_DEX_TYPE"
+        assert "uniswap_v4" not in _PENDING_QUOTE_ADAPTERS, (
+            "uniswap_v4 has an active M9 quote adapter (selector aa9d21cb, V4 Quoter). "
+            "Remove it from pool_verifier._PENDING_QUOTE_ADAPTERS — "
+            "V4 pools are discovered via M8 sniper, not static factory enumeration."
         )
 
     def test_build_getpair_v2_calldata_no_fee_param(self):

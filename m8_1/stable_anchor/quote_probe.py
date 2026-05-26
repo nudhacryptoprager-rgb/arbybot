@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from web3 import Web3
 from core.rpc_rate_limiter import rpc_throttle
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
@@ -15,6 +16,10 @@ from m8_1.stable_anchor.pool_discovery import DexRoute
 # Function selectors
 _V3_SELECTOR = bytes.fromhex("c6a5026a")
 _SLIP_SELECTOR = bytes.fromhex("9e7defe6")  # quoteExactInputSingle((address,address,uint256,int24,uint160))
+# V4 Quoter: quoteExactInputSingle(((address,address,uint24,int24,address),bool,uint128,bytes))
+# keccak256 computed: aa9d21cb
+_V4_SELECTOR = bytes.fromhex("aa9d21cb")
+_V4_ZERO_HOOKS = "0x" + "0" * 40  # zero address = vanilla pool
 
 
 @dataclass(frozen=True)
@@ -84,14 +89,87 @@ def _decode_quote_response(hex_result: str) -> "tuple[int, Optional[int]]":
     return amount_out, gas_est
 
 
-def probe_quote(w3: Any, route: DexRoute, token_in: TokenInfo, token_out: TokenInfo, amount_in: int) -> QuoteResult:
+def _encode_v4_call(
+    token_in: str, token_out: str, fee: int, tick_spacing: int,
+    hooks: Optional[str], exact_amount: int
+) -> str:
+    """Encode V4 Quoter.quoteExactInputSingle call.
+
+    V4 PoolKey = (currency0, currency1, fee, tickSpacing, hooks) — always sorted by address.
+    zeroForOne = token_in < token_out (by address int value).
+    """
+    addr_in_int = int(token_in, 16)
+    addr_out_int = int(token_out, 16)
+    if addr_in_int < addr_out_int:
+        currency0, currency1 = token_in, token_out
+        zero_for_one = True
+    else:
+        currency0, currency1 = token_out, token_in
+        zero_for_one = False
+    hooks_addr = hooks if hooks else _V4_ZERO_HOOKS
+    c0 = int(currency0, 16).to_bytes(32, "big")
+    c1 = int(currency1, 16).to_bytes(32, "big")
+    fee_b = fee.to_bytes(32, "big")
+    ts_b = tick_spacing.to_bytes(32, "big", signed=True)
+    hooks_b = int(hooks_addr, 16).to_bytes(32, "big")
+    zfo_b = (1 if zero_for_one else 0).to_bytes(32, "big")
+    amount_b = exact_amount.to_bytes(32, "big")
+    # hookData offset = 8 * 32 = 256 (head: 8 static words before hookData length)
+    hookdata_offset = (8 * 32).to_bytes(32, "big")
+    hookdata_len = (0).to_bytes(32, "big")
+    payload = c0 + c1 + fee_b + ts_b + hooks_b + zfo_b + amount_b + hookdata_offset + hookdata_len
+    return "0x" + _V4_SELECTOR.hex() + payload.hex(), zero_for_one
+
+
+def _decode_v4_response(hex_result: str, zero_for_one: bool) -> "tuple[int, Optional[int]]":
+    """Decode V4 Quoter response: (int128[] deltaAmounts, uint160, uint32).
+
+    Returns (amount_out, None).
+    deltaAmounts[0] = delta for currency0 (negative = in, positive = out)
+    deltaAmounts[1] = delta for currency1
+    For zeroForOne=True: amount_out = abs(deltaAmounts[1]) (positive delta for currency1)
+    For zeroForOne=False: amount_out = abs(deltaAmounts[0]) (positive delta for currency0)
+    """
+    raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if len(raw) < 5 * 64:
+        raise ValueError(f"V4 response too short: {len(raw) // 2} bytes")
+    # Word 0: offset to deltaAmounts array (should be 0x60 = 96)
+    da_offset_bytes = int(raw[:64], 16)  # byte offset
+    da_offset_hex = da_offset_bytes * 2  # convert to hex-char position
+    if da_offset_hex + 64 > len(raw):
+        raise ValueError("V4 deltaAmounts array out of bounds")
+    da_len = int(raw[da_offset_hex:da_offset_hex + 64], 16)
+    if da_len < 2:
+        raise ValueError(f"Expected >=2 deltaAmounts, got {da_len}")
+    val0_hex = raw[da_offset_hex + 64:da_offset_hex + 128]
+    val1_hex = raw[da_offset_hex + 128:da_offset_hex + 192]
+    if len(val0_hex) < 64 or len(val1_hex) < 64:
+        raise ValueError("V4 deltaAmounts values truncated")
+    val0 = int(val0_hex, 16)
+    val1 = int(val1_hex, 16)
+    # Sign-extend from int128 (value may be negative in 256-bit word)
+    if val0 >= 2 ** 255:
+        val0 -= 2 ** 256
+    if val1 >= 2 ** 255:
+        val1 -= 2 ** 256
+    if zero_for_one:
+        # currency0 in (negative), currency1 out (positive)
+        return abs(val1), None
+    else:
+        # currency1 in (negative), currency0 out (positive)
+        return abs(val0), None
+
+
+def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "TokenInfo", amount_in: int) -> "QuoteResult":
     """Run a single quote via ``eth_call`` against ``route.quoter``."""
     route_id = f"{route.dex_id}:{token_in.symbol}-{token_out.symbol}@{route.fee}"
     try:
+        # web3.py v6 requires checksum addresses for eth_call 'to' field
+        quoter_addr = Web3.to_checksum_address(route.quoter)
         rpc_throttle.acquire(n=2)  # rate-limit: 2 tokens for eth_chainId + eth_call (web3 v6 pattern)
         if route.adapter_type in ("uniswap_v3",):
             calldata = _encode_v3_call(token_in.address, token_out.address, amount_in, route.fee)
-            result = w3.eth.call({"to": route.quoter, "data": calldata})
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
             amount_out, gas_est = _decode_quote_response(result.hex() if isinstance(result, bytes) else result)
         elif route.adapter_type == "aerodrome_slipstream":
             if route.tick_spacing is None:
@@ -99,30 +177,44 @@ def probe_quote(w3: Any, route: DexRoute, token_in: TokenInfo, token_out: TokenI
             calldata = _encode_slipstream_call(
                 token_in.address, token_out.address, amount_in, route.tick_spacing
             )
-            result = w3.eth.call({"to": route.quoter, "data": calldata})
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
             amount_out, gas_est = _decode_quote_response(result.hex() if isinstance(result, bytes) else result)
         elif route.adapter_type == "aerodrome_v2_stable":
             # getAmountOut(uint amountIn, address tokenIn) selector: f140a35a
             addr_in_padded = int(token_in.address, 16).to_bytes(32, "big")
             amount_bytes = amount_in.to_bytes(32, "big")
             calldata = "0x" + "f140a35a" + amount_bytes.hex() + addr_in_padded.hex()
-            result = w3.eth.call({"to": route.quoter, "data": calldata})
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result[2:]
             amount_out = int(raw[:64], 16)
             gas_est = None
         elif route.adapter_type == "curve_stable":
             # get_dy(i,j,dx) selector: 5e0d443f
             calldata = "0x" + "5e0d443f" + (0).to_bytes(32, "big").hex() + (1).to_bytes(32, "big").hex() + amount_in.to_bytes(32, "big").hex()
-            result = w3.eth.call({"to": route.quoter, "data": calldata})
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result[2:]
             amount_out = int(raw[:64], 16)
             gas_est = None
         elif route.adapter_type == "balancer_stable":
-            raise NotImplementedError("balancer_stable quoter not yet implemented")
+            raise ValueError(
+                "balancer_stable quoter not yet implemented — route is in pending adapter list. "
+                "Implement Balancer queryBatchSwap or batchSwap quote to unlock."
+            )
+        elif route.adapter_type == "uniswap_v4":
+            if route.tick_spacing is None:
+                raise ValueError("missing tick_spacing on V4 route")
+            hooks = getattr(route, "hooks", None)
+            calldata, zero_for_one = _encode_v4_call(
+                token_in.address, token_out.address, route.fee, route.tick_spacing,
+                hooks, amount_in
+            )
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            hex_res = result.hex() if isinstance(result, bytes) else result
+            amount_out, gas_est = _decode_v4_response(hex_res, zero_for_one)
         elif route.adapter_type == "uniswap_v2":
             # getReserves() selector: 0902f1ac
             calldata = "0x0902f1ac"
-            result = w3.eth.call({"to": route.quoter, "data": calldata})
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result
             if raw.startswith("0x"):
                 raw = raw[2:]

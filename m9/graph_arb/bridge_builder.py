@@ -54,12 +54,10 @@ _UNSUPPORTED_ADAPTER = "unsupported"
 # Adapter types that are correctly identified but do NOT yet have a working M9 quote
 # adapter.  Events from these dexes are quarantined with an explicit reason code rather
 # than silently entering active_routes (which would cause QUOTE_DECODE errors at runtime).
-_PENDING_ADAPTER_TYPES: frozenset = frozenset({"uniswap_v4"})
+_PENDING_ADAPTER_TYPES: frozenset = frozenset()
 
-# Per-adapter quarantine reason for pending adapters
-_PENDING_ADAPTER_REASONS: Dict[str, str] = {
-    "uniswap_v4": "NO_V4_QUOTE_ADAPTER_PENDING_P3",
-}
+# Per-adapter quarantine reason for pending adapters (now empty — V4 is active)
+_PENDING_ADAPTER_REASONS: Dict[str, str] = {}
 
 _DEFAULT_SNIPER = "data/runs/_rolling/new_pool_sniper_latest.json"
 _DEFAULT_ANCHOR = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
@@ -154,7 +152,18 @@ def build_bridge_inventory(
     # ------------------------------------------------------------------
     # Stage 1: M8 sniper events
     # ------------------------------------------------------------------
-    m8_events: List[Dict] = (sniper.get("recent_events", []) if sniper else [])
+    # Merge global recent_events with per-dex windows so minority DEXes
+    # (V2, V3, ve33) are not pushed out by high-volume V4 events.
+    _raw_events: List[Dict] = (sniper.get("recent_events", []) if sniper else [])
+    _by_dex: Dict[str, List[Dict]] = (sniper.get("recent_events_by_dex", {}) if sniper else {})
+    if _by_dex:
+        _seen_ids: set = {e.get("event_id") for e in _raw_events if e.get("event_id")}
+        for _dex_events in _by_dex.values():
+            for _ev in _dex_events:
+                if _ev.get("event_id") not in _seen_ids:
+                    _raw_events.append(_ev)
+                    _seen_ids.add(_ev.get("event_id"))
+    m8_events: List[Dict] = _raw_events
     m8_new_pools_input = len(m8_events)
 
     # Stage 2: token_verified — symbol present and non-junk
@@ -228,6 +237,7 @@ def build_bridge_inventory(
 
     # New M8 pools not yet in base inventory — supported dexes only.
     # adapter_type is propagated so builder.py does not default to uniswap_v3.
+    _V4_ZERO_ADDR = "0x" + "0" * 40
     m8_new_routes: List[Dict] = [
         {
             "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
@@ -243,11 +253,19 @@ def build_bridge_inventory(
             "factory_verified": True,  # pool emitted by known factory
             "source": "m8_sniper",
             "block_number": e.get("block_number"),
+            "fee": e.get("fee"),
+            "tick_spacing": e.get("tick_spacing"),
+            "hooks": e.get("hooks"),
             "depth_probe_ok": None,   # not yet depth-probed
             "effective_depth_usd": None,
         }
         for e in supported_events
+        # For V4: only include vanilla pools (hooks == zero address or None)
         if e.get("pool", "").lower() not in base_pool_addrs
+        and (
+            _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "") != "uniswap_v4"
+            or (e.get("hooks") or _V4_ZERO_ADDR).lower() == _V4_ZERO_ADDR.lower()
+        )
     ]
 
     # Unsupported M8 routes (truly unknown adapters) are quarantined.

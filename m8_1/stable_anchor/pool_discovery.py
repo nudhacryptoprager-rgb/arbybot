@@ -30,6 +30,7 @@ class DexRoute:
     fee: int
     tick_spacing: Optional[int]
     curve_coin0_sym: Optional[str]
+    hooks: Optional[str] = None  # V4 only: hooks address; None = vanilla (0x0)
 
     def __post_init__(self) -> None:
         pass

@@ -23,8 +23,10 @@ from m8_1.stable_anchor.pool_discovery import DexRoute
 from m8_1.stable_anchor.quote_probe import (
     QuoteResult,
     _decode_quote_response,
+    _decode_v4_response,
     _encode_slipstream_call,
     _encode_v3_call,
+    _encode_v4_call,
 )
 
 log = logging.getLogger(__name__)
@@ -168,7 +170,27 @@ def probe_quote_raw_http(
             gas_est = None
 
         elif route.adapter_type == "balancer_stable":
-            raise NotImplementedError("balancer_stable quoter not yet implemented")
+            return QuoteResult(
+                route_id=route_id,
+                size_usd=0.0,
+                amount_in=amount_in,
+                amount_out=0,
+                ok=False,
+                reject_reason="QUOTE_NOT_IMPLEMENTED__BALANCER_PENDING",
+                gas_estimate=None,
+                raw_error=None,
+            )
+
+        elif route.adapter_type == "uniswap_v4":
+            if route.tick_spacing is None:
+                raise ValueError("missing tick_spacing on V4 route")
+            hooks = getattr(route, "hooks", None)
+            calldata, zero_for_one = _encode_v4_call(
+                token_in.address, token_out.address, route.fee, route.tick_spacing,
+                hooks, amount_in
+            )
+            hex_result = _eth_call_raw(rpc_url, route.quoter, calldata, client)
+            amount_out, gas_est = _decode_v4_response(hex_result, zero_for_one)
 
         else:
             raise ValueError(f"unsupported adapter_type: {route.adapter_type!r}")

@@ -725,10 +725,11 @@ def _build_and_write_artifact(
     # legacy per-token call on any multicall error.
     # ------------------------------------------------------------------
     symbol_map: Dict[str, Optional[str]] = {}
-    if w3 is not None and recent_window:
+    if w3 is not None and (recent_window or recent_events):
         unique_tokens: List[str] = []
         seen: Set[str] = set()
-        for e in recent_window:
+        # Extend batch to ALL recent_events so per-dex window gets symbols too
+        for e in recent_events:
             for tok in (e.token0, e.token1):
                 if tok and tok not in seen:
                     seen.add(tok)
@@ -776,6 +777,10 @@ def _build_and_write_artifact(
             "token0_symbol": token0_sym,
             "token1_symbol": token1_sym,
             "pair": pair,
+            "fee": e.fee,
+            "tick_spacing": e.tick_spacing,
+            "stable": e.stable,
+            "hooks": e.hooks,
             "block_number": e.block_number,
             "tx_hash": e.tx_hash,
             # Phase 2: per-event entry decision (None when engine not wired / not called)
@@ -829,6 +834,40 @@ def _build_and_write_artifact(
             if last_eid:
                 phase2_summary = _summarise(phase2_event_decisions[last_eid])
 
+    # Build per-dex recent events (last _MAX_PER_DEX_EVENTS per dex) from the
+    # full recent_events buffer.  This prevents V4-dominance from pushing V2/V3
+    # events out of the artifact window (fixes bridge M8→M9 graph_ready_from_m8=0).
+    _MAX_PER_DEX_EVENTS: int = 5
+    _per_dex_build: Dict[str, List[Dict[str, Any]]] = {}
+    for e in recent_events:
+        tok0_sym: Optional[str] = symbol_map.get(e.token0) if symbol_map else None
+        tok1_sym: Optional[str] = symbol_map.get(e.token1) if symbol_map else None
+        # Only include events that have symbols (needed by bridge token_verified stage)
+        if tok0_sym and tok1_sym:
+            dex_key = e.dex or "unknown"
+            _per_dex_build.setdefault(dex_key, []).append({
+                "event_id": e.event_id,
+                "chain": e.chain,
+                "dex": e.dex,
+                "factory": e.factory,
+                "pool": e.pool,
+                "token0": e.token0,
+                "token1": e.token1,
+                "token0_symbol": tok0_sym,
+                "token1_symbol": tok1_sym,
+                "pair": f"{tok0_sym}/{tok1_sym}",
+                "fee": e.fee,
+                "tick_spacing": e.tick_spacing,
+                "stable": e.stable,
+                "hooks": e.hooks,
+                "block_number": e.block_number,
+                "tx_hash": e.tx_hash,
+            })
+    recent_events_by_dex: Dict[str, List[Dict[str, Any]]] = {
+        dex: evs[-_MAX_PER_DEX_EVENTS:]
+        for dex, evs in _per_dex_build.items()
+    }
+
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     artifact = make_sniper_artifact(
         metrics=metrics,
@@ -838,6 +877,7 @@ def _build_and_write_artifact(
         freshness_s=round(elapsed_s, 1),
         generated_at_utc=now_utc,
         recent_events=recent_list,
+        recent_events_by_dex=recent_events_by_dex,
         self_test_by_dex=metrics.get("self_test_by_dex"),
         run_scope=metrics.get("run_scope", "all"),
         dex_filter=metrics.get("dex_filter"),

@@ -61,6 +61,16 @@ dexes:
     factory: "0xfda619b6d20975be80a10332cd39b9a4b0faa8bb"
     enabled: true
 
+  # Uniswap V4 on Base — PoolManager singleton; only vanilla pools (hooks==0x0).
+  # Quoter: https://developers.uniswap.org/docs/protocols/v4/deployments
+  # Discovery is dynamic via M8 sniper Initialize events (not static fee-tier enumeration).
+  uniswap_v4:
+    adapter_type: uniswap_v4
+    factory: "0x498581ff718922c3f8e6a244956af099b2652b2b"  # PoolManager
+    quoter: "0x0d5e0f971ed27fbff6c2837bf31316121532048d"  # Quoter
+    fee_tiers: [100, 500, 3000, 10000]
+    enabled: true
+
 tokens:
   WETH:
     address: "0x4200000000000000000000000000000000000006"

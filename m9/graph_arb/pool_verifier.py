@@ -79,7 +79,8 @@ _GETPOOL_VE33_SEL: Optional[str] = None
 
 # Adapter types with recognised on-chain pools but no M9 quote adapter yet.
 # Routes for these adapters are explicitly quarantined (not silently dropped).
-_PENDING_QUOTE_ADAPTERS: frozenset = frozenset({"uniswap_v4"})
+# V4 is now active — pools are discovered via M8 sniper, not static enumeration.
+_PENDING_QUOTE_ADAPTERS: frozenset = frozenset()
 
 _ZERO_ADDR = "0x" + "0" * 40
 _OUTPUT_PATH = "data/tmp/m9_verified_inventory.json"
@@ -456,6 +457,15 @@ def verify_candidates_from_config(
             "ve33",                # Step 6: getPool(address,address,bool=False)
             "aerodrome_v2_stable", # Step 6: getPool(address,address,bool=True)
         }
+        # V4: pools are discovered dynamically via M8 sniper Initialize events.
+        # Skip static fee-tier enumeration — factory_verified is set by bridge_builder.
+        if adapter_type == "uniswap_v4":
+            logger.info(
+                "dex %s: uniswap_v4 pools discovered dynamically via M8 sniper; "
+                "skipping static enumeration",
+                dex_id,
+            )
+            continue
         if adapter_type not in supported:
             # Determine specific quarantine reason (V4 pending vs truly unknown)
             if adapter_type in _PENDING_QUOTE_ADAPTERS:

@@ -98,6 +98,9 @@ class NewPoolEvent:
     tx_hash: str            # lowercase 0x-prefixed
     log_index: int
 
+    # V4-specific (default=None for backward compat with non-V4 events)
+    hooks: Optional[str] = None  # address (V4 only); None = not set / vanilla (0x0)
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -609,6 +612,8 @@ def _parse_v4_initialize(
 
     fee = _topic_to_uint(_data_word(data, 0))
     tick_spacing = _word_to_int24(_data_word(data, 1))
+    # data word 2: hooks address (20-byte address in 32-byte word)
+    hooks = _topic_to_address("0x" + _data_word(data, 2))
 
     block_number = _parse_block_number(raw_log)
     tx_hash = (raw_log.get("transactionHash") or "").lower()
@@ -628,6 +633,7 @@ def _parse_v4_initialize(
         fee=fee,
         tick_spacing=tick_spacing,
         stable=None,
+        hooks=hooks,
         block_number=block_number,
         tx_hash=tx_hash,
         log_index=log_index,

@@ -232,8 +232,8 @@ class TestProbeQuoteRawHttp:
                         route, token_in, token_out, 1_000_000,
                     )
                     assert result.ok is False
-                    # Not an RPC error but NotImplementedError → QUOTE_RPC_ERROR
-                    assert result.reject_reason == "QUOTE_RPC_ERROR"
+                    # balancer_stable returns PENDING notice (not an RPC error)
+                    assert result.reject_reason == "QUOTE_NOT_IMPLEMENTED__BALANCER_PENDING"
 
     def test_unsupported_adapter_does_not_trigger_provider_throttle(self):
         """NotImplementedError (unsupported adapter) must NOT record failure in provider_throttle.

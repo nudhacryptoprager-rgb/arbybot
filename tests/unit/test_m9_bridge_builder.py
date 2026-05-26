@@ -539,7 +539,7 @@ class TestAdapterTypePropagation:
             )
 
     def test_v4_routes_quarantined_not_active(self, tmp_path):
-        """uniswap_v4 sniper events are quarantined (UNSUPPORTED_DEX_TYPE) not in active_routes."""
+        """uniswap_v4 vanilla (hooks=None) sniper events go to active_routes (V4 quote adapter active)."""
         from m9.graph_arb.bridge_builder import build_bridge_inventory
 
         events = [
@@ -563,27 +563,21 @@ class TestAdapterTypePropagation:
         )
 
         result = json.loads(out.read_text(encoding="utf-8"))
-        # No M8 sniper routes in active_routes for v4 events
+        # V4 vanilla routes (hooks=None) now go to active_routes — V4 quote adapter is active
         m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
-        assert not m8_active, (
-            f"uniswap_v4 routes must NOT be in active_routes, found: {m8_active}"
+        assert len(m8_active) == 2, (
+            f"Expected 2 uniswap_v4 vanilla routes in active_routes, got {len(m8_active)}"
         )
-        # V4 routes must appear in pending_routes (not quarantined_routes)
-        # because V4 has a recognised adapter_type, just no M9 quote adapter yet
-        pending = result.get("pending_routes", [])
-        m8_pend = [r for r in pending if r.get("source") == "m8_sniper"]
-        assert len(m8_pend) == 2, (
-            f"Expected 2 pending M8 v4 routes in pending_routes, got {len(m8_pend)}. "
-            f"(V4 routes must NOT appear in quarantined_routes)"
-        )
-        for r in m8_pend:
-            assert r.get("quarantine_reason") == "NO_V4_QUOTE_ADAPTER_PENDING_P3", (
-                f"Expected quarantine_reason='NO_V4_QUOTE_ADAPTER_PENDING_P3', got {r.get('quarantine_reason')!r}"
-            )
-            # adapter_type must be 'uniswap_v4' (correct type, not generic 'unsupported')
+        for r in m8_active:
             assert r.get("adapter_type") == "uniswap_v4", (
                 f"Expected adapter_type='uniswap_v4', got {r.get('adapter_type')!r}"
             )
+        # No V4 routes in pending_routes (V4 is now fully supported)
+        pending = result.get("pending_routes", [])
+        m8_pend = [r for r in pending if r.get("source") == "m8_sniper"]
+        assert len(m8_pend) == 0, (
+            f"Expected 0 pending M8 v4 routes, got {len(m8_pend)} — V4 is now active"
+        )
 
     def test_no_none_adapter_type_in_active_m8_routes(self, tmp_path):
         """Every active M8 route must have a non-None adapter_type."""
@@ -653,10 +647,10 @@ class TestAdapterTypePropagation:
         assert "uniswap_v4" in dcm
         assert dcm["uniswap_v2"]["adapter_type"] == "uniswap_v2"
         assert dcm["uniswap_v2"]["adapter_supported"] is True
-        # V4 now has correct adapter_type (not 'unsupported') but is pending
+        # V4 is fully active — adapter_type correct and quote adapter enabled
         assert dcm["uniswap_v4"]["adapter_type"] == "uniswap_v4"
-        assert dcm["uniswap_v4"]["adapter_supported"] is False
-        assert dcm["uniswap_v4"]["adapter_pending"] is True
-        assert dcm["uniswap_v4"]["quarantine_reason"] == "NO_V4_QUOTE_ADAPTER_PENDING_P3"
+        assert dcm["uniswap_v4"]["adapter_supported"] is True
+        assert dcm["uniswap_v4"]["adapter_pending"] is False
+        assert dcm["uniswap_v4"]["quarantine_reason"] is None
         assert dcm["uniswap_v2"]["event_count"] == 2
         assert dcm["uniswap_v4"]["event_count"] == 2

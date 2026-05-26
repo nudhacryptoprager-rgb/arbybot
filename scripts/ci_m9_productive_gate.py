@@ -215,6 +215,15 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
             f", pending_adapter_count={bsm_pass.get('pending_adapter_count', 0)}"
             f", cycles_with_m8_pool={bsm_pass.get('cycles_with_m8_pool', 'N/A')}"
             f", positive_cycles_with_m8_pool={bsm_pass.get('positive_cycles_with_m8_pool', 'N/A')}"
+            f"\n  coverage_funnel:"
+            f"\n    m8_new_pools_input={bsm_pass.get('m8_new_pools_input', 'N/A')}"
+            f"\n    token_verified_count={bsm_pass.get('token_verified_count', 'N/A')}"
+            f"\n    anchor_connected_count={bsm_pass.get('anchor_connected_count', 'N/A')}"
+            f"\n    factory_verified_count={bsm_pass.get('factory_verified_count', 'N/A')}"
+            f"\n    depth_ok_count={bsm_pass.get('depth_ok_count', 'N/A')}"
+            f"\n    graph_ready_from_m8={bsm_pass.get('graph_ready_from_m8', 'N/A')}"
+            f"\n    cycles_with_m8_pool={bsm_pass.get('cycles_with_m8_pool', 'N/A')}"
+            f"\n    positive_cycles_with_m8_pool={bsm_pass.get('positive_cycles_with_m8_pool', 'N/A')}"
         )
     print(
         f"PASS — M9 productive-state gate\n"
