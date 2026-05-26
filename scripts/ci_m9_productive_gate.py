@@ -121,6 +121,8 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
         graph_edges_from_m8 = bsm.get("graph_edges_from_m8", None)
         m8_stale = bsm.get("m8_stale", True)
         m8_1_stale = bsm.get("m8_1_stale", True)
+        unsupported_dex_count = bsm.get("unsupported_dex_count", 0)
+        pending_adapter_count = bsm.get("pending_adapter_count", 0)
         if graph_ready_from_m8 <= 0:
             issues.append(
                 f"STRICT_BRIDGE: graph_ready_from_m8={graph_ready_from_m8} "
@@ -142,6 +144,21 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
             issues.append(
                 "STRICT_BRIDGE: m8_1_stale=True "
                 "(run M8.1 refresh: py -3.11 scripts/m8_1_stable_anchor_run.py)"
+            )
+        # Step 10 (GPT): warn if any dex has truly unsupported adapter_type (not pending)
+        if unsupported_dex_count > 0:
+            issues.append(
+                f"STRICT_BRIDGE: unsupported_dex_count={unsupported_dex_count} "
+                "(dexes have no recognized adapter_type; check dex_coverage_matrix in bridge artifact "
+                "and update bridge_builder._DEX_ID_TO_ADAPTER_TYPE)"
+            )
+        # Step 10 (GPT): info-only — pending adapters are explicitly tracked, not an error
+        if pending_adapter_count > 0:
+            print(
+                f"  INFO: pending_adapter_count={pending_adapter_count} "
+                f"(routes with recognised adapter but no M9 quote adapter yet; "
+                f"tracked in m8_pending_routes for P3 delivery)",
+                flush=True,
             )
 
     if issues:
@@ -194,6 +211,8 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
             f", m8_stale={bsm_pass.get('m8_stale', 'N/A')}"
             f", m8_1_stale={bsm_pass.get('m8_1_stale', 'N/A')}"
             f", graph_ready_total={bsm_pass.get('graph_ready_total', 'N/A')}"
+            f", unsupported_dex_count={bsm_pass.get('unsupported_dex_count', 0)}"
+            f", pending_adapter_count={bsm_pass.get('pending_adapter_count', 0)}"
             f", cycles_with_m8_pool={bsm_pass.get('cycles_with_m8_pool', 'N/A')}"
             f", positive_cycles_with_m8_pool={bsm_pass.get('positive_cycles_with_m8_pool', 'N/A')}"
         )

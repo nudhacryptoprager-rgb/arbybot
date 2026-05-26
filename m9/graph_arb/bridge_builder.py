@@ -34,6 +34,33 @@ _MAX_SYMBOL_LEN = 15
 _M8_STALE_SECONDS = 4 * 3600
 _M8_1_STALE_SECONDS = 4 * 3600
 
+# Maps M8 sniper dex_id → M9 adapter_type.
+# Adapter_type should always be the canonical type string, never "unsupported".
+# Routes that have no quote adapter yet go into m8_pending_routes with explicit reason.
+_DEX_ID_TO_ADAPTER_TYPE: Dict[str, str] = {
+    "uniswap_v2": "uniswap_v2",
+    "uniswap_v3": "uniswap_v3",
+    "uniswap_v4": "uniswap_v4",         # P3: quote adapter pending — explicit quarantine
+    "pancakeswap_v3": "uniswap_v3",
+    "sushiswap_v3": "uniswap_v3",
+    "sushiswap_v2": "uniswap_v2",
+    "baseswap_v2": "uniswap_v2",
+    "aerodrome": "ve33",
+    "aerodrome_slipstream": "aerodrome_slipstream",
+    "aerodrome_v2_stable": "aerodrome_v2_stable",
+}
+_UNSUPPORTED_ADAPTER = "unsupported"
+
+# Adapter types that are correctly identified but do NOT yet have a working M9 quote
+# adapter.  Events from these dexes are quarantined with an explicit reason code rather
+# than silently entering active_routes (which would cause QUOTE_DECODE errors at runtime).
+_PENDING_ADAPTER_TYPES: frozenset = frozenset({"uniswap_v4"})
+
+# Per-adapter quarantine reason for pending adapters
+_PENDING_ADAPTER_REASONS: Dict[str, str] = {
+    "uniswap_v4": "NO_V4_QUOTE_ADAPTER_PENDING_P3",
+}
+
 _DEFAULT_SNIPER = "data/runs/_rolling/new_pool_sniper_latest.json"
 _DEFAULT_ANCHOR = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
 _DEFAULT_BASE_INV = "data/tmp/m9_depth_enriched_inventory.json"
@@ -185,12 +212,28 @@ def build_bridge_inventory(
         for r in base_active
         if r.get("pool_address")
     )
-    # New M8 pools not yet in base inventory (will be appended to active_routes)
+    # Partition cross_dex_seen_events by adapter support
+    supported_events: List[Dict] = []
+    pending_events: List[Dict] = []   # recognised adapter, no M9 quote adapter yet
+    unsupported_events: List[Dict] = []
+    for e in cross_dex_seen_events:
+        dex_id = e.get("dex", "")
+        adapter_type = _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "uniswap_v3")
+        if adapter_type == _UNSUPPORTED_ADAPTER:
+            unsupported_events.append(e)
+        elif adapter_type in _PENDING_ADAPTER_TYPES:
+            pending_events.append(e)
+        else:
+            supported_events.append(e)
+
+    # New M8 pools not yet in base inventory — supported dexes only.
+    # adapter_type is propagated so builder.py does not default to uniswap_v3.
     m8_new_routes: List[Dict] = [
         {
             "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
             "pair_id": "_".join(sorted([e.get("token0_symbol", ""), e.get("token1_symbol", "")])),
             "dex_id": e.get("dex", ""),
+            "adapter_type": _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "uniswap_v3"),
             "token0": e.get("token0_symbol", ""),
             "token1": e.get("token1_symbol", ""),
             "token0_addr": e.get("token0", ""),
@@ -203,32 +246,106 @@ def build_bridge_inventory(
             "depth_probe_ok": None,   # not yet depth-probed
             "effective_depth_usd": None,
         }
-        for e in cross_dex_seen_events
+        for e in supported_events
         if e.get("pool", "").lower() not in base_pool_addrs
     ]
-    # graph_ready_from_m8 = total anchor-connected cross-dex-seen M8 pools
-    graph_ready_from_m8 = len(cross_dex_seen_events)
 
-    # Warn about unsupported dex types (e.g. uniswap_v4) in new M8 routes
-    _unsupported_dex_count = sum(
-        1 for e in cross_dex_seen_events if e.get("dex", "") == "uniswap_v4"
-    )
+    # Unsupported M8 routes (truly unknown adapters) are quarantined.
+    m8_quarantined_routes: List[Dict] = [
+        {
+            "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
+            "pair_id": "_".join(sorted([e.get("token0_symbol", ""), e.get("token1_symbol", "")])),
+            "dex_id": e.get("dex", ""),
+            "adapter_type": _UNSUPPORTED_ADAPTER,
+            "token0": e.get("token0_symbol", ""),
+            "token1": e.get("token1_symbol", ""),
+            "pool_address": e.get("pool", ""),
+            "source": "m8_sniper",
+            "quarantine_reason": "UNSUPPORTED_DEX_TYPE",
+            "quarantine_note": f"No M9 adapter for dex_id={e.get('dex', '')!r}; add adapter before enabling.",
+        }
+        for e in unsupported_events
+    ]
+
+    # Pending M8 routes: known adapter_type but no M9 quote adapter yet.
+    # Tracked explicitly so CI can count them and plan P3 work.
+    m8_pending_routes: List[Dict] = [
+        {
+            "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
+            "pair_id": "_".join(sorted([e.get("token0_symbol", ""), e.get("token1_symbol", "")])),
+            "dex_id": e.get("dex", ""),
+            "adapter_type": _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "uniswap_v3"),
+            "token0": e.get("token0_symbol", ""),
+            "token1": e.get("token1_symbol", ""),
+            "pool_address": e.get("pool", ""),
+            "source": "m8_sniper",
+            "quarantine_reason": _PENDING_ADAPTER_REASONS.get(
+                _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), ""), "NO_QUOTE_ADAPTER"
+            ),
+            "quarantine_note": (
+                f"M9 quote adapter for adapter_type={_DEX_ID_TO_ADAPTER_TYPE.get(e.get('dex',''), '')!r} "
+                f"is pending; tracked for P3 delivery."
+            ),
+        }
+        for e in pending_events
+    ]
+
+    # graph_ready_from_m8 = supported anchor-connected cross-dex-seen M8 pools
+    graph_ready_from_m8 = len(supported_events)
+
+    _unsupported_dex_count = len(unsupported_events)
+    _pending_adapter_count = len(pending_events)
     if _unsupported_dex_count:
         import logging as _logging
         _logging.getLogger(__name__).warning(
-            "bridge_builder: %d M8 event(s) have dex_id=uniswap_v4 — "
-            "M9 config has no uniswap_v4 adapter; these routes will be treated as "
-            "uniswap_v3 fallback and are likely to fail quoting. "
-            "Add quarantine reason UNSUPPORTED_DEX_TYPE once uniswap_v4 adapter is ready.",
+            "bridge_builder: %d M8 event(s) have UNSUPPORTED adapter_type "
+            "(dexes: %s). Add M9 adapter to unlock.",
             _unsupported_dex_count,
+            list({e.get('dex', '?') for e in unsupported_events}),
         )
+    if _pending_adapter_count:
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "bridge_builder: %d M8 event(s) quarantined as pending adapter "
+            "(dexes: %s). Unlock by delivering M9 quote adapter.",
+            _pending_adapter_count,
+            list({e.get('dex', '?') for e in pending_events}),
+        )
+
+    # DEX coverage matrix: per-dex breakdown of event counts and adapter support
+    from collections import Counter as _C
+    _dex_counts = _C(e.get("dex", "unknown") for e in cross_dex_seen_events)
+    # Compute graph_ready_count per dex_id from supported_events
+    _dex_graph_ready = _C(e.get("dex", "unknown") for e in supported_events)
+    # Compute pending_count per dex_id from pending_events
+    _dex_pending = _C(e.get("dex", "unknown") for e in pending_events)
+    dex_coverage_matrix: Dict[str, Any] = {
+        dex_id: {
+            "event_count": count,
+            "adapter_type": _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "unknown"),
+            "adapter_supported": (
+                _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "unknown") != _UNSUPPORTED_ADAPTER
+                and _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "unknown") not in _PENDING_ADAPTER_TYPES
+            ),
+            "adapter_pending": _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "unknown") in _PENDING_ADAPTER_TYPES,
+            "graph_ready_count": _dex_graph_ready.get(dex_id, 0),
+            "pending_count": _dex_pending.get(dex_id, 0),
+            "quarantine_reason": _PENDING_ADAPTER_REASONS.get(
+                _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, ""), None
+            ),
+        }
+        for dex_id, count in sorted(_dex_counts.items())
+    }
 
     # ------------------------------------------------------------------
     # M8.1 anchor routes contributed to base (routes already in base from M8.1)
     # ------------------------------------------------------------------
     m8_1_anchor_routes_input = 0
     if anchor:
-        m8_1_anchor_routes_input = len(anchor.get("near_miss_routes", []))
+        # Check both near_miss_routes (legacy) and active_routes (current schema)
+        m8_1_anchor_routes_input = len(
+            anchor.get("near_miss_routes", []) or anchor.get("active_routes", [])
+        )
 
     # ------------------------------------------------------------------
     # Assemble bridge_source_metrics
@@ -246,6 +363,8 @@ def build_bridge_inventory(
         "graph_ready_total": len(base_active) + len(m8_new_routes),
         "graph_ready_from_m8_new": len(m8_new_routes),
         "unsupported_dex_count": _unsupported_dex_count,
+        "pending_adapter_count": _pending_adapter_count,
+        "dex_coverage_matrix": dex_coverage_matrix,
         "m8_stale": m8_stale,
         "m8_1_stale": m8_1_stale,
         "sniper_path": sniper_path,
@@ -263,7 +382,11 @@ def build_bridge_inventory(
         "source_inventory": base_inv_path if base_inv else None,
         "total_candidates": len(base_active) + len(m8_new_routes),
         "active_routes": base_active + m8_new_routes,
-        "quarantined_routes": (base_inv.get("quarantined_routes", []) if base_inv else []),
+        "quarantined_routes": (
+            (base_inv.get("quarantined_routes", []) if base_inv else [])
+            + m8_quarantined_routes
+        ),
+        "pending_routes": m8_pending_routes,
         "summary": {
             "active_count": len(base_active) + len(m8_new_routes),
             "quarantined_count": (

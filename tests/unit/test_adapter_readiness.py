@@ -264,3 +264,126 @@ class TestNarrativeConsistency:
                     f"DEX '{dex}' (chain={chain}) from {cfg_path.name} "
                     f"not found in ONBOARDING_MATRIX.md table"
                 )
+
+
+class TestM8ToM9BridgeCoverage:
+    """Contract: M8→M9 bridge must not silently drop DEXes with factory events.
+
+    Step 9 (GPT): every dex_id that has M8 factory events must either
+    be fully adapter-supported OR have an explicit quarantine_reason
+    in _PENDING_ADAPTER_REASONS.  No silent 'unsupported' adapter fallback.
+    """
+
+    # DEX IDs known to produce live factory events on Base (confirmed via probe)
+    KNOWN_ACTIVE_DEX_IDS = {
+        "uniswap_v4",        # 1758 events per 5000 blocks (factory probe)
+        "uniswap_v2",        # 113 events per 5000 blocks
+        "uniswap_v3",        # 48 events per 5000 blocks
+        "aerodrome",         # 3 events per 5000 blocks
+        "aerodrome_slipstream",  # 1 event per 5000 blocks
+    }
+
+    def test_all_active_dex_ids_in_bridge_map(self):
+        """Every DEX that produces live M8 events must appear in _DEX_ID_TO_ADAPTER_TYPE."""
+        from m9.graph_arb.bridge_builder import _DEX_ID_TO_ADAPTER_TYPE
+        for dex_id in self.KNOWN_ACTIVE_DEX_IDS:
+            assert dex_id in _DEX_ID_TO_ADAPTER_TYPE, (
+                f"dex_id={dex_id!r} produces live M8 events but is missing from "
+                f"bridge_builder._DEX_ID_TO_ADAPTER_TYPE — add mapping to avoid silent graph loss"
+            )
+
+    def test_no_generic_unsupported_for_known_active_dexes(self):
+        """No dex_id that produces events should silently map to 'unsupported' adapter."""
+        from m9.graph_arb.bridge_builder import _DEX_ID_TO_ADAPTER_TYPE, _UNSUPPORTED_ADAPTER
+        for dex_id in self.KNOWN_ACTIVE_DEX_IDS:
+            at = _DEX_ID_TO_ADAPTER_TYPE.get(dex_id)
+            assert at != _UNSUPPORTED_ADAPTER, (
+                f"dex_id={dex_id!r} maps to 'unsupported' adapter — "
+                f"use the real adapter_type string and add to _PENDING_ADAPTER_TYPES "
+                f"if quote adapter is not ready"
+            )
+
+    def test_v4_maps_to_uniswap_v4_not_unsupported(self):
+        """uniswap_v4 must map to 'uniswap_v4' adapter_type (not 'unsupported')."""
+        from m9.graph_arb.bridge_builder import _DEX_ID_TO_ADAPTER_TYPE
+        assert _DEX_ID_TO_ADAPTER_TYPE.get("uniswap_v4") == "uniswap_v4", (
+            "uniswap_v4 must map to 'uniswap_v4' adapter_type, "
+            "not 'unsupported' — use _PENDING_ADAPTER_TYPES for quarantine"
+        )
+
+    def test_v4_in_pending_adapter_types(self):
+        """uniswap_v4 must be in _PENDING_ADAPTER_TYPES until M9 quote adapter is ready."""
+        from m9.graph_arb.bridge_builder import _PENDING_ADAPTER_TYPES
+        assert "uniswap_v4" in _PENDING_ADAPTER_TYPES, (
+            "uniswap_v4 must be in _PENDING_ADAPTER_TYPES so it gets explicit quarantine reason "
+            "instead of entering active_routes (which would cause QUOTE_DECODE errors)"
+        )
+
+    def test_pending_adapters_have_quarantine_reason(self):
+        """Every entry in _PENDING_ADAPTER_TYPES must have a documented quarantine reason."""
+        from m9.graph_arb.bridge_builder import _PENDING_ADAPTER_TYPES, _PENDING_ADAPTER_REASONS
+        for adapter_type in _PENDING_ADAPTER_TYPES:
+            assert adapter_type in _PENDING_ADAPTER_REASONS, (
+                f"adapter_type={adapter_type!r} is in _PENDING_ADAPTER_TYPES but has no "
+                f"entry in _PENDING_ADAPTER_REASONS — add a quarantine reason string"
+            )
+            reason = _PENDING_ADAPTER_REASONS[adapter_type]
+            assert "PENDING" in reason.upper(), (
+                f"_PENDING_ADAPTER_REASONS[{adapter_type!r}]={reason!r} must contain 'PENDING'"
+            )
+
+
+class TestPoolVerifierCoverage:
+    """Contract: pool_verifier must support factory queries for all active Base DEXes.
+
+    Step 4-6 (GPT): V2, ve33, and V4 (explicit quarantine) must be handled.
+    """
+
+    def test_uniswap_v2_selector_defined(self):
+        """_GETPAIR_V2_SEL must be the correct 4-byte selector for getPair(address,address)."""
+        from m9.graph_arb.pool_verifier import _GETPAIR_V2_SEL
+        # keccak256("getPair(address,address)")[:4] = 0xe6a43905 (well-known)
+        assert _GETPAIR_V2_SEL == "e6a43905", (
+            f"V2 getPair selector mismatch: got {_GETPAIR_V2_SEL!r}, expected 'e6a43905'"
+        )
+
+    def test_ve33_selector_computable(self):
+        """_get_ve33_selector() must return a non-empty 8-hex-char selector."""
+        from m9.graph_arb.pool_verifier import _get_ve33_selector
+        sel = _get_ve33_selector()
+        assert sel and len(sel) == 8, (
+            f"ve33 getPool(address,address,bool) selector invalid: {sel!r}"
+        )
+
+    def test_v4_in_pending_quote_adapters(self):
+        """uniswap_v4 must be in pool_verifier._PENDING_QUOTE_ADAPTERS."""
+        from m9.graph_arb.pool_verifier import _PENDING_QUOTE_ADAPTERS
+        assert "uniswap_v4" in _PENDING_QUOTE_ADAPTERS, (
+            "uniswap_v4 must be in pool_verifier._PENDING_QUOTE_ADAPTERS so it "
+            "gets reason NO_V4_QUOTE_ADAPTER_PENDING_P3 instead of UNSUPPORTED_DEX_TYPE"
+        )
+
+    def test_build_getpair_v2_calldata_no_fee_param(self):
+        """V2 getPair calldata must be exactly 4 + 32 + 32 = 68 bytes (no fee slot)."""
+        from m9.graph_arb.pool_verifier import _build_getpair_v2_calldata
+        addr_a = "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA"
+        addr_b = "0xbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBb"
+        cd = _build_getpair_v2_calldata(addr_a, addr_b)
+        assert cd.startswith("0x"), "calldata must start with 0x"
+        # 0x + selector(4B=8chars) + addr_a(32B=64chars) + addr_b(32B=64chars) = 0x + 136 chars
+        assert len(cd) == 2 + 8 + 64 + 64, (
+            f"V2 getPair calldata length wrong: expected {2+8+64+64}, got {len(cd)}"
+        )
+
+    def test_build_getpool_ve33_calldata_volatile_vs_stable(self):
+        """ve33 calldata must include the bool stable slot (total 4+32+32+32 bytes)."""
+        from m9.graph_arb.pool_verifier import _build_getpool_ve33_calldata
+        addr_a = "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA"
+        addr_b = "0xbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBb"
+        # volatile (stable=False) vs stable (stable=True) must differ
+        cd_volatile = _build_getpool_ve33_calldata(addr_a, addr_b, stable=False)
+        cd_stable = _build_getpool_ve33_calldata(addr_a, addr_b, stable=True)
+        # Length: 0x + selector(8) + addr_a(64) + addr_b(64) + bool(64) = 0x + 200 chars
+        assert len(cd_volatile) == 2 + 8 + 64 + 64 + 64
+        assert len(cd_stable) == 2 + 8 + 64 + 64 + 64
+        assert cd_volatile != cd_stable, "volatile and stable calldata must differ"

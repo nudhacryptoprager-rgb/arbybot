@@ -128,8 +128,10 @@ def probe_quote_raw_http(
             hex_result = _eth_call_raw(rpc_url, route.quoter, calldata, client)
             amount_out, gas_est = _decode_quote_response(hex_result)
 
-        elif route.adapter_type == "aerodrome_v2_stable":
+        elif route.adapter_type in ("aerodrome_v2_stable", "ve33"):
             # getAmountOut(uint amountIn, address tokenIn) selector: f140a35a
+            # ve33 / Solidly-style pools (aerodrome, stratum, etc.) use the same call.
+            # route.quoter is set to pool_address by builder.py for these adapter types.
             addr_in_padded = int(token_in.address, 16).to_bytes(32, "big")
             amount_bytes = amount_in.to_bytes(32, "big")
             calldata = "0x" + "f140a35a" + amount_bytes.hex() + addr_in_padded.hex()

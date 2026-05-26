@@ -17,7 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+
+# Ensure repo root is importable regardless of how the script is invoked
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 
 def _parse_args() -> argparse.Namespace:

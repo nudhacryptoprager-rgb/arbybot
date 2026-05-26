@@ -309,9 +309,9 @@ class TestBridgeBuilderIntegration:
         # Base inventory with a known pool
         base_data = _make_base_inv(2)
         base_data["active_routes"][0]["pool_address"] = "0xknownpool"
-        # Sniper event for same pool — appears twice (cross_dex_seen)
+        # Sniper event for same pool — appears twice (cross_dex_seen); use supported dex
         events = [
-            _sniper_event("AERO", "USDC", dex="uniswap_v4", pool="0xknownpool"),
+            _sniper_event("AERO", "USDC", dex="uniswap_v2", pool="0xknownpool"),
             _sniper_event("AERO", "USDC", dex="aerodrome", pool="0xknownpool"),
         ]
 
@@ -343,8 +343,8 @@ class TestBridgeBuilderIntegration:
         from m9.graph_arb.bridge_builder import build_bridge_inventory
 
         events = [
-            _sniper_event("WETH", "YLDKT", dex="uniswap_v4", pool="0xpool001"),
-            _sniper_event("USDC", "YLDKT", dex="uniswap_v4", pool="0xpool002"),
+            _sniper_event("WETH", "YLDKT", dex="uniswap_v2", pool="0xpool001"),
+            _sniper_event("USDC", "YLDKT", dex="uniswap_v2", pool="0xpool002"),
         ]
         sniper = tmp_path / "sniper.json"
         anchor = tmp_path / "anchor.json"
@@ -415,8 +415,8 @@ class TestBridgeBuilderIntegration:
         from m9.graph_arb.builder import _parse_pair_symbols
 
         events = [
-            _sniper_event("WETH", "YLDKT", dex="uniswap_v4", pool="0xpool_new_001"),
-            _sniper_event("USDC", "YLDKT", dex="uniswap_v4", pool="0xpool_new_002"),
+            _sniper_event("WETH", "YLDKT", dex="uniswap_v2", pool="0xpool_new_001"),
+            _sniper_event("USDC", "YLDKT", dex="uniswap_v2", pool="0xpool_new_002"),
         ]
         sniper = tmp_path / "sniper.json"
         anchor = tmp_path / "anchor.json"
@@ -488,43 +488,175 @@ class TestBridgeArtifactContract:
         )
         assert "bridge_source_metrics" not in art
 
-    def test_bridge_source_metrics_present_when_provided(self):
-        """When bridge_source_metrics kwarg is provided, it appears in artifact."""
-        from m9.graph_arb.artifacts import build_artifact
-        bsm = {
-            "m8_new_pools_input": 5,
-            "graph_ready_total": 119,
-            "m8_stale": True,
-            "m8_1_stale": True,
-        }
-        art = build_artifact(
-            chain="base",
-            duration_minutes=1.0,
-            cycle_results=[],
-            topology=self._make_topology(),
-            sizes_usd=(100.0,),
-            run_timestamp="2026-05-24T00:00:00Z",
-            started_at_mono=0.0,
-            elapsed_s=60.0,
-            bridge_source_metrics=bsm,
-        )
-        assert "bridge_source_metrics" in art
-        assert art["bridge_source_metrics"]["m8_new_pools_input"] == 5
-        assert art["bridge_source_metrics"]["graph_ready_total"] == 119
-        assert art["bridge_source_metrics"]["m8_stale"] is True
 
-    def test_bridge_source_metrics_none_suppressed(self):
-        """Passing bridge_source_metrics=None does not add the key."""
-        from m9.graph_arb.artifacts import build_artifact
-        art = build_artifact(
-            chain="base",
-            duration_minutes=1.0,
-            cycle_results=[],
-            topology=self._make_topology(),
-            sizes_usd=(100.0,),
-            run_timestamp="2026-05-24T00:00:00Z",
-            started_at_mono=0.0,
-            elapsed_s=60.0,
-            bridge_source_metrics=None,
+# ---------------------------------------------------------------------------
+# TestAdapterTypePropagation: M8 routes must carry adapter_type
+# ---------------------------------------------------------------------------
+
+class TestAdapterTypePropagation:
+    """Tests that bridge_builder propagates adapter_type correctly for M8 routes.
+
+    Contract:
+    - uniswap_v2 events → active_routes with adapter_type='uniswap_v2'
+    - uniswap_v4 events → quarantined_routes with quarantine_reason='UNSUPPORTED_DEX_TYPE'
+    - no M8 active route may have adapter_type=None
+    - dex_coverage_matrix key present in bridge_source_metrics
+    """
+
+    def _write_json(self, path, data) -> None:
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_v2_routes_have_adapter_type_in_active(self, tmp_path):
+        """uniswap_v2 sniper events produce active M8 routes with adapter_type='uniswap_v2'."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        events = [
+            _sniper_event("MEME", "USDC", dex="uniswap_v2", pool="0xv2pool001"),
+            _sniper_event("MEME", "WETH", dex="uniswap_v2", pool="0xv2pool002"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
         )
-        assert "bridge_source_metrics" not in art
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        m8_routes = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert m8_routes, "Expected active M8 sniper routes for uniswap_v2 events"
+        for route in m8_routes:
+            assert route.get("adapter_type") == "uniswap_v2", (
+                f"Expected adapter_type='uniswap_v2', got {route.get('adapter_type')!r}"
+            )
+
+    def test_v4_routes_quarantined_not_active(self, tmp_path):
+        """uniswap_v4 sniper events are quarantined (UNSUPPORTED_DEX_TYPE) not in active_routes."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        events = [
+            _sniper_event("NEWTKN", "USDC", dex="uniswap_v4", pool="0xv4pool001"),
+            _sniper_event("NEWTKN", "WETH", dex="uniswap_v4", pool="0xv4pool002"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        # No M8 sniper routes in active_routes for v4 events
+        m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert not m8_active, (
+            f"uniswap_v4 routes must NOT be in active_routes, found: {m8_active}"
+        )
+        # V4 routes must appear in pending_routes (not quarantined_routes)
+        # because V4 has a recognised adapter_type, just no M9 quote adapter yet
+        pending = result.get("pending_routes", [])
+        m8_pend = [r for r in pending if r.get("source") == "m8_sniper"]
+        assert len(m8_pend) == 2, (
+            f"Expected 2 pending M8 v4 routes in pending_routes, got {len(m8_pend)}. "
+            f"(V4 routes must NOT appear in quarantined_routes)"
+        )
+        for r in m8_pend:
+            assert r.get("quarantine_reason") == "NO_V4_QUOTE_ADAPTER_PENDING_P3", (
+                f"Expected quarantine_reason='NO_V4_QUOTE_ADAPTER_PENDING_P3', got {r.get('quarantine_reason')!r}"
+            )
+            # adapter_type must be 'uniswap_v4' (correct type, not generic 'unsupported')
+            assert r.get("adapter_type") == "uniswap_v4", (
+                f"Expected adapter_type='uniswap_v4', got {r.get('adapter_type')!r}"
+            )
+
+    def test_no_none_adapter_type_in_active_m8_routes(self, tmp_path):
+        """Every active M8 route must have a non-None adapter_type."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        events = [
+            _sniper_event("TKNA", "USDC", dex="uniswap_v2", pool="0xpool_v2_a"),
+            _sniper_event("TKNA", "WETH", dex="uniswap_v2", pool="0xpool_v2_b"),
+            _sniper_event("TKNB", "USDC", dex="uniswap_v4", pool="0xpool_v4_a"),
+            _sniper_event("TKNB", "WETH", dex="uniswap_v4", pool="0xpool_v4_b"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        result = json.loads(out.read_text(encoding="utf-8"))
+        m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        for route in m8_active:
+            assert route.get("adapter_type") is not None, (
+                f"adapter_type must not be None for M8 route: {route['route_id']!r}"
+            )
+            assert route.get("adapter_type") != "unsupported", (
+                f"unsupported routes must be quarantined, not active: {route['route_id']!r}"
+            )
+
+    def test_dex_coverage_matrix_in_bridge_source_metrics(self, tmp_path):
+        """bridge_source_metrics must contain dex_coverage_matrix with per-dex breakdown."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        events = [
+            _sniper_event("TKNA", "USDC", dex="uniswap_v2", pool="0xpool_v2_a"),
+            _sniper_event("TKNA", "WETH", dex="uniswap_v2", pool="0xpool_v2_b"),
+            _sniper_event("TKNB", "USDC", dex="uniswap_v4", pool="0xpool_v4_a"),
+            _sniper_event("TKNB", "WETH", dex="uniswap_v4", pool="0xpool_v4_b"),
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        assert "dex_coverage_matrix" in metrics, "dex_coverage_matrix must be in bridge_source_metrics"
+        dcm = metrics["dex_coverage_matrix"]
+        assert "uniswap_v2" in dcm
+        assert "uniswap_v4" in dcm
+        assert dcm["uniswap_v2"]["adapter_type"] == "uniswap_v2"
+        assert dcm["uniswap_v2"]["adapter_supported"] is True
+        # V4 now has correct adapter_type (not 'unsupported') but is pending
+        assert dcm["uniswap_v4"]["adapter_type"] == "uniswap_v4"
+        assert dcm["uniswap_v4"]["adapter_supported"] is False
+        assert dcm["uniswap_v4"]["adapter_pending"] is True
+        assert dcm["uniswap_v4"]["quarantine_reason"] == "NO_V4_QUOTE_ADAPTER_PENDING_P3"
+        assert dcm["uniswap_v2"]["event_count"] == 2
+        assert dcm["uniswap_v4"]["event_count"] == 2

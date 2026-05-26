@@ -961,6 +961,7 @@ def _run_online_loop(
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
     phase2_enricher: Any = None,
     phase2_lock: Optional[threading.Lock] = None,
+    arb_trace: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Main online HTTP polling loop.
 
@@ -1088,7 +1089,7 @@ def _run_online_loop(
                 reasons=reasons,
                 w3=w3,
                 phase2_event_decisions=decisions_snap,
-                arb_trace=list(arb_trace),
+                arb_trace=list(arb_trace) if arb_trace is not None else None,
             )
             last_artifact_ts = time.monotonic()
 
@@ -1518,6 +1519,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 phase2_event_decisions=phase2_event_decisions,
                 phase2_enricher=phase2_enricher,
                 phase2_lock=phase2_lock,
+                arb_trace=arb_trace,
             )
     except KeyboardInterrupt:
         logger.info("sniper interrupted by user (KeyboardInterrupt)")

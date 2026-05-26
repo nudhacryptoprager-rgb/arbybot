@@ -29,6 +29,8 @@ def _fee_bps_from_edge(adapter_type: str, fee: int, tick_spacing: Optional[int])
         return fee / 100.0 if fee else 30.0
     elif adapter_type in ("aerodrome_v2_stable",):
         return 1.0  # 0.01% stable swap default
+    elif adapter_type in ("ve33",):
+        return 20.0  # aerodrome volatile ~0.2%; per-pool in reality
     elif adapter_type in ("curve_stable",):
         return 1.0  # ~0.01% curve default
     elif adapter_type in ("uniswap_v2",):
@@ -201,6 +203,10 @@ def build_graph_from_inventory(
         else:
             adapter_type = dex_cfg.adapter_type
             quoter_addr = dex_cfg.quoter
+            # V2 and ve33 adapters quote on the pool itself (getReserves / getAmountOut)
+            # — no dex-level quoter contract exists; use pool_address instead.
+            if adapter_type in ("uniswap_v2", "ve33"):
+                quoter_addr = pool_address
             if adapter_type == "aerodrome_slipstream" and dex_cfg.tick_spacings:
                 # Use first tick spacing (or match by fee/tick_spacing field)
                 tick_spacing = dex_cfg.tick_spacings[0]

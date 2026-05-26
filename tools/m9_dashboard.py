@@ -180,6 +180,39 @@ def display(path: Path) -> None:  # noqa: C901
             pct = cnt / max(1, total_rh) * 100
             print(f"  {reason:<30}: {cnt:>5}  ({pct:.1f}%)")
 
+    # ── Bridge / M8 metrics ───────────────────────────────────────────────
+    bsm = art.get("bridge_source_metrics", {})
+    if bsm:
+        ge_m8       = bsm.get("graph_edges_from_m8", "?")
+        c_m8        = bsm.get("cycles_with_m8_pool", "?")
+        pos_m8      = bsm.get("positive_cycles_with_m8_pool", "?")
+        unsup       = bsm.get("unsupported_dex_count", 0)
+        gr_m8       = bsm.get("graph_ready_from_m8", "?")
+        gr_tot      = bsm.get("graph_ready_total", "?")
+        m8_stale    = bsm.get("m8_stale", "?")
+        m8_1_stale  = bsm.get("m8_1_stale", "?")
+        stale_mark  = _WARN if (m8_stale or m8_1_stale) else _PASS
+        pos_mark    = _PASS if (isinstance(pos_m8, int) and pos_m8 > 0) else _WARN
+        unsup_mark  = _PASS if unsup == 0 else _WARN
+        print(f"\n  BRIDGE / M8  (stale: m8={m8_stale} m8_1={m8_1_stale})  {stale_mark}")
+        print(f"  {line}")
+        print(f"  graph_ready_total       : {gr_tot}")
+        print(f"  graph_ready_from_m8     : {gr_m8}")
+        print(f"  graph_edges_from_m8     : {ge_m8}")
+        print(f"  cycles_with_m8_pool     : {c_m8}")
+        print(f"  positive_cycles_m8_pool : {pos_m8}  {pos_mark}")
+        print(f"  unsupported_dex_count   : {unsup}  {unsup_mark}")
+        dcm = bsm.get("dex_coverage_matrix", {})
+        if dcm:
+            print(f"\n  DEX COVERAGE MATRIX")
+            print(f"  {line}")
+            for dex_id, info in sorted(dcm.items()):
+                sup_mark = _PASS if info.get("adapter_supported") else _FAIL
+                print(
+                    f"  {dex_id:<22}: events={info.get('event_count',0):>3}"
+                    f"  adapter={info.get('adapter_type','?'):<26} {sup_mark}"
+                )
+
     print(f"\n{thick}\n")
 
 

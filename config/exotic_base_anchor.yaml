@@ -36,6 +36,31 @@ dexes:
     fee_tiers: [1, 50, 100, 200, 2000]
     enabled: true
 
+  # Aerodrome ve33 (volatile + stable pools). Quote via pool.getAmountOut(amountIn, tokenIn).
+  # builder.py sets quoter_addr=pool_address for ve33; raw_http_probe uses f140a35a selector.
+  aerodrome:
+    adapter_type: ve33
+    factory: "0x420dd381b31aef6683db6b902084cb0ffece40da"
+    enabled: true
+
+  # UniswapV2 on Base (factory 0x8909...). Quote via pool.getReserves(); builder sets quoter=pool.
+  uniswap_v2:
+    adapter_type: uniswap_v2
+    factory: "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"
+    enabled: true
+
+  # SushiSwap V2 on Base — UniswapV2 fork. Same adapter, different factory.
+  sushiswap_v2:
+    adapter_type: uniswap_v2
+    factory: "0x71524b4f93c58fcbf659783284e38825f0622859"
+    enabled: true
+
+  # BaseSwap V2 on Base — Base-native UniswapV2 fork.
+  baseswap_v2:
+    adapter_type: uniswap_v2
+    factory: "0xfda619b6d20975be80a10332cd39b9a4b0faa8bb"
+    enabled: true
+
 tokens:
   WETH:
     address: "0x4200000000000000000000000000000000000006"

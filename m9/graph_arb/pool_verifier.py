@@ -69,6 +69,18 @@ _GETPOOL_V3_SEL: str = "1698ee82"
 # Computed lazily via web3.Web3.keccak (web3 is a hard project dependency)
 _GETPOOL_SLIP_SEL: Optional[str] = None
 
+# getPair(address,address) — UniswapV2 / SushiSwap V2 / BaseSwap V2 factory (no fee parameter)
+# keccak256("getPair(address,address)")[:4] = 0xe6a43905  (well-known constant)
+_GETPAIR_V2_SEL: str = "e6a43905"
+
+# getPool(address,address,bool) — Aerodrome ve33 PoolFactory (stable flag)
+# Computed lazily via web3.Web3.keccak (web3 is a hard project dependency)
+_GETPOOL_VE33_SEL: Optional[str] = None
+
+# Adapter types with recognised on-chain pools but no M9 quote adapter yet.
+# Routes for these adapters are explicitly quarantined (not silently dropped).
+_PENDING_QUOTE_ADAPTERS: frozenset = frozenset({"uniswap_v4"})
+
 _ZERO_ADDR = "0x" + "0" * 40
 _OUTPUT_PATH = "data/tmp/m9_verified_inventory.json"
 
@@ -97,6 +109,23 @@ def _get_slip_selector() -> str:
             # Computed offline (differs from V3 uint24 selector 0x1698ee82).
             _GETPOOL_SLIP_SEL = "28af8d0b"
     return _GETPOOL_SLIP_SEL
+
+
+def _get_ve33_selector() -> str:
+    """Return 4-byte hex selector for Aerodrome ve33 getPool(address,address,bool)."""
+    global _GETPOOL_VE33_SEL
+    if _GETPOOL_VE33_SEL is None:
+        try:
+            from web3 import Web3
+            _GETPOOL_VE33_SEL = Web3.keccak(
+                text="getPool(address,address,bool)"
+            )[:4].hex()
+        except Exception as exc:
+            logger.warning("Cannot compute ve33 selector via web3: %s", exc)
+            # Fallback: pre-computed value (Aerodrome PoolFactory ABI)
+            # keccak256("getPool(address,address,bool)")[:4]
+            _GETPOOL_VE33_SEL = "a2886e8b"
+    return _GETPOOL_VE33_SEL
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +164,47 @@ def _build_getpool_calldata(
         + _encode_addr(token_b)
         + _encode_int_32(fee_or_spacing)
     )
+
+
+def _build_getpair_v2_calldata(token_a: str, token_b: str) -> str:
+    """Build eth_call data for V2 factory.getPair(tokenA, tokenB) — no fee parameter."""
+    return "0x" + _GETPAIR_V2_SEL + _encode_addr(token_a) + _encode_addr(token_b)
+
+
+def _build_getpool_ve33_calldata(token_a: str, token_b: str, stable: bool) -> str:
+    """Build eth_call data for Aerodrome ve33 factory.getPool(tokenA, tokenB, stable)."""
+    stable_encoded = _encode_int_32(1 if stable else 0)
+    return (
+        "0x"
+        + _get_ve33_selector()
+        + _encode_addr(token_a)
+        + _encode_addr(token_b)
+        + stable_encoded
+    )
+
+
+def _build_factory_calldata(
+    token_a: str,
+    token_b: str,
+    fee_or_spacing: int,
+    adapter_type: str,
+) -> str:
+    """Dispatch to the correct factory ABI encoding for the given adapter_type.
+
+    - uniswap_v2:           getPair(address,address)           — no fee/tick
+    - ve33:                  getPool(address,address,bool=False) — volatile
+    - aerodrome_v2_stable:   getPool(address,address,bool=True)  — stable
+    - aerodrome_slipstream:  getPool(address,address,int24)      — tickSpacing
+    - uniswap_v3 (and forks): getPool(address,address,uint24)   — fee
+    """
+    if adapter_type == "uniswap_v2":
+        return _build_getpair_v2_calldata(token_a, token_b)
+    elif adapter_type == "ve33":
+        return _build_getpool_ve33_calldata(token_a, token_b, stable=False)
+    elif adapter_type == "aerodrome_v2_stable":
+        return _build_getpool_ve33_calldata(token_a, token_b, stable=True)
+    else:
+        return _build_getpool_calldata(token_a, token_b, fee_or_spacing, adapter_type)
 
 
 def _decode_addr_result(result: str) -> str:
@@ -251,7 +321,7 @@ def _verify_one(
     Returns a canonical route dict with factory_verified / quarantine_reason set.
     When check_liquidity=True, also calls pool.liquidity() on verified pools.
     """
-    calldata = _build_getpool_calldata(
+    calldata = _build_factory_calldata(
         token_a_addr, token_b_addr, fee_or_spacing, adapter_type
     )
     result = _eth_call(rpc_url, factory_addr, calldata, request_delay_s=request_delay_s)
@@ -273,7 +343,8 @@ def _verify_one(
             factory_verified = True
             quarantine_reason = None
             # P2: check pool.liquidity() to confirm pool is active
-            if check_liquidity:
+            # Note: V2 pairs and ve33 pools also expose liquidity() — skip for V2/ve33 for now
+            if check_liquidity and adapter_type not in {"uniswap_v2", "ve33", "aerodrome_v2_stable"}:
                 liquidity_ok = _check_liquidity_ok(rpc_url, pool_address, request_delay_s)
                 if liquidity_ok is False:
                     # Pool exists but has zero liquidity — quarantine
@@ -286,10 +357,16 @@ def _verify_one(
                 status = "active"
 
     # Build canonical route_id matching builder.py convention
-    fee_label = (
-        f"ts{fee_or_spacing}" if adapter_type == "aerodrome_slipstream"
-        else f"f{fee_or_spacing}"
-    )
+    if adapter_type == "aerodrome_slipstream":
+        fee_label = f"ts{fee_or_spacing}"
+    elif adapter_type == "uniswap_v2":
+        fee_label = "v2pair"
+    elif adapter_type == "ve33":
+        fee_label = "volatile"
+    elif adapter_type == "aerodrome_v2_stable":
+        fee_label = "stable"
+    else:
+        fee_label = f"f{fee_or_spacing}"
     route_id = f"{dex_id}:{fee_label}"
 
     return {
@@ -371,19 +448,30 @@ def verify_candidates_from_config(
             logger.debug("Skipping dex %s: no factory address configured", dex_id)
             continue
 
-        # Only V3-family and Slipstream support factory getPool queries
+        # Adapter types with on-chain factory queries implemented
         supported = {
             "uniswap_v3",
             "aerodrome_slipstream",
-            # Extend here when PancakeSwap V3 / SushiSwap V3 added to config
+            "uniswap_v2",          # Step 5: getPair(address,address) — no fee
+            "ve33",                # Step 6: getPool(address,address,bool=False)
+            "aerodrome_v2_stable", # Step 6: getPool(address,address,bool=True)
         }
         if adapter_type not in supported:
-            logger.warning(
-                "dex %s adapter_type=%s: factory query not supported; "
-                "tagging all pairs as UNSUPPORTED_DEX_TYPE",
-                dex_id, adapter_type,
-            )
-            # Step 9: emit explicit quarantine records instead of silently skipping
+            # Determine specific quarantine reason (V4 pending vs truly unknown)
+            if adapter_type in _PENDING_QUOTE_ADAPTERS:
+                qr = "NO_V4_QUOTE_ADAPTER_PENDING_P3"
+                log_msg = (
+                    "dex %s adapter_type=%s: V4 quote adapter pending (P3); "
+                    "tagging all pairs as NO_V4_QUOTE_ADAPTER_PENDING_P3"
+                )
+            else:
+                qr = "UNSUPPORTED_DEX_TYPE"
+                log_msg = (
+                    "dex %s adapter_type=%s: factory query not supported; "
+                    "tagging all pairs as UNSUPPORTED_DEX_TYPE"
+                )
+            logger.warning(log_msg, dex_id, adapter_type)
+            # Emit explicit quarantine records instead of silently skipping
             for i, sym_a in enumerate(token_syms):
                 for sym_b in token_syms[i + 1:]:
                     pair_sym = f"{sym_a}_{sym_b}"
@@ -407,13 +495,16 @@ def verify_candidates_from_config(
                         "fee_match": None,
                         "liquidity_ok": None,
                         "status": "quarantined",
-                        "quarantine_reason": "UNSUPPORTED_DEX_TYPE",
+                        "quarantine_reason": qr,
                     })
             continue
 
         # Fee tiers or tick spacings to probe
         if adapter_type == "aerodrome_slipstream":
             fee_or_spacing_list = list(dex_cfg.tick_spacings) or [1, 50, 100, 200]
+        elif adapter_type in {"uniswap_v2", "ve33", "aerodrome_v2_stable"}:
+            # Single candidate per pair: V2/ve33 do not have multiple fee tiers
+            fee_or_spacing_list = [0]
         else:
             fee_or_spacing_list = list(dex_cfg.fee_tiers) or [100, 500, 3000, 10000]
 
@@ -531,7 +622,7 @@ def verify_inventory_routes(
             route["verified_at_block"] = None
             return idx, route
 
-        calldata = _build_getpool_calldata(
+        calldata = _build_factory_calldata(
             token0_addr, token1_addr, fee_or_spacing, adapter_type
         )
         result = _eth_call(rpc_url, factory_addr, calldata, request_delay_s=request_delay_s)
@@ -662,6 +753,7 @@ def _write_reject_histogram(
         "MISSING_TOKEN_ADDRESS": "token_mismatch",
         "FEE_MISMATCH": "fee_mismatch",
         "UNSUPPORTED_DEX_TYPE": "unsupported_dex_type",  # Step 9 (GPT)
+        "NO_V4_QUOTE_ADAPTER_PENDING_P3": "v4_pending_p3",  # Step 4 (GPT)
     }
     histogram = _count_quarantine_reasons(quarantined)
     normalized: Dict[str, int] = {}

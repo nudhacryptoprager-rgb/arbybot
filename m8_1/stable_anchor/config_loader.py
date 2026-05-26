@@ -15,6 +15,7 @@ _VALID_ADAPTER_TYPES = {
     "uniswap_v3",
     "aerodrome_slipstream",
     "aerodrome_v2_stable",
+    "ve33",
     "curve_stable",
     "balancer_stable",
     "uniswap_v2",
