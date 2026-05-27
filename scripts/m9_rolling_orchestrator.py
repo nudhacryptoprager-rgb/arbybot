@@ -1,4 +1,4 @@
-"""Rolling orchestrator: M8 sniper → M8.1 refresh → bridge rebuild → M9 scan.
+"""Rolling orchestrator: M8 sniper -> M8.1 refresh -> bridge rebuild -> M9 scan.
 
 M8 factory polling cadence:
   - M8 sniper runs for `--m8-duration-minutes` (default 15), polling new pool events
@@ -47,7 +47,12 @@ def _artifact_ts(path: Path) -> float:
         data = json.loads(path.read_text(encoding="utf-8"))
         ts_str = data.get("generated_at_utc") or data.get("generated_at", "")
         if ts_str:
-            return _dt.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+            # Parse as UTC (strptime ignores the trailing 'Z', giving local epoch)
+            return (
+                _dt.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ")
+                .replace(tzinfo=_dt.timezone.utc)
+                .timestamp()
+            )
     except Exception:
         pass
     return path.stat().st_mtime
@@ -100,6 +105,7 @@ def run_m8_sniper(chain: str, duration_minutes: float, dry_run: bool) -> int:
         "--duration-minutes", str(duration_minutes),
         "--skip-preflight",
         "--skip-self-test",
+        "--prefer-ws",
     ]
     # ARBY_SNIPER_ENABLE=1 activates live block polling; without it M8 exits in ~183ms
     return _run(cmd, dry_run, "M8_SNIPER", extra_env={"ARBY_SNIPER_ENABLE": "1"})

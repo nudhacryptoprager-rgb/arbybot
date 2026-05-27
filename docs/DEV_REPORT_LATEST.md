@@ -1,33 +1,84 @@
 ﻿# DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-27T14:41:04Z
-run_id: data/runs/_rolling (rolling artifact; M9 GPT-round4 session 3 — M8 sniper root-cause fix)
+timestamp_utc: 2026-05-27T17:22:14Z
+run_id: data/runs/_rolling (rolling artifact; M9 Session 6 — Alchemy RPC run; UTC timezone bug fixed)
 mode: ONLINE
 artifact_mode: rolling
 config: config/exotic_base_anchor.yaml
 code_identity:
-  primary: ts:2026-05-27T14:41:04Z
+  primary: ts:2026-05-27T17:22:14Z
   dirty: true
-  desc: Session 3 — M8 sniper silent-exit root cause found and fixed; m8_stale=False for first time; orchestrator M8.1 soft-fail added
+  desc: Session 6 — UTC timezone bug in _artifact_ts fixed; full Alchemy run; runtime_gates.all_pass=True; MARKET_NO_POSITIVE_GROSS
 
 ## 1) Scope
 goal (Roadmap): M9 — досягти positive_cycles_with_m8_pool > 0 через raw_http+dynamic-sizes; CI gate exit=0
-goal_status: IN_PROGRESS
+goal_status: BLOCKED
 change_summary:
-  - Fix 1 (session 3): M8 sniper silent exit — root cause: `python -m m8.runtime.smoke_run` has no __main__ block
-  - Fix 1 resolution: orchestrator now uses `scripts/sniper_smoke_run.py` as entry point
-  - Fix 2 (session 3): Added --skip-preflight (publicnode HTTP 403 on chain_id check) and --skip-self-test (baseswap_v2 no events)
-  - Fix 3 (session 3): Orchestrator M8.1 soft-fail: rc=1 (borderline rpc_error_rate) → warning, not hard-fail; rc>=2 → hard-fail
-  - Result: m8_stale=False PASSES STRICT_BRIDGE for first time; qsr 0.63→0.91; data_completeness 0.66→0.92; multicall 0.42→0.75
-  - New failures found: duration_fulfilled=False (priority scheduler exhausts 1668 cycles in 203s); toxic_route_rate=1.0
-  - Previous sessions: 4/7 gate failures resolved; bridge inventory wired; unverified_active_routes=0; m8_1_stale=False
+  - Fix (session 6): UTC timezone bug in `scripts/m9_rolling_orchestrator.py` `_artifact_ts` — `strptime` interpreted UTC timestamps as local time (+2h offset → false age 7204s). Fixed with `.replace(tzinfo=_dt.timezone.utc)`
+  - A/B test results: dRPC (lb.drpc.live) = 2833×429 on raw_http quote path (ARBY_RPC_RPS_LIMIT does NOT throttle raw_http); Alchemy = 0×429, all infra gates PASS
+  - New discovery: M8 sniper EMPTY with Alchemy WS (WS log subscription compat issue); graph_ready_from_m8=0
+  - Gate blocker: MARKET_NO_POSITIVE_GROSS (0 profitable cycles in current Base DEX market)
+  - Previous sessions: duration_fulfilled fixed, UTC bug fixed, pipeline end-to-end confirmed
 
 ## 2) Runtime Claims
 
-### M8 Sniper (session 3 — fixed entry point)
+### M9 Scan — Alchemy run (2026-05-27T17:22:14Z)
 | Метрика | Значення |
 |---------|---------|
+| rpc_provider | alchemy |
+| duration_fulfilled | True ✅ |
+| elapsed_s | 922.0 / 900 |
+| sweeps_completed | 23 |
+| cycles_found | 4580 |
+| cycles_quoteable | 4400 |
+| cycles_positive_gross | 0 |
+| best_cycle_gross_bps | 0.0 |
+| qsr | 0.9607 ✅ |
+| multicall_success_rate | 1.0 ✅ |
+| data_completeness | 1.0 ✅ |
+| http_429_count | 0 ✅ |
+| graph_ready_total | 119 |
+| graph_ready_from_m8 | 0 ⚠️ |
+| runtime_gates.all_pass | True ✅ |
+| economics_gate_status | BLOCKED_NO_POSITIVE_GROSS |
+| economics_blocker_class | MARKET_NO_POSITIVE_GROSS |
+
+### dRPC A/B comparison (2026-05-27T16:53:54Z)
+| Метрика | dRPC | Alchemy |
+|---------|------|---------|
+| http_429_count | 2833 | 0 |
+| qsr | 0.1545 | 0.9607 |
+| multicall_success_rate | 0.4314 | 1.0 |
+| data_completeness | 0.5954 | 1.0 |
+| cycles_positive_gross | 2 (likely false) | 0 |
+
+## 3) Gate Status (strict-bridge)
+| Check | Status | Value | Threshold |
+|-------|--------|-------|-----------|
+| multicall_success_rate | PASS ✅ | 1.0 | 0.9 |
+| data_completeness | PASS ✅ | 1.0 | 0.98 |
+| qsr | PASS ✅ | 0.96 | 0.8 |
+| quote_revert_rate | PASS ✅ | 0.0 | 0.05 |
+| unverified_active_routes | PASS ✅ | 0 | 0 |
+| runtime_gates.all_pass | **True ✅** | | |
+| STRICT_BRIDGE graph_ready_from_m8 | FAIL ❌ | 0 | >0 |
+| cycles_positive_gross | FAIL ❌ | 0 | >0 |
+
+## 4) Blocker Analysis
+| Blocker | Клас | Статус |
+|---------|------|--------|
+| duration_fulfilled=False (UTC bug) | CODE | ✅ RESOLVED (session 6) |
+| dRPC 429 throttling raw_http path | INFRA | ⚠️ WORKAROUND (use Alchemy) |
+| M8 sniper EMPTY with Alchemy WS | CODE | ❌ NEW — WS log sub compat issue |
+| MARKET_NO_POSITIVE_GROSS | MARKET | ❌ 0 profitable cycles in current market |
+
+## 5) Path to Gate PASS
+1. Fix M8 sniper WS log subscriptions with Alchemy (or use dRPC for M8 only) → `graph_ready_from_m8 > 0`
+2. Wait for market conditions that produce positive gross cycles — OR expand inventory (more tokens/routes)
+3. Optional: throttle raw_http quote path with rate limiter (`ARBY_RPC_RPS_LIMIT` does not cover this path)
+
+docs_reread_confirmed: true
 | run_at_utc | 2026-05-27T14:30:36Z |
 | duration_minutes | 10 |
 | candidates_total | 166 |

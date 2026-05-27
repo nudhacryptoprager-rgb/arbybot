@@ -77,6 +77,8 @@ def _classify_rpc_error(error_str: str) -> str:
         return _RPC_ERR_5XX
     if "timeout" in s or "timed out" in s or "time out" in s:
         return _RPC_ERR_TIMEOUT
+    if any(p in s for p in ("block range", "range exceeded", "free tier", "range limit", "-32600")):
+        return "range_too_wide"
     return _RPC_ERR_OTHER
 
 

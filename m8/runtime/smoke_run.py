@@ -1111,8 +1111,16 @@ def _run_online_loop(
         if elapsed_since_artifact >= _ARTIFACT_WRITE_INTERVAL_S:
             snap = funnel.snapshot()
             elapsed_total = snap["elapsed_s"]
-            status = "ACTIVE" if snap["snipe_candidates_total"] > 0 else "EMPTY"
-            reasons = [] if snap["snipe_candidates_total"] > 0 else ["NO_EVENTS_YET"]
+            if snap["snipe_candidates_total"] > 0:
+                status = "ACTIVE"
+                reasons = []
+            elif (snap["rpc_errors"] > 0 and snap["raw_fetched"] == 0
+                  and snap.get("ws_subscriptions", 0) == 0):
+                status = "RPC_ERROR"
+                reasons = ["RPC_UNAVAILABLE"]
+            else:
+                status = "EMPTY"
+                reasons = ["NO_EVENTS_YET"]
             # Step 3: snapshot under lock to prevent concurrent WS mutation.
             if phase2_lock is not None:
                 with phase2_lock:
@@ -1599,8 +1607,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if snap["snipe_candidates_total"] > 0:
         status = "ACTIVE"
         reasons: List[str] = []
-    elif snap["rpc_errors"] > 0 and snap["cycles_completed"] == 0:
-        status = "ERROR"
+    elif (snap["rpc_errors"] > 0 and snap["raw_fetched"] == 0
+          and snap.get("ws_subscriptions", 0) == 0):
+        status = "RPC_ERROR"
         reasons = ["RPC_UNAVAILABLE"]
     else:
         status = "EMPTY"

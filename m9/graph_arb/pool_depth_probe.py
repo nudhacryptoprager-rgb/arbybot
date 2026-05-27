@@ -169,7 +169,7 @@ def probe_pool_depth(
     """
     pair_id = route.get("pair_id", "")
     dex_id = route.get("dex_id", "")
-    fee = int(route.get("fee", 0))
+    fee = int(route.get("fee") or 0)
     adapter_type = route.get("adapter_type", "uniswap_v3")
     tick_spacing = route.get("tick_spacing")
     quoter = route.get("quoter_addr", "") or ""

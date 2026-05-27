@@ -349,6 +349,9 @@ class TestValidStatuses:
     def test_error_in_valid_statuses(self):
         assert "ERROR" in VALID_STATUSES
 
+    def test_rpc_error_in_valid_statuses(self):
+        assert "RPC_ERROR" in VALID_STATUSES
+
     def test_at_least_four_statuses(self):
         assert len(VALID_STATUSES) >= 4
 

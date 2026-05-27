@@ -507,6 +507,25 @@ class TestRpcErrorHistogram:
         joined = "\n".join(lines)
         assert "408" in joined
 
+    def test_inc_rpc_error_range_too_wide_alchemy_free_tier(self):
+        """Alchemy free-tier block range error is classified as range_too_wide."""
+        t = FunnelTracker()
+        t.inc_rpc_error(
+            "400 Client Error: Bad Request -- Under the Free tier plan, "
+            "you can make eth_getLogs requests with up to a 10 block range."
+        )
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("range_too_wide", 0) == 1, f"Expected range_too_wide, got: {hist}"
+
+    def test_inc_rpc_error_range_exceeded_string(self):
+        """Generic 'range exceeded' or '-32600' error is classified as range_too_wide."""
+        t = FunnelTracker()
+        t.inc_rpc_error("Log response size exceeded. -32600")
+        snap = t.snapshot()
+        hist = snap["rpc_error_histogram"]
+        assert hist.get("range_too_wide", 0) == 1, f"Expected range_too_wide, got: {hist}"
+
 
 # ---------------------------------------------------------------------------
 # factory_breakdown tests (Step 7)

@@ -1,8 +1,8 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: M8_STALE_RESOLVED__PRODUCTIVE_GATE_BLOCKED_BY_SCHEDULER_RPC_AND_TOXIC_ROUTES — Session 4 (2026-05-27): Code fixes applied — (1) `__main__` guard added to `m8/runtime/smoke_run.py`; (2) priority scheduler recycle-on-empty (sleep+continue instead of break); (3) `cycles_with_m8_pool` always int (not None); (4) M8.1 soft-fail hardened (escalate to hard-fail if stable_anchor_passes_total=0); (5) orchestrator M8.1 artifact freshness guard. Pending: pool_depth_probe quarantine expand + full pipeline run.
+**Status**: ALCHEMY_INFRA_PASS__STRICT_BRIDGE_BLOCKED_BY_M8_RPC_ERROR — Session 6 (2026-05-27): (1) UTC timezone bug in `_artifact_ts` fixed → `duration_fulfilled=True`; (2) Alchemy: qsr=0.96, multicall=1.0, data=1.0, http_429=0, runtime_gates.all_pass=True; (3) M8 sniper EMPTY with Alchemy but `rpc_errors=160` — actual RPC failure, not "no events"; (4) `graph_ready_from_m8=0` → strict_bridge FAIL; (5) Next: isolate M8 HTTP vs WS failure path.
 
-`goal_status`: IN_PROGRESS
+`goal_status`: BLOCKED
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
@@ -27,15 +27,33 @@
 
 ---
 
-## Session 2026-05-27 (Session 4): Fixes Applied
+## Session 2026-05-27 (Session 6): Full RPC A/B Test + UTC Bug Fix
 
 ### Зроблено
-- ✅ **Fix 1** (`m8/runtime/smoke_run.py`): `if __name__ == '__main__':` block added → `python -m m8.runtime.smoke_run` now works
-- ✅ **Fix 2** (tests): `tests/unit/test_m8_entrypoint.py` — 4 contract tests for M8 sniper entrypoint
-- ✅ **Fix 3** (`m9/graph_arb/runner.py`): scheduler `next_batch()` returns empty → `time.sleep(2.0); continue` instead of `break` → deadline respected
-- ✅ **Fix 5** (`m9/graph_arb/artifacts.py`): `cycles_with_m8_pool` always stored as int 0 (not None) when bridge_source_metrics missing key
-- ✅ **Fix 6** (`scripts/m9_rolling_orchestrator.py`): M8.1 soft-fail hardened — reads artifact, checks `stable_anchor_passes_total > 0`; escalates to hard-fail if no usable anchors
-- ✅ **Fix 7** (this file): Status_M9.md compressed below 300 lines
+- ✅ **Fix** (`scripts/m9_rolling_orchestrator.py` `_artifact_ts`): UTC timezone bug — `strptime` без timezone treated `Z` as local → age=7204s false. Fixed with `.replace(tzinfo=_dt.timezone.utc)`
+- ✅ **dRPC run** (lb.drpc.live): `duration_fulfilled=True`; 3392 cycles; **2833×429** (83.6% error rate on raw_http quote path); `qsr=0.15`, `data=0.60` → gate FAIL INFRA
+- ✅ **Alchemy run** (base-mainnet.g.alchemy.com/v2/...): zero 429s, `qsr=0.96`, `multicall=1.0`, `data=1.0`; `runtime_gates.all_pass=True`; MARKET_NO_POSITIVE_GROSS
+- ✅ Key insight: `ARBY_RPC_RPS_LIMIT` only throttles `provider_throttle` paths, NOT the raw_http multicall/quote path
+
+### Артефакти — Alchemy run (2026-05-27T17:22:14Z)
+```
+generated_at_utc: 2026-05-27T17:22:14Z
+rpc_provider: alchemy, rpc_public_fallback_used: False
+duration_fulfilled: True, elapsed_s: 922.0, sweeps_completed: 23
+cycles_found: 4580, cycles_quoteable: 4400, cycles_positive_gross: 0
+qsr: 0.9607, multicall_success_rate: 1.0, data_completeness: 1.0
+http_429_count: 0, actual_http_calls: 13177
+runtime_gates.all_pass: True  ✅ FIRST TIME
+graph_ready_total: 119, graph_ready_from_m8: 0  ← M8 sniper EMPTY (WS issue)
+economics_gate_status: BLOCKED_NO_POSITIVE_GROSS
+economics_blocker_class: MARKET_NO_POSITIVE_GROSS
+```
+
+### Gate failures (2 remaining)
+| Failure | Root cause | Fix |
+|---------|------------|-----|
+| `STRICT_BRIDGE: graph_ready_from_m8=0` | M8 sniper EMPTY with Alchemy WS (WS log sub compat?) | Investigate sniper WS with Alchemy |
+| `BLOCKED_NO_POSITIVE_GROSS` | No arb opportunity in current market with current 119-pool inventory | Market/time condition OR larger inventory |
 
 ---
 
@@ -98,9 +116,9 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 2. ~~3 consecutive all_pass runs for bridge unlock~~ **RESOLVED** — smoke23+24+25
 3. ~~`toxic_route_rate=0.9894`~~ **RESOLVED** — quarantine 3→59; toxic_rate=0.4183
 4. ~~`m8_stale=True`~~ **RESOLVED** — orchestrator now uses `scripts/sniper_smoke_run.py`
-5. **ACTIVE**: `duration_fulfilled=False` — scheduler early-exit (recycle fix applied, needs runtime evidence)
-6. **ACTIVE**: `multicall_success_rate=0.75` — publicnode 429 (should improve with scheduler recycle)
-7. **ACTIVE**: `toxic_route_rate=1.0` — needs `pool_depth_probe --update-quarantine`
+5. **RESOLVED**: orchestrator `--help` crash (→ Unicode fixed, session 5)
+6. **RESOLVED**: `pool_depth_probe` fee=None crash (session 5)
+7. **QUARANTINE EXPANDED** (59→60): `pool_depth_probe --update-quarantine` ran; runtime evidence pending (next full pipeline run)
 8. `positive_cycles_with_m8_pool=0`; M8 long-tail still single-venue or non-economic
 9. `router_sim` NOT_STARTED; `prequote_min_bps=-9999` smoke bypass; kill_switch=true
 
@@ -112,7 +130,9 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 [DONE]   M8_STALE resolved (m8_stale=False confirmed)
 [DONE]   cost_model_applied=true, cost-adjusted fields populated
 [DONE]   Priority scheduler recycle fix (session 4, needs runtime evidence)
-[NEXT]   pool_depth_probe --update-quarantine → reduce toxic_route_rate from 1.0
+[DONE]   pool_depth_probe --update-quarantine (quarantine 59→60, session 5)
+[DONE]   orchestrator --help Unicode fix (session 5)
+[NEXT]   Run with premium RPC: ARBY_REQUIRE_PREMIUM_RPC=1 ARBY_RPC_RPS_LIMIT=10 ARBY_RPC_RPS_BURST=5
 [NEXT]   m9_rolling_orchestrator.py --cycles 1 → expect duration_fulfilled=True
 [NEXT]   ci_m9_productive_gate.py --strict-bridge → target GATE_EXIT=0
 [NEXT]   positive_cycles_with_m8_pool > 0 after quarantine expansion

@@ -71,6 +71,7 @@ VALID_STATUSES: frozenset[str] = frozenset({
     "ACTIVE",      # listener running, receiving events
     "STALE",       # listener was running but freshness_s exceeded threshold
     "ERROR",       # listener encountered a fatal error
+    "RPC_ERROR",   # HTTP-only mode, all RPC calls failed (e.g. provider range limit)
 })
 
 
