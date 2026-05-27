@@ -403,6 +403,17 @@ def build_bridge_inventory(
         and r.get("pool_address")
     })
 
+    # Per-token pool breakdown: how many base routes exist for each M8-context token.
+    # Helps diagnose why positive_cycles_with_m8_pool=0: a token with many pools
+    # (liquidity is present) but still no positive cycle indicates market/economics issue.
+    _m8_context_token_pool_breakdown: Dict[str, int] = {
+        tok: sum(
+            1 for r in base_active
+            if (r.get("token0") == tok or r.get("token1") == tok) and r.get("pool_address")
+        )
+        for tok in sorted(_m8_context_tokens)
+    }
+
     # ------------------------------------------------------------------
     # Assemble bridge_source_metrics
     # ------------------------------------------------------------------
@@ -430,6 +441,7 @@ def build_bridge_inventory(
         "m8_context_tokens": sorted(_m8_context_tokens),
         "m8_context_pool_count": len(_m8_context_pool_addrs),
         "m8_context_pool_addresses": _m8_context_pool_addrs,
+        "m8_context_token_pool_breakdown": _m8_context_token_pool_breakdown,
     }
 
     # ------------------------------------------------------------------

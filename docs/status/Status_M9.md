@@ -1,6 +1,6 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: M8_CYCLE_PARTICIPATION_REACHED — Збір стабільний (`all_pass=True`, `qsr=0.9614`, `sweeps=345`, `bridge active`). CI gate (strict-bridge) EXIT 0. `cycles_with_m8_pool=98` — M8-sniped pools активно беруть участь у циклах. Профіль: `raw_http, 1 worker, dynamic-sizes`. M8 sniper: 1298 подій за 600s (V4=1206, V2=79, V3=11). M8.1 anchor: qsr=0.9465. Bridge: graph_ready_total=125, graph_ready_from_m8=18, m8_context_tokens=['VIRTUAL'], m8_context_pool_count=19. Наступний milestone: `positive_cycles_with_m8_pool > 0`.
+**Status**: M8_M9_BRIDGE_RUNTIME_PASS_WITH_STRATEGIC_WARNING — Продуктивні гейти PASS (`all_pass=True`, `qsr=0.961`, `sweeps=284`). CI gate (strict-bridge) EXIT 0. `cycles_with_m8_pool=92` — M8-sniped pools активно беруть участь у циклах. Strategic warning: `positive_cycles_with_m8_pool=0` — жодного позитивного gross циклу через M8 пул. Профіль: `raw_http, 1 worker, dynamic-sizes`. M8 sniper: 1270 подій (5000 blocks), `m8_context_tokens=['VIRTUAL']`, `m8_context_token_pool_breakdown={VIRTUAL:19}`. Bridge: `graph_ready_from_m8=15`, `graph_ready_total=125`. Нові поля: `m8_context_token_pool_breakdown` (step 7), `cycle_origin` в top_cycles (step 9). Наступний milestone: `positive_cycles_with_m8_pool > 0`.
 
 `goal_status`: IN_PROGRESS
 `schema_family`: m9_graph_arb
@@ -30,7 +30,51 @@ M8 smoke_run polling cadence:
 | **Next** | `positive_cycles_with_m8_pool > 0` | ⏳ PENDING |
 | Final | `economics_gate_status=POSITIVE` | ⏳ PENDING |
 
-### Next Soak Requirements (cycles_with_m8_pool > 0)
+---
+
+## Session 2026-05-27: GPT Steps 7+9 + Pipeline Soak8
+
+### Зроблено (поточна сесія)
+- ✅ **Step 7** (`bridge_builder.py`): `m8_context_token_pool_breakdown` dict у `bridge_source_metrics` — per-token підрахунок base route-ів для кожного M8-context токена. Artifact: `{VIRTUAL: 19}`
+- ✅ **Step 9** (`artifacts.py`, `runner.py`): `cycle_origin` поле у кожному `top_cycles` entry — `"m8"` якщо хоча б один edge через M8 пул, інакше `"base"`. Поточний run: всі позитивні цикли → `cycle_origin="base"`
+- ✅ **Tests**: `TestCycleOriginAnnotation` (4 tests) + `TestM8ContextTokenPoolBreakdown` (2 tests) + `TestAdapterTypePropagation` відновлений — **5977 passed, 6 skipped**
+- ✅ **M8 soak** (10 хв, 5000 blocks, 1270 candidates, 20 cycles): VIRTUAL token у m8_context_tokens
+- ✅ **M8.1 refresh** (5 хв): qsr=0.9465, passes=318, near_miss=50
+- ✅ **Bridge rebuild**: `graph_ready_from_m8=15`, `graph_ready_total=125`, `m8_stale=False`
+- ✅ **M9 soak** (15 хв, 284 sweeps, 1411 cycles): qsr=0.961, 32 positive gross, cycles_with_m8=92
+- ✅ **CI gate** (strict-bridge): EXIT 0, STRATEGIC_WARNING як очікувалось
+- ✅ **check_repo_safety.py**: PASS (2 warnings — Status_M7/M8 line count)
+
+### Артефакти (2026-05-27T09:31:31Z)
+```
+bridge_source_metrics:
+  m8_new_pools_input: 24
+  token_verified_count: 18
+  anchor_connected_count: 15
+  cross_dex_seen_count: 15
+  graph_ready_from_m8: 15
+  graph_ready_total: 125
+  m8_context_token_count: 1
+  m8_context_tokens: ['VIRTUAL']
+  m8_context_pool_count: 19
+  m8_context_token_pool_breakdown: {VIRTUAL: 19}  ← NEW (step 7)
+  dex_coverage_matrix:
+    uniswap_v2: events=4, graph_ready=4, supported=True
+    uniswap_v4: events=11, graph_ready=11, supported=True
+
+M9 run (soak8):
+  generated_at_utc: 2026-05-27T09:31:31Z
+  sweeps: 284, cycles_total: 1411, qsr: 0.961, all_pass: True
+  cycles_positive_gross: 32
+  best_cycle_gross_bps: 1.3455
+  best_cycle_net_bps: 1.3455
+  cycles_with_m8_pool: 92
+  positive_cycles_with_m8_pool: 0
+  top_cycles[0].cycle_origin: "base"  ← NEW (step 9)
+  dynamic_sizes: selection_rate=0.5804
+```
+
+
 For the next soak to advance milestone, it MUST demonstrate:
 1. **M8 run** → fresh events including sushiswap_v2 (TTT/WETH confirmed) or other new factories
 2. **Bridge rebuild** runs AFTER M8 (orchestrator stale-guard ensures this)

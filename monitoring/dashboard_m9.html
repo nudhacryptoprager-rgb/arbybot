@@ -82,6 +82,10 @@
 <h2>M8 New-Pool Scout</h2>
 <div class="row" id="m8-row"></div>
 
+<h2>M8→M9 Bridge Integration</h2>
+<div class="row" id="m8-integration-row"></div>
+<div id="m8-integration-warning"></div>
+
 <h2>Risk Metrics</h2>
 <div class="row" id="risk-row"></div>
 
@@ -220,6 +224,28 @@ async function load() {
     card('New pools found', m8.new_pools_found ?? '—', ''),
     `<div class="card"><div class="label">Last scout</div><div class="val" style="font-size:11px">${m8.generated_at_utc ? m8.generated_at_utc.replace('T', ' ').slice(0,19)+'Z' : '—'}</div></div>`,
   ].join('');
+
+  // M8→M9 Bridge integration row
+  const mi = d.m8_integration || {};
+  const cyclesM8 = mi.cycles_with_m8_pool;
+  const posCyclesM8 = mi.positive_cycles_with_m8_pool;
+  document.getElementById('m8-integration-row').innerHTML = [
+    card('Graph ready from M8', mi.graph_ready_from_m8 ?? '—', ''),
+    card('Graph edges from M8', mi.graph_edges_from_m8 ?? '—', ''),
+    card('Cycles with M8 pool', cyclesM8 ?? '—', cyclesM8 > 0 ? 'pos' : ''),
+    card('Positive cycles (M8)', posCyclesM8 ?? '—', posCyclesM8 > 0 ? 'pos' : 'neg'),
+    card('Unsupported DEX', mi.unsupported_dex_count ?? '—', mi.unsupported_dex_count > 0 ? 'neg' : ''),
+    card('Pending adapter', mi.pending_adapter_count ?? '—', mi.pending_adapter_count > 0 ? 'neg' : ''),
+  ].join('');
+  // Strategic warning: M8 cycles exist but none positive
+  const warnEl = document.getElementById('m8-integration-warning');
+  if (typeof cyclesM8 === 'number' && cyclesM8 > 0 && typeof posCyclesM8 === 'number' && posCyclesM8 === 0) {
+    warnEl.innerHTML = `<div class="card" style="border-color:var(--yellow);margin-top:4px"><span class="badge badge-yellow">STRATEGIC_WARNING</span> <span style="color:var(--muted);font-size:12px">cycles_with_m8_pool=${cyclesM8} but positive_cycles_with_m8_pool=0 — M8-sniped pools active in cycles but no positive gross spread yet. Next target: positive_cycles_with_m8_pool &gt; 0.</span></div>`;
+  } else if (typeof cyclesM8 === 'number' && cyclesM8 === 0) {
+    warnEl.innerHTML = `<div class="card" style="border-color:var(--muted);margin-top:4px"><span class="badge badge-muted">ADVISORY</span> <span style="color:var(--muted);font-size:12px">cycles_with_m8_pool=0 — M8 pools not yet in active cycles.</span></div>`;
+  } else {
+    warnEl.innerHTML = '';
+  }
 
   // Risk metrics row
   const rm = d.risk_metrics || {};

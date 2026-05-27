@@ -1,4 +1,4 @@
-"""Unit tests for M8→M9 bridge_builder module.
+﻿"""Unit tests for M8в†’M9 bridge_builder module.
 
 Tests:
   - BridgeBuilderUnit: pure-logic tests (no filesystem)
@@ -309,7 +309,7 @@ class TestBridgeBuilderIntegration:
         # Base inventory with a known pool
         base_data = _make_base_inv(2)
         base_data["active_routes"][0]["pool_address"] = "0xknownpool"
-        # Sniper event for same pool — appears twice (cross_dex_seen); use supported dex
+        # Sniper event for same pool вЂ” appears twice (cross_dex_seen); use supported dex
         events = [
             _sniper_event("AERO", "USDC", dex="uniswap_v2", pool="0xknownpool"),
             _sniper_event("AERO", "USDC", dex="aerodrome", pool="0xknownpool"),
@@ -335,10 +335,10 @@ class TestBridgeBuilderIntegration:
         assert metrics["graph_ready_from_m8"] == 2   # both events' pool in base
 
     def test_pair_id_uses_underscore_not_slash(self, tmp_path):
-        """M8 bridge pair_id must use '_' separator — required by M9 _parse_pair_symbols().
+        """M8 bridge pair_id must use '_' separator вЂ” required by M9 _parse_pair_symbols().
 
-        Old bug: pair_id='WETH/YLDKT' → _parse_pair_symbols splits by '_' → 1 part
-        → ValueError → route silently skipped → graph_edges_from_m8=0.
+        Old bug: pair_id='WETH/YLDKT' в†’ _parse_pair_symbols splits by '_' в†’ 1 part
+        в†’ ValueError в†’ route silently skipped в†’ graph_edges_from_m8=0.
         """
         from m9.graph_arb.bridge_builder import build_bridge_inventory
 
@@ -439,7 +439,7 @@ class TestBridgeBuilderIntegration:
         assert metrics["graph_ready_from_m8"] > 0, (
             "graph_ready_from_m8 must be > 0 to test graph integration"
         )
-        # Every M8 route pair_id must be parseable — no ValueError → no silent skip
+        # Every M8 route pair_id must be parseable вЂ” no ValueError в†’ no silent skip
         parsed_count = 0
         for route in m8_routes:
             pair_id = route["pair_id"]
@@ -451,7 +451,7 @@ class TestBridgeBuilderIntegration:
                 raise AssertionError(
                     f"M8 route pair_id={pair_id!r} is not parseable by M9 graph builder: {exc}"
                 ) from exc
-        assert parsed_count > 0, "No M8 routes were parseable — graph_edges_from_m8 would be 0"
+        assert parsed_count > 0, "No M8 routes were parseable вЂ” graph_edges_from_m8 would be 0"
 
 
 # ---------------------------------------------------------------------------
@@ -497,8 +497,8 @@ class TestAdapterTypePropagation:
     """Tests that bridge_builder propagates adapter_type correctly for M8 routes.
 
     Contract:
-    - uniswap_v2 events → active_routes with adapter_type='uniswap_v2'
-    - uniswap_v4 events → quarantined_routes with quarantine_reason='UNSUPPORTED_DEX_TYPE'
+    - uniswap_v2 events в†’ active_routes with adapter_type='uniswap_v2'
+    - uniswap_v4 events в†’ quarantined_routes with quarantine_reason='UNSUPPORTED_DEX_TYPE'
     - no M8 active route may have adapter_type=None
     - dex_coverage_matrix key present in bridge_source_metrics
     """
@@ -563,7 +563,7 @@ class TestAdapterTypePropagation:
         )
 
         result = json.loads(out.read_text(encoding="utf-8"))
-        # V4 vanilla routes (hooks=None) now go to active_routes — V4 quote adapter is active
+        # V4 vanilla routes (hooks=None) now go to active_routes вЂ” V4 quote adapter is active
         m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
         assert len(m8_active) == 2, (
             f"Expected 2 uniswap_v4 vanilla routes in active_routes, got {len(m8_active)}"
@@ -576,7 +576,7 @@ class TestAdapterTypePropagation:
         pending = result.get("pending_routes", [])
         m8_pend = [r for r in pending if r.get("source") == "m8_sniper"]
         assert len(m8_pend) == 0, (
-            f"Expected 0 pending M8 v4 routes, got {len(m8_pend)} — V4 is now active"
+            f"Expected 0 pending M8 v4 routes, got {len(m8_pend)} вЂ” V4 is now active"
         )
 
     def test_no_none_adapter_type_in_active_m8_routes(self, tmp_path):
@@ -647,10 +647,244 @@ class TestAdapterTypePropagation:
         assert "uniswap_v4" in dcm
         assert dcm["uniswap_v2"]["adapter_type"] == "uniswap_v2"
         assert dcm["uniswap_v2"]["adapter_supported"] is True
-        # V4 is fully active — adapter_type correct and quote adapter enabled
+        # V4 is fully active вЂ” adapter_type correct and quote adapter enabled
         assert dcm["uniswap_v4"]["adapter_type"] == "uniswap_v4"
         assert dcm["uniswap_v4"]["adapter_supported"] is True
         assert dcm["uniswap_v4"]["adapter_pending"] is False
         assert dcm["uniswap_v4"]["quarantine_reason"] is None
         assert dcm["uniswap_v2"]["event_count"] == 2
         assert dcm["uniswap_v4"]["event_count"] == 2
+
+
+class TestM8ContextTokenPoolBreakdown:
+    """m8_context_token_pool_breakdown tracks per-token pool counts in base inventory."""
+
+    def test_breakdown_populated_when_context_token_exists(self, tmp_path):
+        """Token seen in M8 events that also has base routes -> breakdown entry."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        base_routes = [
+            {
+                "route_id": "r1",
+                "pair_id": "VIRAL_WETH",
+                "dex_id": "uniswap_v3",
+                "adapter_type": "uniswap_v3",
+                "token0": "VIRAL",
+                "token1": "WETH",
+                "token0_addr": "0xviral",
+                "token1_addr": "0xweth",
+                "fee": 3000,
+                "pool_address": "0xpool_viral_weth",
+                "factory_verified": True,
+                "depth_probe_ok": True,
+            },
+            {
+                "route_id": "r2",
+                "pair_id": "VIRAL_USDC",
+                "dex_id": "uniswap_v3",
+                "adapter_type": "uniswap_v3",
+                "token0": "VIRAL",
+                "token1": "USDC",
+                "token0_addr": "0xviral",
+                "token1_addr": "0xusdc",
+                "fee": 3000,
+                "pool_address": "0xpool_viral_usdc",
+                "factory_verified": True,
+                "depth_probe_ok": True,
+            },
+        ]
+        base_inv = {
+            "schema_version": "m9_verified_inventory.1",
+            "generated_at_utc": "2026-05-24T10:00:00",
+            "active_routes": base_routes,
+            "quarantined_routes": [],
+            "summary": {"active_count": 2, "quarantined_count": 0},
+        }
+        events = [
+            {
+                "event_id": "base:0xnewpool:0xhash:1",
+                "chain": "base",
+                "dex": "uniswap_v2",
+                "pool": "0xnewpool_viral",
+                "token0_symbol": "VIRAL",
+                "token1_symbol": "WETH",
+                "pair": "VIRAL/WETH",
+                "phase2_decision": {"verdict": "SKIP"},
+            },
+            {
+                "event_id": "base:0xnewpool2:0xhash:2",
+                "chain": "base",
+                "dex": "uniswap_v3",
+                "pool": "0xnewpool_viral2",
+                "token0_symbol": "VIRAL",
+                "token1_symbol": "USDC",
+                "pair": "VIRAL/USDC",
+                "phase2_decision": {"verdict": "SKIP"},
+            },
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        sniper.write_text(
+            __import__("json").dumps(_make_sniper_artifact(events)), encoding="utf-8"
+        )
+        anchor.write_text(
+            __import__("json").dumps(_make_anchor_artifact(0)), encoding="utf-8"
+        )
+        base.write_text(__import__("json").dumps(base_inv), encoding="utf-8")
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        breakdown = metrics.get("m8_context_token_pool_breakdown")
+        assert isinstance(breakdown, dict), "m8_context_token_pool_breakdown must be a dict"
+        assert "VIRAL" in breakdown, f"Expected VIRAL in breakdown, got keys={list(breakdown.keys())}"
+        assert breakdown["VIRAL"] == 2, f"Expected 2 VIRAL base pools, got {breakdown['VIRAL']}"
+
+    def test_breakdown_empty_when_no_context_tokens(self, tmp_path):
+        """No M8-context tokens -> empty breakdown dict (not absent)."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        sniper.write_text(
+            __import__("json").dumps(_make_sniper_artifact([])), encoding="utf-8"
+        )
+        anchor.write_text(
+            __import__("json").dumps(_make_anchor_artifact(0)), encoding="utf-8"
+        )
+        base.write_text(__import__("json").dumps(_make_base_inv(3)), encoding="utf-8")
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        breakdown = metrics.get("m8_context_token_pool_breakdown")
+        assert isinstance(breakdown, dict), "m8_context_token_pool_breakdown must be a dict"
+        assert breakdown == {}, f"Expected empty dict, got {breakdown}"
+
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        # Base inventory has VIRAL/WETH and VIRAL/USDC routes
+        base_routes = [
+            {
+                "route_id": "r1",
+                "pair_id": "VIRAL_WETH",
+                "dex_id": "uniswap_v3",
+                "adapter_type": "uniswap_v3",
+                "token0": "VIRAL",
+                "token1": "WETH",
+                "token0_addr": "0xviral",
+                "token1_addr": "0xweth",
+                "fee": 3000,
+                "pool_address": "0xpool_viral_weth",
+                "factory_verified": True,
+                "depth_probe_ok": True,
+            },
+            {
+                "route_id": "r2",
+                "pair_id": "VIRAL_USDC",
+                "dex_id": "uniswap_v3",
+                "adapter_type": "uniswap_v3",
+                "token0": "VIRAL",
+                "token1": "USDC",
+                "token0_addr": "0xviral",
+                "token1_addr": "0xusdc",
+                "fee": 3000,
+                "pool_address": "0xpool_viral_usdc",
+                "factory_verified": True,
+                "depth_probe_ok": True,
+            },
+        ]
+        base_inv = {
+            "schema_version": "m9_verified_inventory.1",
+            "generated_at_utc": "2026-05-24T10:00:00",
+            "active_routes": base_routes,
+            "quarantined_routes": [],
+            "summary": {"active_count": 2, "quarantined_count": 0},
+        }
+        # M8 sniper events: new pools for VIRAL (non-anchor token that also exists in base)
+        events = [
+            {
+                "event_id": "base:0xnewpool:0xhash:1",
+                "chain": "base",
+                "dex": "uniswap_v2",
+                "pool": "0xnewpool_viral",  # NOT in base
+                "token0_symbol": "VIRAL",
+                "token1_symbol": "WETH",
+                "pair": "VIRAL/WETH",
+                "phase2_decision": {"verdict": "SKIP"},
+            },
+            # Second VIRAL event for cross_dex_seen (freq >= 2)
+            {
+                "event_id": "base:0xnewpool2:0xhash:2",
+                "chain": "base",
+                "dex": "uniswap_v3",
+                "pool": "0xnewpool_viral2",
+                "token0_symbol": "VIRAL",
+                "token1_symbol": "USDC",
+                "pair": "VIRAL/USDC",
+                "phase2_decision": {"verdict": "SKIP"},
+            },
+        ]
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        sniper.write_text(
+            __import__("json").dumps(_make_sniper_artifact(events)), encoding="utf-8"
+        )
+        anchor.write_text(
+            __import__("json").dumps(_make_anchor_artifact(0)), encoding="utf-8"
+        )
+        base.write_text(__import__("json").dumps(base_inv), encoding="utf-8")
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        breakdown = metrics.get("m8_context_token_pool_breakdown")
+        assert isinstance(breakdown, dict), "m8_context_token_pool_breakdown must be a dict"
+        assert "VIRAL" in breakdown, f"Expected VIRAL in breakdown, got keys={list(breakdown.keys())}"
+        assert breakdown["VIRAL"] == 2, f"Expected 2 VIRAL base pools, got {breakdown['VIRAL']}"
+
+    def test_breakdown_empty_when_no_context_tokens(self, tmp_path):
+        """No M8-context tokens в†’ empty breakdown dict (not absent)."""
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        sniper.write_text(
+            __import__("json").dumps(_make_sniper_artifact([])), encoding="utf-8"
+        )
+        anchor.write_text(
+            __import__("json").dumps(_make_anchor_artifact(0)), encoding="utf-8"
+        )
+        base.write_text(__import__("json").dumps(_make_base_inv(3)), encoding="utf-8")
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        breakdown = metrics.get("m8_context_token_pool_breakdown")
+        assert isinstance(breakdown, dict), "m8_context_token_pool_breakdown must be a dict"
+        assert breakdown == {}, f"Expected empty dict, got {breakdown}"
+

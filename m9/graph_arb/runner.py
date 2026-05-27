@@ -970,6 +970,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             bridge_source_metrics=_bridge_source_metrics,
+            m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -1064,6 +1065,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         pool_quality_lane=_lane,
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         bridge_source_metrics=_bridge_source_metrics,
+        m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
     )
     write_artifact(artifact, args.artifact_path)
 

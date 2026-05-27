@@ -381,6 +381,107 @@ class TestRpcResolutionFromEnv:
 # Tests: quote_revert_rate is leg-level (not cycle-level histogram)
 # ---------------------------------------------------------------------------
 
+class TestCycleOriginAnnotation:
+    """cycle_origin field in top_cycles: 'm8' | 'base' | None."""
+
+    def _make_qr(self, pool_address: str, gross_bps: float = 0.5):
+        from unittest.mock import MagicMock
+        from m9.graph_arb.models import CycleQuoteResult
+        edge = MagicMock()
+        edge.pool_address = pool_address
+        edge.dex_id = "uniswap_v3"
+        edge.factory_class = "EFFICIENT_BASELINE"
+        edge.factory_verified = True
+        edge.fee_bps = 5.0
+        edge.token_in_sym = "USDC"
+        edge.token_out_sym = "WETH"
+        edge.token_in_decimals = 6
+        edge.token_out_decimals = 18
+        edge2 = MagicMock()
+        edge2.pool_address = "0xbase0002"
+        edge2.dex_id = "uniswap_v3"
+        edge2.factory_class = "EFFICIENT_BASELINE"
+        edge2.factory_verified = True
+        edge2.fee_bps = 5.0
+        edge2.token_in_sym = "WETH"
+        edge2.token_out_sym = "EURC"
+        edge2.token_in_decimals = 18
+        edge2.token_out_decimals = 6
+        edge3 = MagicMock()
+        edge3.pool_address = "0xbase0003"
+        edge3.dex_id = "uniswap_v2"
+        edge3.factory_class = "EFFICIENT_BASELINE"
+        edge3.factory_verified = True
+        edge3.fee_bps = 5.0
+        edge3.token_in_sym = "EURC"
+        edge3.token_out_sym = "USDC"
+        edge3.token_in_decimals = 6
+        edge3.token_out_decimals = 6
+        cycle = MagicMock()
+        cycle.edges = [edge, edge2, edge3]
+        cycle.cycle_id = "testcycle01"
+        cycle.length = 3
+        cycle.token_path = ["USDC", "WETH", "EURC"]
+        cycle.start_token_sym = "USDC"
+        cycle.total_fee_bps = 15.0
+        cycle.min_factory_class = "EFFICIENT_BASELINE"
+        return CycleQuoteResult(
+            cycle=cycle,
+            size_usd=1000.0,
+            amount_in=1_000_000,
+            amount_out=1_000_500,
+            gross_bps=gross_bps,
+            status="POSITIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.05,
+        )
+
+    def test_cycle_origin_none_when_no_m8_addrs(self):
+        """When m8_pool_addrs_for_annotation is None, cycle_origin must be None."""
+        qr = self._make_qr("0xbase0001")
+        kwargs = _base_kwargs()
+        kwargs["cycle_results"] = [qr]
+        art = build_artifact(**kwargs)
+        top = art.get("top_cycles", [])
+        assert len(top) == 1
+        assert top[0]["cycle_origin"] is None
+
+    def test_cycle_origin_base_when_pool_not_in_m8(self):
+        """Pool not in m8_pool_addrs → cycle_origin='base'."""
+        qr = self._make_qr("0xbase0001")
+        m8_addrs = frozenset({"0xm8pool0001"})
+        kwargs = _base_kwargs()
+        kwargs["cycle_results"] = [qr]
+        art = build_artifact(**kwargs, m8_pool_addrs_for_annotation=m8_addrs)
+        top = art.get("top_cycles", [])
+        assert len(top) == 1
+        assert top[0]["cycle_origin"] == "base"
+
+    def test_cycle_origin_m8_when_pool_in_m8(self):
+        """First edge pool in m8_pool_addrs → cycle_origin='m8'."""
+        m8_addr = "0xm8pool0001"
+        qr = self._make_qr(m8_addr)
+        m8_addrs = frozenset({m8_addr.lower()})
+        kwargs = _base_kwargs()
+        kwargs["cycle_results"] = [qr]
+        art = build_artifact(**kwargs, m8_pool_addrs_for_annotation=m8_addrs)
+        top = art.get("top_cycles", [])
+        assert len(top) == 1
+        assert top[0]["cycle_origin"] == "m8"
+
+    def test_cycle_origin_case_insensitive(self):
+        """Comparison is case-insensitive for pool addresses."""
+        m8_addr = "0xM8POOL0001"
+        qr = self._make_qr(m8_addr)
+        m8_addrs = frozenset({"0xm8pool0001"})  # lowercase in set
+        kwargs = _base_kwargs()
+        kwargs["cycle_results"] = [qr]
+        art = build_artifact(**kwargs, m8_pool_addrs_for_annotation=m8_addrs)
+        top = art.get("top_cycles", [])
+        assert top[0]["cycle_origin"] == "m8"
+
+
 class TestQuoteRevertRateLegLevel:
     """quote_revert_rate must be computed from leg_results.reject_reason, not from
     the cycle-level histogram (which never carries 'QUOTE_REVERT' since cycles

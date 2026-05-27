@@ -228,6 +228,12 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
                 "\n  ADVISORY: cycles_with_m8_pool=0 — M8 pools not yet in active cycles. "
                 "Next target: cycles_with_m8_pool > 0."
             )
+        elif isinstance(cycles_m8, int) and cycles_m8 > 0 and isinstance(pos_cycles_m8, int) and pos_cycles_m8 == 0:
+            cycles_advisory = (
+                "\n  STRATEGIC_WARNING: cycles_with_m8_pool>0 but positive_cycles_with_m8_pool=0. "
+                "M8-sniped pools are in active cycles but none yield positive gross spread. "
+                "Next target: positive_cycles_with_m8_pool > 0."
+            )
         bridge_info = (
             f"\n  bridge: graph_ready_from_m8={bsm_pass.get('graph_ready_from_m8', 'N/A')}"
             f", graph_ready_total={bsm_pass.get('graph_ready_total', 'N/A')}"

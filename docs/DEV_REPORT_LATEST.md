@@ -1,103 +1,93 @@
 ﻿# DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-27T08:20:00Z
-run_id: data/runs/_rolling (rolling artifact; M8+M8.1+M9 online runs this session)
+timestamp_utc: 2026-05-27T09:31:31Z
+run_id: data/runs/_rolling (rolling artifact; M8+M8.1+M9 pipeline soak8)
 mode: ONLINE
 artifact_mode: rolling
 config: config/exotic_base_anchor.yaml
 code_identity:
-  primary: ts:2026-05-27T08:18:51Z
-  dirty: false
-  desc: M9 soak7 (raw_http+dynamic-sizes): cycles_with_m8_pool=98, qsr=0.9614, CI gate exit=0
+  primary: ts:2026-05-27T09:31:31Z
+  dirty: true
+  desc: GPT steps 7+9 implemented; soak8 run (5000 blocks M8, 284 sweeps M9); 5977 tests pass
 
 ## 1) Scope
-goal (Roadmap): M9 — досягти cycles_with_m8_pool > 0 через правильний профіль raw_http+dynamic-sizes; CI gate exit=0
+goal (Roadmap): M9 — досягти positive_cycles_with_m8_pool > 0 через raw_http+dynamic-sizes; CI gate exit=0
 goal_status: IN_PROGRESS
 change_summary:
-  - Профіль M9: змінено з direct_http (4 workers) на raw_http (1 worker) + dynamic-sizes — виправлено qsr 0.001->0.9614
-  - M8 soak7: 1298 подій за 601s (V4=1206, V2=79, V3=11, pancakeswap_v3=2), publicnode.com, blocks-back 5000
-  - M8.1 anchor refresh: qsr=0.9465, passes=336, candidates=1122, elapsed=238s
-  - Bridge rebuild: graph_ready_total=125, graph_ready_from_m8=18, m8_context_tokens=['VIRTUAL'], m8_context_pool_count=19
-  - M9 soak7: 345 sweeps, 1710 cycles, 3 positive gross, cycles_with_m8_pool=98, elapsed=900s
-  - CI gate (strict-bridge) exit=0: qsr=0.9614 >= 0.8, multicall_success_rate=1.0, all_pass=True
-  - docs/status/Status_M9.md: milestone "M8 Cycle Participation" DONE
+  - Step 7: m8_context_token_pool_breakdown в bridge_source_metrics (per-token base route count)
+  - Step 9: cycle_origin поле в top_cycles entries ("m8" або "base")
+  - Tests: TestCycleOriginAnnotation (4) + TestM8ContextTokenPoolBreakdown (2) — 5977 passed
+  - M8 soak8: 1270 подій (5000 blocks back, 10 хв), m8_context_tokens=['VIRTUAL']
+  - M8.1: qsr=0.9465, passes=318, near_miss=50
+  - Bridge: graph_ready_from_m8=15, graph_ready_total=125
+  - M9 soak8: 284 sweeps, 1411 cycles, qsr=0.961, 32 positive gross
+  - CI gate strict-bridge: PASS EXIT 0, STRATEGIC_WARNING (positive_with_m8=0)
+  - check_repo_safety.py: PASS
 
 ## 2) Runtime Claims
 
-### M8 Sniper (soak — publicnode.com)
+### M9 Scanner (soak8)
 | Метрика | Значення |
 |---------|---------|
-| generated_at_utc | 2026-05-27T07:58:15Z |
-| total_events | 1298 |
-| elapsed_s | 601.5 |
-| V4 events | 1206 |
-| V2 events | 79 |
-| V3 events | 11 |
-| pancakeswap_v3 events | 2 |
-| VIRTUAL in recent_events | true |
-| status | ACTIVE |
+| generated_at_utc | 2026-05-27T09:31:31Z |
+| qsr | 0.961 |
+| sweeps_completed | 284 |
+| cycles_total | 1411 |
+| cycles_positive_gross | 32 |
+| best_cycle_gross_bps | 1.3455 |
+| cycles_with_m8_pool | 92 |
+| positive_cycles_with_m8_pool | 0 |
+| m8_context_token_pool_breakdown | {VIRTUAL: 19} |
+| top_cycles[0].cycle_origin | "base" |
+| multicall_success_rate | 1.0 |
+| all_pass | true |
 
-### M8.1 Anchor Refresh
+### Bridge (soak8)
 | Метрика | Значення |
 |---------|---------|
-| generated_at_utc | 2026-05-27T08:02:42Z |
-| candidates | 1122 |
-| passes | 336 |
-| qsr | 0.9465 |
-| elapsed_s | 238.4 |
-
-### M9 Bridge
-| Метрика | Значення |
-|---------|---------|
-| generated_at_utc | 2026-05-27T08:03:08Z |
+| m8_new_pools_input | 24 |
+| graph_ready_from_m8 | 15 |
 | graph_ready_total | 125 |
-| graph_ready_from_m8 | 18 |
-| m8_context_token_count | 1 |
+| m8_stale | False |
+| m8_1_stale | False |
 | m8_context_tokens | ['VIRTUAL'] |
 | m8_context_pool_count | 19 |
-| m8_stale | false |
-| m8_1_stale | false |
-
-### M9 Scanner (soak7 — raw_http+dynamic-sizes)
-| Метрика | Значення |
-|---------|---------|
-| generated_at_utc | 2026-05-27T08:18:51Z |
-| elapsed_s | 900.0 |
-| sweeps_completed | 345 |
-| cycles_found | 1710 |
-| qsr | 0.9614 |
-| cycles_with_m8_pool | 98 |
-| positive_gross | 3 |
-| multicall_success_rate | 1.0 |
-| data_completeness | 1.0 |
-| quote_rpc_error_rate | 0.0 |
-| dynamic_size_selected | 993 |
-| selection_rate | 0.5807 |
-| all_pass | true |
+| m8_context_token_pool_breakdown | {VIRTUAL: 19} |
 
 ### CI Gate (ci_m9_productive_gate --strict-bridge)
 | Метрика | Значення |
 |---------|---------|
 | exit_code | 0 |
-| multicall_success_rate | 1.0 (>=0.9) PASS |
-| qsr | 0.9614 (>=0.8) PASS |
-| runtime_gates.all_pass | true PASS |
-| cycles_with_m8_pool | 98 (>0) PASS |
-| toxic_route_rate | 0.3291 (<0.90) PASS |
+| STRATEGIC_WARNING emitted | true |
+| cycles_with_m8_pool | 92 (>0) PASS |
 
-## 3) Діагностика / Вирішені Проблеми
+### check_repo_safety.py
+| Метрика | Значення |
+|---------|---------|
+| exit_code | 0 |
+| result | PASS (2 warnings -- Status_M7/M8 line count) |
 
-### Проблема soak6 -> soak7
-- soak6: qsr=0.001, quote_rpc_error_rate=0.997 — V3 QuoterV2 eth_call повертав 0x для всіх публічних RPC
-- Причина: direct_http backend з 4 workers — занадто великі amounts викликали revert QuoterV2
-- Рішення: raw_http backend + 1 worker + --dynamic-sizes — V3 quotes тепер успішні
-- Підтвердження: quote_rpc_error_rate=0.0 у soak7 (проти 0.997 у soak6)
+### pytest
+| Метрика | Значення |
+|---------|---------|
+| passed | 5977 |
+| skipped | 6 |
+| failed | 0 |
 
-### m8_context механізм (попередня сесія)
-- bridge_builder.py: визначає non-anchor токени в нових M8 снайпер-подіях, знаходить їх базові пули
-- runner.py: розширює _m8_pool_addrs контекстними пулами
-- Результат: m8_context_tokens=['VIRTUAL'], m8_context_pool_count=19
+## 3) M8 Integration Analysis
+
+### positive_cycles_with_m8_pool=0 — стратегічна проблема
+- M8-sniped pools входять до активних циклів (92 cycles)
+- Але жоден цикл не має positive gross spread через M8 пул
+- Позитивні цикли (32 шт.) ідуть через base inventory (WETH/USDC/EURC), cycle_origin="base"
+- best_cycle_net_bps=1.3455 — у базових маршрутах
+
+### Нові поля (steps 7+9)
+- m8_context_token_pool_breakdown: для кожного M8-context токена — кількість base inventory routes
+  Поточний стан: {VIRTUAL: 19} — VIRTUAL має 19 base routes для arb
+- cycle_origin: кожен top_cycle тепер має анотацію "m8" або "base"
+  Поточний стан: всі positive cycles = "base" (M8 цикли не позитивні)
 
 ## 4) Chain Quality
 chain: base
@@ -106,18 +96,13 @@ chain_quality: NORMAL
 multicall: success_rate=1.0
 
 ## 5) Open Issues / Blockers
-
-- cycles_with_m8_pool=98 ДОСЯГНУТО
-- positive_cycles_with_m8_pool=0 — НАСТУПНИЙ MILESTONE
+- positive_cycles_with_m8_pool=0 -- НАСТУПНИЙ MILESTONE
+- токен VIRTUAL має 19 base routes, але M8-new пули для VIRTUAL не знаходять arb spread
 - economics_gate_status: PENDING
 
 ## Session Completion
-session_goal: Запустити M8 soak + M8.1 + bridge + M9 (raw_http+dynamic-sizes) + CI gate exit=0; досягти cycles_with_m8_pool > 0
+session_goal: Завершити GPT review steps 7+9 (код + тести), запустити повний pipeline soak8
 goal_status: IN_PROGRESS
 close_allowed: false
 remaining_blockers: positive_cycles_with_m8_pool=0 (наступний milestone не досягнутий)
-evidence_session_run_dirs: data/runs/_rolling (m9_graph_latest.json ts=2026-05-27T08:18:51Z)
-primary_blocker_of_session: qsr=0.001 через неправильний quote backend (direct_http+4workers)
-blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED
-docs_reread_confirmed: true
+evidence_session_run_dirs: data/runs/_rolling (m9_graph_latest.json ts=2026-05-27T09:31:31Z)

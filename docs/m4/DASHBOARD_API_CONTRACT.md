@@ -178,3 +178,78 @@ field so any client can detect them programmatically. The legacy
 `gate_funnel` continues to serve **lifetime** totals — new clients
 **must not** depend on those values. They will be removed once the
 `schema_version` bumps to `summary_v3`.
+
+---
+
+## M9 Graph-Arb Endpoint — `/api/m9/current`
+
+```
+GET /api/m9/current
+```
+
+**Note**: `/api/m9` returns 404. The correct contract endpoint is `/api/m9/current`.
+
+Schema: `m9_dashboard.3`. Served from `monitoring/dashboard_server.py` → `build_m9_current_payload()`.
+
+```jsonc
+{
+  "schema_family": "m9_dashboard",
+  "schema_revision": "m9_dashboard.3",
+  "now_utc": "<ISO-8601 UTC>",
+  "artifact_exists": true,
+  "artifact_age_s": 45,
+  "generated_at_utc": "<ISO-8601 UTC>",
+
+  "m9_summary": {
+    "chain": "base",
+    "cycles_found": 1710,
+    "cycles_positive_gross": 3,
+    "sweeps_completed": 345,
+    "duration_minutes": 15,
+    "elapsed_s": 900.0,
+    "topology_gate": "CYCLES_FOUND"
+  },
+
+  "economics": {
+    "economics_gate_status": "UNKNOWN",
+    "qsr": 0.9614,
+    "cycles_quoteable": 1644,
+    "cycles_positive_gross": 3,
+    "quote_rpc_error_rate": 0.0
+  },
+
+  // M8→M9 bridge integration metrics (top-level block, not nested)
+  "m8_integration": {
+    "graph_ready_from_m8": 18,        // routes from M8 sniper entered M9 graph
+    "graph_edges_from_m8": 38,        // edge count from M8 pools
+    "cycles_with_m8_pool": 98,        // M9 cycles touching an M8-sniped pool; target: >0
+    "positive_cycles_with_m8_pool": 0, // … with positive gross; target: >0 (next milestone)
+    "unsupported_dex_count": 0,
+    "pending_adapter_count": 0
+  },
+
+  "infra_quality": {
+    "run_status": "completed",        // "completed" | "incomplete" | "stale" | "no_artifact"
+    "runtime_gates_live_verdict": "PASS",  // "PASS" | "FAIL" | "STALE" | "NO_ARTIFACT"
+    "multicall_success_rate": 1.0,
+    "http_429_count": 0,
+    "dynamic_size_enabled": true,
+    "dynamic_size_selected_count": 993,
+    "dynamic_size_selection_rate": 0.5807
+  },
+
+  "m8_1_inventory": { ... },   // M8.1 stable-anchor summary
+  "m8_sniper": { ... },        // M8 new-pool sniper summary
+  "coverage": { ... },         // Edge/route/pool coverage
+  "top_opportunities": [ ... ] // Quoteable cycles sorted best-first
+}
+```
+
+### Strategic warning pattern
+When `cycles_with_m8_pool > 0` but `positive_cycles_with_m8_pool == 0`, the gate emits:
+```
+STRATEGIC_WARNING: cycles_with_m8_pool>0 but positive_cycles_with_m8_pool=0.
+M8-sniped pools are in active cycles but none yield positive gross spread.
+Next target: positive_cycles_with_m8_pool > 0.
+```
+This warning does **not** affect exit code (gate still exits 0 if all other checks pass).

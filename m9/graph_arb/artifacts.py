@@ -44,7 +44,28 @@ def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _build_cycle_summary(qr: CycleQuoteResult) -> Dict[str, Any]:
+def _compute_cycle_origin(
+    cycle: "ArbitrageCycle",
+    m8_pool_addrs: "Optional[frozenset[str]]",
+) -> "Optional[str]":
+    """Return 'm8' when any cycle edge uses an M8-sourced pool, else 'base'.
+
+    Returns None when m8_pool_addrs is not provided (bridge metrics unavailable).
+    Distinguishing 'base' from 'm8' is the key RCA signal for
+    positive_cycles_with_m8_pool diagnostics.
+    """
+    if m8_pool_addrs is None:
+        return None
+    for e in cycle.edges:
+        if e.pool_address.lower() in m8_pool_addrs:
+            return "m8"
+    return "base"
+
+
+def _build_cycle_summary(
+    qr: "CycleQuoteResult",
+    m8_pool_addrs: "Optional[frozenset[str]]" = None,
+) -> Dict[str, Any]:
     cycle = qr.cycle
     return {
         "cycle_id": cycle.cycle_id,
@@ -60,6 +81,7 @@ def _build_cycle_summary(qr: CycleQuoteResult) -> Dict[str, Any]:
         "status": qr.status,
         "reject_reason": qr.reject_reason,
         "elapsed_s": round(qr.elapsed_s, 3),
+        "cycle_origin": _compute_cycle_origin(cycle, m8_pool_addrs),
     }
 
 
@@ -332,6 +354,8 @@ def build_artifact(
     depth_quarantine_skipped: int = 0,
     # M8→M9 bridge provenance block (bridge_builder.build_bridge_inventory output)
     bridge_source_metrics: Optional[Dict[str, Any]] = None,
+    # M8 pool address set for cycle origin annotation in top_cycles (step 9 RCA)
+    m8_pool_addrs_for_annotation: "Optional[frozenset[str]]" = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -609,7 +633,7 @@ def build_artifact(
         "route_error_histogram": computed_route_hist,
         "edge_error_histogram": computed_edge_hist,
         "scan_scope": scan_scope,
-        "top_cycles": [_build_cycle_summary(qr) for qr in top_cycles],
+        "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation) for qr in top_cycles],
         "top_opportunities": [_build_top_opportunity(qr) for qr in top_cycles],
         "toxic_pool_families": _toxic_pool_families,
         "graph_topology": graph_topology,
