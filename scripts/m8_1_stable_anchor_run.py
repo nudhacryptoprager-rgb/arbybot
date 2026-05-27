@@ -259,7 +259,7 @@ def _offline_refresh(output_path: Path) -> int:
             existing.setdefault("run_context", {})["run_timestamp"] = run_ts
             with open(output_path, "w", encoding="utf-8") as fh:
                 json.dump(existing, fh, indent=2)
-            print(f"OFFLINE: refreshed timestamp → {run_ts} in {output_path}", flush=True)
+            print(f"OFFLINE: refreshed timestamp -> {run_ts} in {output_path}", flush=True)
             return 0
         except Exception as exc:
             _log.warning("could not refresh existing artifact (%s), writing minimal stub", exc)
@@ -277,7 +277,7 @@ def _offline_refresh(output_path: Path) -> int:
         rpc_url=None,
         duration_minutes=0.0,
     )
-    print(f"OFFLINE: wrote stub artifact → {output_path}", flush=True)
+    print(f"OFFLINE: wrote stub artifact -> {output_path}", flush=True)
     return 0
 
 
@@ -335,7 +335,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "best_net_usd": None, "rpc_error_rate": 0.0,
                          "quote_success_rate": 1.0, "reject_histogram": {}},
                         run_ts, 0.0, True, rpc_url, args.duration_minutes)
-        print(f"PASS: wrote stub artifact (no pairs in config) → {output_path}", flush=True)
+        print(f"PASS: wrote stub artifact (no pairs in config) -> {output_path}", flush=True)
         return 0
 
     _log.info("pairs=%d routes=%d sizes=%s", len(pairs), len(routes), _DEFAULT_SIZES_USD)

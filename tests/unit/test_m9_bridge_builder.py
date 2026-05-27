@@ -345,6 +345,10 @@ class TestBridgeBuilderIntegration:
         events = [
             _sniper_event("WETH", "YLDKT", dex="uniswap_v2", pool="0xpool001"),
             _sniper_event("USDC", "YLDKT", dex="uniswap_v2", pool="0xpool002"),
+            # Stage 4b: YLDKT needs >=2 QUOTEABLE distinct DEX IDs to pass multi-venue check.
+            # uniswap_v4 is a fully-supported, quoteable DEX so YLDKT passes Stage 4b and
+            # the v4 event enters active_routes alongside the v2 events.
+            _sniper_event("WETH", "YLDKT", dex="uniswap_v4", pool="0xv4pool_yldkt"),
         ]
         sniper = tmp_path / "sniper.json"
         anchor = tmp_path / "anchor.json"
@@ -417,6 +421,8 @@ class TestBridgeBuilderIntegration:
         events = [
             _sniper_event("WETH", "YLDKT", dex="uniswap_v2", pool="0xpool_new_001"),
             _sniper_event("USDC", "YLDKT", dex="uniswap_v2", pool="0xpool_new_002"),
+            # Stage 4b: YLDKT needs >=2 QUOTEABLE distinct DEX IDs; uniswap_v4 is quoteable.
+            _sniper_event("WETH", "YLDKT", dex="uniswap_v4", pool="0xv4pool_new_yldkt"),
         ]
         sniper = tmp_path / "sniper.json"
         anchor = tmp_path / "anchor.json"
@@ -513,6 +519,9 @@ class TestAdapterTypePropagation:
         events = [
             _sniper_event("MEME", "USDC", dex="uniswap_v2", pool="0xv2pool001"),
             _sniper_event("MEME", "WETH", dex="uniswap_v2", pool="0xv2pool002"),
+            # Stage 4b: MEME needs >=2 QUOTEABLE distinct DEX IDs; uniswap_v4 is quoteable.
+            # Both v2 and v4 events enter active_routes; only v2 routes are checked below.
+            _sniper_event("MEME", "USDC", dex="uniswap_v4", pool="0xv4pool_meme"),
         ]
         sniper = tmp_path / "sniper.json"
         anchor = tmp_path / "anchor.json"
@@ -532,8 +541,9 @@ class TestAdapterTypePropagation:
 
         result = json.loads(out.read_text(encoding="utf-8"))
         m8_routes = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
-        assert m8_routes, "Expected active M8 sniper routes for uniswap_v2 events"
-        for route in m8_routes:
+        m8_v2_routes = [r for r in m8_routes if r.get("dex_id") == "uniswap_v2"]
+        assert m8_v2_routes, "Expected active M8 sniper routes for uniswap_v2 events"
+        for route in m8_v2_routes:
             assert route.get("adapter_type") == "uniswap_v2", (
                 f"Expected adapter_type='uniswap_v2', got {route.get('adapter_type')!r}"
             )
@@ -545,6 +555,9 @@ class TestAdapterTypePropagation:
         events = [
             _sniper_event("NEWTKN", "USDC", dex="uniswap_v4", pool="0xv4pool001"),
             _sniper_event("NEWTKN", "WETH", dex="uniswap_v4", pool="0xv4pool002"),
+            # Stage 4b: NEWTKN needs >=2 QUOTEABLE distinct DEX IDs; uniswap_v2 is quoteable.
+            # 3 active M8 routes total: 2 v4 + 1 v2.
+            _sniper_event("NEWTKN", "USDC", dex="uniswap_v2", pool="0xv2pool_newtkn"),
         ]
         sniper = tmp_path / "sniper.json"
         anchor = tmp_path / "anchor.json"
@@ -563,20 +576,28 @@ class TestAdapterTypePropagation:
         )
 
         result = json.loads(out.read_text(encoding="utf-8"))
-        # V4 vanilla routes (hooks=None) now go to active_routes вЂ” V4 quote adapter is active
+        # V4 vanilla routes (hooks=None) go to active_routes — V4 quote adapter is active.
+        # With uniswap_v2 as second quoteable DEX: 2 v4 + 1 v2 = 3 active M8 routes.
         m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
-        assert len(m8_active) == 2, (
-            f"Expected 2 uniswap_v4 vanilla routes in active_routes, got {len(m8_active)}"
+        assert len(m8_active) == 3, (
+            f"Expected 3 active M8 sniper routes (2 v4 + 1 v2), got {len(m8_active)}"
         )
-        for r in m8_active:
+        m8_v4_active = [r for r in m8_active if r.get("dex_id") == "uniswap_v4"]
+        assert len(m8_v4_active) == 2, (
+            f"Expected 2 uniswap_v4 active routes, got {len(m8_v4_active)}"
+        )
+        for r in m8_v4_active:
             assert r.get("adapter_type") == "uniswap_v4", (
                 f"Expected adapter_type='uniswap_v4', got {r.get('adapter_type')!r}"
             )
         # No V4 routes in pending_routes (V4 is now fully supported)
         pending = result.get("pending_routes", [])
-        m8_pend = [r for r in pending if r.get("source") == "m8_sniper"]
-        assert len(m8_pend) == 0, (
-            f"Expected 0 pending M8 v4 routes, got {len(m8_pend)} вЂ” V4 is now active"
+        m8_pend_v4 = [
+            r for r in pending
+            if r.get("source") == "m8_sniper" and r.get("dex_id") == "uniswap_v4"
+        ]
+        assert len(m8_pend_v4) == 0, (
+            f"Expected 0 pending M8 v4 routes, got {len(m8_pend_v4)} — V4 is now active"
         )
 
     def test_no_none_adapter_type_in_active_m8_routes(self, tmp_path):
@@ -888,3 +909,118 @@ class TestM8ContextTokenPoolBreakdown:
         assert isinstance(breakdown, dict), "m8_context_token_pool_breakdown must be a dict"
         assert breakdown == {}, f"Expected empty dict, got {breakdown}"
 
+
+
+# ---------------------------------------------------------------------------
+# TestSymbolCollisionMultiVenue (Step 7 GPT round-3)
+# ---------------------------------------------------------------------------
+
+class TestSymbolCollisionMultiVenue:
+    """Stage 4b multi-venue gate: test quoteable-DEX filtering contracts.
+
+    Contract (Step 7 GPT round-3):
+    - Same symbol on two pools of the SAME DEX ID (single venue) -> blocked.
+    - Same symbol on two QUOTEABLE DEX IDs (uniswap_v2 + uniswap_v4) -> passes.
+    - Pending adapter (balancer_stable) must NOT count as arb-ready second venue.
+    """
+
+    def _write_json(self, path, data) -> None:
+        path.write_text(__import__("json").dumps(data), encoding="utf-8")
+
+    def _run_bridge(self, tmp_path, events):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        self._write_json(sniper, _make_sniper_artifact(events))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(2))
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+        result = __import__("json").loads(out.read_text(encoding="utf-8"))
+        return metrics, result
+
+    def test_same_symbol_single_dex_is_blocked(self, tmp_path):
+        """Two events for MEME on the same DEX (two pools) must NOT satisfy multi-venue gate.
+
+        MEME/USDC on uniswap_v2 pool1 + MEME/WETH on uniswap_v2 pool2:
+        quoteable_dex_ids = {uniswap_v2} -- only 1 quoteable DEX -> Stage 4b quarantine.
+        """
+        events = [
+            _sniper_event("MEME", "USDC", dex="uniswap_v2", pool="0xpool_meme_usdc"),
+            _sniper_event("MEME", "WETH", dex="uniswap_v2", pool="0xpool_meme_weth"),
+        ]
+        metrics, result = self._run_bridge(tmp_path, events)
+        m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert len(m8_active) == 0, (
+            f"Single-DEX token must be quarantined by Stage 4b, got {len(m8_active)} active routes"
+        )
+        quarantined = result.get("quarantined_routes", [])
+        meme_quarantined = [
+            r for r in quarantined
+            if (r.get("token0") == "MEME" or r.get("token1") == "MEME"
+                or r.get("token0_symbol") == "MEME" or r.get("token1_symbol") == "MEME")
+            and r.get("source") == "m8_sniper"
+        ]
+        assert len(meme_quarantined) > 0, (
+            "MEME single-DEX events must appear in quarantined_routes"
+        )
+        assert metrics["structural_single_venue_blocked_count"] > 0, (
+            "structural_single_venue_blocked_count must be > 0"
+        )
+
+    def test_same_symbol_two_quoteable_dex_passes(self, tmp_path):
+        """Same symbol on uniswap_v2 AND uniswap_v4 (both quoteable) must pass Stage 4b."""
+        events = [
+            _sniper_event("MEME", "USDC", dex="uniswap_v2", pool="0xv2pool_meme"),
+            _sniper_event("MEME", "WETH", dex="uniswap_v4", pool="0xv4pool_meme"),
+        ]
+        metrics, result = self._run_bridge(tmp_path, events)
+        m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert len(m8_active) > 0, (
+            f"Token on 2 quoteable DEXes must pass Stage 4b, got 0 active routes"
+        )
+        assert metrics["m8_multi_venue_quoteable_count"] > 0, (
+            "m8_multi_venue_quoteable_count must be > 0 when >=2 quoteable DEXes"
+        )
+
+    def test_pending_dex_does_not_count_as_second_venue(self, tmp_path):
+        """Token on uniswap_v2 + balancer_stable (pending) must NOT pass Stage 4b gate.
+
+        balancer_stable is in _PENDING_ADAPTER_TYPES -> not quoteable -> not counted.
+        quoteable_dex_ids = {uniswap_v2} -> only 1 quoteable DEX -> Stage 4b quarantine.
+        """
+        events = [
+            _sniper_event("MEME", "USDC", dex="uniswap_v2", pool="0xv2pool_meme"),
+            _sniper_event("MEME", "WETH", dex="balancer_stable", pool="0xbalpool_meme"),
+        ]
+        metrics, result = self._run_bridge(tmp_path, events)
+        m8_active = [r for r in result["active_routes"] if r.get("source") == "m8_sniper"]
+        assert len(m8_active) == 0, (
+            f"Pending adapter must not count as second venue; got {len(m8_active)} active routes"
+        )
+        assert metrics["m8_multi_venue_seen_count"] > 0, (
+            "m8_multi_venue_seen_count must count pending DEXes too (diagnostic)"
+        )
+        assert metrics["m8_multi_venue_quoteable_count"] == 0, (
+            "m8_multi_venue_quoteable_count must be 0 when only 1 quoteable DEX"
+        )
+
+    def test_split_metrics_seen_vs_quoteable(self, tmp_path):
+        """m8_multi_venue_seen_count >= m8_multi_venue_quoteable_count always."""
+        events = [
+            _sniper_event("MEME", "USDC", dex="uniswap_v2", pool="0xv2pool_meme"),
+            _sniper_event("MEME", "WETH", dex="balancer_stable", pool="0xbalpool_meme"),
+        ]
+        metrics, _ = self._run_bridge(tmp_path, events)
+        assert "m8_multi_venue_seen_count" in metrics
+        assert "m8_multi_venue_quoteable_count" in metrics
+        assert "m8_multi_venue_verified_count" in metrics
+        assert metrics["m8_multi_venue_seen_count"] >= metrics["m8_multi_venue_quoteable_count"]
+        assert metrics["m8_multi_venue_verified_count"] == metrics["m8_multi_venue_quoteable_count"]

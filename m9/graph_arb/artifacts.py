@@ -40,6 +40,27 @@ _BLOCKER_MARKET = "MARKET_NO_POSITIVE_GROSS"
 _ANCHOR_HEAVY_PAIR_THRESHOLD = 15
 
 
+def compute_estimated_cost_bps(
+    size_usd: float,
+    gas_usd: float,
+    l1_fee_usd: float,
+    slippage_bps: float,
+) -> Optional[float]:
+    """Estimate total cost of a trade in basis points.
+
+    Formula: (gas_usd + l1_fee_usd) / size_usd * 10_000 + slippage_bps
+
+    For $100 size with gas_usd=0.05, l1_fee_usd=0.01, slippage_bps=5.0:
+      (0.05 + 0.01) / 100 * 10_000 + 5.0 = 6.0 + 5.0 = 11.0 bps
+
+    Returns None when size_usd <= 0 (defensive).
+    """
+    if size_usd <= 0:
+        return None
+    gas_cost_bps = (gas_usd + l1_fee_usd) / size_usd * 10_000.0
+    return round(gas_cost_bps + slippage_bps, 4)
+
+
 def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -65,8 +86,21 @@ def _compute_cycle_origin(
 def _build_cycle_summary(
     qr: "CycleQuoteResult",
     m8_pool_addrs: "Optional[frozenset[str]]" = None,
+    cost_profile: "Optional[Dict[str, Any]]" = None,
 ) -> Dict[str, Any]:
     cycle = qr.cycle
+    # Per-cycle cost estimate (when cost_profile is available)
+    _est_cost_cycle: Optional[float] = None
+    _cost_adj_net_cycle: Optional[float] = None
+    if cost_profile and qr.size_usd and qr.size_usd > 0:
+        _est_cost_cycle = compute_estimated_cost_bps(
+            size_usd=qr.size_usd,
+            gas_usd=cost_profile.get("gas_usd", 0.05),
+            l1_fee_usd=cost_profile.get("l1_fee_usd", 0.01),
+            slippage_bps=cost_profile.get("slippage_bps", 5.0),
+        )
+        if _est_cost_cycle is not None:
+            _cost_adj_net_cycle = round(qr.gross_bps - _est_cost_cycle, 4)
     return {
         "cycle_id": cycle.cycle_id,
         "length": cycle.length,
@@ -82,10 +116,15 @@ def _build_cycle_summary(
         "reject_reason": qr.reject_reason,
         "elapsed_s": round(qr.elapsed_s, 3),
         "cycle_origin": _compute_cycle_origin(cycle, m8_pool_addrs),
+        "estimated_cost_bps": _est_cost_cycle,
+        "cost_adjusted_net_bps": _cost_adj_net_cycle,
     }
 
 
-def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
+def _build_top_opportunity(
+    qr: CycleQuoteResult,
+    cost_profile: "Optional[Dict[str, Any]]" = None,
+) -> Dict[str, Any]:
     """Build one operator-facing opportunity row from a CycleQuoteResult.
 
     Fields:
@@ -101,6 +140,9 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
       spread_bps    — gross_bps from quote
       spread_usd    — gross_bps * market_size_usd / 10000
       profit_usd    — gross_usd (gas model not yet implemented)
+      estimated_cost_bps — gas+slippage cost estimate in bps (null if no cost profile)
+      cost_adjusted_net_bps — spread_bps - estimated_cost_bps (null if no cost profile)
+      cost_adjusted_profit_usd — cost_adjusted_net_bps * size_usd / 10000 (null if no cost profile)
       main_blocker  — null when POSITIVE_GROSS, else reject_reason or status
       fee_drag_bps  — sum of all edge fees (total cost of the cycle)
       pre_fee_gross_bps — estimated gross before fees (spread_bps + fee_drag_bps)
@@ -116,6 +158,20 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
     if qr.size_usd and qr.size_usd > 0:
         spread_usd = round(qr.size_usd * qr.gross_bps / 10000.0, 6)
     profit_usd = spread_usd  # gross-only; no gas/slippage model in M9.3
+    # Cost-aware fields for operator dashboard (step 3)
+    _est_cost_opp: Optional[float] = None
+    _cost_adj_net_opp: Optional[float] = None
+    _cost_adj_profit_opp: Optional[float] = None
+    if cost_profile and qr.size_usd and qr.size_usd > 0:
+        _est_cost_opp = compute_estimated_cost_bps(
+            size_usd=qr.size_usd,
+            gas_usd=cost_profile.get("gas_usd", 0.05),
+            l1_fee_usd=cost_profile.get("l1_fee_usd", 0.01),
+            slippage_bps=cost_profile.get("slippage_bps", 5.0),
+        )
+        if _est_cost_opp is not None:
+            _cost_adj_net_opp = round(spread_bps - _est_cost_opp, 4)
+            _cost_adj_profit_opp = round(_cost_adj_net_opp * qr.size_usd / 10000.0, 6)
     main_blocker: Optional[str] = None
     if qr.status not in ("POSITIVE_GROSS",):
         main_blocker = qr.reject_reason or qr.status
@@ -156,6 +212,9 @@ def _build_top_opportunity(qr: CycleQuoteResult) -> Dict[str, Any]:
         "spread_bps": spread_bps,
         "spread_usd": spread_usd,
         "profit_usd": profit_usd,
+        "estimated_cost_bps": _est_cost_opp,
+        "cost_adjusted_net_bps": _cost_adj_net_opp,
+        "cost_adjusted_profit_usd": _cost_adj_profit_opp,
         "main_blocker": main_blocker,
         "fee_drag_bps": fee_drag_bps,
         "pre_fee_gross_bps": pre_fee_gross_bps,
@@ -356,6 +415,8 @@ def build_artifact(
     bridge_source_metrics: Optional[Dict[str, Any]] = None,
     # M8 pool address set for cycle origin annotation in top_cycles (step 9 RCA)
     m8_pool_addrs_for_annotation: "Optional[frozenset[str]]" = None,
+    # Cost model from config (cost_model.profiles.default); enables estimated_cost_bps
+    cost_model: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -368,11 +429,34 @@ def build_artifact(
     # When dry-run skipped quoting, use explicit topology count
     cycles_found = cycles_found_topology if cycles_found_topology is not None else len(cycle_results)
     cycles_positive_gross = sum(1 for qr in cycle_results if qr.gross_bps > 0)
-    # Near-positive cycles worth router-sim probing (within floor of breakeven)
+
+    # Extract cost profile once — used for router-sim eligibility, per-cycle summaries,
+    # and the top-level estimated_cost_bps field.
+    _cost_profile_for_compute: Optional[Dict[str, Any]] = None
+    if cost_model:
+        _profile_name = cost_model.get("default_profile", "default")
+        _cost_profile_for_compute = (cost_model.get("profiles") or {}).get(_profile_name) or {}
+
+    # Cost-aware helper: returns cost-adjusted net bps when cost profile is available,
+    # else returns raw gross_bps for backward-compatible floor comparisons.
+    def _cycle_net_bps_for_gate(qr_x: "CycleQuoteResult") -> float:
+        if _cost_profile_for_compute and qr_x.size_usd and qr_x.size_usd > 0:
+            _ec = compute_estimated_cost_bps(
+                size_usd=qr_x.size_usd,
+                gas_usd=_cost_profile_for_compute.get("gas_usd", 0.05),
+                l1_fee_usd=_cost_profile_for_compute.get("l1_fee_usd", 0.01),
+                slippage_bps=_cost_profile_for_compute.get("slippage_bps", 5.0),
+            )
+            if _ec is not None:
+                return qr_x.gross_bps - _ec
+        return qr_x.gross_bps
+
+    # Near-positive cycles worth router-sim probing (within floor of breakeven).
+    # Step 8 (cost-aware): use cost-adjusted net when cost model present.
     cycles_router_sim_eligible = sum(
         1 for qr in cycle_results
         if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS")
-        and qr.gross_bps > _ROUTER_SIM_BPS_FLOOR
+        and _cycle_net_bps_for_gate(qr) > _ROUTER_SIM_BPS_FLOOR
     )
 
     # Step 4 (GPT fix): explicit gross/net distinction.
@@ -385,7 +469,38 @@ def build_artifact(
         best = max(cycle_results, key=lambda qr: qr.gross_bps)
         best_cycle_gross_bps = round(best.gross_bps, 4)
     best_cycle_net_bps = best_cycle_gross_bps  # alias — gross only until router_sim
-    estimated_cost_bps: Optional[float] = None  # TODO: gas + router fee model
+    # Step 4 (GPT round-3): explicit cost-adjusted best cycle metric.
+    # Distinct from best_cycle_net_bps (which is gross alias) — so operator cannot
+    # mistake gross for true net.
+    best_cycle_cost_adjusted_net_bps: Optional[float] = None
+    if _cost_profile_for_compute and cycle_results:
+        _best_for_cadj = max(cycle_results, key=lambda qr: qr.gross_bps)
+        _cadj_cost = compute_estimated_cost_bps(
+            size_usd=_best_for_cadj.size_usd or (sizes_usd[0] if sizes_usd else 100.0),
+            gas_usd=_cost_profile_for_compute.get("gas_usd", 0.05),
+            l1_fee_usd=_cost_profile_for_compute.get("l1_fee_usd", 0.01),
+            slippage_bps=_cost_profile_for_compute.get("slippage_bps", 5.0),
+        )
+        if _cadj_cost is not None and best_cycle_gross_bps is not None:
+            best_cycle_cost_adjusted_net_bps = round(best_cycle_gross_bps - _cadj_cost, 4)
+    # Compute estimated_cost_bps using best cycle's size and cost model from config
+    estimated_cost_bps: Optional[float] = None
+    if _cost_profile_for_compute and cycle_results:
+        _best_for_cost = max(cycle_results, key=lambda qr: qr.gross_bps)
+        _best_size_for_cost = (
+            _best_for_cost.size_usd
+            if _best_for_cost.size_usd and _best_for_cost.size_usd > 0
+            else (sizes_usd[0] if sizes_usd else 100.0)
+        )
+        estimated_cost_bps = compute_estimated_cost_bps(
+            size_usd=_best_size_for_cost,
+            gas_usd=_cost_profile_for_compute.get("gas_usd", 0.05),
+            l1_fee_usd=_cost_profile_for_compute.get("l1_fee_usd", 0.01),
+            slippage_bps=_cost_profile_for_compute.get("slippage_bps", 5.0),
+        )
+    cost_adjusted_net_bps: Optional[float] = None
+    if estimated_cost_bps is not None and best_cycle_gross_bps is not None:
+        cost_adjusted_net_bps = round(best_cycle_gross_bps - estimated_cost_bps, 4)
     router_sim_net_bps: Optional[float] = None  # TODO: on-chain router simulation
 
     # Step 6 (GPT fix): positive-cycle repeatability counters.
@@ -553,6 +668,8 @@ def build_artifact(
     economics_metrics["toxic_route_count"] = _toxic_route_count
     if cycles_quoteable > 0:
         economics_metrics["toxic_route_rate"] = round(_toxic_route_count / cycles_quoteable, 4)
+    economics_metrics["cost_model_applied"] = _cost_profile_for_compute is not None
+    economics_metrics["router_sim_eligible_after_cost"] = cycles_router_sim_eligible
 
     # Economics blocker classification: distinguish inventory quality from market signal
     pair_count = (scan_scope or {}).get("pair_count") or (
@@ -596,6 +713,16 @@ def build_artifact(
     # Step 7: toxic_pool_families — operator-visible list of pools dominating toxic cycles
     _toxic_pool_families = _compute_toxic_pool_families(cycle_results)
 
+    # Dashboard fields: pull M8 cycle participation metrics from bridge_source_metrics
+    # to top-level so CI gates and dashboards can read them without nested traversal.
+    _cycles_with_m8_pool: int = 0
+    _positive_cycles_with_m8_pool: int = 0
+    _m8_multi_venue_verified: Optional[int] = None
+    if bridge_source_metrics is not None:
+        _cycles_with_m8_pool = bridge_source_metrics.get("cycles_with_m8_pool") or 0
+        _positive_cycles_with_m8_pool = bridge_source_metrics.get("positive_cycles_with_m8_pool") or 0
+        _m8_multi_venue_verified = bridge_source_metrics.get("m8_multi_venue_verified_count")
+
     artifact: Dict[str, Any] = {
         "schema_family": SCHEMA_FAMILY,
         "schema_revision": SCHEMA_REVISION,
@@ -616,8 +743,13 @@ def build_artifact(
         "cycles_router_sim_eligible": cycles_router_sim_eligible,
         "best_cycle_net_bps": best_cycle_net_bps,  # alias for best_cycle_gross_bps; backward compat
         "best_cycle_gross_bps": best_cycle_gross_bps,  # raw quote bps, no router/gas simulation
-        "estimated_cost_bps": estimated_cost_bps,  # null until cost model implemented
+        "best_cycle_cost_adjusted_net_bps": best_cycle_cost_adjusted_net_bps,  # gross - estimated_cost
+        "estimated_cost_bps": estimated_cost_bps,  # gas + l1_fee + slippage in bps
+        "cost_adjusted_net_bps": cost_adjusted_net_bps,  # best_cycle_gross_bps - estimated_cost_bps
         "router_sim_net_bps": router_sim_net_bps,  # null until router simulation enabled
+        "cycles_with_m8_pool": _cycles_with_m8_pool,  # cycles that traverse ≥1 M8-sourced pool
+        "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,  # positive gross only
+        "m8_multi_venue_verified": _m8_multi_venue_verified,  # tokens confirmed on >=2 DEXes
         "positive_cycle_multi_hit_count": positive_cycle_multi_hit_count,  # cycles positive ≥2 sweeps
         "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id
         "qsr": round(qsr, 4),
@@ -633,8 +765,8 @@ def build_artifact(
         "route_error_histogram": computed_route_hist,
         "edge_error_histogram": computed_edge_hist,
         "scan_scope": scan_scope,
-        "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation) for qr in top_cycles],
-        "top_opportunities": [_build_top_opportunity(qr) for qr in top_cycles],
+        "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation, _cost_profile_for_compute) for qr in top_cycles],
+        "top_opportunities": [_build_top_opportunity(qr, _cost_profile_for_compute) for qr in top_cycles],
         "toxic_pool_families": _toxic_pool_families,
         "graph_topology": graph_topology,
         "topology_gate": topology_gate,

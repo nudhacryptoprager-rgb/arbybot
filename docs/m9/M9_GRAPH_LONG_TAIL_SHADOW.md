@@ -248,7 +248,11 @@ M9 прогресує тільки тоді, коли проходить пов�
 ### Economics
 - `cycles_positive_gross`
 - `positive_gross_rate`
+- `cycles_with_m8_pool`
+- `positive_cycles_with_m8_pool`
 - `near_breakeven_cycles_total`
+- `estimated_cost_bps`
+- `cost_adjusted_net_bps`
 - `cost_sensitivity_score`
 - `repeatable_positive_cycles_5m`
 - `repeatable_positive_cycles_30m`
@@ -327,6 +331,19 @@ M9 прогресує тільки тоді, коли проходить пов�
 - не відкривати simulation by force;
 - продовжити inventory expansion і ranking;
 - окремо перевірити, чи negative gross структурний, а не наслідок вузького inventory.
+
+### Якщо `cycles_with_m8_pool > 0`, але `positive_cycles_with_m8_pool = 0`
+- не вважати M8→M9 thesis доведеною;
+- класифікувати стан як topology participation without long-tail economics;
+- перевірити, чи M8 token має >=2 on-chain venues з ненульовою ліквідністю саме на момент quote;
+- замінити symbol-frequency heuristics на multi-venue liquidity verification;
+- скоротити M8→bridge→M9 cadence, якщо edge може жити тільки перші блоки після створення пулу.
+
+### Якщо gross-positive є, але `estimated_cost_bps` відсутній
+- не оголошувати economics proof;
+- вважати cycle diagnostic-only;
+- додати gas/L1/slippage cost у cycle summary для кожного `size_usd`;
+- переходити до router sim лише після cost-adjusted shortlist.
 
 ### Якщо positive gross з’явився
 - не говорити про production;

@@ -30,8 +30,9 @@ _ANCHOR_TOKENS = frozenset({
 })
 # Symbols longer than this are almost always junk tokens at creation time
 _MAX_SYMBOL_LEN = 15
-# How old an artifact may be before it is considered stale (seconds)
-_M8_STALE_SECONDS = 4 * 3600
+# How old an artifact may be before it is considered stale (seconds).
+# 30 min: aligns with recommended M8→bridge→M9 cadence for timely long-tail discovery.
+_M8_STALE_SECONDS = 1800        # 30 min (was 4 * 3600)
 _M8_1_STALE_SECONDS = 4 * 3600
 
 # Maps M8 sniper dex_id → M9 adapter_type.
@@ -206,6 +207,47 @@ def build_bridge_inventory(
     cross_dex_seen_count = len(cross_dex_seen_events)
 
     # ------------------------------------------------------------------
+    # Stage 4b: multi_venue_confirmed — token seen on ≥2 DISTINCT dex_ids.
+    # Gate uses only QUOTEABLE DEX IDs (not pending, not unsupported adapters).
+    # Separate diagnostic counters for seen (all dex_ids) vs quoteable (arb-ready).
+    # Tokens failing this check are quarantined with STRUCTURAL_SINGLE_VENUE_TOPOLOGY.
+    # ------------------------------------------------------------------
+    from collections import defaultdict as _defaultdict
+    _sym_dex_ids_all: Dict[str, set] = _defaultdict(set)   # all DEX IDs (diagnostic)
+    _sym_dex_ids_qte: Dict[str, set] = _defaultdict(set)   # quoteable DEX IDs only (gate)
+    for _e4b in anchor_connected_events:
+        _dex4b = _e4b.get("dex", "unknown")
+        _adp4b = _DEX_ID_TO_ADAPTER_TYPE.get(_dex4b, "uniswap_v3")
+        _is_quoteable4b = (_adp4b != _UNSUPPORTED_ADAPTER and _adp4b not in _PENDING_ADAPTER_TYPES)
+        for _s4b in [_e4b.get("token0_symbol", ""), _e4b.get("token1_symbol", "")]:
+            if _s4b:
+                _sym_dex_ids_all[_s4b].add(_dex4b)
+                if _is_quoteable4b:
+                    _sym_dex_ids_qte[_s4b].add(_dex4b)
+    # Gate: must be present on ≥2 QUOTEABLE dex_ids (no pending/unsupported as second venue)
+    _multi_venue_syms: "frozenset[str]" = frozenset(
+        sym for sym, dexes in _sym_dex_ids_qte.items() if len(dexes) >= 2
+    )
+    # Diagnostic: seen on ≥2 any dex_ids (may include pending adapters)
+    _multi_venue_seen_count: int = sum(
+        1 for dexes in _sym_dex_ids_all.values() if len(dexes) >= 2
+    )
+    _m8_multi_venue_quoteable_count: int = len(_multi_venue_syms)
+    # backward compat alias — "verified" now means quoteable, not just seen
+    _m8_multi_venue_verified_count: int = _m8_multi_venue_quoteable_count
+    multi_venue_events: List[Dict] = [
+        e for e in cross_dex_seen_events
+        if e.get("token0_symbol", "") in _multi_venue_syms
+        or e.get("token1_symbol", "") in _multi_venue_syms
+    ]
+    _single_venue_events: List[Dict] = [
+        e for e in cross_dex_seen_events
+        if e not in multi_venue_events
+    ]
+    _structural_single_venue_blocked = len(_single_venue_events)
+    _m8_multi_venue_verified_count = len(_multi_venue_syms)
+
+    # ------------------------------------------------------------------
     # Stage 5: Base inventory metrics (already factory_verified + depth_ok)
     # ------------------------------------------------------------------
     base_active: List[Dict] = base_inv.get("active_routes", []) if base_inv else []
@@ -230,11 +272,13 @@ def build_bridge_inventory(
         for r in base_active
         if r.get("pool_address")
     )
-    # Partition cross_dex_seen_events by adapter support
+    # Partition multi_venue_events by adapter support.
+    # (Stage 4b filtered to tokens with >=2 distinct dex_ids; single-venue events
+    #  are quarantined with STRUCTURAL_SINGLE_VENUE_TOPOLOGY reason.)
     supported_events: List[Dict] = []
     pending_events: List[Dict] = []   # recognised adapter, no M9 quote adapter yet
     unsupported_events: List[Dict] = []
-    for e in cross_dex_seen_events:
+    for e in multi_venue_events:
         dex_id = e.get("dex", "")
         adapter_type = _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "uniswap_v3")
         if adapter_type == _UNSUPPORTED_ADAPTER:
@@ -317,8 +361,30 @@ def build_bridge_inventory(
         for e in pending_events
     ]
 
-    # graph_ready_from_m8 = supported anchor-connected cross-dex-seen M8 pools
+    # graph_ready_from_m8 = supported anchor-connected multi-venue-confirmed M8 pools
     graph_ready_from_m8 = len(supported_events)
+
+    # Single-venue blocked routes: cross_dex_seen but only 1 distinct DEX.
+    # These are quarantined because they cannot form an arb cycle (no second venue to
+    # capture price divergence). Reason: STRUCTURAL_SINGLE_VENUE_TOPOLOGY.
+    m8_single_venue_routes: List[Dict] = [
+        {
+            "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
+            "pair_id": "_".join(sorted([e.get("token0_symbol", ""), e.get("token1_symbol", "")])),
+            "dex_id": e.get("dex", ""),
+            "adapter_type": _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "uniswap_v3"),
+            "token0": e.get("token0_symbol", ""),
+            "token1": e.get("token1_symbol", ""),
+            "pool_address": e.get("pool", ""),
+            "source": "m8_sniper",
+            "quarantine_reason": "STRUCTURAL_SINGLE_VENUE_TOPOLOGY",
+            "quarantine_note": (
+                f"Token only observed on single DEX {e.get('dex','')!r}; "
+                "needs >=2 distinct venues for arb cycle formation."
+            ),
+        }
+        for e in _single_venue_events
+    ]
 
     _unsupported_dex_count = len(unsupported_events)
     _pending_adapter_count = len(pending_events)
@@ -442,6 +508,11 @@ def build_bridge_inventory(
         "m8_context_pool_count": len(_m8_context_pool_addrs),
         "m8_context_pool_addresses": _m8_context_pool_addrs,
         "m8_context_token_pool_breakdown": _m8_context_token_pool_breakdown,
+        # Stage 4b multi-venue diagnostics
+        "m8_multi_venue_seen_count": _multi_venue_seen_count,         # diagnostic: >=2 any DEX IDs
+        "m8_multi_venue_quoteable_count": _m8_multi_venue_quoteable_count,  # gate: >=2 quoteable DEX IDs
+        "m8_multi_venue_verified_count": _m8_multi_venue_verified_count,    # backward compat alias
+        "structural_single_venue_blocked_count": _structural_single_venue_blocked,
     }
 
     # ------------------------------------------------------------------
@@ -457,6 +528,7 @@ def build_bridge_inventory(
         "quarantined_routes": (
             (base_inv.get("quarantined_routes", []) if base_inv else [])
             + m8_quarantined_routes
+            + m8_single_venue_routes
         ),
         "pending_routes": m8_pending_routes,
         "summary": {

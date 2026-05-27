@@ -15,7 +15,7 @@
 `phase2_discovery_gate`: PASS
 `phase2_arb_gate`: BLOCKED_ZERO_SPREAD_MIRROR_AND_PNL_NULL
 `phase2_24h_soak_allowed`: false
-`next_focus`: MIRROR_LIQUIDITY_AND_QUOTED_TRIANGULAR_FOR_MEME_TOKENS
+`next_focus`: M9_BRIDGE_MULTI_VENUE_VERIFICATION_AND_FIRST_BLOCK_CADENCE
 `phase2_arb_gate_triangular_fix`: DEPLOYED
 `phase2_discovery_gate_429_tolerance`: ENABLED
 `phase2_dashboard_schema`: phase2.dashboard (arb_blocked_warning + top_arb_candidates confirmed)
@@ -28,6 +28,8 @@
 `pipeline_ready`: false
 `production_profit_ready`: false
 `close_allowed`: false
+`m9_bridge_role_status`: DISCOVERY_INPUT_OPERATIONAL_BUT_LONG_TAIL_BREAKTHROUGH_NOT_PROVEN
+`m9_bridge_blocker`: M8_SNIPED_POOLS_ARE_ENTERING_M9_CYCLES_BUT_POSITIVE_CYCLES_WITH_M8_POOL_EQUALS_ZERO
 `primary_blocker_of_session`: PHASE2_PAPER_RUNTIME_GATES
 `blocker_status_before`: PHASE2_SCAFFOLDING_SHIPPED_PAPER_SOAK_PENDING
 `blocker_status_after`: PHASE2_SHORT_GATES_PASS_REAL_INPUT_GATE_REQUIRED
@@ -52,6 +54,8 @@
 M8 is the controlled pivot from classic pool-family arbitrage toward new-pool sniping.
 
 M7 remains maintained as the research and arbitrage lane. M8 must not reuse M7 production-profit claims unless fresh M8 runtime artifacts prove them.
+
+Current M9 role: M8 is now a discovery input for M9 bridge inventory. This is operational, but not yet a profit lane. Runtime evidence shows M8-sourced pools can enter M9 cycles, while positive gross cycles through M8 pools are still absent. The next M8 responsibility is not "more raw events"; it is fresher first-block discovery plus on-chain multi-venue liquidity verification for each token before M9 treats it as arb-ready.
 
 ## Canonical Docs
 

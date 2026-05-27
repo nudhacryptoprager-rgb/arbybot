@@ -49,6 +49,11 @@ def _parse_args() -> argparse.Namespace:
         help="Output path for bridge inventory",
     )
     p.add_argument("--verbose", action="store_true", help="Extra logging")
+    p.add_argument(
+        "--config",
+        default=None,
+        help="Config YAML path (accepted for pipeline compat; not used by bridge builder)",
+    )
     return p.parse_args()
 
 

@@ -452,6 +452,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _CLI_DYN_MAX_DEFAULT = 3
     # Fix 7: track source of sizes_usd for artifact invariant
     _sizes_usd_source: str = "cli_default"
+    _cost_model: Optional[Dict[str, Any]] = None  # loaded from cost_model section in YAML
     try:
         import yaml  # noqa: PLC0415
         with open(args.config, encoding="utf-8") as _f:
@@ -466,6 +467,18 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         if _sp.get("dynamic_size_max_cycles") and args.dynamic_size_max_cycles == _CLI_DYN_MAX_DEFAULT:
             args.dynamic_size_max_cycles = int(_sp["dynamic_size_max_cycles"])
             log.info("scan_params: dynamic_size_max_cycles from config: %d", args.dynamic_size_max_cycles)
+        _cost_model = _cfg_raw.get("cost_model") or None
+        if _cost_model:
+            _profile = (_cost_model.get("profiles") or {}).get(
+                _cost_model.get("default_profile", "default"), {}
+            )
+            log.info(
+                "Cost model loaded: profile=%s gas_usd=%.4f l1_fee_usd=%.4f slippage_bps=%.2f",
+                _cost_model.get("default_profile", "default"),
+                _profile.get("gas_usd", 0.05),
+                _profile.get("l1_fee_usd", 0.01),
+                _profile.get("slippage_bps", 5.0),
+            )
     except Exception as _sp_exc:
         log.debug("scan_params load skipped: %s", _sp_exc)
 
@@ -643,6 +656,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             bridge_source_metrics=_bridge_source_metrics,
+            cost_model=_cost_model,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_CONFIG_ERROR
@@ -694,6 +708,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             bridge_source_metrics=_bridge_source_metrics,
+            cost_model=_cost_model,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_NO_CYCLES
@@ -727,6 +742,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             bridge_source_metrics=_bridge_source_metrics,
+            cost_model=_cost_model,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_OK
@@ -822,7 +838,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             # Priority mode: scheduler picks the best candidates each sweep
             batch = _cycle_scheduler.next_batch(max_per_sweep)
             if not batch:
-                break
+                # Scheduler exhausted ready cycles; sleep briefly and retry
+                # rather than exiting early — respects the deadline contract.
+                time.sleep(2.0)
+                continue
         else:
             # Round-robin (legacy): sliding window over pre-ranked list
             start_idx = (sweep_num * max_per_sweep) % cycle_count
@@ -971,6 +990,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             bridge_source_metrics=_bridge_source_metrics,
             m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
+            cost_model=_cost_model,
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -1066,6 +1086,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         bridge_source_metrics=_bridge_source_metrics,
         m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
+        cost_model=_cost_model,
     )
     write_artifact(artifact, args.artifact_path)
 

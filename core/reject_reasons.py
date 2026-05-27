@@ -43,6 +43,9 @@ class QuoteRejectReason(str, Enum):
     TOXIC_PRICE_IMPACT = "TOXIC_PRICE_IMPACT"          # Extreme price impact (> 50%) at probe size
     ASYMMETRIC_POOL_DEPTH = "ASYMMETRIC_POOL_DEPTH"    # Imbalanced pool (one side much deeper)
 
+    # M9 long-tail topology rejection
+    STRUCTURAL_SINGLE_VENUE_TOPOLOGY = "STRUCTURAL_SINGLE_VENUE_TOPOLOGY"  # Token only on single DEX venue
+
 
 class SimRejectReason(str, Enum):
     """Simulation-level rejection reasons (M4 execution phase)."""

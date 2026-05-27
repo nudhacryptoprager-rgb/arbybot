@@ -114,6 +114,28 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
             f"target: <0.90 for smoke29, <0.50 long-term)"
         )
 
+    # GPT Step 9 (round-3) / GPT fix step 8: cost_model_applied check.
+    # In strict mode this is a hard FAIL; otherwise a WARNING.
+    # cost_model_applied=false means run was done without a config that includes a
+    # [cost_model] section; estimated_cost_bps and cost_adjusted fields will all be null.
+    _cost_model_applied = em.get("cost_model_applied", False)
+    if not _cost_model_applied:
+        if strict_bridge:
+            issues.append(
+                "economics_metrics.cost_model_applied=false — "
+                "run with --config that includes a [cost_model] section "
+                "(e.g. config/exotic_base_anchor.yaml) to populate "
+                "estimated_cost_bps / cost_adjusted_net_bps fields."
+            )
+        else:
+            print(
+                "  WARNING: economics_metrics.cost_model_applied=false — "
+                "run with --config that includes a [cost_model] section "
+                "(e.g. config/exotic_base_anchor.yaml) to populate "
+                "estimated_cost_bps / cost_adjusted_net_bps fields.",
+                flush=True,
+            )
+
     # GPT Fix step 4: strict-bridge mode — require live M8/M8.1 inputs
     if strict_bridge:
         bsm = art.get("bridge_source_metrics") or {}
@@ -159,6 +181,31 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
                 f"(routes with recognised adapter but no M9 quote adapter yet; "
                 f"tracked in m8_pending_routes for P3 delivery)",
                 flush=True,
+            )
+
+        # GPT Step 8: dynamic_size_enabled must be True in productive lane
+        it_strict = art.get("infra_telemetry") or {}
+        if not it_strict.get("dynamic_size_enabled", False):
+            issues.append(
+                "STRICT_BRIDGE: dynamic_size_enabled=False "
+                "(productive lane requires --dynamic-sizes; "
+                "fix: orchestrator run_m9_scan must pass --dynamic-sizes flag)"
+            )
+
+        # GPT Step 9: quote_backend must be raw_http and quote_workers must be 1
+        qb = it_strict.get("quote_backend")
+        if qb and qb != "raw_http":
+            issues.append(
+                f"STRICT_BRIDGE: quote_backend={qb!r} "
+                "(productive lane requires raw_http; "
+                "fix: orchestrator run_m9_scan must pass --quote-backend raw_http)"
+            )
+        qw = it_strict.get("quote_workers")
+        if isinstance(qw, int) and qw > 1:
+            issues.append(
+                f"STRICT_BRIDGE: quote_workers={qw} "
+                f"(productive lane requires quote_workers=1 to avoid RPC overload; "
+                f"fix: orchestrator run_m9_scan must pass --quote-workers 1)"
             )
 
     if issues:
