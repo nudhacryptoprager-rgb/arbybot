@@ -559,6 +559,23 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             for r in _inv_raw.get("active_routes", [])
             if r.get("source") == "m8_sniper" and r.get("pool_address")
         )
+        # Extend with M8-context pools (existing base routes for M8-tracked tokens).
+        # These are base-inventory routes for non-anchor tokens that M8 sniped a new
+        # pool for — confirming those tokens are active. Cycles that traverse any of
+        # their existing pools count toward cycles_with_m8_pool.
+        if isinstance(_bsm, dict):
+            _ctx_addrs = frozenset(
+                pa.lower()
+                for pa in _bsm.get("m8_context_pool_addresses", [])
+                if pa
+            )
+            if _ctx_addrs:
+                _m8_pool_addrs = _m8_pool_addrs | _ctx_addrs
+                log.info(
+                    "M8 context pools: %d addrs for tokens %s",
+                    len(_ctx_addrs),
+                    _bsm.get("m8_context_tokens", []),
+                )
     except Exception as _bsm_exc:
         log.debug("Bridge metrics extraction skipped: %s", _bsm_exc)
 

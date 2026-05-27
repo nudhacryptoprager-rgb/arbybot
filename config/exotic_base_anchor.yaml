@@ -71,6 +71,19 @@ dexes:
     fee_tiers: [100, 500, 3000, 10000]
     enabled: true
 
+  # Curve StableSwap on Base — PENDING delivery (Step 5).
+  # M9 quote adapter (get_dy) is ready in raw_http_probe.py.
+  # Activation requires:
+  #   1. Verify Curve pool factory address on Base via Curve registry
+  #   2. Add pool addresses for USDC/USDT, USDC/crvUSD etc. under `pools:`
+  #   3. Set enabled: true + add M8 factory to config/new_pool_factories.yaml
+  # curve_stable:
+  #   adapter_type: curve_stable
+  #   factory: "0x0000000000000000000000000000000000000000"  # TODO: Curve factory on Base
+  #   pools:
+  #     USDC_USDT: "0x0000000000000000000000000000000000000000"  # TODO: discover via Curve registry
+  #   enabled: false
+
 tokens:
   WETH:
     address: "0x4200000000000000000000000000000000000006"

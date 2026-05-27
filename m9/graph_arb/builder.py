@@ -201,6 +201,13 @@ def build_graph_from_inventory(
                 "Unknown dex in inventory",
                 extra={"context": {"dex_id": dex_id, "event": "graph_build_unknown_dex"}},
             )
+            # Fallback: use adapter_type already stored in the inventory entry (set by bridge_builder)
+            _entry_adapter = entry.get("adapter_type")
+            if _entry_adapter and _entry_adapter not in ("unknown", "unsupported"):
+                adapter_type = _entry_adapter
+            if adapter_type in ("uniswap_v2", "ve33"):
+                # V2/ve33: quoter is the pool itself
+                quoter_addr = pool_address
         else:
             adapter_type = dex_cfg.adapter_type
             quoter_addr = dex_cfg.quoter

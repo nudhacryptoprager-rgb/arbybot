@@ -56,6 +56,7 @@ def load_quarantined_pool_addresses(
         return frozenset()
 
     addresses: set[str] = set()
+    now_utc = __import__("datetime").datetime.utcnow()
     for entry in data.get("quarantined_pools", []):
         addr = entry.get("pool_address", "")
         if not addr or not addr.startswith("0x"):
@@ -70,6 +71,23 @@ def load_quarantined_pool_addresses(
                 entry.get("fee"),
             )
             continue
+        # Respect TTL: if retry_after_utc is set and has passed, skip (transient quarantine)
+        retry_after = entry.get("retry_after_utc")
+        if retry_after:
+            try:
+                import datetime as _dt
+                retry_dt = _dt.datetime.strptime(retry_after, "%Y-%m-%dT%H:%M:%SZ")
+                if now_utc >= retry_dt:
+                    logger.info(
+                        "Quarantine entry expired (retry_after=%s): pair=%s pool=%s — "
+                        "excluded from filter; re-probe to confirm or remove",
+                        retry_after,
+                        entry.get("pair_id"),
+                        addr_lower[:14],
+                    )
+                    continue
+            except Exception:
+                pass  # unparseable retry_after: treat as permanent
         addresses.add(addr_lower)
 
     if addresses:

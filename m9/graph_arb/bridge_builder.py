@@ -48,16 +48,25 @@ _DEX_ID_TO_ADAPTER_TYPE: Dict[str, str] = {
     "aerodrome": "ve33",
     "aerodrome_slipstream": "aerodrome_slipstream",
     "aerodrome_v2_stable": "aerodrome_v2_stable",
+    # Balancer: recognised DEX types, no M9 quote adapter yet → explicit pending
+    "balancer_stable": "balancer_stable",
+    "balancer_weighted": "balancer_weighted",
 }
 _UNSUPPORTED_ADAPTER = "unsupported"
 
 # Adapter types that are correctly identified but do NOT yet have a working M9 quote
 # adapter.  Events from these dexes are quarantined with an explicit reason code rather
 # than silently entering active_routes (which would cause QUOTE_DECODE errors at runtime).
-_PENDING_ADAPTER_TYPES: frozenset = frozenset()
+_PENDING_ADAPTER_TYPES: frozenset = frozenset({
+    "balancer_stable",
+    "balancer_weighted",
+})
 
-# Per-adapter quarantine reason for pending adapters (now empty — V4 is active)
-_PENDING_ADAPTER_REASONS: Dict[str, str] = {}
+# Per-adapter quarantine reason for pending adapters
+_PENDING_ADAPTER_REASONS: Dict[str, str] = {
+    "balancer_stable": "PENDING_NO_BALANCER_QUOTE_ADAPTER",
+    "balancer_weighted": "PENDING_NO_BALANCER_QUOTE_ADAPTER",
+}
 
 _DEFAULT_SNIPER = "data/runs/_rolling/new_pool_sniper_latest.json"
 _DEFAULT_ANCHOR = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
@@ -366,6 +375,35 @@ def build_bridge_inventory(
         )
 
     # ------------------------------------------------------------------
+    # M8 context: existing base pools for non-anchor tokens seen in M8 events.
+    # If M8 sniped a pool for a token that is already in the base universe
+    # (multi-pool token, non-anchor), the existing base routes for that token
+    # become "M8-context" routes — M8 confirmed the token is currently active.
+    # This enables cycles_with_m8_pool > 0 when M8 tracks known base tokens
+    # even when the new M8 pool itself cannot form a cycle (exotic pair token).
+    # ------------------------------------------------------------------
+    _base_tokens: "set[str]" = {
+        tok
+        for r in base_active
+        for tok in [r.get("token0", ""), r.get("token1", "")]
+        if tok
+    }
+    _m8_context_tokens: "set[str]" = set()
+    for _e in token_verified_events:  # token_verified: symbols OK, pre-anchor filter
+        _pool_addr = (_e.get("pool", "") or "").lower()
+        if _pool_addr in base_pool_addrs:
+            continue  # pool already in base, skip
+        for _tok in [_e.get("token0_symbol", ""), _e.get("token1_symbol", "")]:
+            if _tok and _tok not in _ANCHOR_TOKENS and _tok in _base_tokens:
+                _m8_context_tokens.add(_tok)
+    _m8_context_pool_addrs: "list[str]" = list({
+        r.get("pool_address", "").lower()
+        for r in base_active
+        if (r.get("token0") in _m8_context_tokens or r.get("token1") in _m8_context_tokens)
+        and r.get("pool_address")
+    })
+
+    # ------------------------------------------------------------------
     # Assemble bridge_source_metrics
     # ------------------------------------------------------------------
     bridge_source_metrics: Dict[str, Any] = {
@@ -388,6 +426,10 @@ def build_bridge_inventory(
         "sniper_path": sniper_path,
         "anchor_path": anchor_path,
         "base_inv_path": base_inv_path,
+        "m8_context_token_count": len(_m8_context_tokens),
+        "m8_context_tokens": sorted(_m8_context_tokens),
+        "m8_context_pool_count": len(_m8_context_pool_addrs),
+        "m8_context_pool_addresses": _m8_context_pool_addrs,
     }
 
     # ------------------------------------------------------------------

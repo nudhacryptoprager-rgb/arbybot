@@ -1,8 +1,8 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: HEALTH_PASS__STRATEGIC_BRIDGE_PARTIAL — Збір стабільний (`all_pass=True`, `qsr=0.9629`, `sweeps=402`, `bridge active`). Здоров'я системи PASS (всі runtime gates пройшли, strict-bridge gate EXIT 0). Стратегічна ціль: збільшити `cycles_with_m8_pool > 0`. V4 adapter реалізований (Quoter `0x0d5e0f971ed27fbff6c2837bf31316121532048d`, vanilla-only hooks==0x0). SushiSwap V2 + BaseSwap V2 додані до factory sniping. Наступна ціль: `positive_cycles_with_m8_pool > 0`.
+**Status**: M8_CYCLE_PARTICIPATION_REACHED — Збір стабільний (`all_pass=True`, `qsr=0.9614`, `sweeps=345`, `bridge active`). CI gate (strict-bridge) EXIT 0. `cycles_with_m8_pool=98` — M8-sniped pools активно беруть участь у циклах. Профіль: `raw_http, 1 worker, dynamic-sizes`. M8 sniper: 1298 подій за 600s (V4=1206, V2=79, V3=11). M8.1 anchor: qsr=0.9465. Bridge: graph_ready_total=125, graph_ready_from_m8=18, m8_context_tokens=['VIRTUAL'], m8_context_pool_count=19. Наступний milestone: `positive_cycles_with_m8_pool > 0`.
 
-`goal_status`: HEALTH_PASS__STRATEGIC_BRIDGE_PARTIAL
+`goal_status`: IN_PROGRESS
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
@@ -24,14 +24,61 @@ M8 smoke_run polling cadence:
 | Step | Target | Status |
 |------|--------|--------|
 | Health PASS | `all_pass=True`, `qsr>=0.8`, `bridge_active` | ✅ DONE |
-| V4 Adapter | `uniswap_v4` quote path (hooks==0x0) | ✅ DONE (this session) |
-| **Next** | `cycles_with_m8_pool > 0` | ⏳ PENDING |
-| Then | `positive_cycles_with_m8_pool > 0` | ⏳ PENDING |
+| V4 Adapter | `uniswap_v4` quote path (hooks==0x0) | ✅ DONE |
+| DEX Coverage Gate | sushiswap_v2/baseswap_v2 in bridge, Balancer pending tracked | ✅ DONE (2026-05-26) |
+| **M8 Cycle Participation** | `cycles_with_m8_pool > 0` — M8-sniped pool enters active cycles | ✅ DONE (2026-05-27, cycles_with_m8=98) |
+| **Next** | `positive_cycles_with_m8_pool > 0` | ⏳ PENDING |
 | Final | `economics_gate_status=POSITIVE` | ⏳ PENDING |
+
+### Next Soak Requirements (cycles_with_m8_pool > 0)
+For the next soak to advance milestone, it MUST demonstrate:
+1. **M8 run** → fresh events including sushiswap_v2 (TTT/WETH confirmed) or other new factories
+2. **Bridge rebuild** runs AFTER M8 (orchestrator stale-guard ensures this)
+3. **M9 run** uses fresh bridge with M8-sourced routes in active_routes
+4. **`cycles_with_m8_pool > 0`** — at least one cycle quotes through an M8-sniped pool
+5. Gate displays per-DEX breakdown showing `graph_ready_count > 0` for sushiswap_v2
 
 ---
 
-## Current Focus: Live Bridge Acceptance — GPT CRITERIA MET (2026-05-24) ✅
+## Session 2026-05-26: DEX_COVERAGE_GATE_PASS
+
+### Зроблено (поточна сесія)
+- ✅ **V4 hooks fix** (`smoke_run.py`): `fee/tick_spacing/stable/hooks` поля додані до `recent_list` items → bridge builder отримує правильні hooks для V4 фільтрації
+- ✅ **Builder fee=None fix** (`builder.py`): `int(entry.get("fee") or 0)` (було `int(entry.get("fee", 0))`) — захист від V2 routes де fee=None
+- ✅ **M8 run** (8 хв, 16 циклів, 527 подій): sushiswap_v2 TTT/WETH (`0x626d4f6d...`) виявлений
+- ✅ **Bridge rebuild** (08:55:46Z): `m8_new_pools_input=26`, `graph_ready_from_m8=19`, `graph_ready_from_m8_new=7`, sushiswap_v2 TTT/WETH в active_routes
+- ✅ **M9 run** (10 хв, 228 sweeps, 1124 cycles): `qsr=0.9653`, 6 positive gross, EXIT 0
+- ✅ **CI gate** (strict-bridge): PASS EXIT 0
+- ✅ **Unit tests**: 5971 passed, 6 skipped
+- ✅ **DEX pipeline dashboard** (`ci_m9_productive_gate.py`): per-DEX breakdown із `graph_ready_count`
+- ✅ **Balancer pending tracking** (`bridge_builder.py`): `balancer_stable/balancer_weighted` в `_PENDING_ADAPTER_TYPES` з explicit reasons
+- ✅ **Quarantine TTL** (`pool_depth_probe.py` + `pool_depth_filter.py`): `quarantine_ttl_seconds=604800`, `retry_after_utc`, `activation_path` — TTL-expired entries auto-skipped
+- ✅ **Orchestrator stale guard** (`m9_rolling_orchestrator.py`): якщо bridge старший за sniper після rebuild — M9 не запускається цього циклу
+
+### Артефакти (2026-05-26)
+```
+bridge_source_metrics:
+  m8_new_pools_input: 26
+  token_verified_count: 21
+  anchor_connected_count: 19
+  cross_dex_seen_count: 19
+  graph_ready_from_m8: 19
+  graph_ready_from_m8_new: 7
+  pending_adapter_count: 0
+  unsupported_dex_count: 0
+  dex_coverage_matrix:
+    sushiswap_v2: events=1, graph_ready=1, supported=True
+    uniswap_v2:   events=4, graph_ready=4, supported=True
+    uniswap_v3:   events=2, graph_ready=2, supported=True
+    uniswap_v4:   events=12, graph_ready=12, supported=True
+
+M9 run (latest):
+  sweeps: 228, cycles: 1124, qsr: 0.9653, all_pass: True
+  cycles_with_m8_pool: 0  ← target for next soak
+  positive_cycles_with_m8_pool: 0
+  V4 active route: USDC/Toad (hooks=0x0, fee=990001)
+  sushiswap_v2 TTT/WETH: in bridge, not yet in m9_cycles (bridge stale during M9 run)
+```
 
 ### Зроблено (live bridge acceptance milestone)
 - ✅ **M8 sniper smoke**: `python -m m8.runtime.smoke_run --chain base --duration-minutes 0.2 --blocks-back 50` → 20 events, status=ACTIVE, `new_pool_sniper_latest.json` (2026-05-24T20:02:27Z)

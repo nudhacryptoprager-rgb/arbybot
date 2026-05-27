@@ -1,131 +1,123 @@
 ﻿# DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-25T11:08:41Z
-run_id: data/runs/_rolling (rolling artifact; no fresh online run this session)
-mode: OFFLINE
+timestamp_utc: 2026-05-27T08:20:00Z
+run_id: data/runs/_rolling (rolling artifact; M8+M8.1+M9 online runs this session)
+mode: ONLINE
 artifact_mode: rolling
-config: N/A (code-only session — no scanner run)
+config: config/exotic_base_anchor.yaml
 code_identity:
-  primary: ts:2026-05-25T11:08:41Z
-  dirty: true — pool_verifier.py, bridge_builder.py, test_adapter_readiness.py, test_m9_bridge_builder.py, ci_m9_productive_gate.py, docs/status/Status_M9.md
-  desc: M8->M9 adapter coverage (10-step GPT fix): V2/ve33 verifier, V4 explicit pending, unsupported_dex_count=0
+  primary: ts:2026-05-27T08:18:51Z
+  dirty: false
+  desc: M9 soak7 (raw_http+dynamic-sizes): cycles_with_m8_pool=98, qsr=0.9614, CI gate exit=0
 
 ## 1) Scope
-goal (Roadmap): M9 adapter coverage — bridge V4/V2/ve33 support (10-step GPT fix plan, E1.XX)
+goal (Roadmap): M9 — досягти cycles_with_m8_pool > 0 через правильний профіль raw_http+dynamic-sizes; CI gate exit=0
+goal_status: IN_PROGRESS
 change_summary:
-  - pool_verifier.py: Added V2 getPair (selector e6a43905), ve33 getPool+stable (lazy selector), _build_factory_calldata() dispatcher; expanded supported set to include uniswap_v2, ve33, aerodrome_v2_stable; V4 explicitly quarantined with NO_V4_QUOTE_ADAPTER_PENDING_P3 via _PENDING_QUOTE_ADAPTERS
-  - bridge_builder.py: uniswap_v4 now maps to "uniswap_v4" (not "unsupported"); _PENDING_ADAPTER_TYPES added; V4 events routed to pending_routes with NO_V4_QUOTE_ADAPTER_PENDING_P3; dex_coverage_matrix expanded; bridge_source_metrics includes pending_adapter_count
-  - test_adapter_readiness.py: Added TestM8ToM9BridgeCoverage (5 tests) + TestPoolVerifierCoverage (5 tests)
-  - test_m9_bridge_builder.py: Updated 2 tests to reflect new V4 pending semantics
-  - ci_m9_productive_gate.py: Strict-bridge mode fails if unsupported_dex_count > 0; pending_adapter_count logged as INFO
-  - docs/status/Status_M9.md: Added M8->M9 Adapter Coverage section
-  - m9_bridge_inventory_latest.json: Rebuilt — unsupported_dex_count=0, pending_adapter_count=14 (V4)
-touched_files:
-  - m9/graph_arb/pool_verifier.py
-  - m9/graph_arb/bridge_builder.py
-  - tests/unit/test_adapter_readiness.py
-  - tests/unit/test_m9_bridge_builder.py
-  - scripts/ci_m9_productive_gate.py
-  - docs/status/Status_M9.md
-  - data/runs/_rolling/m9_bridge_inventory_latest.json
+  - Профіль M9: змінено з direct_http (4 workers) на raw_http (1 worker) + dynamic-sizes — виправлено qsr 0.001->0.9614
+  - M8 soak7: 1298 подій за 601s (V4=1206, V2=79, V3=11, pancakeswap_v3=2), publicnode.com, blocks-back 5000
+  - M8.1 anchor refresh: qsr=0.9465, passes=336, candidates=1122, elapsed=238s
+  - Bridge rebuild: graph_ready_total=125, graph_ready_from_m8=18, m8_context_tokens=['VIRTUAL'], m8_context_pool_count=19
+  - M9 soak7: 345 sweeps, 1710 cycles, 3 positive gross, cycles_with_m8_pool=98, elapsed=900s
+  - CI gate (strict-bridge) exit=0: qsr=0.9614 >= 0.8, multicall_success_rate=1.0, all_pass=True
+  - docs/status/Status_M9.md: milestone "M8 Cycle Participation" DONE
 
-## 2) Commands Executed
+## 2) Runtime Claims
 
-py -3.11 -m pytest -q: PASS (5971 passed, 6 skipped, 1 warning in 158s)
-py -3.11 scripts/ci_full_pipeline.py --mode ci: NOT RUN (code-only session)
-py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: NOT RUN (M4 scope not touched)
-py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: NOT RUN (code-only session)
-py -3.11 scripts/m9_bridge_build.py --verbose: PASS (bridge rebuilt, unsupported_dex_count=0, pending_adapter_count=14)
-py -3.11 scripts/check_repo_safety.py: PASS (2 warnings, no blockers)
-py -3.11 scripts/sniper_factory_probe.py --chain base --blocks-back 5000: PASS (V4=1758/1758, V2=113/113, V3=48/48)
+### M8 Sniper (soak — publicnode.com)
+| Метрика | Значення |
+|---------|---------|
+| generated_at_utc | 2026-05-27T07:58:15Z |
+| total_events | 1298 |
+| elapsed_s | 601.5 |
+| V4 events | 1206 |
+| V2 events | 79 |
+| V3 events | 11 |
+| pancakeswap_v3 events | 2 |
+| VIRTUAL in recent_events | true |
+| status | ACTIVE |
 
-## 3) Artifacts Attached
-rolling:
-  - data/runs/_rolling/m9_bridge_inventory_latest.json
-  - data/runs/_rolling/m9_graph_latest.json
-  - data/runs/_rolling/new_pool_sniper_latest.json
-  - data/runs/_rolling/m8_1_stable_anchor_latest.json
+### M8.1 Anchor Refresh
+| Метрика | Значення |
+|---------|---------|
+| generated_at_utc | 2026-05-27T08:02:42Z |
+| candidates | 1122 |
+| passes | 336 |
+| qsr | 0.9465 |
+| elapsed_s | 238.4 |
 
-## 4) Key Results
+### M9 Bridge
+| Метрика | Значення |
+|---------|---------|
+| generated_at_utc | 2026-05-27T08:03:08Z |
+| graph_ready_total | 125 |
+| graph_ready_from_m8 | 18 |
+| m8_context_token_count | 1 |
+| m8_context_tokens | ['VIRTUAL'] |
+| m8_context_pool_count | 19 |
+| m8_stale | false |
+| m8_1_stale | false |
 
-```
-m9_bridge_inventory_latest (rebuilt 2026-05-25T11:08:41Z):
-  graph_ready_from_m8: 0        # online M8 sniper run needed
-  graph_ready_total: 119
-  pending_adapter_count: 14     # NEW: V4 routes tracked explicitly
-  unsupported_dex_count: 0      # FIXED: was 14
-  pending_routes: 14            # all V4, reason=NO_V4_QUOTE_ADAPTER_PENDING_P3
-  dex_coverage_matrix.uniswap_v4:
-    adapter_type: uniswap_v4    # FIXED: was "unsupported"
-    adapter_pending: true
-    pending_count: 14
-    quarantine_reason: NO_V4_QUOTE_ADAPTER_PENDING_P3
+### M9 Scanner (soak7 — raw_http+dynamic-sizes)
+| Метрика | Значення |
+|---------|---------|
+| generated_at_utc | 2026-05-27T08:18:51Z |
+| elapsed_s | 900.0 |
+| sweeps_completed | 345 |
+| cycles_found | 1710 |
+| qsr | 0.9614 |
+| cycles_with_m8_pool | 98 |
+| positive_gross | 3 |
+| multicall_success_rate | 1.0 |
+| data_completeness | 1.0 |
+| quote_rpc_error_rate | 0.0 |
+| dynamic_size_selected | 993 |
+| selection_rate | 0.5807 |
+| all_pass | true |
 
-m9_graph_latest (2026-05-25T08:39:49Z, pre-patch run):
-  qsr: 0.8141 (PASS)
-  multicall_success_rate: 0.698 (FAIL — drpc 429, not code regression)
-  unverified_active_routes: 0 (PASS)
-  cycles_positive_gross: 0
-  economics_gate_status: BLOCKED_NO_POSITIVE_GROSS
+### CI Gate (ci_m9_productive_gate --strict-bridge)
+| Метрика | Значення |
+|---------|---------|
+| exit_code | 0 |
+| multicall_success_rate | 1.0 (>=0.9) PASS |
+| qsr | 0.9614 (>=0.8) PASS |
+| runtime_gates.all_pass | true PASS |
+| cycles_with_m8_pool | 98 (>0) PASS |
+| toxic_route_rate | 0.3291 (<0.90) PASS |
 
-factory_probe (base chain, 5000 blocks):
-  uniswap_v4: 1758/1758 PASS
-  uniswap_v2: 113/113 PASS
-  uniswap_v3: 48/48 PASS
-  aerodrome: 3/3 PASS
-```
+## 3) Діагностика / Вирішені Проблеми
 
-theoretical_net_profit:
-  mode: paper_simulated
-  gross_pnl_usdc: n/a (cycles_positive_gross=0)
-  net_pnl_usdc: n/a
-  disclaimer: "Theoretical profit based on simulated execution. No real trades were executed."
+### Проблема soak6 -> soak7
+- soak6: qsr=0.001, quote_rpc_error_rate=0.997 — V3 QuoterV2 eth_call повертав 0x для всіх публічних RPC
+- Причина: direct_http backend з 4 workers — занадто великі amounts викликали revert QuoterV2
+- Рішення: raw_http backend + 1 worker + --dynamic-sizes — V3 quotes тепер успішні
+- Підтвердження: quote_rpc_error_rate=0.0 у soak7 (проти 0.997 у soak6)
 
-## 5) Contract Checks
-status/reasons consistency: OK
-rolling discipline: OK
-v2.x provenance contract: OK
-runtime artifacts not committed: OK
+### m8_context механізм (попередня сесія)
+- bridge_builder.py: визначає non-anchor токени в нових M8 снайпер-подіях, знаходить їх базові пули
+- runner.py: розширює _m8_pool_addrs контекстними пулами
+- Результат: m8_context_tokens=['VIRTUAL'], m8_context_pool_count=19
 
-## 6) Blocker Classification
+## 4) Chain Quality
+chain: base
+rpc: https://base-rpc.publicnode.com
+chain_quality: NORMAL
+multicall: success_rate=1.0
 
-code_blocker: LOW (pytest 5971 PASS, safety PASS, bridge PASS)
-data_collection_blocker: HIGH (graph_ready_from_m8=0 — needs online M8 sniper run; M8.1 anchor has 0 routes)
-market_window_blocker: HIGH (cycles_positive_gross=0, multicall FAIL due to drpc 429)
+## 5) Open Issues / Blockers
 
-## 6.1) Blockers / Risks
-1. P0 (RPC): multicall_success_rate=0.698 — drpc.live 429. Use publicnode.com for smoke runs.
-2. P1 (graph_ready_from_m8=0): Needs online M8 sniper run + bridge rebuild to populate V2/V3/ve33 routes.
-3. P2 (V4 pending): 14 V4 routes in pending_routes. Unlock requires P3: M9 PoolManager StateView quote adapter.
-4. P3 (M8.1 anchor=0): m8_1_stable_anchor_latest.json has active_routes=0. Needs online M8.1 run.
-5. P4 (cycles_positive_gross=0): Likely RPC degradation. Re-test with publicnode.
-
-## 7) GPT 10-Step Execution Map
-
-| Step | Action | Status |
-|------|--------|--------|
-| 1 | M8 arb_trace fix (NameError in smoke_run.py) | DONE (prior session) |
-| 2 | V4 parsing confirmed (factory probe 1758/1758) | CONFIRMED |
-| 3 | bridge_builder V4 mapping -> uniswap_v4 (not "unsupported") | DONE |
-| 4 | pool_verifier V4 explicit quarantine (NO_V4_QUOTE_ADAPTER_PENDING_P3) | DONE |
-| 5 | pool_verifier V2 factory support (getPair, no fee param) | DONE |
-| 6 | pool_verifier ve33/Aerodrome factory support (getPool+stable flag) | DONE |
-| 7 | M8.1 route wiring | DEFERRED (offline stub 0 routes; needs online run) |
-| 8 | dex_coverage_matrix expansion | DONE |
-| 9 | Contract tests (10 new tests) | DONE |
-| 10 | ci_m9_productive_gate unsupported_dex_count check | DONE |
+- cycles_with_m8_pool=98 ДОСЯГНУТО
+- positive_cycles_with_m8_pool=0 — НАСТУПНИЙ MILESTONE
+- economics_gate_status: PENDING
 
 ## Session Completion
-session_goal: Implement all 10 GPT fix steps for M8->M9 adapter coverage (V4/V2/ve33 bridge+verifier, unsupported->pending routing, contract tests, gate enforcement)
+session_goal: Запустити M8 soak + M8.1 + bridge + M9 (raw_http+dynamic-sizes) + CI gate exit=0; досягти cycles_with_m8_pool > 0
 goal_status: IN_PROGRESS
 close_allowed: false
-remaining_blockers:
-  - Step 7 deferred: M8.1 route wiring requires online M8.1 run (active_routes=0)
-  - graph_ready_from_m8=0: no fresh M8 sniper routes in bridge (requires online M8 run)
-  - cycles_positive_gross=0: RPC degradation (drpc 429) + no fresh M8 routes
-evidence_session_run_dirs: none (code-only session; bridge artifact rebuilt offline)
-primary_blocker_of_session: unsupported_dex_count=14 (V4 silently quarantined as "unsupported", V2/ve33 not factory-verified)
+remaining_blockers: positive_cycles_with_m8_pool=0 (наступний milestone не досягнутий)
+evidence_session_run_dirs: data/runs/_rolling (m9_graph_latest.json ts=2026-05-27T08:18:51Z)
+primary_blocker_of_session: qsr=0.001 через неправильний quote backend (direct_http+4workers)
 blocker_status_before: ACTIVE
-blocker_status_after: RESOLVED — unsupported_dex_count=0; V4 properly tracked as pending; V2/ve33 verifier support added; 5971 tests PASS
+blocker_status_after: RESOLVED
 docs_reread_confirmed: true

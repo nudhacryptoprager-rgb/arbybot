@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import subprocess
 import sys
@@ -31,6 +32,40 @@ _DEFAULT_M8_MINUTES = 15
 _DEFAULT_M9_MINUTES = 15
 _DEFAULT_CONFIG = "config/exotic_base_anchor.yaml"
 _REPO_ROOT = Path(__file__).parent.parent
+
+_SNIPER_PATH = _REPO_ROOT / "data/runs/_rolling/new_pool_sniper_latest.json"
+_BRIDGE_PATH = _REPO_ROOT / "data/runs/_rolling/m9_bridge_inventory_latest.json"
+
+
+def _artifact_ts(path: Path) -> float:
+    """Return artifact generated_at as epoch float, or 0 if unreadable."""
+    if not path.is_file():
+        return 0.0
+    try:
+        import datetime as _dt
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ts_str = data.get("generated_at_utc") or data.get("generated_at", "")
+        if ts_str:
+            return _dt.datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+    except Exception:
+        pass
+    return path.stat().st_mtime
+
+
+def _bridge_is_stale() -> bool:
+    """Return True if bridge inventory is older than the sniper artifact."""
+    sniper_ts = _artifact_ts(_SNIPER_PATH)
+    bridge_ts = _artifact_ts(_BRIDGE_PATH)
+    if sniper_ts == 0:
+        return False  # no sniper data yet, not stale
+    stale = bridge_ts < sniper_ts
+    if stale:
+        log.warning(
+            "Bridge is stale (bridge=%s < sniper=%s) — will auto-rebuild before M9.",
+            time.strftime("%H:%M:%SZ", time.gmtime(bridge_ts)),
+            time.strftime("%H:%M:%SZ", time.gmtime(sniper_ts)),
+        )
+    return stale
 
 
 def _run(cmd: list[str], dry_run: bool, step: str) -> int:
@@ -142,10 +177,17 @@ def main() -> None:
             if rc != 0:
                 log.warning("Bridge rebuild failed (rc=%d); M9 may use stale bridge", rc)
 
-            # Step 4: M9 scan
-            rc = run_m9_scan(args.config, args.m9_duration_minutes, args.dry_run)
-            if rc != 0:
-                log.warning("M9 scan exited with rc=%d", rc)
+            # Step 3 (stale guard): if bridge is still stale after explicit rebuild, abort M9 this cycle
+            if _bridge_is_stale() and not args.dry_run:
+                log.warning(
+                    "Bridge still stale after rebuild — skipping M9 scan this cycle. "
+                    "This usually means bridge rebuild script failed silently."
+                )
+            else:
+                # Step 4: M9 scan
+                rc = run_m9_scan(args.config, args.m9_duration_minutes, args.dry_run)
+                if rc != 0:
+                    log.warning("M9 scan exited with rc=%d", rc)
 
             elapsed = time.monotonic() - cycle_start
             log.info("Cycle %d complete in %.1fs", cycle_num, elapsed)

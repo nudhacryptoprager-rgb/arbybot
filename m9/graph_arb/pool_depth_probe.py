@@ -274,6 +274,11 @@ def probe_pool_depth(
     return result
 
 
+# Default quarantine TTL: 7 days.  Entries older than this are considered expired
+# and pool_depth_filter will skip them (transient quarantine policy).
+_QUARANTINE_TTL_SECONDS = 7 * 24 * 3600  # 604800
+
+
 def _update_quarantine(
     quarantine_path: Path,
     results_by_pool: Dict[str, Dict[str, Any]],
@@ -330,12 +335,23 @@ def _update_quarantine(
         impact = probe.get("price_impact_at_100usd") or 0
         depth_usd = probe.get("effective_depth_usd") or 0
 
+        # Compute retry_after_utc (quarantine expires after TTL, pool is re-probed)
+        retry_dt = datetime.datetime.utcnow() + datetime.timedelta(seconds=_QUARANTINE_TTL_SECONDS)
+        retry_after_utc = retry_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
         entry: Dict[str, Any] = {
             "pool_address": pool_addr,
             "pair_id": route.get("pair_id", "UNKNOWN"),
             "dex_id": route.get("dex_id", "unknown"),
             "fee": int(route.get("fee", 0)),
             "reject_reason": reject,
+            "quarantine_ttl_seconds": _QUARANTINE_TTL_SECONDS,
+            "quarantined_at_utc": today,
+            "retry_after_utc": retry_after_utc,
+            "activation_path": (
+                "Re-probe via pool_depth_probe --update-quarantine after retry_after_utc. "
+                "If probe passes (impact < LOW_EFFECTIVE_DEPTH threshold), remove entry to re-activate."
+            ),
             "evidence": {
                 "price_impact_at_100usd": round(impact, 4),
                 "effective_depth_usd": round(depth_usd, 2),
@@ -346,18 +362,20 @@ def _update_quarantine(
             },
             "note": (
                 f"Auto-added by pool_depth_probe on {today}. "
-                f"price_impact={impact * 100:.1f}%, effective_depth_usd={depth_usd:.2f}."
+                f"price_impact={impact * 100:.1f}%, effective_depth_usd={depth_usd:.2f}. "
+                f"Expires (retry_after): {retry_after_utc}."
             ),
         }
         quarantine["quarantined_pools"].append(entry)
         existing_addrs.add(pool_addr)
         new_count += 1
         log.info(
-            "Quarantine: added %s pair=%s reason=%s impact=%.1f%%",
+            "Quarantine: added %s pair=%s reason=%s impact=%.1f%% retry_after=%s",
             pool_addr[:14],
             entry["pair_id"],
             reject,
             impact * 100,
+            retry_after_utc,
         )
 
     if new_count > 0:

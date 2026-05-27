@@ -205,25 +205,46 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
     bridge_info = ""
     if strict_bridge:
         bsm_pass = art.get("bridge_source_metrics") or {}
+        cycles_m8 = bsm_pass.get("cycles_with_m8_pool", "N/A")
+        pos_cycles_m8 = bsm_pass.get("positive_cycles_with_m8_pool", "N/A")
+        # Build per-DEX breakdown from dex_coverage_matrix
+        dex_matrix = bsm_pass.get("dex_coverage_matrix") or {}
+        dex_lines = []
+        for dex_id, dex_info in sorted(dex_matrix.items()):
+            adapter = dex_info.get("adapter_type", "?")
+            ev_count = dex_info.get("event_count", 0)
+            gr_count = dex_info.get("graph_ready_count", 0)
+            pending = dex_info.get("adapter_pending", False)
+            pend_tag = " [PENDING]" if pending else ""
+            dex_lines.append(
+                f"\n    {dex_id:<28} events={ev_count:<4} adapter={adapter:<22}{pend_tag}"
+                f" graph_ready={gr_count}"
+            )
+        dex_block = "".join(dex_lines) if dex_lines else "\n    (none)"
+        # cycles_with_m8_pool advisory warning
+        cycles_advisory = ""
+        if isinstance(cycles_m8, int) and cycles_m8 == 0:
+            cycles_advisory = (
+                "\n  ADVISORY: cycles_with_m8_pool=0 — M8 pools not yet in active cycles. "
+                "Next target: cycles_with_m8_pool > 0."
+            )
         bridge_info = (
             f"\n  bridge: graph_ready_from_m8={bsm_pass.get('graph_ready_from_m8', 'N/A')}"
-            f", graph_edges_from_m8={bsm_pass.get('graph_edges_from_m8', 'N/A')}"
+            f", graph_ready_total={bsm_pass.get('graph_ready_total', 'N/A')}"
             f", m8_stale={bsm_pass.get('m8_stale', 'N/A')}"
             f", m8_1_stale={bsm_pass.get('m8_1_stale', 'N/A')}"
-            f", graph_ready_total={bsm_pass.get('graph_ready_total', 'N/A')}"
             f", unsupported_dex_count={bsm_pass.get('unsupported_dex_count', 0)}"
             f", pending_adapter_count={bsm_pass.get('pending_adapter_count', 0)}"
-            f", cycles_with_m8_pool={bsm_pass.get('cycles_with_m8_pool', 'N/A')}"
-            f", positive_cycles_with_m8_pool={bsm_pass.get('positive_cycles_with_m8_pool', 'N/A')}"
-            f"\n  coverage_funnel:"
-            f"\n    m8_new_pools_input={bsm_pass.get('m8_new_pools_input', 'N/A')}"
-            f"\n    token_verified_count={bsm_pass.get('token_verified_count', 'N/A')}"
-            f"\n    anchor_connected_count={bsm_pass.get('anchor_connected_count', 'N/A')}"
-            f"\n    factory_verified_count={bsm_pass.get('factory_verified_count', 'N/A')}"
-            f"\n    depth_ok_count={bsm_pass.get('depth_ok_count', 'N/A')}"
-            f"\n    graph_ready_from_m8={bsm_pass.get('graph_ready_from_m8', 'N/A')}"
-            f"\n    cycles_with_m8_pool={bsm_pass.get('cycles_with_m8_pool', 'N/A')}"
-            f"\n    positive_cycles_with_m8_pool={bsm_pass.get('positive_cycles_with_m8_pool', 'N/A')}"
+            f"\n  DEX pipeline (M8 events → active routes):"
+            f"\n    m8_new_pools_input:          {bsm_pass.get('m8_new_pools_input', 'N/A')}"
+            f"\n    token_verified:              {bsm_pass.get('token_verified_count', 'N/A')}"
+            f"\n    anchor_connected:            {bsm_pass.get('anchor_connected_count', 'N/A')}"
+            f"\n    graph_ready_from_m8:         {bsm_pass.get('graph_ready_from_m8', 'N/A')}"
+            f"\n    graph_ready_from_m8_new:     {bsm_pass.get('graph_ready_from_m8_new', 'N/A')}"
+            f"\n    cycles_with_m8_pool:         {cycles_m8}  ← target: >0"
+            f"\n    positive_cycles_with_m8_pool:{pos_cycles_m8}"
+            f"\n  Per-DEX breakdown:{dex_block}"
+            f"{cycles_advisory}"
         )
     print(
         f"PASS — M9 productive-state gate\n"
