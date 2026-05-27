@@ -143,12 +143,15 @@ def probe_quote_raw_http(
             gas_est = None
 
         elif route.adapter_type == "curve_stable":
-            # get_dy(i,j,dx) selector: 5e0d443f
+            # get_dy(i,j,dx) — indices come from config/adapter_metadata.yaml via route.
+            # Fallback 0/1 is only safe for 2-pool USDC/USDT when no metadata loaded.
+            idx_in = route.token_in_index if route.token_in_index is not None else 0
+            idx_out = route.token_out_index if route.token_out_index is not None else 1
             calldata = (
                 "0x"
                 + "5e0d443f"
-                + (0).to_bytes(32, "big").hex()
-                + (1).to_bytes(32, "big").hex()
+                + idx_in.to_bytes(32, "big").hex()
+                + idx_out.to_bytes(32, "big").hex()
                 + amount_in.to_bytes(32, "big").hex()
             )
             hex_result = _eth_call_raw(rpc_url, route.quoter, calldata, client)
@@ -169,17 +172,29 @@ def probe_quote_raw_http(
             amount_out = (amount_in * 997 * r1) // (r0 * 1000 + amount_in * 997)
             gas_est = None
 
-        elif route.adapter_type == "balancer_stable":
-            return QuoteResult(
-                route_id=route_id,
-                size_usd=0.0,
-                amount_in=amount_in,
-                amount_out=0,
-                ok=False,
-                reject_reason="QUOTE_NOT_IMPLEMENTED__BALANCER_PENDING",
-                gas_estimate=None,
-                raw_error=None,
-            )
+        elif route.adapter_type in ("balancer_stable", "balancer_weighted"):
+            # Balancer queryBatchSwap — requires pool_id from config/adapter_metadata.yaml.
+            from dex.adapters.balancer_vault import BALANCER_VAULT_ADDRESS
+            _vault = route.vault_address or BALANCER_VAULT_ADDRESS
+            _pool_id = route.pool_id
+            if not _pool_id:
+                return QuoteResult(
+                    route_id=route_id,
+                    size_usd=0.0,
+                    amount_in=amount_in,
+                    amount_out=0,
+                    ok=False,
+                    reject_reason="QUOTE_CONFIG_MISSING__BALANCER_POOL_ID",
+                    gas_estimate=None,
+                    raw_error="route.pool_id is None; add to config/adapter_metadata.yaml",
+                )
+            from dex.adapters.balancer_vault import _encode_query_batch_swap, _decode_query_batch_swap
+            _vault_addr = _vault if _vault.startswith("0x") else "0x" + _vault
+            _calldata_bytes = _encode_query_batch_swap(_pool_id, token_in.address, token_out.address, amount_in)
+            _calldata_hex = "0x" + _calldata_bytes.hex()
+            hex_result = _eth_call_raw(rpc_url, _vault_addr, _calldata_hex, client)
+            _, amount_out = _decode_query_batch_swap(hex_result)
+            gas_est = None
 
         elif route.adapter_type == "uniswap_v4":
             if route.tick_spacing is None:

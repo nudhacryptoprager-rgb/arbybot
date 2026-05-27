@@ -1,0 +1,94 @@
+# Adapter metadata for config-driven quote routing.
+# Purpose: per-pool data that cannot be inferred from on-chain events alone.
+#
+# This file is the SINGLE source of truth for:
+#   - Curve pool coin indices (which token is coin[0], coin[1], etc.)
+#   - Balancer pool IDs (32-byte hex registered with the Vault)
+#   - Balancer vault address per chain
+#
+# Format rules:
+#   - All pool addresses MUST be lowercase 0x + 40 hex chars
+#   - Balancer pool_ids MUST be lowercase 0x + 64 hex chars (32 bytes)
+#   - Coin indices MUST match on-chain coin[] array ordering (verify via pool.coins(i))
+#   - vault_address MUST be lowercase 0x + 40 hex chars
+#
+# Adding new pools:
+#   1. Verify the pool address on-chain via Curve registry / Balancer Vault
+#   2. Verify coin ordering via pool.coins(0), pool.coins(1), ...
+#   3. Add an entry below under the appropriate chain
+#   4. Add a unit test that the pool appears in the registry with correct indices
+
+# ---------------------------------------------------------------------------
+# Curve StableSwap
+# ---------------------------------------------------------------------------
+# Curve uses direct pool.get_dy(i, j, dx) — no vault contract.
+# Coin indices are pool-specific: coin[0], coin[1], (coin[2] for 3-pools), etc.
+# The quote adapter uses token_in_index / token_out_index from here.
+#
+# NOTE: Curve also has a "cryptoswap" variant (CryptoPool) — those are listed
+# under pool_kind: "crypto" and use the same get_dy selector with uint256 indices.
+# int128 variants use selector 5e0d443f; uint256 variants use 4fb08c5e.
+# The adapter auto-detects via fallback (tries int128 first, then uint256).
+
+curve:
+  base:
+    pools:
+      # -----------------------------------------------------------------------
+      # USDC/USDT 2-pool on Base
+      # Curve Finance Base deployment — verify via https://curve.fi/#/base/pools
+      # or https://basescan.org/address/<pool_address>#readContract
+      # coin[0]=USDC, coin[1]=USDT
+      # -----------------------------------------------------------------------
+      # "0x<pool_address>":
+      #   pool_kind: "stable"
+      #   coin_indices:
+      #     USDC: 0
+      #     USDT: 1
+
+      # -----------------------------------------------------------------------
+      # crvUSD/USDC on Base (if deployed)
+      # coin[0]=crvUSD, coin[1]=USDC
+      # -----------------------------------------------------------------------
+      # "0x<pool_address>":
+      #   pool_kind: "stable"
+      #   coin_indices:
+      #     crvUSD: 0
+      #     USDC: 1
+
+      # Placeholder: will be populated by on-chain discovery (see NEXT_4 in Status_M9.md)
+      # To activate: uncomment and fill in the real pool address from Curve registry
+
+# ---------------------------------------------------------------------------
+# Balancer V2+
+# ---------------------------------------------------------------------------
+# Balancer uses a single Vault contract for all pools.
+# Each pool registers with the Vault and receives a 32-byte pool_id.
+# The first 20 bytes of pool_id are the pool address; the remaining bytes
+# encode the pool nonce and specialization.
+#
+# pool_kind: "stable" | "weighted" | "crypto" | "linear"
+# assets: list of token addresses in ascending address order (Balancer invariant).
+#         Order MUST match on-chain (verify via Vault.getPoolTokens(pool_id)).
+
+balancer:
+  # Canonical Balancer V2 Vault — same address on all EVM chains where Balancer V2 is deployed.
+  # This is a trust anchor: do not change without on-chain verification.
+  vault_address: "0xba12222222228d8ba445958a75a0704d566bf2c8"
+
+  base:
+    pools:
+      # -----------------------------------------------------------------------
+      # Balancer pools on Base
+      # Verify pool_id via: Vault.getPool(poolAddress) or subgraph
+      # pool_id format: 0x<20-byte-pool-address><8-byte-nonce><4-byte-specialization>
+      # = 0x + 64 hex chars total
+      # -----------------------------------------------------------------------
+      # "0x<pool_id_64_hex_chars>":
+      #   pool_kind: "stable"
+      #   pool_address: "0x<20-byte-address>"  # first 20 bytes of pool_id
+      #   assets:
+      #     - "0x<token_address_ascending_1>"
+      #     - "0x<token_address_ascending_2>"
+
+      # Placeholder: will be populated by on-chain discovery
+      # To activate: uncomment and fill in pool_id from Balancer subgraph or Vault contract

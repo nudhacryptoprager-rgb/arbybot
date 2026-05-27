@@ -144,6 +144,11 @@ def _make_dex_route(edge: GraphEdge) -> DexRoute:
         tick_spacing=edge.tick_spacing,
         curve_coin0_sym=None,
         hooks=edge.hooks,
+        token_in_index=edge.token_in_index,
+        token_out_index=edge.token_out_index,
+        pool_id=edge.pool_id,
+        vault_address=edge.vault_address,
+        pool_kind=edge.pool_kind,
     )
 
 

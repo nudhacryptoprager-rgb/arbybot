@@ -372,6 +372,8 @@ ALLOWED_YAML_FILES = {
     # M9 soak profiles (Step 7 GPT fix)
     "soak_30m_base.yaml",
     "soak_60m_base.yaml",
+    # M9 adapter runtime wiring — per-pool Curve/Balancer metadata registry
+    "adapter_metadata.yaml",
 }
 
 

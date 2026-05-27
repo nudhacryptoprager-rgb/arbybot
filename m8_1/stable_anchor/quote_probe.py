@@ -189,17 +189,33 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
             amount_out = int(raw[:64], 16)
             gas_est = None
         elif route.adapter_type == "curve_stable":
-            # get_dy(i,j,dx) selector: 5e0d443f
-            calldata = "0x" + "5e0d443f" + (0).to_bytes(32, "big").hex() + (1).to_bytes(32, "big").hex() + amount_in.to_bytes(32, "big").hex()
+            # get_dy(i,j,dx) — indices come from config/adapter_metadata.yaml via route.
+            # Fallback 0/1 is only safe for 2-pool USDC/USDT when no metadata loaded.
+            idx_in = route.token_in_index if route.token_in_index is not None else 0
+            idx_out = route.token_out_index if route.token_out_index is not None else 1
+            calldata = "0x" + "5e0d443f" + idx_in.to_bytes(32, "big").hex() + idx_out.to_bytes(32, "big").hex() + amount_in.to_bytes(32, "big").hex()
             result = w3.eth.call({"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result[2:]
             amount_out = int(raw[:64], 16)
             gas_est = None
-        elif route.adapter_type == "balancer_stable":
-            raise ValueError(
-                "balancer_stable quoter not yet implemented — route is in pending adapter list. "
-                "Implement Balancer queryBatchSwap or batchSwap quote to unlock."
+        elif route.adapter_type in ("balancer_stable", "balancer_weighted"):
+            from dex.adapters.balancer_vault import BalancerVaultAdapter, BALANCER_VAULT_ADDRESS
+            _vault = route.vault_address or BALANCER_VAULT_ADDRESS
+            _pool_id = route.pool_id
+            if not _pool_id:
+                raise ValueError(
+                    f"balancer route missing pool_id: {route_id}; "
+                    "add pool_id to config/adapter_metadata.yaml"
+                )
+            _bv_adapter = BalancerVaultAdapter(w3, vault_address=_vault)
+            _bv_result = _bv_adapter.get_quote(
+                pool_id=_pool_id,
+                token_in=token_in.address,
+                token_out=token_out.address,
+                amount_in=amount_in,
             )
+            amount_out = _bv_result.amount_out
+            gas_est = _bv_result.gas_estimate
         elif route.adapter_type == "uniswap_v4":
             if route.tick_spacing is None:
                 raise ValueError("missing tick_spacing on V4 route")

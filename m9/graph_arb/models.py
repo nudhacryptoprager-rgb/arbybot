@@ -27,7 +27,12 @@ class GraphEdge:
     factory_class: str
     pair_id: str
     factory_verified: bool = False  # True when pool_verifier confirmed this route on-chain
-    hooks: Optional[str] = None     # V4 only: hooks address; None = vanilla (0x0)
+    hooks: Optional[str] = None       # V4 only: hooks address; None = vanilla (0x0)
+    token_in_index: Optional[int] = None  # Curve: coin[] index for token_in
+    token_out_index: Optional[int] = None  # Curve: coin[] index for token_out
+    pool_id: Optional[str] = None         # Balancer: 32-byte pool ID (0x + 64 hex chars)
+    vault_address: Optional[str] = None   # Balancer: Vault contract address
+    pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):

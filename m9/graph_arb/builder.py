@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from m8_1.stable_anchor.config_loader import load_config, M8_1Config
 from m8_1.stable_anchor.pairs import TokenInfo
 from m9.graph_arb.models import GraphEdge
+from m9.graph_arb.adapter_metadata import load_adapter_metadata, AdapterMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,16 @@ def build_graph_from_inventory(
     depth_skipped = 0
     _productive_lane = (lane == "productive")
 
+    # Load per-pool adapter metadata (Curve coin indices, Balancer pool_id/vault_address).
+    # Graceful: returns empty registry when file missing or malformed.
+    _adapter_meta: AdapterMetadata = load_adapter_metadata()
+    # Infer chain from config name if possible; default "base".
+    _meta_chain = "base"
+    if config_path and "arbitrum" in config_path.lower():
+        _meta_chain = "arbitrum"
+    elif config_path and "mantle" in config_path.lower():
+        _meta_chain = "mantle"
+
     for entry in active_routes:
         pair_id = entry.get("pair_id", "")
         dex_id = entry.get("dex_id", "")
@@ -233,6 +244,26 @@ def build_graph_from_inventory(
 
         fee_bps = _fee_bps_from_edge(adapter_type, fee, tick_spacing)
 
+        # Resolve per-pool adapter metadata (Curve/Balancer).
+        # These fields flow into GraphEdge → DexRoute → quote_probe / raw_http_probe.
+        _token_in_index: Optional[int] = None
+        _token_out_index: Optional[int] = None
+        _pool_id: Optional[str] = None
+        _vault_address: Optional[str] = None
+        _pool_kind: Optional[str] = None
+
+        if adapter_type == "curve_stable":
+            _pool_kind = "stable"
+        elif adapter_type in ("balancer_stable", "balancer_weighted"):
+            _pool_kind = "stable" if adapter_type == "balancer_stable" else "weighted"
+            _b_pool = _adapter_meta.balancer_pool_meta(pool_address, chain=_meta_chain)
+            if _b_pool is not None:
+                _pool_id = _b_pool.pool_id
+                _pool_kind = _b_pool.pool_kind
+                _vault_address = _adapter_meta.balancer_vault_address(_meta_chain)
+
+        # Curve index lookup happens per-direction (fwd / rev), computed below.
+
         # Resolve token info
         t0 = token_map.get(sym0)
         t1 = token_map.get(sym1)
@@ -271,6 +302,12 @@ def build_graph_from_inventory(
 
         # Forward: sym0 → sym1
         if not (exclude_edge_keys and edge_key_fwd in exclude_edge_keys):
+            # Curve: per-direction index lookup
+            _fwd_idx_in, _fwd_idx_out = (
+                _adapter_meta.curve_indices(pool_address, sym0, sym1, chain=_meta_chain)
+                if adapter_type == "curve_stable"
+                else (None, None)
+            )
             fwd_edge = GraphEdge(
                 token_in_sym=sym0,
                 token_out_sym=sym1,
@@ -290,12 +327,23 @@ def build_graph_from_inventory(
                 pair_id=pair_id,
                 factory_verified=factory_verified_flag,
                 hooks=hooks,
+                token_in_index=_fwd_idx_in,
+                token_out_index=_fwd_idx_out,
+                pool_id=_pool_id,
+                vault_address=_vault_address,
+                pool_kind=_pool_kind,
             )
             adjacency[sym0][sym1].append(fwd_edge)
             built_count += 1
 
         # Reverse: sym1 → sym0
         if not (exclude_edge_keys and edge_key_rev in exclude_edge_keys):
+            # Curve: reversed direction — swap token order for index lookup
+            _rev_idx_in, _rev_idx_out = (
+                _adapter_meta.curve_indices(pool_address, sym1, sym0, chain=_meta_chain)
+                if adapter_type == "curve_stable"
+                else (None, None)
+            )
             rev_edge = GraphEdge(
                 token_in_sym=sym1,
                 token_out_sym=sym0,
@@ -315,6 +363,11 @@ def build_graph_from_inventory(
                 pair_id=pair_id,
                 factory_verified=factory_verified_flag,
                 hooks=hooks,
+                token_in_index=_rev_idx_in,
+                token_out_index=_rev_idx_out,
+                pool_id=_pool_id,
+                vault_address=_vault_address,
+                pool_kind=_pool_kind,
             )
             adjacency[sym1][sym0].append(rev_edge)
             built_count += 1

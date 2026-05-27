@@ -961,6 +961,18 @@ def build_artifact(
     if bridge_source_metrics is not None:
         artifact["bridge_source_metrics"] = bridge_source_metrics
 
+    # Per-adapter cost breakdown and adapter-family cycle distribution (Step 2 + cost_model)
+    try:
+        from m9.graph_arb.cost_model import build_cost_breakdown as _build_cost_breakdown
+        _adapter_breakdown = _build_cost_breakdown(cycle_results)
+        artifact["cost_breakdown_by_adapter"] = _adapter_breakdown["cost_breakdown_by_adapter"]
+        artifact["cycles_by_adapter_family"] = _adapter_breakdown["cycles_by_adapter_family"]
+        artifact["positive_cycles_by_adapter_family"] = _adapter_breakdown["positive_cycles_by_adapter_family"]
+    except Exception:
+        artifact["cost_breakdown_by_adapter"] = None
+        artifact["cycles_by_adapter_family"] = None
+        artifact["positive_cycles_by_adapter_family"] = None
+
     return artifact
 
 

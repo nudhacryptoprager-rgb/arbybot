@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dex.adapters.uniswap_v4 import is_safe_v4_hook as _is_safe_v4_hook
+
 _ANCHOR_TOKENS = frozenset({
     "USDC", "EURC", "WETH", "cbBTC", "WETH_BASE", "DAI", "USDT",
 })
@@ -34,6 +36,11 @@ _MAX_SYMBOL_LEN = 15
 # 30 min: aligns with recommended M8→bridge→M9 cadence for timely long-tail discovery.
 _M8_STALE_SECONDS = 1800        # 30 min (was 4 * 3600)
 _M8_1_STALE_SECONDS = 4 * 3600
+# Fresh-window threshold: admit single-quoteable-venue pools when the sniper
+# artifact is this young.  New pools take 60–90 min to appear on a second DEX,
+# so we relax the multi-venue gate for the first hour to avoid missing MEV-naive
+# fresh liquidity.  Admitted routes are tagged freshness_window=True.
+_FRESH_WINDOW_SECONDS: int = 3600   # 1 hour
 
 # Maps M8 sniper dex_id → M9 adapter_type.
 # Adapter_type should always be the canonical type string, never "unsupported".
@@ -49,7 +56,11 @@ _DEX_ID_TO_ADAPTER_TYPE: Dict[str, str] = {
     "aerodrome": "ve33",
     "aerodrome_slipstream": "aerodrome_slipstream",
     "aerodrome_v2_stable": "aerodrome_v2_stable",
-    # Balancer: recognised DEX types, no M9 quote adapter yet → explicit pending
+    # Curve: recognised DEX type → curve_stable adapter (get_dy)
+    # Coin indices are loaded from config/adapter_metadata.yaml per pool
+    "curve": "curve_stable",
+    # Balancer: recognised DEX types; quote adapter wired via BalancerVaultAdapter
+    # pool_id and vault_address loaded from config/adapter_metadata.yaml
     "balancer_stable": "balancer_stable",
     "balancer_weighted": "balancer_weighted",
 }
@@ -58,16 +69,11 @@ _UNSUPPORTED_ADAPTER = "unsupported"
 # Adapter types that are correctly identified but do NOT yet have a working M9 quote
 # adapter.  Events from these dexes are quarantined with an explicit reason code rather
 # than silently entering active_routes (which would cause QUOTE_DECODE errors at runtime).
-_PENDING_ADAPTER_TYPES: frozenset = frozenset({
-    "balancer_stable",
-    "balancer_weighted",
-})
+# NOTE: balancer_stable and balancer_weighted are now wired via BalancerVaultAdapter.
+_PENDING_ADAPTER_TYPES: frozenset = frozenset()
 
 # Per-adapter quarantine reason for pending adapters
-_PENDING_ADAPTER_REASONS: Dict[str, str] = {
-    "balancer_stable": "PENDING_NO_BALANCER_QUOTE_ADAPTER",
-    "balancer_weighted": "PENDING_NO_BALANCER_QUOTE_ADAPTER",
-}
+_PENDING_ADAPTER_REASONS: Dict[str, str] = {}
 
 _DEFAULT_SNIPER = "data/runs/_rolling/new_pool_sniper_latest.json"
 _DEFAULT_ANCHOR = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
@@ -248,6 +254,37 @@ def build_bridge_inventory(
     _m8_multi_venue_verified_count = len(_multi_venue_syms)
 
     # ------------------------------------------------------------------
+    # Stage 4c: fresh_window admission — relax multi-venue gate for pools
+    # from a sniper artifact that is itself younger than _FRESH_WINDOW_SECONDS.
+    #
+    # Rationale: brand-new pools take 60–90 min to propagate to a second DEX.
+    # During this window they always fail the multi-venue gate, which causes
+    # the bridge to miss the highest-alpha opportunity (MEV-naive fresh pools).
+    #
+    # Policy: admit events from _single_venue_events when ALL of:
+    #   1. Sniper artifact age < _FRESH_WINDOW_SECONDS (fresh run)
+    #   2. Adapter type is supported (not pending, not unsupported)
+    #   3. Token is anchor-connected (already guaranteed by ancestry)
+    #
+    # Fresh-window routes are tagged freshness_window=True in active_routes
+    # and counted in bridge_source_metrics.fresh_window_admitted_count.
+    # ------------------------------------------------------------------
+    _sniper_age: Optional[float] = None
+    if sniper is not None:
+        _sniper_age = _artifact_age_seconds(sniper, now_ts)
+    _sniper_in_fresh_window: bool = (
+        _sniper_age is not None and _sniper_age < _FRESH_WINDOW_SECONDS
+    )
+    _fresh_window_events: List[Dict] = []
+    if _sniper_in_fresh_window:
+        for _fw_e in _single_venue_events:
+            _fw_dex = _fw_e.get("dex", "")
+            _fw_adp = _DEX_ID_TO_ADAPTER_TYPE.get(_fw_dex, "uniswap_v3")
+            if _fw_adp != _UNSUPPORTED_ADAPTER and _fw_adp not in _PENDING_ADAPTER_TYPES:
+                _fresh_window_events.append(_fw_e)
+    _fresh_window_admitted_count: int = len(_fresh_window_events)
+
+    # ------------------------------------------------------------------
     # Stage 5: Base inventory metrics (already factory_verified + depth_ok)
     # ------------------------------------------------------------------
     base_active: List[Dict] = base_inv.get("active_routes", []) if base_inv else []
@@ -290,9 +327,17 @@ def build_bridge_inventory(
 
     # New M8 pools not yet in base inventory — supported dexes only.
     # adapter_type is propagated so builder.py does not default to uniswap_v3.
-    _V4_ZERO_ADDR = "0x" + "0" * 40
-    m8_new_routes: List[Dict] = [
-        {
+    # V4 pools: admitted when hook is safe (zero-address OR in _KNOWN_SAFE_HOOKS).
+    # Unknown V4 hooks are quarantined (see uniswap_v4.py whitelist policy).
+
+    def _v4_hook_ok(e: Dict) -> bool:
+        """Return True when the event's V4 hooks are safe (or the pool is not V4)."""
+        if _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "") != "uniswap_v4":
+            return True
+        return _is_safe_v4_hook(e.get("hooks"))
+
+    def _build_m8_route(e: Dict, freshness_window: bool = False) -> Dict:
+        return {
             "route_id": f"m8_{e.get('event_id', '').replace(':', '_')}",
             "pair_id": "_".join(sorted([e.get("token0_symbol", ""), e.get("token1_symbol", "")])),
             "dex_id": e.get("dex", ""),
@@ -311,15 +356,54 @@ def build_bridge_inventory(
             "hooks": e.get("hooks"),
             "depth_probe_ok": None,   # not yet depth-probed
             "effective_depth_usd": None,
+            "freshness_window": freshness_window,
         }
+
+    m8_new_routes: List[Dict] = [
+        _build_m8_route(e, freshness_window=False)
         for e in supported_events
-        # For V4: only include vanilla pools (hooks == zero address or None)
         if e.get("pool", "").lower() not in base_pool_addrs
-        and (
-            _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "") != "uniswap_v4"
-            or (e.get("hooks") or _V4_ZERO_ADDR).lower() == _V4_ZERO_ADDR.lower()
-        )
+        and _v4_hook_ok(e)
     ]
+
+    # V4 pools with unknown hooks → quarantine with UNKNOWN_V4_HOOK reason
+    _v4_unknown_hook_events = [
+        e for e in supported_events
+        if _DEX_ID_TO_ADAPTER_TYPE.get(e.get("dex", ""), "") == "uniswap_v4"
+        and not _is_safe_v4_hook(e.get("hooks"))
+    ]
+    m8_quarantined_routes_v4_hooks: List[Dict] = [
+        {
+            "route_id": f"m8_{_hke.get('event_id', '').replace(':', '_')}",
+            "pair_id": "_".join(sorted([_hke.get("token0_symbol", ""), _hke.get("token1_symbol", "")])),
+            "dex_id": _hke.get("dex", ""),
+            "adapter_type": "uniswap_v4",
+            "token0": _hke.get("token0_symbol", ""),
+            "token1": _hke.get("token1_symbol", ""),
+            "pool_address": _hke.get("pool", ""),
+            "hooks": _hke.get("hooks"),
+            "source": "m8_sniper",
+            "quarantine_reason": "UNKNOWN_V4_HOOK",
+            "quarantine_note": (
+                f"V4 pool hooks={_hke.get('hooks')!r} is not in the safe-hooks whitelist. "
+                "Add to dex/adapters/uniswap_v4.py after on-chain audit."
+            ),
+        }
+        for _hke in _v4_unknown_hook_events
+    ]
+
+    # Fresh-window routes: single-venue but fresh sniper → admitted with flag.
+    # Pool addresses already in base or already in m8_new_routes are skipped.
+    _m8_new_pool_addrs = frozenset(r["pool_address"].lower() for r in m8_new_routes)
+    m8_fresh_window_routes: List[Dict] = [
+        _build_m8_route(e, freshness_window=True)
+        for e in _fresh_window_events
+        if e.get("pool", "").lower() not in base_pool_addrs
+        and e.get("pool", "").lower() not in _m8_new_pool_addrs
+        and _v4_hook_ok(e)
+    ]
+    # Extend m8_new_routes with fresh-window admissions
+    m8_new_routes = m8_new_routes + m8_fresh_window_routes
 
     # Unsupported M8 routes (truly unknown adapters) are quarantined.
     m8_quarantined_routes: List[Dict] = [
@@ -362,7 +446,8 @@ def build_bridge_inventory(
     ]
 
     # graph_ready_from_m8 = supported anchor-connected multi-venue-confirmed M8 pools
-    graph_ready_from_m8 = len(supported_events)
+    # + fresh-window admissions (single-venue but fresh sniper artifact)
+    graph_ready_from_m8 = len(supported_events) + len(m8_fresh_window_routes)
 
     # Single-venue blocked routes: cross_dex_seen but only 1 distinct DEX.
     # These are quarantined because they cannot form an arb cycle (no second venue to
@@ -513,6 +598,10 @@ def build_bridge_inventory(
         "m8_multi_venue_quoteable_count": _m8_multi_venue_quoteable_count,  # gate: >=2 quoteable DEX IDs
         "m8_multi_venue_verified_count": _m8_multi_venue_verified_count,    # backward compat alias
         "structural_single_venue_blocked_count": _structural_single_venue_blocked,
+        # Stage 4c fresh-window diagnostics
+        "sniper_in_fresh_window": _sniper_in_fresh_window,
+        "sniper_age_seconds": round(_sniper_age, 1) if _sniper_age is not None else None,
+        "fresh_window_admitted_count": _fresh_window_admitted_count,
     }
 
     # ------------------------------------------------------------------
@@ -529,6 +618,7 @@ def build_bridge_inventory(
             (base_inv.get("quarantined_routes", []) if base_inv else [])
             + m8_quarantined_routes
             + m8_single_venue_routes
+            + m8_quarantined_routes_v4_hooks
         ),
         "pending_routes": m8_pending_routes,
         "summary": {
