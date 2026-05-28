@@ -159,15 +159,19 @@ class MulticallBatcher:
         Steps 2+3 (GPT review): adaptive chunking + partial result caching.
         Successful sub-chunks are returned immediately; only failed sub-chunks
         are split further.  Controls: ARBY_MULTICALL_MIN_SUBCHUNK (default 3),
-        _MAX_SPLIT_DEPTH=2.
+        _MAX_SPLIT_DEPTH=0 (no recursive split — avoids cascading 429 sleep storms).
+
+        Sleep budget: capped at ARBY_MULTICALL_MAX_SLEEP_S (default 1.0s) to prevent
+        Retry-After headers (e.g. publicnode Retry-After:60) from hanging the sweep.
         """
         import random
         import re
         import time as _time
 
-        _MAX_ATTEMPTS = 3
+        _MAX_ATTEMPTS = 2
         _MIN_SUBCHUNK = int(os.environ.get("ARBY_MULTICALL_MIN_SUBCHUNK", "3"))
-        _MAX_SPLIT_DEPTH = 2
+        _MAX_SPLIT_DEPTH = 0
+        _MAX_SLEEP_S = float(os.environ.get("ARBY_MULTICALL_MAX_SLEEP_S", "1.0"))
 
         self.stats["multicall_attempted"] += 1
         last_exc: Optional[Exception] = None
@@ -192,22 +196,25 @@ class MulticallBatcher:
                     self.stats["multicall_429"] += 1
                 if is_429 and attempt < _MAX_ATTEMPTS - 1:
                     self.stats["multicall_retry_count"] += 1
-                    # Respect Retry-After header if dRPC includes it
+                    # Respect Retry-After header but cap to prevent sweep hang
                     _m = re.search(r"Retry-After[:\s]+(\d+)", e_str, re.IGNORECASE)
                     if _m:
                         sleep_s = int(_m.group(1)) + random.uniform(0.0, 0.5)
                     else:
                         sleep_s = (1.5 ** attempt) + random.uniform(0.0, 0.5)
-                    logger.debug(
-                        "Multicall 429 (attempt %d/%d), sleeping %.2fs",
-                        attempt + 1, _MAX_ATTEMPTS, sleep_s,
+                    sleep_s = min(sleep_s, _MAX_SLEEP_S)  # hard cap to avoid 60s Retry-After hangs
+                    logger.warning(
+                        "Multicall 429 (attempt %d/%d rpc=%s), sleeping %.2fs",
+                        attempt + 1, _MAX_ATTEMPTS,
+                        self.rpc_url.split("/")[2] if self.rpc_url.count("/") >= 2 else self.rpc_url[:30],
+                        sleep_s,
                     )
                     _time.sleep(sleep_s)
                     continue
                 # Non-429 or exhausted 429 retries — fall through to split
                 break
 
-        # Retries exhausted — try adaptive split if chunk is large enough
+        # Retries exhausted — try adaptive split if chunk is large enough and depth allows
         if len(chunk) > _MIN_SUBCHUNK and depth < _MAX_SPLIT_DEPTH:
             mid = len(chunk) // 2
             self.stats["multicall_subchunk_splits"] += 1

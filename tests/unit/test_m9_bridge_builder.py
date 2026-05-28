@@ -179,6 +179,7 @@ class TestBridgeBuilderIntegration:
             anchor_path=str(anchor),
             base_inv_path=str(base),
             output_path=str(out),
+            curve_discovery_path=str(tmp_path / "no_curve_discovery.json"),
         )
 
         assert out.exists()
@@ -274,6 +275,7 @@ class TestBridgeBuilderIntegration:
             anchor_path=str(anchor),
             base_inv_path=str(base),
             output_path=str(out),
+            curve_discovery_path=str(tmp_path / "no_curve_discovery.json"),
         )
 
         result = json.loads(out.read_text(encoding="utf-8"))

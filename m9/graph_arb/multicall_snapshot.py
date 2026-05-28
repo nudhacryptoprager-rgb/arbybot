@@ -96,6 +96,14 @@ def get_multicall_stats() -> dict:
     return dict(_cumulative_multicall_stats)
 
 
+def get_adaptive_chunk_scale() -> float:
+    """Return the current adaptive chunk scale [0.25, 1.0].
+
+    Exposed for inclusion in rolling artifacts (Step 11 visibility).
+    """
+    return float(_adaptive_chunk_scale)
+
+
 def reset_multicall_stats() -> None:
     """Reset cumulative stats (call before a new run to avoid cross-run contamination)."""
     for k in _cumulative_multicall_stats:

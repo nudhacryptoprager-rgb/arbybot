@@ -103,6 +103,33 @@ def _percentile_summary(samples: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+def _estimate_events_potentially_missed(
+    polls_ok: Dict[str, int],
+    raw_logs: Dict[str, int],
+    errors: Dict[str, int],
+) -> int:
+    """Estimate events dropped due to RPC poll failures (Step 12).
+
+    For each DEX:
+        missed ≈ errors[dex] * (raw_logs[dex] / max(polls_ok[dex], 1))
+
+    Rationale: each failed poll likely would have returned roughly the
+    same number of logs as the average successful poll.  When a DEX has
+    zero successful polls or zero errors, it is skipped.
+    """
+    total: float = 0.0
+    all_dexes = set(polls_ok) | set(raw_logs) | set(errors)
+    for dex in all_dexes:
+        p_ok = int(polls_ok.get(dex, 0) or 0)
+        r_logs = int(raw_logs.get(dex, 0) or 0)
+        err = int(errors.get(dex, 0) or 0)
+        if p_ok <= 0 or err <= 0:
+            continue
+        avg_logs_per_poll = r_logs / p_ok
+        total += err * avg_logs_per_poll
+    return int(round(total))
+
+
 def _build_factory_breakdown(
     polls_ok: Dict[str, int],
     raw_logs: Dict[str, int],
@@ -444,6 +471,13 @@ class FunnelTracker:
                 "rpc_calls_made": self._rpc_calls,
                 "rpc_errors": self._rpc_errors,
                 "rpc_error_histogram": dict(self._rpc_error_types),
+                # Step 12 (CURRENT_STRATEGY): estimate of events dropped due to
+                # per-DEX poll failures. For each DEX:
+                #   missed ≈ error_polls * (raw_logs / max(polls_ok, 1))
+                # i.e. failed polls × average log-rate from successful polls.
+                "events_potentially_missed": _estimate_events_potentially_missed(
+                    self._dex_polls_ok, self._dex_raw_logs, self._dex_errors,
+                ),
                 # Per-factory breakdown
                 "factory_breakdown": _build_factory_breakdown(
                     self._dex_polls_ok, self._dex_raw_logs,

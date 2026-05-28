@@ -1,8 +1,79 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: CODE_VALIDATED__DISCOVERY_WIRED — Session 11 (2026-05-28): Curve factory discovery wired end-to-end; 6146 unit tests pass.
+**Status**: PRODUCTIVE_GATE_PASS — Session 15a (2026-05-28): `ci_m9_productive_gate.py` PASS. All thresholds met: `toxic_route_rate=0.6331 (<0.90)`, `qsr=0.9364 (≥0.80)`, `data_completeness=1.0 (≥0.98)`, `multicall_success_rate=1.0 (≥0.90)`, `duration_fulfilled=True`, `unverified_active_routes=0`. Fixes: publicnode.com as PRIMARY (no 429s), V3-only pool filter (dc=1.0), `--productive-lane` quarantine (62 thin pools excluded, edge_count 344→228).
 
-**Session 11 changes:**
+**Session 15a changes (2026-05-28):**
+- ✅ **pool_depth_probe run**: probed 172 active routes at $100; 37 TOXIC_PRICE_IMPACT, 21 LOW_EFFECTIVE_DEPTH; quarantine updated 60→62 entries (added 2×WETH_crvUSD)
+- ✅ **`--productive-lane` active**: 60 quarantined pools excluded from graph at startup; `pool_quality_lane: productive`; edge_count 344→228; `depth_quarantine_skipped: 60`
+- ✅ **toxic_route_rate=0.6331**: down from 1.0 (session 14o discovery mode); 1660/2622 quoted cycles TOXIC (thin exotic pairs that passed quarantine filter)
+- ✅ **qsr=0.9364**: above 0.80 threshold; 0 http_429s with publicnode.com PRIMARY
+- ✅ **data_completeness=1.0, multicall_success_rate=1.0**: V3-only pool filter in runner.py confirmed working
+- ✅ **ci_m9_productive_gate.py: PASS** (exit code 0)
+
+### Artifacts — Session 15a (2026-05-28T15:57:27Z)
+```
+generated_at_utc: 2026-05-28T15:57:27Z
+rpc_provider: publicnode, BASE_RPC=https://base.publicnode.com
+duration_fulfilled: True, elapsed_s: 928.2, sweeps_completed: 14
+cycles_found: 2800, cycles_quoteable: 2622, cycles_positive_gross: 0
+qsr: 0.9364  ✅ PASS (threshold 0.80)
+multicall_success_rate: 1.0  ✅ PASS (threshold 0.90)
+data_completeness: 1.0  ✅ PASS (threshold 0.98)
+toxic_route_rate: 0.6331  ✅ PASS (threshold <0.90)
+duration_fulfilled: True  ✅ PASS
+unverified_active_routes: 0  ✅ PASS
+runtime_gates.all_pass: True  ✅
+pool_quality_lane: productive
+depth_quarantine_skipped: 60
+http_429_count: 0
+economics_gate_status: BLOCKED_NO_POSITIVE_GROSS
+economics_blocker_class: MARKET_NO_POSITIVE_GROSS
+loss_reason_histogram: {UNFAVORABLE_PRICES: 747, FEE_DRAG: 215, TOXIC_ROUTE_PRICE_IMPACT: 1660, QUOTE_FAILED: 178}
+```
+
+---
+
+**Previous Status**: RUNTIME_BLOCKED__MULTICALL_BYPASSES_FAILOVER — Session 13 (2026-05-28): BUG-N1 (ProviderRouter failover) confirmed working at routing level — 3 failovers in session 12b. Curve discovery fixed (26 pools). Pool verifier: 172 active routes. qsr=0.1395 FAIL — root cause: multicall quote path reads raw `BASE_RPC` (dRPC), bypasses ProviderRouter entirely → 86% 429 rate → economics_blocker_class=PROVIDER_QUALITY_BLOCKED.
+
+**Session 13 changes (2026-05-28):**
+- ✅ **BUG-N1 CONFIRMED (runtime)**: `is_failed_over=True`; 3 sweep-level failovers in 15-min run: Sweep 1→publicnode.com, Sweep 3→llamarpc.com, Sweep 5→blockpi.network
+- ✅ **Curve discovery fixed** (2 bugs): (1) `_eth_call` missing `w3.to_checksum_address()` → pool_count()=0 fixed; (2) `_SEL_POOL_LIST` wrong selector `f7b0d5e9` → `3a1d5d8e` fixed; **26 pools admitted** (of 446 total factory pools)
+- ✅ **Pool verifier ran**: `data/tmp/m9_verified_inventory.json` — 172 active routes, 818 quarantined (716 FACTORY_NO_POOL, 57 ZERO_LIQUIDITY, 45 UNSUPPORTED_DEX_TYPE). Use `--require-factory-verified` to eliminate unverified_active_routes=51.
+- ✅ **Failover regression test** (Step 4): `tests/unit/test_provider_router_pool.py` — 9/9 pass including 2 sweep-level failover regression tests
+- ✅ **events_potentially_missed** (Step 5): `monitoring/sniper_artifacts.py::make_empty_sniper_state()` field added
+- ✅ **B-numbering sync** (Step 6): `todo_RPC_blockers.md` Status column updated (B1-B6)
+- ✅ **M8.1 sniper** (Step 7): qsr=1.0, candidates=1536, passes=359
+- ❌ **qsr=0.1395 FAIL**: `multicall_success_rate=0.2083`, `data_completeness=0.502`, 86% quote calls hit dRPC directly → root cause: multicall HTTP session uses static `BASE_RPC` url, NOT `router.get_url()` at sweep time
+
+### Artifacts — Session 12b (2026-05-28T13:29:48Z)
+```
+generated_at_utc: 2026-05-28T13:29:48Z
+rpc_provider: drpc, rpc_source: chain_env_BASE_RPC
+duration_fulfilled: True, elapsed_s: 949.6, sweeps_completed: 6
+cycles_found: 1154, cycles_quoteable: 161, cycles_positive_gross: 0
+qsr: 0.1395  ← FAIL (threshold 0.80)
+multicall_success_rate: 0.2083  ← FAIL (threshold 0.90)
+data_completeness: 0.502  ← FAIL (threshold 0.98)
+http_429_count: 993 / actual_http_calls: 2622 = 86% error rate
+quote_rpc_error_rate: 0.860485
+multicall_stats: attempted=48, success=10, http_429=31, retry_count=21
+unverified_active_routes: 51  ← resolved with --require-factory-verified
+is_failed_over: True  ✅
+extras_count: 9  ✅
+provider_router_snapshot: 3 failovers (sweeps 1/3/5)
+economics_gate_status: BLOCKED_QSR
+economics_blocker_class: PROVIDER_QUALITY_BLOCKED
+```
+
+### Root cause: multicall bypasses ProviderRouter
+The M9 runner's multicall quote layer (`quote_backend: direct_http`) holds a persistent `aiohttp.ClientSession` pointing at the initial `BASE_RPC` URL (dRPC). When ProviderRouter fails over for routing calls, the multicall layer continues hitting dRPC. 86% of 1154 quote cycles get 429s — ProviderRouter failover is transparent to the multicall path.
+
+**Fix needed (B1+B2):** Wire multicall HTTP requests through `provider_router.get_url()` at each sweep start, OR give the multicall layer its own URL rotation logic using the extras pool.
+
+---
+
+**Session 11 changes (2026-05-28):**
+
 - `m9/graph_arb/bridge_builder.py` Stage 5a: `_load_curve_discovery_routes()` loads `m9_curve_discovery_latest.json`; routes enter `active_routes` with `source=curve_factory_discovery`, `factory_verified=True`, `metadata_seeded=False`. New `curve_discovery_count` metric in `bridge_source_metrics`. New `curve_discovery_path` param to `build_bridge_inventory()` (default: rolling path).
 - `m9/graph_arb/bridge_builder.py` semantic fix: `_build_static_curve_routes()` now sets `factory_verified=False` + `metadata_seeded=True` on seed routes (previously had wrong `factory_verified=True`).
 - `config/adapter_metadata.yaml`: added `factory_stable_ng` and `anchor_tokens` fields under `curve.base` (trust anchors for discovery script).
@@ -175,6 +246,7 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 11. **ACTIVE**: dRPC 429 throttling (qsr=0.20 in last online run); use Alchemy for next validation
 12. **ACTIVE**: Balancer pool_ids not verified on-chain; `adapter_metadata.yaml` has vault_address + template but no real pool_ids
 13. **ACTIVE**: M8 sniper WS incompatibility with Alchemy (graph_ready_from_m8=0 in Alchemy runs)
+14. **ACTIVE (B1+B2)**: multicall quote HTTP layer uses static `BASE_RPC` URL (dRPC), bypasses ProviderRouter entirely → failover transparent to quotes → qsr=0.14 despite routing-level failover confirmed working. Fix: call `provider_router.get_url()` at each sweep start to rotate multicall endpoint with the extras pool.
 
 ---
 
@@ -192,10 +264,15 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 [DONE]   config/adapter_metadata.yaml: 2 real Curve pools on Base (factory-stable-ng-47/48) (Session 8)
 [DONE]   curve_stable enabled in exotic_base_anchor.yaml with real factory (Session 8)
 [DONE]   economics_blocker_class: QSR check precedes positive_gross check (Session 8)
-[NEXT_1] Use Alchemy RPC for next online validation: expect qsr≥0.8, Curve pools in cycles_by_adapter_family
-[NEXT_2] Verify Balancer pool_ids on-chain via cast/web3; populate balancer.base.pools in adapter_metadata.yaml
-[NEXT_3] Fix M8 sniper WS incompatibility with Alchemy so graph_ready_from_m8 > 0
-[NEXT_4] ci_m9_productive_gate.py --strict-bridge → target GATE_EXIT=0
+[DONE]   Curve discovery 2 bugs fixed; 26 pools admitted from Base factory (Session 13)
+[DONE]   Pool verifier: 172 active, 818 quarantined; --require-factory-verified flag ready (Session 13)
+[DONE]   BUG-N1 confirmed runtime: is_failed_over=True, 3 sweep-level failovers (Session 13)
+[NEXT_1] B1+B2 fix: wire multicall HTTP through provider_router.get_url() at sweep start (or separate URL rotation)
+[NEXT_2] Re-run M9 15min with B1+B2 fix + --require-factory-verified → target qsr≥0.50
+[NEXT_3] Gate step 3: raise thresholds qsr≥0.80, data_completeness≥0.98 after NEXT_2 passes
+[NEXT_4] Verify Balancer pool_ids on-chain via cast/web3; populate balancer.base.pools in adapter_metadata.yaml
+[NEXT_5] Fix M8 sniper WS incompatibility with Alchemy so graph_ready_from_m8 > 0
+[NEXT_6] ci_m9_productive_gate.py --strict-bridge → target GATE_EXIT=0
 `
 
 ## Scope

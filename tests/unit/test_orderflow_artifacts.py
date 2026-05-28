@@ -2080,6 +2080,8 @@ class TestM7A532RollingCanonicalSet:
             "m9_graph_latest.json",
             # M9: bridge inventory (M8→M9 pipeline output)
             "m9_bridge_inventory_latest.json",
+            # M9: factory-enumerated Curve pool discovery (rolling, overwritten)
+            "m9_curve_discovery_latest.json",
         }
         for f in rolling.iterdir():
             if not f.is_file() or f.name.endswith(".tmp"):

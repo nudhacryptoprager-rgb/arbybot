@@ -59,6 +59,41 @@ _PUBLIC_FALLBACKS = {
     "zksync": "https://mainnet.era.zksync.io",
 }
 
+# Extended public HTTP fallback pool (no API key required).
+# Used by ProviderRouter polyglot fanout when ARBY_USE_PUBLIC_POOL=1.
+# Ordered roughly by observed reliability/latency (best first).
+_PUBLIC_HTTP_FALLBACKS = {
+    "base": [
+        "https://mainnet.base.org",
+        "https://base-rpc.publicnode.com",
+        "https://base.llamarpc.com",
+        "https://base.blockpi.network/v1/rpc/public",
+        "https://1rpc.io/base",
+        "https://base.meowrpc.com",
+        "https://base-mainnet.public.blastapi.io",
+        "https://endpoints.omniatech.io/v1/base/mainnet/public",
+    ],
+    "arbitrum": [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum-one-rpc.publicnode.com",
+        "https://arbitrum.llamarpc.com",
+        "https://arbitrum.blockpi.network/v1/rpc/public",
+        "https://1rpc.io/arb",
+        "https://arbitrum.meowrpc.com",
+        "https://arbitrum-one.public.blastapi.io",
+    ],
+    "linea": [
+        "https://rpc.linea.build",
+        "https://linea-rpc.publicnode.com",
+        "https://1rpc.io/linea",
+    ],
+    "mantle": [
+        "https://rpc.mantle.xyz",
+        "https://mantle-rpc.publicnode.com",
+        "https://1rpc.io/mantle",
+    ],
+}
+
 # Public WS fallbacks (free, no API key required).
 # Used when Alchemy WS is unavailable (e.g. 429 rate limit).
 _PUBLIC_WS_FALLBACKS = {
@@ -443,3 +478,15 @@ def get_rpc_url(chain: str) -> Optional[str]:
     return url
 
 
+def iter_public_http_fallbacks(network: Optional[str]) -> list:
+    """Return ordered list of free public HTTP RPC endpoints for *network*.
+
+    Used by polyglot fanout in ``ProviderRouter`` to spread load across
+    multiple no-API-key endpoints (publicnode, llamarpc, blockpi, ...).
+
+    Returns an empty list if the network is unknown.
+    """
+    net = _normalize_network(network)
+    if not net:
+        return []
+    return list(_PUBLIC_HTTP_FALLBACKS.get(net, ()))

@@ -88,6 +88,9 @@ def make_empty_sniper_state() -> Dict[str, Any]:
         "honeypot_check_pass": 0,
         "honeypot_check_fail": 0,
         "snipe_candidates_total": 0,
+        # Guaranteed present so artifact always has this field visible.
+        # Populated by FunnelTracker.snapshot(); stays 0 when no poll errors.
+        "events_potentially_missed": 0,
     }
 
 

@@ -77,10 +77,17 @@ class TestEthCallRaw:
 
 class TestProbeQuoteRawHttp:
 
-    def _call(self, adapter: str, result_hex: str, amount_in: int = 1_000_000) -> "QuoteResult":  # type: ignore[name-defined]
+    def _call(
+        self,
+        adapter: str,
+        result_hex: str,
+        amount_in: int = 1_000_000,
+        token_in_addr: str = "0x0000000000000000000000000000000000000001",
+        token_out_addr: str = "0x0000000000000000000000000000000000000002",
+    ) -> "QuoteResult":  # type: ignore[name-defined]
         route = _make_route(adapter)
-        token_in = _make_token("USDC", decimals=6)
-        token_out = _make_token("WETH", decimals=18)
+        token_in = _make_token("USDC", addr=token_in_addr, decimals=6)
+        token_out = _make_token("WETH", addr=token_out_addr, decimals=18)
 
         mock_resp = _mock_httpx_response(result_hex)
         with patch("m9.graph_arb.raw_http_probe._get_client") as mock_get_client:
@@ -124,6 +131,24 @@ class TestProbeQuoteRawHttp:
         assert result.ok is True
         # constant product: (1000 * 997 * r1) // (r0 * 1000 + 1000 * 997)
         expected = (amount_in * 997 * r1) // (r0 * 1000 + amount_in * 997)
+        assert result.amount_out == expected
+
+    def test_uniswap_v2_reversed_token_order_uses_reserve1_to_reserve0(self):
+        # V2 pair reserves are token0/token1 by address. If token_in address is
+        # greater than token_out address, the quote direction is reserve1 -> reserve0.
+        reserve_out = 1_000_000_000
+        reserve_in = 2_000_000_000
+        result_hex = "0x" + _encode_uint256(reserve_out) + _encode_uint256(reserve_in) + _encode_uint256(0)
+        amount_in = 1_000
+        result = self._call(
+            "uniswap_v2",
+            result_hex,
+            amount_in=amount_in,
+            token_in_addr="0x0000000000000000000000000000000000000002",
+            token_out_addr="0x0000000000000000000000000000000000000001",
+        )
+        assert result.ok is True
+        expected = (amount_in * 997 * reserve_out) // (reserve_in * 1000 + amount_in * 997)
         assert result.amount_out == expected
 
     def test_zero_output_returns_failed(self):

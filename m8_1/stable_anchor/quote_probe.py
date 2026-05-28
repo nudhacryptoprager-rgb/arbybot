@@ -89,6 +89,20 @@ def _decode_quote_response(hex_result: str) -> "tuple[int, Optional[int]]":
     return amount_out, gas_est
 
 
+def _v2_reserves_for_direction(
+    reserve0: int,
+    reserve1: int,
+    token_in: TokenInfo,
+    token_out: TokenInfo,
+) -> tuple[int, int]:
+    """Map V2 reserves from token0/token1 order to the requested quote direction."""
+    addr_in = (token_in.address or "").lower()
+    addr_out = (token_out.address or "").lower()
+    if not addr_in or not addr_out or addr_in == addr_out:
+        raise ValueError("invalid V2 token direction")
+    return (reserve0, reserve1) if addr_in < addr_out else (reserve1, reserve0)
+
+
 def _encode_v4_call(
     token_in: str, token_out: str, fee: int, tick_spacing: int,
     hooks: Optional[str], exact_amount: int
@@ -238,10 +252,11 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
                 raise ValueError(f"getReserves too short: {len(raw)} hex chars")
             r0 = int(raw[:64], 16)
             r1 = int(raw[64:128], 16)
-            if r0 == 0 or r1 == 0:
+            reserve_in, reserve_out = _v2_reserves_for_direction(r0, r1, token_in, token_out)
+            if reserve_in == 0 or reserve_out == 0:
                 raise ValueError("zero reserves")
             # constant product formula
-            amount_out = (amount_in * 997 * r1) // (r0 * 1000 + amount_in * 997)
+            amount_out = (amount_in * 997 * reserve_out) // (reserve_in * 1000 + amount_in * 997)
             gas_est = None
         else:
             raise ValueError(f"unsupported adapter_type: {route.adapter_type!r}")

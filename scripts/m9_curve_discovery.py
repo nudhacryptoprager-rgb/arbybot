@@ -63,7 +63,7 @@ _DEFAULT_MAX_POOLS: int = 200
 # factory: pool_count() = 0x956aae3a, pool_list(uint256) = 0xf7b0d5e9 (StableSwap-NG)
 # pool: coins(uint256) = 0xc6610657  (returns address of coin at index i)
 _SEL_POOL_COUNT = bytes.fromhex("956aae3a")
-_SEL_POOL_LIST = bytes.fromhex("f7b0d5e9")   # pool_list(uint256 i) → address
+_SEL_POOL_LIST = bytes.fromhex("3a1d5d8e")   # pool_list(uint256 i) → address  [keccak4 verified]
 _SEL_COINS = bytes.fromhex("c6610657")        # coins(uint256 i) → address
 
 _OUTPUT_DEFAULT = "data/runs/_rolling/m9_curve_discovery_latest.json"
@@ -101,7 +101,9 @@ def _decode_uint256(data: bytes) -> int:
 def _eth_call(w3: Any, to: str, data: bytes) -> bytes:
     """Perform an eth_call and return raw bytes result."""
     hex_data = "0x" + data.hex()
-    result = w3.eth.call({"to": to, "data": hex_data})
+    # web3.py requires checksummed addresses; factory addresses may be stored lowercase.
+    checksum_to = w3.to_checksum_address(to)
+    result = w3.eth.call({"to": checksum_to, "data": hex_data})
     if isinstance(result, str):
         result = bytes.fromhex(result.removeprefix("0x"))
     return result

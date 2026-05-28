@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -49,6 +50,18 @@ def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _http_status_from_raw_error(raw_error: Optional[str]) -> Optional[int]:
+    if not raw_error:
+        return None
+    match = re.search(r"\bHTTP\s+(\d{3})\b", raw_error)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def _setup_logging(verbose: bool = False) -> None:
     import logging
     level = logging.DEBUG if verbose else logging.INFO
@@ -56,6 +69,10 @@ def _setup_logging(verbose: bool = False) -> None:
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Suppress httpx HTTP-request INFO logs — they flood stderr at ~200 lines/sweep
+    # and fill the OS pipe buffer, causing the process to block on write.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _get_provider_throttle_snapshot() -> "dict | None":
@@ -785,12 +802,32 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _cycle_scheduler.hot_count, _cycle_scheduler.cold_count,
         )
 
-    # Step 8: Provider router — primary + optional secondary RPC with 429 failover
+    # Step 8: Provider router — primary + optional secondary RPC with 429 failover.
+    # Use from_env() so BASE_RPC_POOL / ARBY_USE_PUBLIC_POOL are picked up automatically.
+    # Pass secondary from CLI/ENV; extras pool comes from from_env() via the factory.
     from m9.graph_arb.provider_router import ProviderRouter
+    from core.rpc_urls import iter_public_http_fallbacks
     _secondary_rpc = getattr(args, "secondary_rpc", None) or os.environ.get("BASE_RPC_SECONDARY")
-    _router = ProviderRouter(primary=rpc_url or "", secondary=_secondary_rpc or None)
-    if _secondary_rpc:
-        log.info("ProviderRouter: secondary RPC configured for failover")
+    _chain_name = getattr(args, "chain", "base") or "base"
+    _extras_pool: list = []
+    _pool_raw = os.environ.get(f"{_chain_name.upper()}_RPC_POOL", "")
+    if _pool_raw:
+        _extras_pool.extend([u.strip() for u in _pool_raw.split(",") if u.strip()])
+    if str(os.environ.get("ARBY_USE_PUBLIC_POOL", "")).strip() == "1":
+        _extras_pool.extend(iter_public_http_fallbacks(_chain_name))
+    _router = ProviderRouter(
+        primary=rpc_url or "",
+        secondary=_secondary_rpc or None,
+        extras=_extras_pool,
+        # Sweep-level telemetry: 1 signal per sweep, window=30s << sweep_duration ~130s.
+        # threshold=1 ensures failover triggers after the first sweep with 429s.
+        failover_threshold=int(os.environ.get("ARBY_PROVIDER_FAILOVER_THRESHOLD", "1")),
+    )
+    if _router.secondary or _router.snapshot().get("extras_count", 0) > 0:
+        log.info(
+            "ProviderRouter: secondary=%s extras=%d (polyglot pool active)",
+            bool(_router.secondary), _router.snapshot().get("extras_count", 0),
+        )
 
     # Step 2: Pool state cache (TTL-backed, survives across sweeps within session)
     from m9.graph_arb.pool_state_cache import PoolStateCache
@@ -809,6 +846,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         from m9.graph_arb.multicall_snapshot import snapshot_pool_states as _snapshot_pool_states
         from m9.graph_arb.multicall_snapshot import get_multicall_stats as _get_multicall_stats
         from m9.graph_arb.multicall_snapshot import reset_multicall_stats as _reset_multicall_stats
+        from m9.graph_arb.multicall_snapshot import get_adaptive_chunk_scale as _get_chunk_scale
         from m9.graph_arb.v3_prequote import should_skip_cycle as _should_skip_cycle
         _reset_multicall_stats()  # start fresh for this run
         log.info(
@@ -819,6 +857,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         _snapshot_pool_states = None  # type: ignore[assignment]
         _should_skip_cycle = None     # type: ignore[assignment]
         _get_multicall_stats = lambda: None  # type: ignore[assignment]
+        _get_chunk_scale = lambda: None  # type: ignore[assignment]
 
     _total_prequote_skipped = 0
     # Step 9 (GPT fix): 429-adaptive prequote threshold.
@@ -832,6 +871,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _ADAPT_STABLE_WINDOW = 5     # consecutive stable sweeps before relaxing
     _ADAPT_STEP_UP = 50.0        # bps increase on spike
     _ADAPT_STEP_DOWN = 25.0      # bps decrease on stable window
+
+    # Steps 1+2 (GPT session-14): Per-sweep w3 recreation when ProviderRouter selects
+    # a different endpoint (failover).  direct_http backend holds a Web3 instance
+    # constructed from the initial BASE_RPC; when the router fails over, w3 must be
+    # rebuilt from _active_rpc so leg quotes no longer target the 429-ridden primary.
+    # raw_http already receives rpc_url=_active_rpc directly and needs no change here.
+    _last_quote_rpc: "Optional[str]" = rpc_url
+    # Step 4 (GPT session-14): Collect per-sweep active RPC netloc for artifact traceability.
+    _active_rpc_by_sweep: "Dict[int, str]" = {}
 
     while time.monotonic() < deadline:
         if _cycle_scheduler is not None:
@@ -855,12 +903,44 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         # Step 8: get active RPC (primary or secondary after failover)
         _active_rpc = _router.get_url() if rpc_url else rpc_url
 
+        # Steps 1+2: Recreate w3 when router selects a different endpoint.
+        # direct_http keeps a persistent Web3(BASE_RPC) — after failover it must
+        # point to _active_rpc so leg quotes reach the healthy provider.
+        _quote_backend_str = getattr(args, "quote_backend", "direct_http")
+        if (
+            w3 is not None
+            and _active_rpc
+            and _active_rpc != _last_quote_rpc
+            and _quote_backend_str == "direct_http"
+        ):
+            try:
+                from web3 import Web3 as _Web3  # noqa: PLC0415
+                w3 = _Web3(_Web3.HTTPProvider(_active_rpc, request_kwargs={"timeout": 30}))
+                _fo_netloc = _active_rpc.split("/")[2] if _active_rpc.count("/") >= 2 else _active_rpc[:30]
+                log.info(
+                    "Quote w3 recreated from failover endpoint (sweep %d): %s",
+                    sweeps_completed + 1, _fo_netloc,
+                )
+            except Exception as _w3_rebuild_exc:
+                log.warning("Could not recreate w3 from failover RPC: %s", _w3_rebuild_exc)
+        _last_quote_rpc = _active_rpc
+        # Step 4: Track per-sweep source for artifact field active_rpc_by_sweep.
+        _rpc_netloc = (
+            _active_rpc.split("/")[2] if (_active_rpc or "").count("/") >= 2
+            else (_active_rpc or "unknown")[:30]
+        )
+        _active_rpc_by_sweep[sweeps_completed + 1] = _rpc_netloc
+
         # Steps 1+3+4+9: Multicall pool snapshot → V3 prequote pre-filter
         _sweep_prequote_skipped = 0
         _prequote_skipped_ids: list = []
         if _prequote_enabled and _snapshot_pool_states is not None and batch:
             try:
-                _pool_addrs = list({e.pool_address for c in batch for e in c.edges})
+                from m9.graph_arb.v3_prequote import _V3_COMPATIBLE_ADAPTERS as _V3_ADAPTERS
+                _pool_addrs = list({
+                    e.pool_address for c in batch for e in c.edges
+                    if e.adapter_type in _V3_ADAPTERS
+                })
                 _pool_states = _snapshot_pool_states(
                     _pool_addrs, rpc_url=_active_rpc, cache=_pool_cache
                 )
@@ -899,14 +979,28 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _cycle_scheduler.record_results(new_results)
             if _prequote_skipped_ids:
                 _cycle_scheduler.record_prequote_skips(_prequote_skipped_ids)
-        # Step 8: record 429s from sweep for provider router
-        _sweep_429s = sum(
+        # Step 8: record 429s and successes from sweep for provider router telemetry
+        _sweep_http_statuses = [
+            status
+            for qr in new_results
+            for leg in (qr.leg_results or [])
+            for status in [_http_status_from_raw_error(getattr(leg, "raw_error", None))]
+            if status is not None
+        ]
+        _sweep_provider_errors = [
+            status for status in _sweep_http_statuses
+            if status == 429 or status >= 500
+        ]
+        _sweep_ok = sum(
             1 for qr in new_results
             for leg in (qr.leg_results or [])
-            if not leg.ok and leg.raw_error and "429" in leg.raw_error
+            if leg.ok
         )
-        if _sweep_429s and _active_rpc:
-            _router.record_429(_active_rpc)
+        if _active_rpc:
+            if _sweep_provider_errors:
+                _router.record_http_error(_active_rpc, _sweep_provider_errors[0])
+            if _sweep_ok:
+                _router.record_success(_active_rpc)
         sweeps_completed += 1
         sweep_num += 1
 
@@ -981,7 +1075,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             unverified_active_routes=unverified_active_routes,
             prequote_cycles_skipped=_total_prequote_skipped,
             scheduler_name=getattr(args, "scheduler", "priority"),
-            multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
+            multicall_stats={
+                **(_get_multicall_stats() or {}),
+                "adaptive_chunk_scale": _get_chunk_scale(),
+            } if _prequote_enabled else None,
             verified_inventory_exists=_verified_inventory_exists,
             sizes_usd_source=_sizes_usd_source,
             provider_router_snapshot=_router.snapshot(),
@@ -991,6 +1088,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             bridge_source_metrics=_bridge_source_metrics,
             m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
             cost_model=_cost_model,
+            active_rpc_by_sweep=dict(_active_rpc_by_sweep),
         )
         write_artifact(partial, args.artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -1077,7 +1175,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         unverified_active_routes=unverified_active_routes,
         prequote_cycles_skipped=_total_prequote_skipped,
         scheduler_name=getattr(args, "scheduler", "priority"),
-        multicall_stats=_get_multicall_stats() if _prequote_enabled else None,
+        multicall_stats={
+            **(_get_multicall_stats() or {}),
+            "adaptive_chunk_scale": _get_chunk_scale(),
+        } if _prequote_enabled else None,
         verified_inventory_exists=_verified_inventory_exists,
         sizes_usd_source=_sizes_usd_source,
         provider_router_snapshot=_router.snapshot(),
@@ -1087,6 +1188,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         bridge_source_metrics=_bridge_source_metrics,
         m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
         cost_model=_cost_model,
+        active_rpc_by_sweep=dict(_active_rpc_by_sweep),
     )
     write_artifact(artifact, args.artifact_path)
 

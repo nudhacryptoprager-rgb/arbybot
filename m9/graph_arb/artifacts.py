@@ -417,6 +417,9 @@ def build_artifact(
     m8_pool_addrs_for_annotation: "Optional[frozenset[str]]" = None,
     # Cost model from config (cost_model.profiles.default); enables estimated_cost_bps
     cost_model: Optional[Dict[str, Any]] = None,
+    # Step 4 (GPT session-14): Per-sweep active RPC netloc (sweep-number → masked label).
+    # Filled by runner after each sweep; allows tracing which endpoint served each sweep.
+    active_rpc_by_sweep: "Optional[Dict[int, str]]" = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -919,6 +922,8 @@ def build_artifact(
     # Per-endpoint provider router telemetry (Fix 2+3)
     if provider_router_snapshot is not None:
         infra_telemetry["provider_router_snapshot"] = provider_router_snapshot
+    if active_rpc_by_sweep:
+        infra_telemetry["active_rpc_by_sweep"] = active_rpc_by_sweep
     artifact["infra_telemetry"] = infra_telemetry
 
     # Runtime gates block (Step 6 GPT fix) — explicit pass/fail for each quality threshold
