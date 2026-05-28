@@ -71,6 +71,52 @@ _IMPACT_THRESHOLD_LOW = 0.10
 _V3_SELECTOR = bytes.fromhex("c6a5026a")
 # Slipstream Quoter selector: quoteExactInputSingle((address,address,uint256,int24,uint160))
 _SLIP_SELECTOR = bytes.fromhex("9e7defe6")
+# ve33 pool selector: getAmountOut(uint256 amountIn, address tokenIn) -> uint256
+_VE33_GET_AMOUNT_OUT_SELECTOR = bytes.fromhex("f140a35a")
+# UniswapV2 pool selector: getReserves() -> (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
+_V2_GET_RESERVES_SELECTOR = bytes.fromhex("0902f1ac")
+# Adapter type sets for routing
+_VE33_ADAPTER_TYPES = frozenset({"ve33", "ve33_stable"})
+_V2_FORK_ADAPTER_TYPES = frozenset({"uniswap_v2", "sushiswap_v2", "baseswap_v2"})
+
+
+def _encode_ve33_amount_out(amount_in: int, token_in: str) -> str:
+    """Encode getAmountOut(uint256 amountIn, address tokenIn) calldata for ve33 pools."""
+    amount_bytes = amount_in.to_bytes(32, "big")
+    token_bytes = int(token_in, 16).to_bytes(32, "big")
+    return "0x" + _VE33_GET_AMOUNT_OUT_SELECTOR.hex() + amount_bytes.hex() + token_bytes.hex()
+
+
+def _v2_amount_out_from_reserves(
+    pool_address: str,
+    addr_in: str,
+    addr_out: str,
+    amount_in: int,
+    rpc_url: str,
+) -> Optional[int]:
+    """Compute UniswapV2 amountOut from on-chain getReserves() via xy=k formula (0.3% fee)."""
+    calldata = "0x" + _V2_GET_RESERVES_SELECTOR.hex()
+    hex_result = _raw_eth_call(rpc_url, pool_address, calldata)
+    if not hex_result or hex_result == "0x":
+        return None
+    raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if len(raw) < 192:  # 3 x 32 bytes
+        return None
+    r0 = int(raw[:64], 16)
+    r1 = int(raw[64:128], 16)
+    if r0 == 0 or r1 == 0:
+        return None
+    # UniV2 sorts tokens: token0 is lower address
+    if int(addr_in, 16) < int(addr_out, 16):
+        reserve_in, reserve_out = r0, r1
+    else:
+        reserve_in, reserve_out = r1, r0
+    # xy=k with 0.3% fee: amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
+    numerator = amount_in * 997 * reserve_out
+    denominator = reserve_in * 1000 + amount_in * 997
+    if denominator == 0:
+        return None
+    return numerator // denominator
 
 
 def _encode_v3_call(token_in: str, token_out: str, amount_in: int, fee: int) -> str:
@@ -185,6 +231,11 @@ def probe_pool_depth(
         "depth_reject_reason": None,
     }
 
+    # For ve33 and v2 forks, the pool itself is the quoter; fall back to pool_address
+    if adapter_type in _VE33_ADAPTER_TYPES or adapter_type in _V2_FORK_ADAPTER_TYPES:
+        if not quoter or quoter == "0x" + "0" * 40:
+            quoter = pool_address
+
     if not quoter or quoter == "0x" + "0" * 40:
         result["probe_error"] = "NO_QUOTER"
         return result
@@ -216,9 +267,24 @@ def probe_pool_depth(
 
     result["probe_amount_in"] = amount_in
 
-    # Encode calldata
+    # Encode calldata or compute amount_out directly (for v2 forks via getReserves)
+    amount_out_precomputed: Optional[int] = None
+    calldata: Optional[str] = None
     try:
-        if adapter_type == "aerodrome_slipstream" and tick_spacing:
+        if adapter_type in _VE33_ADAPTER_TYPES:
+            calldata = _encode_ve33_amount_out(amount_in, addr0)
+        elif adapter_type in _V2_FORK_ADAPTER_TYPES:
+            pool_addr_for_probe = pool_address or quoter
+            amount_out_precomputed = _v2_amount_out_from_reserves(
+                pool_addr_for_probe, addr0, addr1, amount_in, rpc_url
+            )
+            if amount_out_precomputed is None:
+                result["probe_error"] = "V2_RESERVES_FAILED"
+                return result
+            if amount_out_precomputed == 0:
+                result["probe_error"] = "ZERO_AMOUNT_OUT"
+                return result
+        elif adapter_type == "aerodrome_slipstream" and tick_spacing:
             calldata = _encode_slipstream_call(addr0, addr1, amount_in, int(tick_spacing))
         else:
             calldata = _encode_v3_call(addr0, addr1, amount_in, fee)
@@ -226,21 +292,26 @@ def probe_pool_depth(
         result["probe_error"] = f"ENCODE_ERROR:{exc}"
         return result
 
-    # Call quoter
-    hex_result = _raw_eth_call(rpc_url, quoter, calldata)
-    if not hex_result or hex_result == "0x":
-        result["probe_error"] = "QUOTE_FAILED_OR_REVERT"
-        return result
-
-    try:
-        amount_out = _decode_quote_response(hex_result)
-    except Exception as exc:
-        result["probe_error"] = f"DECODE_ERROR:{exc}"
-        return result
-
-    if amount_out == 0:
-        result["probe_error"] = "ZERO_AMOUNT_OUT"
-        return result
+    if amount_out_precomputed is not None:
+        # v2 forks: reserves-based computation, no RPC quoter call needed
+        amount_out = amount_out_precomputed
+    else:
+        # Call quoter (v3, slipstream, ve33)
+        if not calldata:
+            result["probe_error"] = "NO_CALLDATA"
+            return result
+        hex_result = _raw_eth_call(rpc_url, quoter, calldata)
+        if not hex_result or hex_result == "0x":
+            result["probe_error"] = "QUOTE_FAILED_OR_REVERT"
+            return result
+        try:
+            amount_out = _decode_quote_response(hex_result)
+        except Exception as exc:
+            result["probe_error"] = f"DECODE_ERROR:{exc}"
+            return result
+        if amount_out == 0:
+            result["probe_error"] = "ZERO_AMOUNT_OUT"
+            return result
 
     result["probe_amount_out"] = amount_out
     result["probe_ok"] = True

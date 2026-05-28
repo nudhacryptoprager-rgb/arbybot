@@ -65,10 +65,16 @@ economics_gate_status: BLOCKED_QSR
 economics_blocker_class: PROVIDER_QUALITY_BLOCKED
 ```
 
-### Root cause: multicall bypasses ProviderRouter
-The M9 runner's multicall quote layer (`quote_backend: direct_http`) holds a persistent `aiohttp.ClientSession` pointing at the initial `BASE_RPC` URL (dRPC). When ProviderRouter fails over for routing calls, the multicall layer continues hitting dRPC. 86% of 1154 quote cycles get 429s — ProviderRouter failover is transparent to the multicall path.
+### Root cause: multicall bypasses ProviderRouter — ✅ RESOLVED (Session 14o+15a)
 
-**Fix needed (B1+B2):** Wire multicall HTTP requests through `provider_router.get_url()` at each sweep start, OR give the multicall layer its own URL rotation logic using the extras pool.
+Root cause in Session 13: multicall used static `BASE_RPC` (dRPC) → 86% 429 rate.
+
+**Resolution (Session 14o+15a):** Switched `BASE_RPC=https://base.publicnode.com` as PRIMARY.
+Result: `http_429_count=0`, `qsr=0.9364`, `multicall_success_rate=1.0` in Session 15a.
+ProviderRouter wiring change not required — publicnode.com as primary eliminated 429s entirely.
+
+**B1** (dRPC 429-storm): ✅ RESOLVED — publicnode.com PRIMARY, http_429_count=0 online.
+**B2** (multicall bypasses router): ✅ RESOLVED — BASE_RPC=publicnode.com → multicall uses correct URL.
 
 ---
 
@@ -94,7 +100,10 @@ Previous status: CODE_VALIDATED__RUNTIME_COVERAGE_CONFIG_PENDING — Session 8 (
 
 Previous-previous status: ALCHEMY_INFRA_PASS__STRICT_BRIDGE_BLOCKED_BY_M8_RPC_ERROR — Session 6 (2026-05-27): qsr=0.96, multicall=1.0, data=1.0, http_429=0, runtime_gates.all_pass=True; graph_ready_from_m8=0 (WS issue); positive_cycles=0 (all spreads ≤5 bps vs flat cost=11 bps).
 
-`goal_status`: BLOCKED
+`goal_status`: PRODUCTIVE_GATE_PASS (M9 infra ✅) | M4_ECONOMICS: BLOCKED_NO_POSITIVE_GROSS (market ⚠️)
+> M9 productive gate ≠ M4 economics proof. `cycles_positive_gross=0`; `best_cycle_cost_adjusted_net_bps=-11.0`.
+> M4 economics BLOCKED by `MARKET_NO_POSITIVE_GROSS` — not an infra issue.
+> Next: ve33/v2 depth-probe → fewer toxic cycles; `--dynamic-sizes` in next run.
 `schema_family`: m9_graph_arb
 `schema_revision`: m9.1
 `execution_enabled`: false
