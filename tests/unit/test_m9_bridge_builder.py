@@ -184,9 +184,11 @@ class TestBridgeBuilderIntegration:
         assert out.exists()
         result = json.loads(out.read_text(encoding="utf-8"))
         assert result["schema_version"] == "m9_bridge_inventory.1"
+        # Default mode: no config-seed injection → exactly 5 base routes
         assert len(result["active_routes"]) == 5
         assert metrics["graph_ready_total"] == 5
         assert metrics["m8_new_pools_input"] == 0
+        assert metrics.get("metadata_seeded_count", 0) == 0
 
     def test_funnel_counts_anchor_connected(self, tmp_path):
         """Events with USDC/WETH pair are counted as anchor_connected."""
@@ -277,6 +279,7 @@ class TestBridgeBuilderIntegration:
         result = json.loads(out.read_text(encoding="utf-8"))
         assert "bridge_source_metrics" in result
         bsm = result["bridge_source_metrics"]
+        # Default mode: 4 base routes, no seed injection
         assert bsm["graph_ready_total"] == 4
         assert isinstance(bsm["m8_stale"], bool)
         assert isinstance(bsm["m8_1_stale"], bool)
@@ -1024,3 +1027,281 @@ class TestSymbolCollisionMultiVenue:
         assert "m8_multi_venue_verified_count" in metrics
         assert metrics["m8_multi_venue_seen_count"] >= metrics["m8_multi_venue_quoteable_count"]
         assert metrics["m8_multi_venue_verified_count"] == metrics["m8_multi_venue_quoteable_count"]
+
+
+# ---------------------------------------------------------------------------
+# TestConfigSeedContract: metadata_seeded_count / include_config_seed contract
+# ---------------------------------------------------------------------------
+
+class TestConfigSeedContract:
+    """Verifies that default bridge excludes adapter_metadata routes (production contract).
+
+    These tests lock the distinction between:
+      - Production mode (include_config_seed=False, default): only dynamic discovery routes
+      - Seed mode (include_config_seed=True): adds pre-configured Curve pools from
+        adapter_metadata.yaml for smoke / bootstrap runs.
+    """
+
+    def _write_json(self, path, data) -> None:
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def _build(self, tmp_path, include_seed=False, n_base=3):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        self._write_json(sniper, _make_sniper_artifact([]))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(n_base))
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+            include_config_seed=include_seed,
+            # isolate from real discovery artifact on disk
+            curve_discovery_path=str(tmp_path / "nodisc.json"),
+        )
+        result = json.loads(out.read_text(encoding="utf-8"))
+        return metrics, result
+
+    def test_default_mode_excludes_adapter_metadata_routes(self, tmp_path):
+        """Default bridge (include_config_seed=False) must NOT produce source=adapter_metadata routes.
+
+        This is the production contract: all routes must come from dynamic discovery,
+        not from a manually curated list in config/adapter_metadata.yaml.
+        """
+        metrics, result = self._build(tmp_path, include_seed=False)
+        seed_routes = [
+            r for r in result.get("active_routes", [])
+            if r.get("source") == "adapter_metadata"
+        ]
+        assert len(seed_routes) == 0, (
+            f"Default bridge must NOT inject adapter_metadata routes; got {len(seed_routes)}"
+        )
+        assert metrics["metadata_seeded_count"] == 0
+        assert metrics["include_config_seed"] is False
+
+    def test_default_mode_graph_ready_total_equals_base_inv(self, tmp_path):
+        """Default bridge: graph_ready_total == n_base (no extras from seed injection)."""
+        n_base = 4
+        metrics, result = self._build(tmp_path, include_seed=False, n_base=n_base)
+        assert metrics["graph_ready_total"] == n_base
+        assert len(result["active_routes"]) == n_base
+
+    def test_seed_mode_injects_adapter_metadata_routes(self, tmp_path):
+        """When include_config_seed=True, adapter_metadata Curve routes are injected."""
+        metrics, result = self._build(tmp_path, include_seed=True)
+        # The real adapter_metadata.yaml has 2 Curve pools on base.
+        # If it has >=1 pool, metadata_seeded_count must be > 0.
+        # Guard: only check if adapter_metadata.yaml actually has pools configured.
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+        meta = load_adapter_metadata()
+        curve_base_count = len(meta.curve_pools.get("base", {}))
+        if curve_base_count > 0:
+            seed_routes = [
+                r for r in result.get("active_routes", [])
+                if r.get("source") == "adapter_metadata"
+            ]
+            assert len(seed_routes) > 0, (
+                "Seed mode must inject adapter_metadata routes when Curve pools are configured"
+            )
+            assert metrics["metadata_seeded_count"] == curve_base_count
+            assert metrics["include_config_seed"] is True
+
+    def test_seed_mode_routes_not_factory_verified(self, tmp_path):
+        """Seed routes must NOT be counted in factory_verified_count.
+
+        factory_verified_count must only count routes from actual factory event evidence.
+        This separates 'we manually configured this pool' from 'factory emitted this event'.
+        """
+        metrics_seed, _ = self._build(tmp_path, include_seed=True, n_base=3)
+        metrics_noseed, _ = self._build(tmp_path, include_seed=False, n_base=3)
+        # factory_verified_count must be the same in both modes
+        # (seed routes don't increment it)
+        assert metrics_seed["factory_verified_count"] == metrics_noseed["factory_verified_count"], (
+            "Seed routes must not be counted in factory_verified_count"
+        )
+
+    def test_bridge_metrics_has_seed_fields(self, tmp_path):
+        """metadata_seeded_count and include_config_seed must always be present in metrics."""
+        for seed_flag in [False, True]:
+            metrics, _ = self._build(tmp_path, include_seed=seed_flag)
+            assert "metadata_seeded_count" in metrics, "metadata_seeded_count key missing"
+            assert "include_config_seed" in metrics, "include_config_seed key missing"
+            assert metrics["include_config_seed"] == seed_flag
+
+
+# ---------------------------------------------------------------------------
+# TestCurveDiscoveryContract: _load_curve_discovery_routes + bridge wiring
+# ---------------------------------------------------------------------------
+
+class TestCurveDiscoveryContract:
+    """Verifies that m9_curve_discovery_latest.json wiring into bridge Stage 5a works.
+
+    These tests lock:
+      - discovered Curve pools enter active_routes in production mode (no seed flag)
+      - routes have source=curve_factory_discovery and factory_verified=True
+      - curve_discovery_count is present in bridge_source_metrics
+      - source=adapter_metadata never enters production active_routes
+    """
+
+    def _write_json(self, path, data) -> None:
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def _make_discovery_artifact(
+        self, chain: str = "base", pool_addr: str = "0xcurvepool0001", n_pools: int = 1
+    ) -> Dict[str, Any]:
+        from datetime import datetime, timezone
+        pools = [
+            {
+                "pool_address": f"0xcurvepool{i:04d}",
+                "pool_kind": "stable",
+                "coin_indices": {"USDC": 0, "MONEY": 1},
+                "coin_addresses": {
+                    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 0,
+                    "0x69420f9e38a4e60a62224c489be4bf7a94402496": 1,
+                },
+                "coin_count": 2,
+                "source": "curve_factory_discovery",
+                "factory_address": "0xd2002373543ce3527023c75e7518c274a51ce712",
+                "discovered_at_utc": "2026-05-30T10:00:00Z",
+            }
+            for i in range(n_pools)
+        ]
+        return {
+            "schema_version": "m9_curve_discovery.1",
+            "generated_at_utc": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "chain": chain,
+            "factory_address": "0xd2002373543ce3527023c75e7518c274a51ce712",
+            "discovered_pools": pools,
+            "discovered_count": n_pools,
+        }
+
+    def _build_with_disc(
+        self,
+        tmp_path,
+        include_seed: bool = False,
+        n_base: int = 2,
+        disc_artifact=None,
+    ):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+        disc = tmp_path / "disc.json"
+        self._write_json(sniper, _make_sniper_artifact([]))
+        self._write_json(anchor, _make_anchor_artifact(0))
+        self._write_json(base, _make_base_inv(n_base))
+        if disc_artifact is not None:
+            self._write_json(disc, disc_artifact)
+            disc_path = str(disc)
+        else:
+            disc_path = str(tmp_path / "nodisc.json")  # non-existent → empty
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+            include_config_seed=include_seed,
+            curve_discovery_path=disc_path,
+        )
+        result = json.loads(out.read_text(encoding="utf-8"))
+        return metrics, result
+
+    def test_discovery_routes_enter_production_mode(self, tmp_path):
+        """Discovered Curve routes must enter active_routes without seed flag."""
+        n_base = 2
+        disc = self._make_discovery_artifact(n_pools=2)
+        metrics, result = self._build_with_disc(tmp_path, include_seed=False, n_base=n_base, disc_artifact=disc)
+        disc_routes = [
+            r for r in result["active_routes"]
+            if r.get("source") == "curve_factory_discovery"
+        ]
+        assert len(disc_routes) == 2, (
+            f"Expected 2 discovery routes in active_routes, got {len(disc_routes)}"
+        )
+        assert metrics["curve_discovery_count"] == 2
+
+    def test_discovery_routes_have_correct_fields(self, tmp_path):
+        """Discovered routes must have factory_verified=True and metadata_seeded=False."""
+        disc = self._make_discovery_artifact(n_pools=1)
+        _, result = self._build_with_disc(tmp_path, disc_artifact=disc)
+        disc_routes = [
+            r for r in result["active_routes"]
+            if r.get("source") == "curve_factory_discovery"
+        ]
+        assert len(disc_routes) == 1
+        r = disc_routes[0]
+        assert r.get("factory_verified") is True, "discovery routes must be factory_verified=True"
+        assert r.get("metadata_seeded") is False, "discovery routes must have metadata_seeded=False"
+        assert r.get("adapter_type") == "curve_stable"
+
+    def test_no_discovery_file_gives_zero_count(self, tmp_path):
+        """When discovery artifact is absent, curve_discovery_count=0 and active_routes unaffected."""
+        n_base = 3
+        metrics, result = self._build_with_disc(tmp_path, n_base=n_base, disc_artifact=None)
+        assert metrics["curve_discovery_count"] == 0
+        assert metrics["graph_ready_total"] == n_base
+
+    def test_discovery_deduplicates_by_pool_address(self, tmp_path):
+        """Discovered pool already in base_active must not be added again."""
+        # Use pool address that matches a base inventory pool
+        base_pool_addr = "0xpool0000"  # _make_base_inv generates pool0000..poolNNNN
+        disc = self._make_discovery_artifact(n_pools=1)
+        # Override pool_address to clash with base
+        disc["discovered_pools"][0]["pool_address"] = base_pool_addr
+        n_base = 2
+        metrics, result = self._build_with_disc(tmp_path, n_base=n_base, disc_artifact=disc)
+        # Should NOT have added duplicate
+        assert metrics["curve_discovery_count"] == 0, (
+            "Duplicate pool_address must not be re-admitted from discovery"
+        )
+        assert metrics["graph_ready_total"] == n_base
+
+    def test_curve_discovery_count_always_in_metrics(self, tmp_path):
+        """curve_discovery_count must always be present in bridge_source_metrics."""
+        for with_disc in [True, False]:
+            disc = self._make_discovery_artifact() if with_disc else None
+            metrics, _ = self._build_with_disc(tmp_path, disc_artifact=disc)
+            assert "curve_discovery_count" in metrics, (
+                "curve_discovery_count key must always be present in bridge_source_metrics"
+            )
+
+    def test_adapter_metadata_never_in_production_active_routes(self, tmp_path):
+        """source=adapter_metadata must NEVER appear in default (production) active_routes."""
+        # Even if both discovery artifact and production mode are set, no seed routes
+        disc = self._make_discovery_artifact(n_pools=1)
+        metrics, result = self._build_with_disc(tmp_path, include_seed=False, disc_artifact=disc)
+        seed_routes = [
+            r for r in result["active_routes"]
+            if r.get("source") == "adapter_metadata"
+        ]
+        assert len(seed_routes) == 0, (
+            f"source=adapter_metadata must never appear in production mode; found {len(seed_routes)}"
+        )
+        assert metrics["metadata_seeded_count"] == 0
+
+    def test_seed_routes_have_factory_verified_false(self, tmp_path):
+        """Seed routes from adapter_metadata.yaml must have factory_verified=False.
+
+        They are manually curated, not derived from factory contract enumeration.
+        """
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+        meta = load_adapter_metadata()
+        if not meta.curve_pools.get("base"):
+            pytest.skip("No Curve pools in adapter_metadata.yaml; cannot test seed route fields")
+        metrics, result = self._build_with_disc(tmp_path, include_seed=True)
+        seed_routes = [
+            r for r in result["active_routes"]
+            if r.get("source") == "adapter_metadata"
+        ]
+        for r in seed_routes:
+            assert r.get("factory_verified") is False, (
+                f"Seed route {r.get('pool_address')} must have factory_verified=False"
+            )
+            assert r.get("metadata_seeded") is True, (
+                f"Seed route {r.get('pool_address')} must have metadata_seeded=True"
+            )

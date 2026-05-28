@@ -123,6 +123,44 @@ def _enumerate_routes(cfg: Any) -> List[DexRoute]:
                     tick_spacing=ts,
                     curve_coin0_sym=None,
                 ))
+        elif dcfg.adapter_type == "curve_stable":
+            # Load Curve pool metadata from adapter_metadata.yaml
+            from m9.graph_arb.adapter_metadata import load_adapter_metadata
+            _meta = load_adapter_metadata()
+            _chain = getattr(cfg, "chain", "base")
+            _curve_chain_pools = _meta.curve_pools.get(_chain, {})
+            for _pool_addr, _curve_pool in _curve_chain_pools.items():
+                _idx_to_sym = {v: k for k, v in _curve_pool.coin_indices.items()}
+                _coin0_sym = _idx_to_sym.get(0)
+                _coin1_sym = _idx_to_sym.get(1)
+                if _coin0_sym is None or _coin1_sym is None:
+                    continue
+                # Route 0→1 (coin[0] → coin[1])
+                routes.append(DexRoute(
+                    dex_id=dex_id,
+                    adapter_type="curve_stable",
+                    quoter=_pool_addr,
+                    fee=0,
+                    tick_spacing=None,
+                    curve_coin0_sym=_coin0_sym,
+                    curve_coin1_sym=_coin1_sym,
+                    token_in_index=0,
+                    token_out_index=1,
+                    pool_kind=_curve_pool.pool_kind,
+                ))
+                # Route 1→0 (coin[1] → coin[0])
+                routes.append(DexRoute(
+                    dex_id=dex_id,
+                    adapter_type="curve_stable",
+                    quoter=_pool_addr,
+                    fee=0,
+                    tick_spacing=None,
+                    curve_coin0_sym=_coin0_sym,
+                    curve_coin1_sym=_coin1_sym,
+                    token_in_index=1,
+                    token_out_index=0,
+                    pool_kind=_curve_pool.pool_kind,
+                ))
     return routes
 
 
@@ -151,7 +189,24 @@ def _probe_all(
                     _log.info("deadline reached, stopping probe")
                     break
                 candidates_total += 1
-                amount_in = size_usd_to_amount_in(t0, size_usd)
+                # For Curve routes: match pair tokens to pool coin symbols and
+                # pick the correct token for amount_in (index-based, not alphabetical).
+                if route.adapter_type == "curve_stable":
+                    _c0 = route.curve_coin0_sym  # symbol at coin index 0
+                    _c1 = getattr(route, "curve_coin1_sym", None)  # symbol at coin index 1
+                    _expected_in_sym = _c0 if route.token_in_index == 0 else _c1
+                    _expected_out_sym = _c1 if route.token_out_index == 1 else _c0
+                    if t0.symbol == _expected_in_sym and t1.symbol == _expected_out_sym:
+                        _token_in_for_amount = t0
+                    elif t1.symbol == _expected_in_sym and t0.symbol == _expected_out_sym:
+                        _token_in_for_amount = t1
+                    else:
+                        # Pair incompatible with this Curve pool direction → skip
+                        candidates_total -= 1
+                        continue
+                    amount_in = size_usd_to_amount_in(_token_in_for_amount, size_usd)
+                else:
+                    amount_in = size_usd_to_amount_in(t0, size_usd)
                 try:
                     result: QuoteResult = probe_quote(w3, route, t0, t1, amount_in)
                     if result.ok:

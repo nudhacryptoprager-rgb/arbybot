@@ -79,6 +79,7 @@ _DEFAULT_SNIPER = "data/runs/_rolling/new_pool_sniper_latest.json"
 _DEFAULT_ANCHOR = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
 _DEFAULT_BASE_INV = "data/tmp/m9_depth_enriched_inventory.json"
 _BRIDGE_OUTPUT = "data/runs/_rolling/m9_bridge_inventory_latest.json"
+_DEFAULT_CURVE_DISCOVERY = "data/runs/_rolling/m9_curve_discovery_latest.json"
 
 _SCHEMA_VERSION = "m9_bridge_inventory.1"
 
@@ -128,6 +129,126 @@ def _is_anchor_connected(token0_sym: str, token1_sym: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Static pre-configured route injection
+# ---------------------------------------------------------------------------
+
+def _load_curve_discovery_routes(
+    chain: str = "base",
+    discovery_path: str = _DEFAULT_CURVE_DISCOVERY,
+    max_age_seconds: float = 4 * 3600,
+) -> List[Dict[str, Any]]:
+    """Load discovered Curve pools from m9_curve_discovery_latest.json.
+
+    These routes are production-quality: they came from factory.pool_list()
+    enumeration with on-chain coins() verification (scripts/m9_curve_discovery.py).
+    factory_verified=True because they were found via factory contract enumeration.
+
+    Returns empty list when:
+    - artifact does not exist (not yet generated)
+    - artifact is stale (older than max_age_seconds)
+    - chain does not match
+    - file is malformed
+    """
+    import json as _json
+    from datetime import timezone as _tz
+    from pathlib import Path as _Path
+
+    p = _Path(discovery_path)
+    if not p.exists():
+        return []
+    try:
+        with open(p, encoding="utf-8") as fh:
+            data = _json.load(fh)
+    except Exception:
+        return []
+
+    if data.get("chain") != chain:
+        return []
+
+    # Check freshness
+    ts_str = data.get("generated_at_utc", "")
+    if ts_str:
+        try:
+            from datetime import datetime as _dt
+            ts = _dt.fromisoformat(ts_str.rstrip("Z")).replace(tzinfo=_tz.utc)
+            age = (_dt.now(tz=_tz.utc) - ts).total_seconds()
+            if age > max_age_seconds:
+                return []
+        except Exception:
+            pass  # malformed timestamp — admit anyway
+
+    factory_addr = str(data.get("factory_address", ""))
+    routes: List[Dict[str, Any]] = []
+    for pool in (data.get("discovered_pools") or []):
+        pool_addr = str(pool.get("pool_address", "")).lower()
+        coin_indices = pool.get("coin_indices") or {}
+        if not pool_addr or len(coin_indices) < 2:
+            continue
+        syms = sorted(coin_indices.keys())
+        sym0, sym1 = syms[0], syms[1]
+        pair_id = f"{sym0}_{sym1}"
+        routes.append({
+            "route_id": f"curve_disc_{pool_addr}",
+            "pair_id": pair_id,
+            "dex_id": "curve_stable",
+            "adapter_type": "curve_stable",
+            "token0": sym0,
+            "token1": sym1,
+            "fee": 0,
+            "tick_spacing": None,
+            "factory_address": factory_addr,
+            "pool_address": pool_addr,
+            "factory_verified": True,    # enumerated from factory.pool_list()
+            "metadata_seeded": False,
+            "source": "curve_factory_discovery",
+            "pool_kind": str(pool.get("pool_kind", "stable")),
+        })
+    return routes
+
+
+def _build_static_curve_routes(chain: str = "base") -> List[Dict[str, Any]]:
+    """Return route entries for pre-configured Curve pools from adapter_metadata.yaml.
+
+    SEED-ONLY: use only with include_config_seed=True (smoke / bootstrap mode).
+    Production discovery should go through Curve factory events + on-chain coin() verify.
+    Routes produced here are tagged source='adapter_metadata' and counted in
+    bridge_source_metrics['metadata_seeded_count'] — NOT in factory_verified_count.
+    """
+    try:
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+        meta = load_adapter_metadata()
+        curve_chain_pools = meta.curve_pools.get(chain, {})
+    except Exception:
+        return []
+
+    routes: List[Dict[str, Any]] = []
+    for pool_addr, curve_pool in curve_chain_pools.items():
+        coin_indices = curve_pool.coin_indices  # {sym: index}
+        syms = sorted(coin_indices.keys())      # alphabetical for pair_id
+        if len(syms) < 2:
+            continue
+        sym0, sym1 = syms[0], syms[1]
+        pair_id = f"{sym0}_{sym1}"
+        routes.append({
+            "route_id": f"curve_meta_{pool_addr.lower()}",
+            "pair_id": pair_id,
+            "dex_id": "curve_stable",
+            "adapter_type": "curve_stable",
+            "token0": sym0,
+            "token1": sym1,
+            "fee": 0,
+            "tick_spacing": None,
+            "factory_address": "",
+            "pool_address": pool_addr,
+            "factory_verified": False,   # no factory event evidence; manually curated
+            "metadata_seeded": True,     # came from adapter_metadata.yaml config
+            "source": "adapter_metadata",
+            "pool_kind": curve_pool.pool_kind,
+        })
+    return routes
+
+
+# ---------------------------------------------------------------------------
 # Core bridge logic
 # ---------------------------------------------------------------------------
 
@@ -136,8 +257,17 @@ def build_bridge_inventory(
     anchor_path: str = _DEFAULT_ANCHOR,
     base_inv_path: str = _DEFAULT_BASE_INV,
     output_path: str = _BRIDGE_OUTPUT,
+    include_config_seed: bool = False,
+    curve_discovery_path: str = _DEFAULT_CURVE_DISCOVERY,
 ) -> Dict[str, Any]:
     """Build the M9 bridge inventory from M8/M8.1 sources + base depth inventory.
+
+    Args:
+        include_config_seed: When True, inject pre-configured Curve pools from
+            adapter_metadata.yaml into active_routes (smoke/bootstrap mode only).
+            These routes are tagged source='adapter_metadata' and counted separately
+            in metadata_seeded_count — NOT as factory_verified.
+            Default False: production mode relies on dynamic discovery only.
 
     Returns bridge_source_metrics dict.  Writes the output artifact to output_path.
     """
@@ -288,7 +418,47 @@ def build_bridge_inventory(
     # Stage 5: Base inventory metrics (already factory_verified + depth_ok)
     # ------------------------------------------------------------------
     base_active: List[Dict] = base_inv.get("active_routes", []) if base_inv else []
-    factory_verified_count = sum(1 for r in base_active if r.get("factory_verified"))
+
+    # ------------------------------------------------------------------
+    # Stage 5a: Inject Curve factory discovery routes (PRODUCTION path)
+    # Routes here came from factory.pool_list() enumeration via
+    # scripts/m9_curve_discovery.py; no config-seed flag required.
+    # Deduplicates by pool_address against existing base_active.
+    # ------------------------------------------------------------------
+    _disc_routes = _load_curve_discovery_routes(chain="base", discovery_path=curve_discovery_path)
+    _base_active_addrs_disc = frozenset(
+        r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
+    )
+    _curve_discovery_admitted: List[Dict] = []
+    for _dr in _disc_routes:
+        if _dr.get("pool_address", "").lower() not in _base_active_addrs_disc:
+            base_active = list(base_active) + [_dr]
+            _curve_discovery_admitted.append(_dr)
+    _curve_discovery_count: int = len(_curve_discovery_admitted)
+
+    # ------------------------------------------------------------------
+    # Stage 5b: Config-seed injection (SMOKE / BOOTSTRAP MODE ONLY)
+    # In production mode (default), Curve pools must enter via dynamic
+    # factory discovery (scripts/m9_curve_discovery.py) + on-chain verify.
+    # Set include_config_seed=True only for smoke runs or explicit seeding.
+    # ------------------------------------------------------------------
+    _metadata_seeded_routes: List[Dict] = []
+    if include_config_seed:
+        _static_curve = _build_static_curve_routes(chain="base")
+        _base_active_addrs = frozenset(
+            r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
+        )
+        for _scr in _static_curve:
+            if _scr.get("pool_address", "").lower() not in _base_active_addrs:
+                base_active = list(base_active) + [_scr]
+                _metadata_seeded_routes.append(_scr)
+    _metadata_seeded_count: int = len(_metadata_seeded_routes)
+
+    # factory_verified_count counts routes from base inventory (not metadata seeds)
+    factory_verified_count = sum(
+        1 for r in base_active
+        if r.get("factory_verified") and r.get("source") != "adapter_metadata"
+    )
     depth_ok_count = sum(1 for r in base_active if r.get("depth_probe_ok"))
 
     anchor_in_base = [
@@ -602,6 +772,13 @@ def build_bridge_inventory(
         "sniper_in_fresh_window": _sniper_in_fresh_window,
         "sniper_age_seconds": round(_sniper_age, 1) if _sniper_age is not None else None,
         "fresh_window_admitted_count": _fresh_window_admitted_count,
+        # Config-seed diagnostics (SMOKE MODE only, not production)
+        # metadata_seeded_count is separated from factory_verified_count intentionally:
+        # seed routes come from manual config, not from factory event + on-chain verify.
+        "metadata_seeded_count": _metadata_seeded_count,
+        "include_config_seed": include_config_seed,
+        # Curve factory discovery count (production path, no seed flag required)
+        "curve_discovery_count": _curve_discovery_count,
     }
 
     # ------------------------------------------------------------------

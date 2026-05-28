@@ -1,8 +1,27 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: CONFIG_DRIVEN_RUNTIME_WIRING — Adapter slice 2 complete: config-driven Curve coin indices and Balancer pool_id/vault_address flow from `config/adapter_metadata.yaml` → `builder.py` → `GraphEdge` → `DexRoute` → `quote_probe`/`raw_http_probe`. `bridge_builder._DEX_ID_TO_ADAPTER_TYPE` now maps `"curve": "curve_stable"`. Balancer removed from `_PENDING_ADAPTER_TYPES` (quote path wired via `BalancerVaultAdapter`). Hardcoded Curve indices `(0,1)` replaced by `route.token_in_index`/`token_out_index` with graceful fallback. 16 new unit tests added (`test_m9_adapter_metadata.py`). Full unit suite: **6128 passed** (no regressions). Next: populate `config/adapter_metadata.yaml` with real pool addresses, run online scan to verify `cycles_by_adapter_family` shows Curve/Balancer entries.
+**Status**: CODE_VALIDATED__DISCOVERY_WIRED — Session 11 (2026-05-28): Curve factory discovery wired end-to-end; 6146 unit tests pass.
 
-Previous status: ALCHEMY_INFRA_PASS__STRICT_BRIDGE_BLOCKED_BY_M8_RPC_ERROR — Session 6 (2026-05-27): qsr=0.96, multicall=1.0, data=1.0, http_429=0, runtime_gates.all_pass=True; graph_ready_from_m8=0 (WS issue); positive_cycles=0 (all spreads ≤5 bps vs flat cost=11 bps).
+**Session 11 changes:**
+- `m9/graph_arb/bridge_builder.py` Stage 5a: `_load_curve_discovery_routes()` loads `m9_curve_discovery_latest.json`; routes enter `active_routes` with `source=curve_factory_discovery`, `factory_verified=True`, `metadata_seeded=False`. New `curve_discovery_count` metric in `bridge_source_metrics`. New `curve_discovery_path` param to `build_bridge_inventory()` (default: rolling path).
+- `m9/graph_arb/bridge_builder.py` semantic fix: `_build_static_curve_routes()` now sets `factory_verified=False` + `metadata_seeded=True` on seed routes (previously had wrong `factory_verified=True`).
+- `config/adapter_metadata.yaml`: added `factory_stable_ng` and `anchor_tokens` fields under `curve.base` (trust anchors for discovery script).
+- `m9/graph_arb/adapter_metadata.py`: `AdapterMetadata` gains `curve_factory_stable_ng: Dict[str, str]` and `curve_anchor_tokens: Dict[str, Dict[str, str]]`; loader parses both fields.
+- `scripts/m9_curve_discovery.py`: removed hardcoded `_CHAIN_ANCHORS` dict; factory address and anchor tokens now read from `config/adapter_metadata.yaml` via `load_adapter_metadata()`. `_RPC_DEFAULTS` replaces per-chain RPC config.
+- `tests/unit/test_m9_bridge_builder.py`: 7 new tests in `TestCurveDiscoveryContract`; `_build()` in `TestConfigSeedContract` now passes `curve_discovery_path` pointing to non-existent file for isolation.
+
+**Artifact contract (unchanged):** production bridge with no discovery artifact = `curve_discovery_count=0`, `metadata_seeded_count=0`, `graph_ready_total=126`. With `--include-config-seed-pools`: `metadata_seeded_count=2`, `graph_ready_total=128`.
+
+**Remaining open items:**
+- `m9_curve_discovery.py` needs to be run against real RPC to generate `data/runs/_rolling/m9_curve_discovery_latest.json` (requires `$env:BASE_RPC`; run: `py -3.11 scripts/m9_curve_discovery.py --chain base`)
+- `min_tvl_usd` param declared but no on-chain TVL query implemented (informational only)
+- Balancer discovery via Vault PoolRegistered events not yet implemented
+
+Previous status: CODE_VALIDATED__DISCOVERY_CONTRACT_GAP — Session 10 (2026-05-28): Curve quote path wired and tested (6139 unit tests pass). DISCOVERY CONTRACT OPEN: Curve routes previously entered `active_routes` via static `adapter_metadata.yaml` seed injection (`_build_static_curve_routes`), which bypasses the M8 sniper/factory funnel. Session 10 fix: moved static injection behind `include_config_seed=True` flag (smoke-only); default production bridge excludes adapter_metadata routes; `metadata_seeded_count` metric added; `scripts/m9_curve_discovery.py` created.
+
+Previous status: CODE_VALIDATED__RUNTIME_COVERAGE_CONFIG_PENDING — Session 8 (2026-05-28): config-driven adapter wiring complete, config populated with real Curve pool addresses (factory-stable-ng-47: USDC/MONEY, factory-stable-ng-48: crvUSD/MONEY). `curve_stable` enabled in `exotic_base_anchor.yaml` with real factory `0xd2002373543ce3527023c75e7518c274a51ce712`. economics_blocker_class logic fixed (QSR check now precedes positive_gross check). 6 new validation tests (check_curve_pools_configured). All adapter wiring (builder.py→quoter.py→quote_probe.py+raw_http_probe.py) was completed in Session 7. BLOCKED by: (a) dRPC 429 rate limiting (qsr=0.20); (b) Balancer pool_ids not yet verified on-chain (Balancer API unavailable); (c) M8 sniper WS incompatibility with Alchemy (graph_ready_from_m8=0). Config is now populated; next step is Alchemy-backed online validation run.
+
+Previous-previous status: ALCHEMY_INFRA_PASS__STRICT_BRIDGE_BLOCKED_BY_M8_RPC_ERROR — Session 6 (2026-05-27): qsr=0.96, multicall=1.0, data=1.0, http_429=0, runtime_gates.all_pass=True; graph_ready_from_m8=0 (WS issue); positive_cycles=0 (all spreads ≤5 bps vs flat cost=11 bps).
 
 `goal_status`: BLOCKED
 `schema_family`: m9_graph_arb
@@ -136,7 +155,8 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 
 - V4: M8 parses V4 events; routes in `m8_pending_routes`; P3 delivery requires M9 PoolManager StateView adapter
 - V2/ve33: `getPair`, `getPool(bool)` selectors; `uniswap_v2`, `ve33`, `aerodrome_v2_stable` supported
-- Balancer: `_PENDING_ADAPTER_TYPES` with explicit pending reasons
+- Curve: `_DEX_ID_TO_ADAPTER_TYPE["curve"] = "curve_stable"`; coin indices from adapter_metadata.yaml; 2 real pools configured
+- Balancer: vault_address configured; pool_ids pending on-chain verification (Balancer API was unavailable)
 
 ---
 
@@ -151,7 +171,10 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 7. **QUARANTINE EXPANDED** (59→60): `pool_depth_probe --update-quarantine` ran; runtime evidence pending (next full pipeline run)
 8. `positive_cycles_with_m8_pool=0`; all current adapters are CPMM/CLMM with spreads ≤5 bps vs flat cost=11 bps; needs orthogonal pricing (stable curves) — **adapter slice 1 addresses this**
 9. `router_sim` NOT_STARTED; `prequote_min_bps=-9999` smoke bypass; kill_switch=true
-10. Curve/Balancer adapters created but NOT YET wired to `quote_probe.py` — needs bridge_builder `_DEX_ID_TO_ADAPTER_TYPE` update and quote_probe elif branches before online test
+10. ~~Curve/Balancer adapters NOT YET wired~~ **RESOLVED** (Session 7): bridge_builder, quote_probe, raw_http_probe all wired; config populated with real Curve pools (Session 8)
+11. **ACTIVE**: dRPC 429 throttling (qsr=0.20 in last online run); use Alchemy for next validation
+12. **ACTIVE**: Balancer pool_ids not verified on-chain; `adapter_metadata.yaml` has vault_address + template but no real pool_ids
+13. **ACTIVE**: M8 sniper WS incompatibility with Alchemy (graph_ready_from_m8=0 in Alchemy runs)
 
 ---
 
@@ -164,11 +187,15 @@ toxic_route_rate: 1.0  ← needs pool_depth_probe --update-quarantine
 [DONE]   pool_depth_probe --update-quarantine (quarantine 59→60, session 5)
 [DONE]   orchestrator --help Unicode fix (session 5)
 [DONE]   Adapter slice 1: Ve33StableAdapter, CurveStableAdapter, BalancerVaultAdapter, V4 hooks, fresh_window
-[NEXT_1] Wire new adapters: bridge_builder._DEX_ID_TO_ADAPTER_TYPE += "curve" / "balancer"; quote_probe.py elif branches
-[NEXT_2] Remove "balancer_stable"/"balancer_weighted" from _PENDING_ADAPTER_TYPES after tests pass
-[NEXT_3] Run py -3.11 -m pytest tests/unit -q → expect no regressions from slice 1
-[NEXT_4] Run with Alchemy + new adapters: ARBY_REQUIRE_PREMIUM_RPC=1 → expect positive_cycles_with_m8_pool > 0
-[NEXT_5] ci_m9_productive_gate.py --strict-bridge → target GATE_EXIT=0
+[DONE]   Wire adapters: bridge_builder._DEX_ID_TO_ADAPTER_TYPE["curve"]="curve_stable"; quote_probe.py elif branches (Session 7)
+[DONE]   Remove "balancer_stable"/"balancer_weighted" from _PENDING_ADAPTER_TYPES (Session 7)
+[DONE]   config/adapter_metadata.yaml: 2 real Curve pools on Base (factory-stable-ng-47/48) (Session 8)
+[DONE]   curve_stable enabled in exotic_base_anchor.yaml with real factory (Session 8)
+[DONE]   economics_blocker_class: QSR check precedes positive_gross check (Session 8)
+[NEXT_1] Use Alchemy RPC for next online validation: expect qsr≥0.8, Curve pools in cycles_by_adapter_family
+[NEXT_2] Verify Balancer pool_ids on-chain via cast/web3; populate balancer.base.pools in adapter_metadata.yaml
+[NEXT_3] Fix M8 sniper WS incompatibility with Alchemy so graph_ready_from_m8 > 0
+[NEXT_4] ci_m9_productive_gate.py --strict-bridge → target GATE_EXIT=0
 `
 
 ## Scope

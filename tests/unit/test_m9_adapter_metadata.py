@@ -365,3 +365,94 @@ class TestMakeDexRoutePropagation:
         assert route.pool_id == "0x" + "dd" * 32
         assert route.vault_address == "0x" + "ee" * 20
         assert route.pool_kind == "stable"
+
+
+# ---------------------------------------------------------------------------
+# Config validation: check_curve_pools_configured
+# ---------------------------------------------------------------------------
+
+class TestCheckCurvePoolsConfigured:
+    """Verify that check_curve_pools_configured detects pools missing from metadata."""
+
+    def test_empty_metadata_flags_all_pools(self):
+        from m9.graph_arb.adapter_metadata import AdapterMetadata, check_curve_pools_configured
+
+        meta = AdapterMetadata()  # no pools
+        pools = ["0x70d410b739da81303a76169cdd406a746bde8b34"]
+        missing = check_curve_pools_configured(meta, pools)
+        assert "0x70d410b739da81303a76169cdd406a746bde8b34" in missing
+
+    def test_configured_pool_not_in_missing_list(self, tmp_path):
+        import textwrap
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata, check_curve_pools_configured
+
+        yaml_content = textwrap.dedent("""
+            curve:
+              base:
+                pools:
+                  "0x70d410b739da81303a76169cdd406a746bde8b34":
+                    pool_kind: stable
+                    coin_indices:
+                      USDC: 0
+                      MONEY: 1
+        """)
+        f = tmp_path / "meta.yaml"
+        f.write_text(yaml_content, encoding="utf-8")
+        meta = load_adapter_metadata(str(f))
+
+        pools = ["0x70d410b739da81303a76169cdd406a746bde8b34"]
+        missing = check_curve_pools_configured(meta, pools)
+        assert missing == [], f"Expected no missing pools, got: {missing}"
+
+    def test_partial_configuration_flags_unconfigured_only(self, tmp_path):
+        import textwrap
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata, check_curve_pools_configured
+
+        yaml_content = textwrap.dedent("""
+            curve:
+              base:
+                pools:
+                  "0x70d410b739da81303a76169cdd406a746bde8b34":
+                    pool_kind: stable
+                    coin_indices:
+                      USDC: 0
+                      MONEY: 1
+        """)
+        f = tmp_path / "meta.yaml"
+        f.write_text(yaml_content, encoding="utf-8")
+        meta = load_adapter_metadata(str(f))
+
+        # One known pool + one unknown pool
+        pools = [
+            "0x70d410b739da81303a76169cdd406a746bde8b34",  # configured
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",  # not configured
+        ]
+        missing = check_curve_pools_configured(meta, pools)
+        assert "0x70d410b739da81303a76169cdd406a746bde8b34" not in missing
+        assert "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" in missing
+
+    def test_address_normalised_to_lowercase(self):
+        from m9.graph_arb.adapter_metadata import AdapterMetadata, check_curve_pools_configured
+
+        meta = AdapterMetadata()
+        # Pass mixed-case address — result should be lowercase
+        missing = check_curve_pools_configured(meta, ["0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"])
+        assert "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" in missing
+
+    def test_empty_pool_list_returns_empty(self):
+        from m9.graph_arb.adapter_metadata import AdapterMetadata, check_curve_pools_configured
+
+        meta = AdapterMetadata()
+        assert check_curve_pools_configured(meta, []) == []
+
+    def test_real_config_adapter_metadata_has_curve_pools(self):
+        """Smoke-check: config/adapter_metadata.yaml now has real Curve pool entries."""
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+
+        meta = load_adapter_metadata("config/adapter_metadata.yaml")
+        # Two pools should be present after Step 1
+        assert "base" in meta.curve_pools, "No 'base' chain in curve_pools"
+        assert len(meta.curve_pools["base"]) >= 2, (
+            f"Expected >=2 Curve pools on Base, got {len(meta.curve_pools['base'])}"
+        )
+

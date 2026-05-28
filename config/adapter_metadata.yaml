@@ -32,31 +32,49 @@
 
 curve:
   base:
+    # -----------------------------------------------------------------------
+    # Curve StableSwap-NG factory on Base — trust anchor (immutable contract).
+    # Used by scripts/m9_curve_discovery.py for factory pool enumeration.
+    # Verify: https://curve.readthedocs.io/factory-deployer.html
+    # -----------------------------------------------------------------------
+    factory_stable_ng: "0xd2002373543ce3527023c75e7518c274a51ce712"
+
+    # -----------------------------------------------------------------------
+    # Anchor token addresses for discovery filtering.
+    # Only pools that contain at least one of these tokens are admitted.
+    # Format: token_address (lowercase) -> symbol
+    # -----------------------------------------------------------------------
+    anchor_tokens:
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC"
+      "0x4200000000000000000000000000000000000006": "WETH"
+      "0x417ac0e078398c154edfadd9ef675d30be60af93": "crvUSD"
+      "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC"
+      "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI"
+
     pools:
       # -----------------------------------------------------------------------
-      # USDC/USDT 2-pool on Base
-      # Curve Finance Base deployment — verify via https://curve.fi/#/base/pools
-      # or https://basescan.org/address/<pool_address>#readContract
-      # coin[0]=USDC, coin[1]=USDT
+      # USDC / MONEY — factory-stable-ng-47 on Base
+      # TVL ~$3.2M (2026-05-28); verified via https://api.curve.finance/api/getPools/base/factory-stable-ng
+      # coin[0]=USDC (0x833589fcd6edb6e08f4c7c32d4f71b54bda02913), decimals=6
+      # coin[1]=MONEY (0x69420f9e38a4e60a62224c489be4bf7a94402496), decimals=18
       # -----------------------------------------------------------------------
-      # "0x<pool_address>":
-      #   pool_kind: "stable"
-      #   coin_indices:
-      #     USDC: 0
-      #     USDT: 1
+      "0x70d410b739da81303a76169cdd406a746bde8b34":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          MONEY: 1
 
       # -----------------------------------------------------------------------
-      # crvUSD/USDC on Base (if deployed)
-      # coin[0]=crvUSD, coin[1]=USDC
+      # crvUSD / MONEY — factory-stable-ng-48 on Base
+      # Verified via https://api.curve.finance/api/getPools/base/factory-stable-ng
+      # coin[0]=crvUSD (0x417ac0e078398c154edfadd9ef675d30be60af93), decimals=18
+      # coin[1]=MONEY  (0x69420f9e38a4e60a62224c489be4bf7a94402496), decimals=18
       # -----------------------------------------------------------------------
-      # "0x<pool_address>":
-      #   pool_kind: "stable"
-      #   coin_indices:
-      #     crvUSD: 0
-      #     USDC: 1
-
-      # Placeholder: will be populated by on-chain discovery (see NEXT_4 in Status_M9.md)
-      # To activate: uncomment and fill in the real pool address from Curve registry
+      "0x68446d5f287c5dfaabff932efbecda2dd7e7861b":
+        pool_kind: "stable"
+        coin_indices:
+          crvUSD: 0
+          MONEY: 1
 
 # ---------------------------------------------------------------------------
 # Balancer V2+
@@ -79,16 +97,22 @@ balancer:
     pools:
       # -----------------------------------------------------------------------
       # Balancer pools on Base
-      # Verify pool_id via: Vault.getPool(poolAddress) or subgraph
+      # Verify pool_id via: Vault.getPool(poolAddress) or Balancer subgraph
       # pool_id format: 0x<20-byte-pool-address><8-byte-nonce><4-byte-specialization>
       # = 0x + 64 hex chars total
+      #
+      # On-chain verification command (requires web3/cast):
+      #   cast call 0xba12222222228d8ba445958a75a0704d566bf2c8 \
+      #     "getPool(bytes32)(address,uint8)" <pool_id> --rpc-url <BASE_RPC>
+      #
+      # TODO: Balancer V2 has limited liquidity on Base compared to Aerodrome/UniV3.
+      # Populate with pool_ids after on-chain verification. No real pool_ids added yet
+      # because the Balancer API (api.balancer.fi/graphql) was unavailable at config time.
       # -----------------------------------------------------------------------
-      # "0x<pool_id_64_hex_chars>":
+      # Example entry format (do not activate until pool_id verified on-chain):
+      # "0x<pool_id_64_hex_chars_lowercase>":
       #   pool_kind: "stable"
-      #   pool_address: "0x<20-byte-address>"  # first 20 bytes of pool_id
+      #   pool_address: "0x<first_20_bytes>"  # first 20 bytes of pool_id
       #   assets:
-      #     - "0x<token_address_ascending_1>"
-      #     - "0x<token_address_ascending_2>"
-
-      # Placeholder: will be populated by on-chain discovery
-      # To activate: uncomment and fill in pool_id from Balancer subgraph or Vault contract
+      #     - "0x<token_address_1_ascending>"
+      #     - "0x<token_address_2_ascending>"

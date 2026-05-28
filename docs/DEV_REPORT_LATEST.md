@@ -1,178 +1,117 @@
 ﻿# DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-05-27T17:22:14Z
-run_id: data/runs/_rolling (rolling artifact; M9 Session 6 — Alchemy RPC run; UTC timezone bug fixed)
-mode: ONLINE
+timestamp_utc: 2026-05-28T09:12:10Z
+run_id: data/runs/_rolling (rolling artifact; M9 Session 11 — discovery wiring)
+mode: OFFLINE
 artifact_mode: rolling
 config: config/exotic_base_anchor.yaml
 code_identity:
-  primary: ts:2026-05-27T17:22:14Z
+  primary: ts:2026-05-28T09:12:10Z
   dirty: true
-  desc: Session 6 — UTC timezone bug in _artifact_ts fixed; full Alchemy run; runtime_gates.all_pass=True; MARKET_NO_POSITIVE_GROSS
+  desc: Session 11 — Curve factory discovery wired into bridge Stage 5a; _CHAIN_ANCHORS → config; 7 new tests; 6146 unit tests pass
 
 ## 1) Scope
-goal (Roadmap): M9 — досягти positive_cycles_with_m8_pool > 0 через raw_http+dynamic-sizes; CI gate exit=0
+goal (Roadmap): M9 — динамічний пул-юніверс: Curve pools входять у production bridge через factory.pool_list() enumeration, а не через manually curated config list
 goal_status: BLOCKED
 change_summary:
-  - Fix (session 6): UTC timezone bug in `scripts/m9_rolling_orchestrator.py` `_artifact_ts` — `strptime` interpreted UTC timestamps as local time (+2h offset → false age 7204s). Fixed with `.replace(tzinfo=_dt.timezone.utc)`
-  - A/B test results: dRPC (lb.drpc.live) = 2833×429 on raw_http quote path (ARBY_RPC_RPS_LIMIT does NOT throttle raw_http); Alchemy = 0×429, all infra gates PASS
-  - New discovery: M8 sniper EMPTY with Alchemy WS (WS log subscription compat issue); graph_ready_from_m8=0
-  - Gate blocker: MARKET_NO_POSITIVE_GROSS (0 profitable cycles in current Base DEX market)
-  - Previous sessions: duration_fulfilled fixed, UTC bug fixed, pipeline end-to-end confirmed
+  - `scripts/m9_curve_discovery.py`: видалено hardcoded `_CHAIN_ANCHORS`; factory address та anchor_tokens тепер читаються з `config/adapter_metadata.yaml` через `load_adapter_metadata()`; додано `_RPC_CONFIG` для fallback RPC URLs
+  - `config/adapter_metadata.yaml`: додано `factory_stable_ng: 0xd2002373...` та `anchor_tokens: {addr: symbol}` під `curve.base` — trust anchors для discovery скрипта
+  - `m9/graph_arb/adapter_metadata.py`: `AdapterMetadata` отримав поля `curve_factory_stable_ng` і `curve_anchor_tokens`; loader їх парсить
+  - `m9/graph_arb/bridge_builder.py` Stage 5a: нова функція `_load_curve_discovery_routes()`; discovery routes вливаються у `active_routes` без seed-флага; новий параметр `curve_discovery_path`; нова метрика `curve_discovery_count` у `bridge_source_metrics`
+  - Semantic fix: `_build_static_curve_routes()` тепер `factory_verified=False` + `metadata_seeded=True` (раніше помилково `factory_verified=True`)
+  - `tests/unit/test_m9_bridge_builder.py`: `_build()` ізольований від реального discovery artifact; новий клас `TestCurveDiscoveryContract` (7 тестів)
+  - `docs/status/Status_M9.md`: оновлено до `CODE_VALIDATED__DISCOVERY_WIRED`
+touched_files:
+  - scripts/m9_curve_discovery.py
+  - config/adapter_metadata.yaml
+  - m9/graph_arb/adapter_metadata.py
+  - m9/graph_arb/bridge_builder.py
+  - tests/unit/test_m9_bridge_builder.py
+  - docs/status/Status_M9.md
 
-## 2) Runtime Claims
+## 2) Commands Executed
 
-### M9 Scan — Alchemy run (2026-05-27T17:22:14Z)
-| Метрика | Значення |
-|---------|---------|
-| rpc_provider | alchemy |
-| duration_fulfilled | True ✅ |
-| elapsed_s | 922.0 / 900 |
-| sweeps_completed | 23 |
-| cycles_found | 4580 |
-| cycles_quoteable | 4400 |
-| cycles_positive_gross | 0 |
-| best_cycle_gross_bps | 0.0 |
-| qsr | 0.9607 ✅ |
-| multicall_success_rate | 1.0 ✅ |
-| data_completeness | 1.0 ✅ |
-| http_429_count | 0 ✅ |
-| graph_ready_total | 119 |
-| graph_ready_from_m8 | 0 ⚠️ |
-| runtime_gates.all_pass | True ✅ |
-| economics_gate_status | BLOCKED_NO_POSITIVE_GROSS |
-| economics_blocker_class | MARKET_NO_POSITIVE_GROSS |
+py -3.11 -m pytest -q: PASS (6146 passed, 6 skipped, 1 warning in 155.05s)
+py -3.11 scripts/ci_full_pipeline.py --mode ci: NOT RUN (offline session; code-only changes)
+py -3.11 scripts/ci_m4_execution_gate.py --offline --profile profit --strict: NOT RUN
+py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml: NOT RUN (offline session)
+py -3.11 scripts/ci_m4_execution_gate.py --online --profile profit: NOT RUN
+py -3.11 scripts/m9_bridge_build.py --config config/exotic_base_anchor.yaml: OK (graph_ready_total=126, curve_discovery_count=0, metadata_seeded_count=0)
+py -3.11 scripts/check_repo_safety.py: PASS (2 warnings — Status_M8.md bloat, rolling chain purity OK)
 
-### dRPC A/B comparison (2026-05-27T16:53:54Z)
-| Метрика | dRPC | Alchemy |
-|---------|------|---------|
-| http_429_count | 2833 | 0 |
-| qsr | 0.1545 | 0.9607 |
-| multicall_success_rate | 0.4314 | 1.0 |
-| data_completeness | 0.5954 | 1.0 |
-| cycles_positive_gross | 2 (likely false) | 0 |
+## 3) Artifacts Attached
+rolling:
+  - data/runs/_rolling/m9_bridge_inventory_latest.json (generated_at_utc: 2026-05-28T09:12:10Z)
+  - data/runs/_rolling/run_summary_latest.json — ABSENT (M4/online run not performed in this session)
+  - data/runs/_rolling/m4_stability_agg.json — ABSENT
+  - data/runs/_rolling/m9_curve_discovery_latest.json — ABSENT (discovery not yet run against real RPC)
 
-## 3) Gate Status (strict-bridge)
-| Check | Status | Value | Threshold |
-|-------|--------|-------|-----------|
-| multicall_success_rate | PASS ✅ | 1.0 | 0.9 |
-| data_completeness | PASS ✅ | 1.0 | 0.98 |
-| qsr | PASS ✅ | 0.96 | 0.8 |
-| quote_revert_rate | PASS ✅ | 0.0 | 0.05 |
-| unverified_active_routes | PASS ✅ | 0 | 0 |
-| runtime_gates.all_pass | **True ✅** | | |
-| STRICT_BRIDGE graph_ready_from_m8 | FAIL ❌ | 0 | >0 |
-| cycles_positive_gross | FAIL ❌ | 0 | >0 |
+## 4) Key Results
 
-## 4) Blocker Analysis
-| Blocker | Клас | Статус |
-|---------|------|--------|
-| duration_fulfilled=False (UTC bug) | CODE | ✅ RESOLVED (session 6) |
-| dRPC 429 throttling raw_http path | INFRA | ⚠️ WORKAROUND (use Alchemy) |
-| M8 sniper EMPTY with Alchemy WS | CODE | ❌ NEW — WS log sub compat issue |
-| MARKET_NO_POSITIVE_GROSS | MARKET | ❌ 0 profitable cycles in current market |
+bridge_inventory_latest:
+  schema_version: m9_bridge_inventory.1
+  generated_at_utc: 2026-05-28T09:12:10Z
+  active_routes_total: 126
+  graph_ready_total: 126
+  factory_verified_count: 119
+  depth_ok_count: 117
+  metadata_seeded_count: 0   [include_config_seed=False — production mode]
+  curve_discovery_count: 0   [artifact absent — discovery not yet run vs RPC]
+  m8_stale: True             [M8 sniper artifact >4h old]
+  m8_1_stale: False
 
-## 5) Path to Gate PASS
-1. Fix M8 sniper WS log subscriptions with Alchemy (or use dRPC for M8 only) → `graph_ready_from_m8 > 0`
-2. Wait for market conditions that produce positive gross cycles — OR expand inventory (more tokens/routes)
-3. Optional: throttle raw_http quote path with rate limiter (`ARBY_RPC_RPS_LIMIT` does not cover this path)
+unit_tests:
+  total_passed: 6146          [+7 vs Session 10 / +12 vs Session 9]
+  skipped: 6
+  new_tests_session_11: 7    [TestCurveDiscoveryContract class]
+  status: PASS
 
-docs_reread_confirmed: true
-| run_at_utc | 2026-05-27T14:30:36Z |
-| duration_minutes | 10 |
-| candidates_total | 166 |
-| cycles | 20 |
-| rpc_errors | 0 |
-| exit_code | 0 |
-| entry_point | scripts/sniper_smoke_run.py |
+check_repo_safety: PASS (2 warnings — Status_M8.md bloat незмінний, не критично)
 
-### M8.1 Stable Anchor (session 3)
-| Метрика | Значення |
-|---------|---------|
-| run_at_utc | 2026-05-27T14:31:31Z |
-| passes | 108 |
-| candidates | 562 |
-| qsr | 0.8897 |
-| rpc_error_rate | 0.1103 (exit=1 tolerated — gate threshold 0.10) |
-| exit_code | 1 (soft-fail, artifact written) |
+## 5) Contract Checks
+status/reasons consistency: OK — bridge_source_metrics поля узгоджені; curve_discovery_count=0 коректно при відсутньому артефакті
+rolling discipline (3 canonical files): PARTIAL — run_summary_latest.json та m4_stability_agg.json відсутні (M4/online run не проводився в цій сесії); m9_bridge_inventory_latest.json OK
+v2.x provenance contract: OK — run_timestamp присутній, code_sha=null (deprecated), runs_since_timestamp не runs_since_sha
+runtime artifacts not committed: OK — data/runs/** не в git
 
-### Bridge (session 3 — fresh rebuild with fixed M8 artifact)
-| Метрика | Значення |
-|---------|---------|
-| rebuild_at_utc | 2026-05-27T14:37:28Z |
-| graph_ready_from_m8 | 14 (PASSES STRICT_BRIDGE — +3 vs session 2) |
-| graph_ready_total | 122 |
-| m8_stale | False (PASSES STRICT_BRIDGE — FIXED this session!) |
-| m8_1_stale | False (PASSES STRICT_BRIDGE) |
-| unsupported_dex_count | 0 |
-| pending_adapter_count | 0 |
+## 6) Blocker Classification
+code_blocker: LOW — pytest PASS (6146/6146), safety PASS, bridge build OK
+data_collection_blocker: MEDIUM — m9_curve_discovery_latest.json не згенерований (потрібен BASE_RPC + запуск discovery скрипта); M8 sniper артефакт stale (>4h)
+market_window_blocker: UNKNOWN — M4/M9 online run не проводився в цій сесії; останній відомий результат: positive_cycles=5 (dRPC 429s, qsr~low)
 
-### M9 Scanner (session 3 — fresh pipeline run)
-| Метрика | Значення |
-|---------|---------|
-| generated_at_utc | 2026-05-27T14:41:04Z |
-| elapsed_s | 203.4 (priority scheduler exhausted 1668 cycles) |
-| duration_fulfilled | False (FAIL — exited before 900s) |
-| sweeps_completed | 9 |
-| cycles_found | 1668 |
-| cycles_positive_gross | 0 |
-| qsr | 0.9059 (IMPROVED from 0.63) |
-| multicall_success_rate | 0.75 (FAIL — threshold 0.9; improved from 0.42) |
-| data_completeness | 0.9212 (FAIL — threshold 0.98; improved from 0.66) |
-| unverified_active_routes | 0 (PASS) |
-| dynamic_size_enabled | True (PASS) |
-| quote_backend | raw_http (PASS) |
-| quote_workers | 1 (PASS) |
-| quote_rpc_error_rate | 0.0767 (improved from 0.2425) |
-| http_429_count | 128 |
-| economics_gate_status | BLOCKED_NO_POSITIVE_GROSS |
+### Blockers / Risks (max 5)
+1. `m9_curve_discovery_latest.json` відсутній — discovery скрипт не запускався vs реального RPC; `curve_discovery_count=0` поки немає живих Curve pools у bridge production path
+2. M8 sniper artifact stale (>4h) — `m8_stale=True`; нові M8 пули не надходять у bridge до refresh
+3. dRPC 429 throttling — qsr~0.20 на попередніх online runs; для production потрібен Alchemy або інший RPC без rate limit
+4. `min_tvl_usd` у discovery скрипті задекларований, але on-chain TVL query не реалізований (інформаційно лише)
+5. Balancer discovery через Vault `PoolRegistered` events не реалізований (наступний великий блок)
 
-### CI Gate (ci_m9_productive_gate --strict-bridge — session 3)
-| Метрика | Значення |
-|---------|---------|
-| exit_code | 1 (FAIL) |
-| passes (new this session) | m8_stale=False, m8_1_stale=False, graph_ready_from_m8=14, unverified_active_routes=0, dynamic_size_enabled, quote_backend, quote_workers |
-| fails_remaining | duration_fulfilled=False, multicall_success_rate=0.75<0.9, data_completeness=0.92<0.98, toxic_route_rate=1.0 |
+## 7) GPT Lead's Previous Steps: Execution Map
+step_01: DONE — `factory_verified=False` + `metadata_seeded=True` на seed routes (bridge_builder.py). Evidence: TestCurveDiscoveryContract::test_seed_routes_have_factory_verified_false PASS
+step_02: DONE — `_CHAIN_ANCHORS` видалено з m9_curve_discovery.py; factory_stable_ng + anchor_tokens → config/adapter_metadata.yaml. Evidence: adapter_metadata.py loader парсить нові поля; 6146 тестів pass
+step_03: DONE — `_load_curve_discovery_routes()` додано; Stage 5a вливає discovery routes у production bridge. Evidence: TestCurveDiscoveryContract::test_discovery_routes_enter_production_mode PASS
+step_04: DONE — `curve_discovery_count` в bridge_source_metrics. Evidence: test_curve_discovery_count_always_in_metrics PASS; bridge artifact має поле=0
+step_05: DONE — `_build()` в TestConfigSeedContract ізольований через `curve_discovery_path=nodisc.json`. Evidence: TestConfigSeedContract всі 5 тестів PASS
+step_06: DONE — 7 нових тестів TestCurveDiscoveryContract. Evidence: py -3.11 -m pytest TestCurveDiscoveryContract — 7 passed
+step_07: DONE — Status_M9.md оновлено → CODE_VALIDATED__DISCOVERY_WIRED. Evidence: docs/status/Status_M9.md
+step_08: NO — `m9_curve_discovery.py` не запускався vs реального RPC (потребує BASE_RPC env)
+step_09: NO — M4/M9 online scan не проводився в цій сесії
+step_10: NO — bridge з live Curve pools не перевірявся (залежить від step_08)
 
-## 3) Infrastructure Fix Summary (session 3 — M8 sniper fix)
-
-### M8 Sniper Silent Exit Root Cause (FIXED)
-- **Root cause**: `python -m m8.runtime.smoke_run` has no `if __name__ == "__main__":` block — process exits immediately with code 0, zero output, no artifact update
-- **Fix**: `scripts/m9_rolling_orchestrator.py::run_m8_sniper()` changed to use `scripts/sniper_smoke_run.py` as entry point
-- **Additional flags**: `--skip-preflight` (publicnode returns HTTP 403 on chain_id check), `--skip-self-test` (baseswap_v2 no recent events)
-- **Impact**: m8_stale: True → **False** (PASSES STRICT_BRIDGE for first time), graph_ready_from_m8: 11 → 14
-
-### Orchestrator M8.1 Soft-Fail (FIXED)
-- **Root cause**: Orchestrator hard-failed (`continue` to next cycle) on M8.1 exit=1, which occurs when rpc_error_rate=0.1103 > 0.10 threshold — borderline, artifact valid
-- **Fix**: Changed to `rc >= 2` for hard-fail (config/input error); `rc == 1` → warning only, continues to bridge rebuild
-- **Impact**: Automated rolling pipeline no longer aborts when M8.1 has marginally high RPC error rate
-
-### Remaining Blockers After Session 3
-1. **duration_fulfilled=False** — Priority scheduler exhausts all 1668 unique cycles in ~203s; runner exits instead of cycling. Fix: implement cycle recycling in priority scheduler after all cycles quoted once, or add sleep/wait when `next_batch()` returns empty within deadline.
-2. **multicall_success_rate=0.75 < 0.9** — publicnode free-tier 429 rate limiting; 128 HTTP 429s in this run. Fix: use paid RPC endpoint or reduce max_cycles.
-3. **data_completeness=0.92 < 0.98** — downstream of multicall failures. Fix: same as above.
-4. **toxic_route_rate=1.0** — All bridge inventory routes classified as "toxic"; need `pool_depth_probe --update-quarantine` to expand quarantine coverage below 0.9 threshold.
-
-## 4) Chain Quality
-chain: base
-rpc: https://base-rpc.publicnode.com
-chain_quality: NORMAL
-multicall: multicall_success_rate=0.75 (improved from 0.42; still limited by publicnode free tier with 1668 cycles)
-rpc_429s: 128 in 203s run
-
-## 5) Open Issues / Blockers
-- Priority scheduler exits after exhausting 1668 cycles (~203s) → duration_fulfilled=False
-- RPC capacity: publicnode free tier limits multicall (429s); need paid endpoint or cycle cap
-- toxic_route_rate=1.0: need pool_depth_probe --update-quarantine
-- cost_adjusted_net_bps < 0 — cost model correctly blocking (gross < gas cost)
-- economics_gate_status: BLOCKED_NO_POSITIVE_GROSS (market, not infra issue)
+## 8) Що потрібно від Lead зараз
+question_1: Підтвердити, чи вважати Session 11 goal=REACHED за умови що code+tests verified, але online artifact (m9_curve_discovery_latest.json) ще не згенерований — чи потрібно обов'язково запустити discovery скрипт vs RPC?
+request_1: Якщо BASE_RPC доступний — запустити: `$env:BASE_RPC="https://..."; py -3.11 scripts/m9_curve_discovery.py --chain base` і передати лог (щоб bridge показав curve_discovery_count>0)
+request_2: Визначити наступний крок: (a) запустити discovery vs RPC → wire live Curve pools, або (b) перейти до Balancer discovery, або (c) перейти до M9 online run для proof positive_cycles>0
 
 ## Session Completion
-session_goal: M8 sniper silent-exit root cause fix; full M8→M8.1→bridge→M9 pipeline run (Step 10)
-goal_status: IN_PROGRESS
+session_goal: Завершити wiring Curve factory discovery у bridge Stage 5a, перенести _CHAIN_ANCHORS у config, виправити factory_verified semantic на seed routes, додати unit tests для discovery contract
+goal_status: REACHED
 close_allowed: true
-blocker_status_after: BLOCKED
-remaining_blockers: duration_fulfilled=False (scheduler exhaustion); multicall RPC capacity; toxic_route_rate=1.0
-evidence_session_run_dirs: data/runs/_rolling (m9_graph_latest.json ts=2026-05-27T14:41:04Z)
-key_win: m8_stale=False for FIRST TIME — M8 sniper root cause found and fixed
+remaining_blockers: m9_curve_discovery_latest.json не згенерований (потребує BASE_RPC + ручний запуск) — але це runtime залежність, не code blocker
+evidence_session_run_dirs: data/runs/_rolling (m9_bridge_inventory_latest.json @ 2026-05-28T09:12:10Z); pytest 6146 passed @ 155.05s
+primary_blocker_of_session: discovery contract gap — _CHAIN_ANCHORS hardcoded, factory discovery не wired у bridge production path
+blocker_status_before: ACTIVE
+blocker_status_after: RESOLVED
+docs_reread_confirmed: true
+

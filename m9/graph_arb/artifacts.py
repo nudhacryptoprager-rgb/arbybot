@@ -677,10 +677,12 @@ def build_artifact(
     )
     if cycles_found == 0 or not cycle_results:
         economics_blocker_class = _BLOCKER_NOT_RUN
+    elif qsr < 0.5:
+        # QSR below threshold means data is unreliable; blocker is provider quality,
+        # even if some cycles appear positive-gross (those results are not trustworthy).
+        economics_blocker_class = _BLOCKER_PROVIDER_QUALITY
     elif cycles_positive_gross > 0:
         economics_blocker_class = _BLOCKER_NOT_BLOCKED
-    elif qsr < 0.5:
-        economics_blocker_class = _BLOCKER_PROVIDER_QUALITY
     elif 0 < pair_count <= _ANCHOR_HEAVY_PAIR_THRESHOLD:
         economics_blocker_class = _BLOCKER_INVENTORY_ANCHOR
     else:

@@ -71,17 +71,20 @@ dexes:
     fee_tiers: [100, 500, 3000, 10000]
     enabled: true
 
-  # Curve StableSwap on Base — PENDING delivery (Step 5).
-  # M9 quote adapter (get_dy) is ready in raw_http_probe.py.
-  # Activation requires:
-  #   1. Verify Curve pool factory address on Base via Curve registry
-  #   2. Add pool addresses for USDC/USDT, USDC/crvUSD etc. under `pools:`
-  #   3. Set enabled: true + add M8 factory to config/new_pool_factories.yaml
-  # curve_stable:
-  #   adapter_type: curve_stable
-  #   factory: "0x0000000000000000000000000000000000000000"  # TODO: Curve factory on Base
-  #   pools:
-  #     USDC_USDT: "0x0000000000000000000000000000000000000000"  # TODO: discover via Curve registry
+  # Curve Stable-NG on Base — factory-stable-ng factory.
+  # Quote adapter: raw_http_probe.py get_dy(i,j,dx) via token_in_index/token_out_index
+  # from config/adapter_metadata.yaml (coin_indices). Enabled: 2 real pools populated.
+  curve_stable:
+    adapter_type: curve_stable
+    factory: "0xd2002373543ce3527023c75e7518c274a51ce712"  # Curve Stable-NG factory on Base
+    enabled: true
+
+  # Balancer V2 Vault on Base — pool discovery pending (no pool_ids in adapter_metadata.yaml yet).
+  # Activation requires: populate balancer.base.pools in config/adapter_metadata.yaml with
+  # real pool_ids verified via Vault.getPool(poolAddress) on-chain.
+  # balancer_vault:
+  #   adapter_type: balancer_vault
+  #   factory: "0xba12222222228d8ba445958a75a0704d566bf2c8"  # Balancer V2 Vault on Base
   #   enabled: false
 
 tokens:
@@ -109,6 +112,13 @@ tokens:
   LBTC:
     address: "0xecac9c5f704e954931349da37f60e39f515c11c1"
     decimals: 8
+  # Curve pool tokens — needed for USDC/MONEY and crvUSD/MONEY pools (factory-stable-ng-47/48)
+  MONEY:
+    address: "0x69420f9e38a4e60a62224c489be4bf7a94402496"
+    decimals: 18
+  crvUSD:
+    address: "0x417ac0e078398c154edfadd9ef675d30be60af93"
+    decimals: 18
 
 # Minimal required sections (defaults used by config_loader.py)
 pairs: []

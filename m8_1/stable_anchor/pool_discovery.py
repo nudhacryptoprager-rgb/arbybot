@@ -36,6 +36,7 @@ class DexRoute:
     pool_id: Optional[str] = None         # Balancer: 32-byte pool ID (0x + 64 hex chars)
     vault_address: Optional[str] = None   # Balancer: Vault contract address
     pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
+    curve_coin1_sym: Optional[str] = None  # Curve: symbol of coin at index 1
 
     def __post_init__(self) -> None:
         pass

@@ -54,6 +54,16 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Config YAML path (accepted for pipeline compat; not used by bridge builder)",
     )
+    p.add_argument(
+        "--include-config-seed-pools",
+        action="store_true",
+        default=False,
+        help=(
+            "SMOKE / BOOTSTRAP MODE: inject Curve pools from config/adapter_metadata.yaml "
+            "directly into active_routes without dynamic discovery. "
+            "Do NOT use in production — production relies on m9_curve_discovery.py."
+        ),
+    )
     return p.parse_args()
 
 
@@ -80,6 +90,7 @@ def main() -> int:
         anchor_path=args.anchor,
         base_inv_path=args.base_inv,
         output_path=args.output,
+        include_config_seed=args.include_config_seed_pools,
     )
 
     log.info("Bridge funnel:")
@@ -91,6 +102,9 @@ def main() -> int:
     log.info("  depth_ok_count           : %d", metrics["depth_ok_count"])
     log.info("  graph_ready_from_m8      : %d", metrics["graph_ready_from_m8"])
     log.info("  graph_ready_total        : %d", metrics["graph_ready_total"])
+    log.info("  metadata_seeded_count    : %d  [seed=%s]",
+             metrics.get("metadata_seeded_count", 0),
+             metrics.get("include_config_seed", False))
     log.info("  m8_stale                 : %s", metrics["m8_stale"])
     log.info("  m8_1_stale               : %s", metrics["m8_1_stale"])
     log.info("Written: %s", args.output)

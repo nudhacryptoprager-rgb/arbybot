@@ -49,6 +49,11 @@ class AdapterMetadata:
     # Balancer vault: canonical address (same on all chains)
     _balancer_vault: str = "0xba12222222228d8ba445958a75a0704d566bf2c8"
 
+    # Curve factory address per chain (trust anchor, set in adapter_metadata.yaml)
+    curve_factory_stable_ng: Dict[str, str] = field(default_factory=dict)
+    # Anchor token addresses per chain for discovery filtering: {chain: {addr: symbol}}
+    curve_anchor_tokens: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
     # ---------------------------------------------------------------------------
     # Curve helpers
     # ---------------------------------------------------------------------------
@@ -133,6 +138,19 @@ def load_adapter_metadata(path: str = _DEFAULT_PATH) -> AdapterMetadata:
     for chain_name, chain_data in (curve_raw.items() if isinstance(curve_raw, dict) else []):
         if not isinstance(chain_data, dict):
             continue
+
+        # factory_stable_ng trust anchor (string address)
+        factory_addr = chain_data.get("factory_stable_ng")
+        if factory_addr and isinstance(factory_addr, str):
+            meta.curve_factory_stable_ng[chain_name] = factory_addr.lower()
+
+        # anchor_tokens dict: {addr: symbol}
+        anchor_raw = chain_data.get("anchor_tokens") or {}
+        if isinstance(anchor_raw, dict) and anchor_raw:
+            meta.curve_anchor_tokens[chain_name] = {
+                str(addr).lower(): str(sym) for addr, sym in anchor_raw.items()
+            }
+
         pools_raw = chain_data.get("pools") or {}
         if not isinstance(pools_raw, dict):
             continue
@@ -182,3 +200,37 @@ def load_adapter_metadata(path: str = _DEFAULT_PATH) -> AdapterMetadata:
             meta.balancer_pools[chain_name] = chain_pools_b
 
     return meta
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+def check_curve_pools_configured(
+    metadata: "AdapterMetadata",
+    enabled_pool_addresses: list,
+    chain: str = "base",
+) -> list:
+    """Return list of pool addresses that are enabled but have no coin_indices configured.
+
+    Use this to detect config gaps: Curve pools appearing in the inventory but
+    missing from adapter_metadata.yaml → quoter falls back to (0,1) which may
+    be incorrect for pools where coin ordering differs.
+
+    Args:
+        metadata: Loaded AdapterMetadata (from load_adapter_metadata()).
+        enabled_pool_addresses: Pool addresses to check (e.g., from bridge inventory).
+        chain: Chain name, default "base".
+
+    Returns:
+        List of pool address strings (lowercase) that have no coin_indices entry.
+        Empty list means all pools are fully configured.
+    """
+    chain_pools = metadata.curve_pools.get(chain, {})
+    missing: list = []
+    for addr in enabled_pool_addresses:
+        addr_lower = addr.lower()
+        pool = chain_pools.get(addr_lower)
+        if pool is None or not pool.coin_indices:
+            missing.append(addr_lower)
+    return missing
