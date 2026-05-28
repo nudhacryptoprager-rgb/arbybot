@@ -1,112 +1,83 @@
-"""Per-adapter cost model for M9 graph-arb cycles.
+"""Per-adapter cost and pricing-model taxonomy for M9 graph-arb cycles.
 
-Provides a flat cost_bps estimate per adapter family.
-Replaces the previous hard-coded 11 bps constant in artifacts.py.
+The runtime needs two distinct groupings:
 
-Usage
------
-    from m9.graph_arb.cost_model import adapter_cost_bps, cycle_cost_bps
+* adapter family: operational grouping used for dashboards and readiness
+* pricing model: curve topology used for strategy coverage analysis
 
-    # Single-edge cost
-    cost = adapter_cost_bps("uniswap_v3")          # → 8.0
-
-    # Full-cycle cost (sum of edge costs)
-    total = cycle_cost_bps(["uniswap_v3", "ve33_stable"])  # → 12.0
-
-Design notes
-------------
-Values are *minimum expected round-trip costs in basis points* assuming:
-- Trade size $100–$500 USD (gas dominates for smaller sizes)
-- No fallback router; direct pool interaction
-- Base L2 gas price ≈ 0.01–0.05 gwei (static cost)
-- Slippage = worst-case 50th percentile for the adapter type
-
-These estimates are intentionally *conservative* so that only
-cycles with room above the cost bar are flagged as profitable.
-Tune values via `config/cost_model.yaml` override (optional future work).
+The second grouping is what lets M9 verify that it is expanding beyond
+CPMM/CLMM into Solidly stable curves, Curve StableSwap, PMM, RFQ, directional
+liquidity, and hook-driven pools.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-# ---------------------------------------------------------------------------
-# Per-adapter cost in basis points (one-way leg cost)
-# ---------------------------------------------------------------------------
-# The cost for a full arbitrage cycle = sum over all legs.
-# For a 3-leg cycle through CLMM→stable→CLMM: 8 + 4 + 8 = 20 bps total cost.
-# Positive gross must exceed this for a net-positive trade.
+# Per-adapter cost in basis points for one leg.  Cycle cost is the sum over
+# every leg, not the set of unique adapters in the cycle.
 _ADAPTER_COST_BPS: Dict[str, float] = {
     # Standard AMMs
-    "uniswap_v2": 12.0,           # 30 bps swap fee dominates; deep but legacy
-    "uniswap_v3": 8.0,            # 5–30 bps tier; gas modest; good liquidity
-    "uniswap_v4": 10.0,           # no-hook v4; slightly more gas than v3 (singleton overhead)
-    "uniswap_v4_nohook": 10.0,    # alias for explicitness in config
-    "uniswap_v4_hook": 14.0,      # unknown hook may alter fee/logic; guard upward
-    # Solidly ve(3,3) family
-    "ve33": 12.0,                  # volatile solidly; treated same as V2 for now
-    "ve33_volatile": 12.0,         # explicit volatile alias
-    "ve33_stable": 4.0,            # stable x³y+xy³=k; very low slippage near peg
-    "aerodrome_v2_stable": 4.0,    # same invariant via bridge_builder dex_id
-    # Concentrated-liquidity forks
-    "aerodrome_slipstream": 9.0,   # CL tick-based; slightly cheaper than V3 due to low tiers
-    "pancakeswap_v3": 8.0,         # V3 fork; same math
-    "sushiswap_v3": 8.0,
+    "uniswap_v2": 12.0,
     "sushiswap_v2": 12.0,
     "baseswap_v2": 12.0,
-    "algebra": 9.0,                # dynamic fee Algebra; estimate mid-range
-    "iziswap": 9.0,                # CL-based on zkSync/Linea
+    "uniswap_v3": 8.0,
+    "pancakeswap_v3": 8.0,
+    "sushiswap_v3": 8.0,
+    "uniswap_v4": 10.0,
+    "uniswap_v4_nohook": 10.0,
+    "uniswap_v4_hook": 14.0,
+    "uniswap_v4_with_hooks": 14.0,
+    # Solidly ve(3,3)
+    "ve33": 12.0,
+    "ve33_volatile": 12.0,
+    "solidly_volatile": 12.0,
+    "ve33_stable": 4.0,
+    "solidly_stable": 4.0,
+    "aerodrome_stable": 4.0,
+    "aerodrome_v2_stable": 4.0,
+    # Concentrated-liquidity forks
+    "aerodrome_slipstream": 9.0,
+    "algebra": 9.0,
+    "iziswap": 9.0,
     "syncswap": 10.0,
     "ambient": 10.0,
-    # New adapters (P1–P2)
-    "curve_stable": 3.0,           # StableSwap hybrid invariant; minimal slippage on pegs
-    "curve_cryptoswap": 7.0,       # CryptoSwap (volatile-asset Curve); higher slippage
-    "maverick_v2": 9.0,            # Directional liquidity; mid-range estimate
-    "balancer_weighted": 10.0,     # 80/20 or 60/40 weighted pools
-    "balancer_stable": 4.0,        # ComposableStable / BoostedPool
-    "balancer_vault": 7.0,         # generic Balancer queryBatchSwap (mixed pool types)
-    "dodo_pmm": 6.0,               # Oracle PMM; low slippage near oracle price
-    "rfq": 2.0,                    # Hashflow / Bebop; off-chain quote, on-chain settle
-    "fluid": 8.0,                  # Lending-AMM hybrid
+    # Orthogonal pricing models from CURRENT_STRATEGY.md
+    "curve_stable": 3.0,
+    "curve_stableswap": 3.0,
+    "curve_cryptoswap": 7.0,
+    "maverick_v2": 9.0,
+    "balancer_weighted": 10.0,
+    "balancer_stable": 4.0,
+    "balancer_vault": 7.0,
+    "dodo_pmm": 6.0,
+    "dodo_pmm_v2": 6.0,
+    "rfq": 2.0,
+    "hashflow_rfq": 2.0,
+    "bebop_rfq": 2.0,
+    "native_rfq": 2.0,
+    "fluid": 8.0,
 }
 
-# Default when adapter_type is unknown
 _DEFAULT_COST_BPS: float = 11.0
 
 
 def adapter_cost_bps(adapter_type: str) -> float:
-    """Return the estimated one-way leg cost in bps for a given adapter type.
-
-    Falls back to ``_DEFAULT_COST_BPS`` for unrecognised adapters so existing
-    cycles never lose their cost estimate.
-    """
+    """Return the estimated one-way leg cost in bps for an adapter type."""
     return _ADAPTER_COST_BPS.get(adapter_type, _DEFAULT_COST_BPS)
 
 
 def cycle_cost_bps(adapter_types: List[str]) -> float:
-    """Return the total estimated cost of a cycle (sum of per-leg costs).
-
-    Parameters
-    ----------
-    adapter_types:
-        Ordered list of adapter_type strings for each leg of the cycle.
-    """
+    """Return the total estimated cost of a cycle, summed per leg."""
     return sum(adapter_cost_bps(a) for a in adapter_types)
 
 
 def cycle_net_bps(gross_bps: float, adapter_types: List[str]) -> float:
-    """Compute cost-adjusted net bps for a cycle.
-
-    Returns ``gross_bps - cycle_cost_bps(adapter_types)``.
-    """
+    """Return gross spread minus per-leg cycle cost."""
     return gross_bps - cycle_cost_bps(adapter_types)
 
 
 def adapter_family(adapter_type: str) -> str:
-    """Return a coarse adapter family for grouping in artifact breakdowns.
-
-    Families: uniswap_v2, uniswap_v3, uniswap_v4, solidly_stable,
-              solidly_volatile, curve, balancer, maverick, dodo_pmm, rfq, other.
-    """
+    """Return a coarse operational adapter family."""
     _map: Dict[str, str] = {
         "uniswap_v2": "uniswap_v2",
         "sushiswap_v2": "uniswap_v2",
@@ -114,47 +85,96 @@ def adapter_family(adapter_type: str) -> str:
         "uniswap_v3": "uniswap_v3",
         "sushiswap_v3": "uniswap_v3",
         "pancakeswap_v3": "uniswap_v3",
-        "uniswap_v4": "uniswap_v4",
-        "uniswap_v4_nohook": "uniswap_v4",
-        "uniswap_v4_hook": "uniswap_v4",
-        "ve33": "solidly_volatile",
-        "ve33_volatile": "solidly_volatile",
-        "ve33_stable": "solidly_stable",
-        "aerodrome_v2_stable": "solidly_stable",
         "aerodrome_slipstream": "uniswap_v3",
         "algebra": "uniswap_v3",
         "iziswap": "uniswap_v3",
         "syncswap": "uniswap_v3",
         "ambient": "uniswap_v3",
+        "uniswap_v4": "uniswap_v4",
+        "uniswap_v4_nohook": "uniswap_v4",
+        "uniswap_v4_hook": "uniswap_v4",
+        "uniswap_v4_with_hooks": "uniswap_v4",
+        "ve33": "solidly_volatile",
+        "ve33_volatile": "solidly_volatile",
+        "solidly_volatile": "solidly_volatile",
+        "ve33_stable": "solidly_stable",
+        "solidly_stable": "solidly_stable",
+        "aerodrome_stable": "solidly_stable",
+        "aerodrome_v2_stable": "solidly_stable",
         "curve_stable": "curve",
+        "curve_stableswap": "curve",
         "curve_cryptoswap": "curve",
         "balancer_weighted": "balancer",
         "balancer_stable": "balancer",
+        "balancer_vault": "balancer",
         "maverick_v2": "maverick",
         "dodo_pmm": "dodo_pmm",
+        "dodo_pmm_v2": "dodo_pmm",
         "rfq": "rfq",
+        "hashflow_rfq": "rfq",
+        "bebop_rfq": "rfq",
+        "native_rfq": "rfq",
         "fluid": "other",
     }
     return _map.get(adapter_type, "other")
+
+
+def adapter_pricing_model(adapter_type: str) -> str:
+    """Return the pricing topology used by an adapter type.
+
+    This is intentionally separate from ``adapter_family``.  Two adapters can
+    belong to different brands/families while sharing the same curve, and the
+    strategy needs explicit visibility into orthogonal pricing models.
+    """
+    _map: Dict[str, str] = {
+        "uniswap_v2": "cpmm_xyk",
+        "sushiswap_v2": "cpmm_xyk",
+        "baseswap_v2": "cpmm_xyk",
+        "uniswap_v3": "clmm_ticks",
+        "sushiswap_v3": "clmm_ticks",
+        "pancakeswap_v3": "clmm_ticks",
+        "aerodrome_slipstream": "clmm_ticks",
+        "algebra": "clmm_dynamic_fee",
+        "iziswap": "clmm_ticks",
+        "syncswap": "hybrid_pool",
+        "ambient": "ambient_concentrated",
+        "uniswap_v4": "v4_nohook_clmm",
+        "uniswap_v4_nohook": "v4_nohook_clmm",
+        "uniswap_v4_hook": "v4_hook_dynamic_fee",
+        "uniswap_v4_with_hooks": "v4_hook_dynamic_fee",
+        "ve33": "solidly_volatile_xyk",
+        "ve33_volatile": "solidly_volatile_xyk",
+        "solidly_volatile": "solidly_volatile_xyk",
+        "ve33_stable": "solidly_stable_curve",
+        "solidly_stable": "solidly_stable_curve",
+        "aerodrome_stable": "solidly_stable_curve",
+        "aerodrome_v2_stable": "solidly_stable_curve",
+        "curve_stable": "curve_stableswap",
+        "curve_stableswap": "curve_stableswap",
+        "curve_cryptoswap": "curve_cryptoswap",
+        "balancer_weighted": "balancer_weighted",
+        "balancer_stable": "balancer_stable",
+        "balancer_vault": "balancer_vault_mixed",
+        "maverick_v2": "maverick_directional",
+        "dodo_pmm": "pmm_oracle",
+        "dodo_pmm_v2": "pmm_oracle",
+        "rfq": "rfq_offchain",
+        "hashflow_rfq": "rfq_offchain",
+        "bebop_rfq": "rfq_offchain",
+        "native_rfq": "rfq_offchain",
+        "fluid": "lending_amm_hybrid",
+    }
+    return _map.get(adapter_type, "unknown")
 
 
 def build_cost_breakdown(
     cycle_results: "List",
     adapter_type_getter: "Optional[callable]" = None,
 ) -> Dict[str, Any]:
-    """Build `cost_breakdown_by_adapter`, `cycles_by_adapter_family`, and
-    `positive_cycles_by_adapter_family` dicts for artifact output.
+    """Build cost and topology breakdowns for artifact output.
 
-    Accepts both production CycleQuoteResult objects and plain dicts (for tests).
-
-    Parameters
-    ----------
-    cycle_results:
-        List of ``CycleQuoteResult`` objects **or** plain dicts with keys:
-        ``{"gross_spread_bps": float, "legs": [{"adapter_type": str}, ...]}``.
-    adapter_type_getter:
-        Optional callable ``(edge) -> str`` to extract adapter_type from a
-        cycle edge. Defaults to ``edge.adapter_type`` / ``edge.dex_id`` / ``edge["adapter_type"]``.
+    Accepts production ``CycleQuoteResult`` objects and plain dicts with:
+    ``{"gross_spread_bps": float, "legs": [{"adapter_type": str}, ...]}``.
     """
     from collections import defaultdict
 
@@ -181,29 +201,38 @@ def build_cost_breakdown(
     cost_breakdown: Dict[str, Dict[str, Any]] = {}
     cycles_by_family: Dict[str, int] = defaultdict(int)
     positive_by_family: Dict[str, int] = defaultdict(int)
+    cycles_by_pricing_model: Dict[str, int] = defaultdict(int)
+    positive_by_pricing_model: Dict[str, int] = defaultdict(int)
 
     for qr in cycle_results:
         gross = _gross_bps_from_qr(qr)
         edges = _edges_from_qr(qr)
-        # Collect unique adapter types in this cycle
-        adapters_in_cycle = list(dict.fromkeys(_get_adapter_from_edge(e) for e in edges))
-        if not adapters_in_cycle:
-            adapters_in_cycle = ["other"]
-        families_in_cycle = list(dict.fromkeys(adapter_family(a) for a in adapters_in_cycle))
+        adapters_by_leg = [_get_adapter_from_edge(e) for e in edges]
+        if not adapters_by_leg:
+            adapters_by_leg = ["other"]
 
-        # net_bps = gross - sum(per-leg costs)
-        net_bps = cycle_net_bps(gross, adapters_in_cycle)
+        adapters_in_cycle = list(dict.fromkeys(adapters_by_leg))
+        families_in_cycle = list(dict.fromkeys(adapter_family(a) for a in adapters_in_cycle))
+        pricing_models_in_cycle = list(
+            dict.fromkeys(adapter_pricing_model(a) for a in adapters_in_cycle)
+        )
+
+        net_bps = cycle_net_bps(gross, adapters_by_leg)
 
         for fam in families_in_cycle:
             cycles_by_family[fam] += 1
             if net_bps > 0:
                 positive_by_family[fam] += 1
+        for model in pricing_models_in_cycle:
+            cycles_by_pricing_model[model] += 1
+            if net_bps > 0:
+                positive_by_pricing_model[model] += 1
 
-        # Per-adapter cost contribution
         for a_type in adapters_in_cycle:
             if a_type not in cost_breakdown:
                 cost_breakdown[a_type] = {
                     "cost_bps_per_leg": adapter_cost_bps(a_type),
+                    "pricing_model": adapter_pricing_model(a_type),
                     "cycle_count": 0,
                     "positive_cycle_count": 0,
                 }
@@ -215,4 +244,6 @@ def build_cost_breakdown(
         "cost_breakdown_by_adapter": cost_breakdown,
         "cycles_by_adapter_family": dict(cycles_by_family),
         "positive_cycles_by_adapter_family": dict(positive_by_family),
+        "cycles_by_pricing_model": dict(cycles_by_pricing_model),
+        "positive_cycles_by_pricing_model": dict(positive_by_pricing_model),
     }

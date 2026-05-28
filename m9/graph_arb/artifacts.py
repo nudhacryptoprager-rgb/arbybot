@@ -975,10 +975,14 @@ def build_artifact(
         artifact["cost_breakdown_by_adapter"] = _adapter_breakdown["cost_breakdown_by_adapter"]
         artifact["cycles_by_adapter_family"] = _adapter_breakdown["cycles_by_adapter_family"]
         artifact["positive_cycles_by_adapter_family"] = _adapter_breakdown["positive_cycles_by_adapter_family"]
+        artifact["cycles_by_pricing_model"] = _adapter_breakdown["cycles_by_pricing_model"]
+        artifact["positive_cycles_by_pricing_model"] = _adapter_breakdown["positive_cycles_by_pricing_model"]
     except Exception:
         artifact["cost_breakdown_by_adapter"] = None
         artifact["cycles_by_adapter_family"] = None
         artifact["positive_cycles_by_adapter_family"] = None
+        artifact["cycles_by_pricing_model"] = None
+        artifact["positive_cycles_by_pricing_model"] = None
 
     return artifact
 

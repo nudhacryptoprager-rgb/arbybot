@@ -136,6 +136,35 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
                 flush=True,
             )
 
+    # Fix step 2: cycles_by_pricing_model taxonomy check.
+    # Non-null indicates cost_model.build_cost_breakdown() ran successfully and
+    # produced orthogonal pricing model coverage beyond cpmm_xyk / clmm_ticks.
+    # Null → cost_model integration not complete or cost_model.py raised an exception.
+    _cbpm = art.get("cycles_by_pricing_model")
+    if _cbpm is None:
+        print(
+            "  INFO: cycles_by_pricing_model=null — cost_model taxonomy not populated. "
+            "Expected after integration of m9/graph_arb/cost_model.py into artifacts.py. "
+            "Check that build_cost_breakdown() does not raise during artifact build.",
+            flush=True,
+        )
+    else:
+        _model_keys = sorted(_cbpm.keys())
+        _only_base = set(_model_keys) <= {"cpmm_xyk", "clmm_ticks"}
+        if _only_base:
+            print(
+                f"  INFO: cycles_by_pricing_model only contains base models {_model_keys} — "
+                "no Solidly/Curve/Balancer cycles observed yet "
+                "(Phase B: add aerodrome_stable + curve_stable adapters for peg-arb coverage).",
+                flush=True,
+            )
+        else:
+            print(
+                f"  INFO: cycles_by_pricing_model={_model_keys} — "
+                "orthogonal pricing model taxonomy populated (RUNTIME_VALIDATED__ORTHOGONAL_PRICING_VISIBLE).",
+                flush=True,
+            )
+
     # GPT Fix step 4: strict-bridge mode — require live M8/M8.1 inputs
     if strict_bridge:
         bsm = art.get("bridge_source_metrics") or {}

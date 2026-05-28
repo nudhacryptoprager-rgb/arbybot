@@ -76,8 +76,26 @@ _VE33_GET_AMOUNT_OUT_SELECTOR = bytes.fromhex("f140a35a")
 # UniswapV2 pool selector: getReserves() -> (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
 _V2_GET_RESERVES_SELECTOR = bytes.fromhex("0902f1ac")
 # Adapter type sets for routing
-_VE33_ADAPTER_TYPES = frozenset({"ve33", "ve33_stable"})
+_VE33_ADAPTER_TYPES = frozenset({
+    "ve33",
+    "ve33_stable",
+    "ve33_volatile",
+    "solidly_stable",
+    "solidly_volatile",
+    "aerodrome_stable",
+    "aerodrome_v2_stable",
+})
 _V2_FORK_ADAPTER_TYPES = frozenset({"uniswap_v2", "sushiswap_v2", "baseswap_v2"})
+_DEFAULT_V2_FEE_BPS = 30
+# Per-adapter-type default fee map for V2 forks.
+# Used when neither `fee` nor `fee_bps` field is present in the route metadata.
+# Keeps probe math independent of field presence without a hard 30 bps fallback for all.
+_V2_FORK_FEE_BPS_MAP: Dict[str, int] = {
+    "uniswap_v2": 30,
+    "sushiswap_v2": 30,
+    "baseswap_v2": 30,
+}
+_FEE_DENOMINATOR_BPS = 10_000
 
 
 def _encode_ve33_amount_out(amount_in: int, token_in: str) -> str:
@@ -93,8 +111,11 @@ def _v2_amount_out_from_reserves(
     addr_out: str,
     amount_in: int,
     rpc_url: str,
+    fee_bps: int = _DEFAULT_V2_FEE_BPS,
 ) -> Optional[int]:
-    """Compute UniswapV2 amountOut from on-chain getReserves() via xy=k formula (0.3% fee)."""
+    """Compute V2-fork amountOut from getReserves() via xy=k formula."""
+    if fee_bps < 0 or fee_bps >= _FEE_DENOMINATOR_BPS:
+        return None
     calldata = "0x" + _V2_GET_RESERVES_SELECTOR.hex()
     hex_result = _raw_eth_call(rpc_url, pool_address, calldata)
     if not hex_result or hex_result == "0x":
@@ -111,12 +132,27 @@ def _v2_amount_out_from_reserves(
         reserve_in, reserve_out = r0, r1
     else:
         reserve_in, reserve_out = r1, r0
-    # xy=k with 0.3% fee: amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
-    numerator = amount_in * 997 * reserve_out
-    denominator = reserve_in * 1000 + amount_in * 997
+    fee_multiplier = _FEE_DENOMINATOR_BPS - int(fee_bps)
+    numerator = amount_in * fee_multiplier * reserve_out
+    denominator = reserve_in * _FEE_DENOMINATOR_BPS + amount_in * fee_multiplier
     if denominator == 0:
         return None
     return numerator // denominator
+
+
+def _route_v2_fee_bps(route: Dict[str, Any]) -> int:
+    """Resolve V2-fork fee bps from route metadata.
+
+    Priority: route['fee'] > route['fee_bps'] > per-adapter map > global default.
+    """
+    fee = int(route.get("fee") or 0)
+    if fee > 0:
+        return fee
+    fee_bps = route.get("fee_bps")
+    if fee_bps is not None:
+        return int(float(fee_bps))
+    adapter_type = route.get("adapter_type", "")
+    return _V2_FORK_FEE_BPS_MAP.get(adapter_type, _DEFAULT_V2_FEE_BPS)
 
 
 def _encode_v3_call(token_in: str, token_out: str, amount_in: int, fee: int) -> str:
@@ -276,7 +312,12 @@ def probe_pool_depth(
         elif adapter_type in _V2_FORK_ADAPTER_TYPES:
             pool_addr_for_probe = pool_address or quoter
             amount_out_precomputed = _v2_amount_out_from_reserves(
-                pool_addr_for_probe, addr0, addr1, amount_in, rpc_url
+                pool_addr_for_probe,
+                addr0,
+                addr1,
+                amount_in,
+                rpc_url,
+                fee_bps=_route_v2_fee_bps(route),
             )
             if amount_out_precomputed is None:
                 result["probe_error"] = "V2_RESERVES_FAILED"

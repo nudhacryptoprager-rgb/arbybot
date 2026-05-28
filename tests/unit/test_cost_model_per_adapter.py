@@ -18,6 +18,7 @@ from m9.graph_arb.cost_model import (
     _ADAPTER_COST_BPS,
     adapter_cost_bps,
     adapter_family,
+    adapter_pricing_model,
     build_cost_breakdown,
     cycle_cost_bps,
     cycle_net_bps,
@@ -37,6 +38,11 @@ class TestAdapterCostBpsMap:
         "balancer_stable",
         "balancer_vault",
         "aerodrome_slipstream",
+        "uniswap_v4_nohook",
+        "uniswap_v4_hook",
+        "maverick_v2",
+        "dodo_pmm",
+        "rfq",
     ]
 
     def test_known_adapters_present(self):
@@ -154,6 +160,16 @@ class TestAdapterFamily:
         # Both must be non-empty strings (specific values may differ by design)
         assert fam_s and fam_v
 
+    def test_ve33_volatile_and_stable_different_pricing_models(self):
+        """Generic ve33 (volatile) and aerodrome_stable must map to DIFFERENT pricing models."""
+        volatile_model = adapter_pricing_model("ve33")
+        stable_model = adapter_pricing_model("aerodrome_stable")
+        assert volatile_model != stable_model, (
+            f"ve33 volatile ({volatile_model!r}) must differ from aerodrome_stable ({stable_model!r})"
+        )
+        assert volatile_model == "solidly_volatile_xyk"
+        assert stable_model == "solidly_stable_curve"
+
     def test_curve_family_not_same_as_ve33(self):
         fam_curve = adapter_family("curve_stable")
         fam_ve33 = adapter_family("ve33_stable")
@@ -164,6 +180,38 @@ class TestAdapterFamily:
         fam = adapter_family("totally_unknown_adapter")
         assert isinstance(fam, str)
         assert len(fam) > 0
+
+
+class TestAdapterPricingModel:
+    """adapter_pricing_model() exposes orthogonal curve topology."""
+
+    @pytest.mark.parametrize(
+        ("adapter_type", "expected_model"),
+        [
+            ("uniswap_v2", "cpmm_xyk"),
+            ("uniswap_v3", "clmm_ticks"),
+            # ve33 generic (volatile) must NOT fall into solidly_stable_curve
+            ("ve33", "solidly_volatile_xyk"),
+            ("ve33_volatile", "solidly_volatile_xyk"),
+            ("solidly_volatile", "solidly_volatile_xyk"),
+            # aerodrome_stable must map to solidly_stable_curve, not volatile
+            ("ve33_stable", "solidly_stable_curve"),
+            ("aerodrome_stable", "solidly_stable_curve"),
+            ("solidly_stable", "solidly_stable_curve"),
+            ("curve_stable", "curve_stableswap"),
+            ("dodo_pmm", "pmm_oracle"),
+            ("rfq", "rfq_offchain"),
+            ("uniswap_v4_hook", "v4_hook_dynamic_fee"),
+            ("maverick_v2", "maverick_directional"),
+            ("balancer_weighted", "balancer_weighted"),
+            ("balancer_stable", "balancer_stable"),
+        ],
+    )
+    def test_known_pricing_models(self, adapter_type, expected_model):
+        assert adapter_pricing_model(adapter_type) == expected_model
+
+    def test_unknown_pricing_model_is_explicit(self):
+        assert adapter_pricing_model("totally_unknown_adapter") == "unknown"
 
 
 class TestBuildCostBreakdown:
@@ -185,16 +233,21 @@ class TestBuildCostBreakdown:
         assert "cost_breakdown_by_adapter" in result
         assert "cycles_by_adapter_family" in result
         assert "positive_cycles_by_adapter_family" in result
+        assert "cycles_by_pricing_model" in result
+        assert "positive_cycles_by_pricing_model" in result
 
     def test_single_positive_cycle(self):
         cycle = self._make_cycle_result(gross_bps=20.0, adapter_types=["ve33_stable"])
         result = build_cost_breakdown([cycle])
         breakdown = result["cost_breakdown_by_adapter"]
         assert isinstance(breakdown, dict)
+        assert breakdown["ve33_stable"]["pricing_model"] == "solidly_stable_curve"
         by_family = result["cycles_by_adapter_family"]
         positive = result["positive_cycles_by_adapter_family"]
+        by_model = result["cycles_by_pricing_model"]
         assert isinstance(by_family, dict)
         assert isinstance(positive, dict)
+        assert by_model["solidly_stable_curve"] == 1
 
     def test_negative_cycle_not_in_positive_families(self):
         """Cycles with gross_bps too low should not count as positive."""
@@ -225,3 +278,13 @@ class TestBuildCostBreakdown:
         }
         result = build_cost_breakdown([cycle])
         assert result is not None
+
+    def test_duplicate_adapter_legs_are_costed_per_leg(self):
+        """Two legs on the same adapter must pay cost twice, not once."""
+        cycle = self._make_cycle_result(
+            gross_bps=10.0,
+            adapter_types=["uniswap_v3", "uniswap_v3"],
+        )
+        result = build_cost_breakdown([cycle])
+        positive = result["positive_cycles_by_adapter_family"]
+        assert positive.get("uniswap_v3", 0) == 0

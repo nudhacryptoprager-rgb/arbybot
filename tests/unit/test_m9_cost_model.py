@@ -223,6 +223,27 @@ class TestBuildArtifactCostModel:
         )
         assert artifact["economics_metrics"]["cost_model_applied"] is True
 
+    def test_artifact_includes_pricing_model_breakdown(self):
+        """M9 artifact exposes pricing topology coverage for strategy tracking."""
+        mock_qr = _make_mock_cycle_result(gross_bps=20.0, size_usd=100.0)
+        artifact = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[mock_qr],
+            topology=_make_topology(),
+            sizes_usd=(100.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+        )
+
+        assert artifact["cycles_by_pricing_model"]["clmm_ticks"] == 1
+        assert artifact["positive_cycles_by_pricing_model"]["clmm_ticks"] == 1
+        assert (
+            artifact["cost_breakdown_by_adapter"]["uniswap_v3"]["pricing_model"]
+            == "clmm_ticks"
+        )
+
     def test_no_cost_model_flag_false(self):
         """economics_metrics.cost_model_applied=False when no cost_model."""
         artifact = build_artifact(
@@ -280,6 +301,7 @@ def _make_mock_cycle_result(gross_bps: float, size_usd: float):
     edge = MagicMock(spec=GraphEdge)
     edge.pool_address = "0x" + "a" * 40
     edge.dex_id = "uniswap_v3"
+    edge.adapter_type = "uniswap_v3"
     edge.factory_class = "UNISWAP_V3"
     edge.token_in_sym = "USDC"
     edge.token_out_sym = "WETH"
