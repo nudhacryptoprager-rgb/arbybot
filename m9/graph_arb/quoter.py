@@ -236,6 +236,22 @@ def quote_cycle_sync(
     else:
         gross_bps = 0.0
 
+    # Sanity cap: gross_bps outside ±10000 bps (±100%) indicates a phantom quote
+    # (e.g., ABI-revert data mistakenly decoded as amount_out, wrong token indices).
+    _MAX_REASONABLE_BPS = 10_000.0
+    if abs(gross_bps) > _MAX_REASONABLE_BPS:
+        return CycleQuoteResult(
+            cycle=cycle,
+            size_usd=size_usd,
+            amount_in=initial_amount,
+            amount_out=0,
+            gross_bps=0.0,
+            status=STATUS_QUOTE_FAILED,
+            reject_reason="PHANTOM_QUOTE_BPS_OVERFLOW",
+            leg_results=leg_results,
+            elapsed_s=time.monotonic() - started,
+        )
+
     status = STATUS_POSITIVE_GROSS if gross_bps > 0 else STATUS_NEGATIVE_GROSS
 
     return CycleQuoteResult(

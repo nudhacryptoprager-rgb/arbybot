@@ -76,6 +76,87 @@ curve:
           crvUSD: 0
           MONEY: 1
 
+      # -----------------------------------------------------------------------
+      # Bridge inventory pools — discovered via scripts/discover_curve_indices.py
+      # Coin indices verified on-chain via pool.coins(uint256) on 2026-05-28.
+      # -----------------------------------------------------------------------
+      "0x1ab35116c3fa0b2f507d8c8c3261d42683c1e31e":
+        pool_kind: "stable"
+        coin_indices:
+          USDbC: 0
+          USDC: 1
+
+      "0x35c6c59277f8fa9ae98dea29b0546d79957acdd8":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          WETH: 1
+
+      "0x385540fda649a114ffeb943fd73ae82ce7908da3":
+        pool_kind: "stable"
+        coin_indices:
+          crvUSD: 0
+          USDbC: 1
+
+      "0x3a38e9b0b5cb034de01d5298fc2ed2d793c0c36f":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          USDbC: 1
+
+      "0x3df1658e3e76d14ef3c4d410829ea7575bb83b9b":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          crvUSD: 1
+
+      "0x602c281d739357ccd54479960b3196f27571e5da":
+        pool_kind: "stable"
+        coin_indices:
+          crvUSD: 0
+          USDC: 1
+
+      "0x60868043f1f63aaf6ed9499cb00f60b8b0d6b802":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          crvUSD: 1
+
+      "0xb9c79bd5e5561bdcc281e2b530cefbbebc9976ac":
+        pool_kind: "stable"
+        coin_indices:
+          crvUSD: 0
+          USDC: 1
+
+      "0xbc3705b2bfd42d38e8fa2c8efdc3fdda645c3b2a":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          USDbC: 1
+
+      "0xd4e59bfd7bce4a5bc1ee12ea930c7495831d6aef":
+        pool_kind: "stable"
+        coin_indices:
+          USDbC: 0
+          USDC: 1
+
+      # 5-token stableswap: crvUSD / USDbC / axlUSDC / USDC / DAI
+      # coin[2] = axlUSDC (0xeb466342c4d449bc9f53a865d5cb90586f405215) = Axelar Wrapped USDC
+      "0xee454138083b9b9714cac3c7cf12560248d76d6b":
+        pool_kind: "stable"
+        coin_indices:
+          crvUSD: 0
+          USDbC: 1
+          axlUSDC: 2
+          USDC: 3
+          DAI: 4
+
+      "0xf8474c80dfe3af4794eac64672137ad390aabb0a":
+        pool_kind: "stable"
+        coin_indices:
+          USDC: 0
+          crvUSD: 1
+
 # ---------------------------------------------------------------------------
 # Balancer V2+
 # ---------------------------------------------------------------------------

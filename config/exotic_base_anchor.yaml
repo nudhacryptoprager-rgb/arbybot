@@ -36,10 +36,19 @@ dexes:
     fee_tiers: [1, 50, 100, 200, 2000]
     enabled: true
 
-  # Aerodrome ve33 (volatile + stable pools). Quote via pool.getAmountOut(amountIn, tokenIn).
+  # Aerodrome ve33 volatile pools. Quote via pool.getAmountOut(amountIn, tokenIn).
   # builder.py sets quoter_addr=pool_address for ve33; raw_http_probe uses f140a35a selector.
   aerodrome:
     adapter_type: ve33
+    factory: "0x420dd381b31aef6683db6b902084cb0ffece40da"
+    enabled: true
+
+  # Aerodrome V2 stable pools (x³y + xy³ = k invariant, 1 bps fee).
+  # Same Aerodrome factory; pool.stable=true distinguishes them at creation.
+  # builder.py sets quoter_addr=pool_address for aerodrome_v2_stable.
+  # raw_http_probe uses the same f140a35a selector (pool.getAmountOut).
+  aerodrome_v2_stable:
+    adapter_type: aerodrome_v2_stable
     factory: "0x420dd381b31aef6683db6b902084cb0ffece40da"
     enabled: true
 

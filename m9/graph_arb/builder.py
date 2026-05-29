@@ -216,15 +216,15 @@ def build_graph_from_inventory(
             _entry_adapter = entry.get("adapter_type")
             if _entry_adapter and _entry_adapter not in ("unknown", "unsupported"):
                 adapter_type = _entry_adapter
-            if adapter_type in ("uniswap_v2", "ve33", "curve_stable"):
-                # V2/ve33/curve_stable: quoter is the pool itself
+            if adapter_type in ("uniswap_v2", "ve33", "aerodrome_v2_stable", "curve_stable"):
+                # V2/ve33/aerodrome_v2_stable/curve_stable: quoter is the pool itself
                 quoter_addr = pool_address
         else:
             adapter_type = dex_cfg.adapter_type
             quoter_addr = dex_cfg.quoter
-            # V2, ve33, and curve_stable adapters quote on the pool itself.
+            # V2, ve33, aerodrome_v2_stable, and curve_stable adapters quote on the pool itself.
             # Curve: get_dy is called on the pool contract; no separate quoter.
-            if adapter_type in ("uniswap_v2", "ve33", "curve_stable"):
+            if adapter_type in ("uniswap_v2", "ve33", "aerodrome_v2_stable", "curve_stable"):
                 quoter_addr = pool_address
             if adapter_type == "aerodrome_slipstream" and dex_cfg.tick_spacings:
                 # Use first tick spacing (or match by fee/tick_spacing field)

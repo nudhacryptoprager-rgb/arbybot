@@ -157,14 +157,36 @@ class TestCurveConfigDrivenIndices:
         assert int(idx_in_hex, 16) == 1, f"Expected idx_in=1, got {int(idx_in_hex,16)}"
         assert int(idx_out_hex, 16) == 2, f"Expected idx_out=2, got {int(idx_out_hex,16)}"
 
-    def test_fallback_to_zero_one_when_none(self):
-        """When route.token_in_index is None, must fall back to 0/1."""
-        calldata = self._capture_calldata(None, None)
-        assert calldata.startswith("0x5e0d443f")
-        idx_in_hex = calldata[10:74]
-        idx_out_hex = calldata[74:138]
-        assert int(idx_in_hex, 16) == 0, "Expected fallback idx_in=0"
-        assert int(idx_out_hex, 16) == 1, "Expected fallback idx_out=1"
+    def test_raises_when_indices_are_none(self):
+        """When route.token_in_index is None, probe must return ok=False (no silent fallback).
+
+        Previously the probe fell back to 0/1 which caused phantom gains when the
+        pool's real coin layout differed. Now missing indices raise ValueError internally,
+        which the probe catches and converts to ok=False / reject_reason=QUOTE_RPC_ERROR.
+        """
+        from m9.graph_arb import raw_http_probe as probe
+        from m8_1.stable_anchor.pairs import TokenInfo
+
+        route = _make_route(
+            adapter_type="curve_stable",
+            token_in_index=None,
+            token_out_index=None,
+        )
+        token_in = TokenInfo(symbol="USDC", address="0x" + "aa" * 20, decimals=6)
+        token_out = TokenInfo(symbol="USDT", address="0x" + "bb" * 20, decimals=6)
+
+        result = probe.probe_quote_raw_http(
+            rpc_url="http://localhost:8545",
+            route=route,
+            token_in=token_in,
+            token_out=token_out,
+            amount_in=1_000_000,
+        )
+        assert not result.ok, "Expected ok=False when coin indices are missing"
+        assert result.reject_reason is not None
+        assert "coin indices" in (result.raw_error or ""), (
+            f"Expected 'coin indices' in raw_error, got: {result.raw_error!r}"
+        )
 
     def test_reversed_direction_indices(self):
         """Index 1→0 (reversed swap) must be encoded correctly."""

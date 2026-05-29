@@ -272,6 +272,114 @@ class TestBuildGraphFromInventory:
         # Unknown dex → zero quoter is documented behavior (caller must handle)
         assert all(e.quoter_addr == self._ZERO_ADDR for e in all_edges)
 
+    def test_aerodrome_v2_stable_unknown_dex_uses_pool_address_as_quoter(self, tmp_path):
+        """aerodrome_v2_stable with unknown dex_id must use pool_address as quoter.
+
+        Stable Aerodrome pools use getAmountOut() directly on the pool contract
+        (same as ve33 volatile). builder.py must resolve quoter_addr=pool_address
+        for this adapter type when the dex_id is not in config (bridge inventory path).
+        """
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "b" * 40
+        inv = {
+            "active_routes": [
+                {
+                    "pair_id": "WETH_USDC",
+                    "dex_id": "aerodrome_v2_stable_bridge_event",  # not in config
+                    "adapter_type": "aerodrome_v2_stable",         # set by bridge_builder
+                    "fee": 1,
+                    "factory_class": "SOLIDLY_STABLE",
+                    "pool_address": pool_addr,
+                    "route_id": "aerodrome_v2_stable:WETH_USDC",
+                }
+            ],
+            "pools": [],
+        }
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(inventory_path=str(p), config_path=cfg)
+        all_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+        assert all_edges, "Expected at least one edge to be built"
+        zero_quoter_edges = [e for e in all_edges if e.quoter_addr == self._ZERO_ADDR]
+        assert not zero_quoter_edges, (
+            f"aerodrome_v2_stable got zero-address quoter — builder.py must set "
+            f"quoter_addr=pool_address for this adapter type. "
+            f"Found {len(zero_quoter_edges)} edges with zero quoter."
+        )
+        # All edges must use the pool address as quoter
+        for edge in all_edges:
+            assert edge.quoter_addr.lower() == pool_addr.lower(), (
+                f"Expected quoter_addr={pool_addr}, got {edge.quoter_addr}"
+            )
+
+    def test_aerodrome_v2_stable_in_config_uses_pool_address_as_quoter(self, tmp_path):
+        """aerodrome_v2_stable with a config entry must also use pool_address as quoter."""
+        import yaml
+        from m9.graph_arb.builder import build_graph_from_inventory
+        pool_addr = "0x" + "c" * 40
+        inv = {
+            "active_routes": [
+                {
+                    "pair_id": "WETH_USDC",
+                    "dex_id": "aerodrome_v2_stable",
+                    "adapter_type": "aerodrome_v2_stable",
+                    "fee": 1,
+                    "factory_class": "SOLIDLY_STABLE",
+                    "pool_address": pool_addr,
+                    "route_id": "aerodrome_v2_stable:WETH_USDC",
+                }
+            ],
+            "pools": [],
+        }
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        # Config includes aerodrome_v2_stable dex entry with empty quoter
+        cfg = {
+            "schema_version": "m8_1.0",
+            "chain": "base",
+            "chain_id": 8453,
+            "dexes": {
+                "uniswap_v3": {
+                    "adapter_type": "uniswap_v3",
+                    "factory": "0x33128a8fc17869897dce68ed026d694621f6fdfd",
+                    "quoter": "0x3d4e44eb1374240ce5f1b871ab261cd16335b76a",
+                    "fee_tiers": [100, 500, 3000, 10000],
+                    "enabled": True,
+                },
+                "aerodrome_v2_stable": {
+                    "adapter_type": "aerodrome_v2_stable",
+                    "factory": "0x420dd381b31aef6683db6b902084cb0ffece40da",
+                    "quoter": "0x0000000000000000000000000000000000000000",
+                    "enabled": True,
+                },
+            },
+            "tokens": {
+                "WETH": {"address": "0x4200000000000000000000000000000000000006", "decimals": 18},
+                "USDC": {"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "decimals": 6},
+            },
+        }
+        cfg_p = tmp_path / "config.yaml"
+        cfg_p.write_text(yaml.dump(cfg))
+        adjacency = build_graph_from_inventory(inventory_path=str(p), config_path=str(cfg_p))
+        all_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+        assert all_edges, "Expected at least one edge to be built"
+        for edge in all_edges:
+            assert edge.quoter_addr.lower() == pool_addr.lower(), (
+                f"aerodrome_v2_stable (config path) must use pool_address as quoter. "
+                f"Expected {pool_addr}, got {edge.quoter_addr}"
+            )
+
     def test_real_config_no_zero_quoter(self):
         """Integration: real config/exotic_base_anchor.yaml produces no zero-quoter edges."""
         import os

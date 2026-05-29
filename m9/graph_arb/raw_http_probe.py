@@ -69,6 +69,16 @@ def _eth_call_raw(url: str, to: str, data: str, client: httpx.Client) -> str:
         msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
         raise ValueError(f"eth_call error: {msg}")
     result = body.get("result") or "0x"
+
+    # Guard: detect ABI-encoded revert data masquerading as a successful result.
+    # Standard revert selectors: Error(string)=0x08c379a0, Panic(uint256)=0x4e487b71.
+    # Any valid return value for our adapters is ≥ 32 bytes (64 hex chars after "0x").
+    result_hex = result[2:] if result.startswith("0x") else result
+    if len(result_hex) < 64:
+        raise ValueError(f"eth_call empty/short result: {result!r}")
+    if result_hex[:8].lower() in {"08c379a0", "4e487b71"}:
+        raise ValueError(f"eth_call ABI-revert detected: {result[:20]}")
+
     return result
 
 
@@ -162,10 +172,16 @@ def probe_quote_raw_http(
             gas_est = None
 
         elif route.adapter_type == "curve_stable":
-            # get_dy(i,j,dx) — indices come from config/adapter_metadata.yaml via route.
-            # Fallback 0/1 is only safe for 2-pool USDC/USDT when no metadata loaded.
-            idx_in = route.token_in_index if route.token_in_index is not None else 0
-            idx_out = route.token_out_index if route.token_out_index is not None else 1
+            # get_dy(i,j,dx) — indices MUST come from adapter_metadata.yaml via route.
+            # If indices are missing, we must NOT fall back to 0/1: wrong indices cause
+            # phantom gains (ABI-revert data decoded as amount_out).
+            if route.token_in_index is None or route.token_out_index is None:
+                raise ValueError(
+                    f"curve_stable pool {route.quoter} has no coin indices in "
+                    "adapter_metadata.yaml — add it before enabling this pool"
+                )
+            idx_in = route.token_in_index
+            idx_out = route.token_out_index
             calldata = (
                 "0x"
                 + "5e0d443f"
