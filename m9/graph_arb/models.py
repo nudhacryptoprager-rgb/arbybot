@@ -33,6 +33,7 @@ class GraphEdge:
     pool_id: Optional[str] = None         # Balancer: 32-byte pool ID (0x + 64 hex chars)
     vault_address: Optional[str] = None   # Balancer: Vault contract address
     pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
+    freshness_window: bool = False        # True when M8 sniped pool is within _FRESH_WINDOW_SECONDS
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):

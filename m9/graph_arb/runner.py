@@ -14,8 +14,8 @@ from typing import Any, Dict, Optional
 _LOCK_FILE = "data/tmp/m9_runner.lock"
 
 # Approximate USD prices for Base-chain tokens used to compute quote sizes.
-# These are order-of-magnitude values — update periodically.
-# Without these, 18-decimal tokens get amount_in = 1000 * 10^18 → pool reverts.
+# These are order-of-magnitude values used as fallback — the runner attempts
+# to refresh prices from CoinGecko at startup via token_price_fetcher.py.
 _TOKEN_PRICE_USD_BASE: dict = {
     "WETH": 3500.0,
     "WETH_BASE": 3500.0,
@@ -27,6 +27,9 @@ _TOKEN_PRICE_USD_BASE: dict = {
     "EURC": 1.10,
     "DAI": 1.0,
     "USDT": 1.0,
+    "crvUSD": 1.0,
+    "USDbC": 1.0,
+    "MONEY": 1.0,
     "AERO": 0.70,
     "VIRTUAL": 0.80,
     "TOSHI": 0.0001,
@@ -764,6 +767,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         write_artifact(artifact, args.artifact_path)
         return EXIT_OK
 
+    # Крок 3: Fetch live token prices from CoinGecko; fall back to hardcoded dict.
+    from m9.graph_arb.token_price_fetcher import fetch_token_prices_usd
+    _price_result = fetch_token_prices_usd(timeout_s=5.0)
+    _runtime_token_prices: dict = _price_result.prices
+    log.info(
+        "Token prices: source=%s stale=%s",
+        _price_result.source, _price_result.stale,
+    )
+
     # Connect RPC
     w3 = _connect_rpc(args.chain)
     if w3 is None:
@@ -969,7 +981,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             max_workers=getattr(args, "quote_workers", 4),
             quote_backend=getattr(args, "quote_backend", "direct_http"),
             rpc_url=_active_rpc,
-            token_prices=_TOKEN_PRICE_USD_BASE,
+            token_prices=_runtime_token_prices,
             dynamic_sizes=getattr(args, "dynamic_sizes", False),
             dynamic_size_limit=getattr(args, "dynamic_size_max_cycles", 3),
         )

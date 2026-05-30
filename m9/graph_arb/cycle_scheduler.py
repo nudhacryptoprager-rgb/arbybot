@@ -37,6 +37,7 @@ _FACTORY_CLASS_SCORE: Dict[str, float] = {
 
 _LOW_FEE_MAX: float = 100.0           # fee_efficiency = max(0, 100 - total_fee_bps)
 _CROSS_DEX_BONUS: float = 3.0         # per extra unique adapter type beyond 1
+_FRESHNESS_WINDOW_BONUS: float = 10.0 # bonus for M8 fresh-window cycles (MEV-naive)
 
 # ---------------------------------------------------------------------------
 # Adaptive history constants
@@ -84,7 +85,13 @@ def compute_base_score(cycle: GraphCycle) -> float:
     # 3. Fee efficiency
     fee_score = max(0.0, _LOW_FEE_MAX - cycle.total_fee_bps)
 
-    return fc_score + cross_dex + fee_score
+    # 4. Freshness window bonus: M8 new pools within _FRESH_WINDOW_SECONDS are
+    # MEV-naive (HFT bots have not caught up yet) → prioritise in hot queue.
+    freshness_bonus = _FRESHNESS_WINDOW_BONUS if any(
+        getattr(e, "freshness_window", False) for e in cycle.edges
+    ) else 0.0
+
+    return fc_score + cross_dex + fee_score + freshness_bonus
 
 
 # ---------------------------------------------------------------------------

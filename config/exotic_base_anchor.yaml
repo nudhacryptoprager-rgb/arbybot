@@ -88,13 +88,23 @@ dexes:
     factory: "0xd2002373543ce3527023c75e7518c274a51ce712"  # Curve Stable-NG factory on Base
     enabled: true
 
-  # Balancer V2 Vault on Base — pool discovery pending (no pool_ids in adapter_metadata.yaml yet).
-  # Activation requires: populate balancer.base.pools in config/adapter_metadata.yaml with
-  # real pool_ids verified via Vault.getPool(poolAddress) on-chain.
-  # balancer_vault:
-  #   adapter_type: balancer_vault
-  #   factory: "0xba12222222228d8ba445958a75a0704d566bf2c8"  # Balancer V2 Vault on Base
-  #   enabled: false
+  # Balancer V2 Vault on Base — queryBatchSwap via balancer_vault.py adapter.
+  # Pool IDs are loaded from config/adapter_metadata.yaml balancer.base.pools section.
+  # To add pools: verify pool_id via Vault.getPoolTokens(poolId) on-chain, then add
+  # to adapter_metadata.yaml following the existing curve section pattern.
+  balancer_vault:
+    adapter_type: balancer_stable
+    factory: "0xba12222222228d8ba445958a75a0704d566bf2c8"  # Balancer V2 Vault on Base
+    enabled: true
+
+  # Maverick V2 directional-liquidity pools on Base.
+  # Quotes via PoolInformation.calculateSwap (single eth_call, no router needed).
+  # Token direction (tokenAIn) is resolved from adapter_metadata.yaml token_a field,
+  # or via a live tokenA() call on the pool contract if not pre-configured.
+  maverick_v2:
+    adapter_type: maverick_v2
+    factory: "0x0a7e848aca42d879ef06507fca0e7b33a0a63c1e"  # Maverick V2 factory on Base
+    enabled: true
 
 tokens:
   WETH:
@@ -127,6 +137,34 @@ tokens:
     decimals: 18
   crvUSD:
     address: "0x417ac0e078398c154edfadd9ef675d30be60af93"
+    decimals: 18
+  # ETH derivatives — needed for ve33/aerodrome_v2_stable/uniswap_v2 pairs
+  cbETH:
+    address: "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22"
+    decimals: 18
+  wstETH:
+    address: "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452"
+    decimals: 18
+  # Stablecoins — needed for uniswap_v2/aerodrome_v2_stable pairs
+  DAI:
+    address: "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
+    decimals: 18
+  USDbC:
+    address: "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca"
+    decimals: 6
+  # Meme / long-tail tokens with significant on-chain liquidity on Base
+  BRETT:
+    address: "0x532f27101965dd16442e59d40670faf5ebb142e4"
+    decimals: 18
+  DEGEN:
+    address: "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
+    decimals: 18
+  # Balancer pool tokens — needed for OLAS/USDC, WETH/IMO pools
+  OLAS:
+    address: "0x54330d28ca3357f294334bdc454a032e7f353416"
+    decimals: 18
+  IMO:
+    address: "0x5a7a2bf9ffae199f088b25837dcd7e115cf8e1bb"
     decimals: 18
 
 # Minimal required sections (defaults used by config_loader.py)

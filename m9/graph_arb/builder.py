@@ -216,15 +216,16 @@ def build_graph_from_inventory(
             _entry_adapter = entry.get("adapter_type")
             if _entry_adapter and _entry_adapter not in ("unknown", "unsupported"):
                 adapter_type = _entry_adapter
-            if adapter_type in ("uniswap_v2", "ve33", "aerodrome_v2_stable", "curve_stable"):
-                # V2/ve33/aerodrome_v2_stable/curve_stable: quoter is the pool itself
+            if adapter_type in ("uniswap_v2", "ve33", "aerodrome_v2_stable", "curve_stable", "maverick_v2"):
+                # V2/ve33/aerodrome_v2_stable/curve_stable/maverick_v2: quoter is the pool itself
                 quoter_addr = pool_address
         else:
             adapter_type = dex_cfg.adapter_type
             quoter_addr = dex_cfg.quoter
-            # V2, ve33, aerodrome_v2_stable, and curve_stable adapters quote on the pool itself.
+            # V2, ve33, aerodrome_v2_stable, curve_stable, and maverick_v2 adapters quote on the pool itself.
             # Curve: get_dy is called on the pool contract; no separate quoter.
-            if adapter_type in ("uniswap_v2", "ve33", "aerodrome_v2_stable", "curve_stable"):
+            # Maverick V2: PoolInformation.calculateSwap takes pool addr as first param.
+            if adapter_type in ("uniswap_v2", "ve33", "aerodrome_v2_stable", "curve_stable", "maverick_v2"):
                 quoter_addr = pool_address
             if adapter_type == "aerodrome_slipstream" and dex_cfg.tick_spacings:
                 # Use first tick spacing (or match by fee/tick_spacing field)
@@ -300,6 +301,9 @@ def build_graph_from_inventory(
             if edge_key_fwd in exclude_edge_keys and edge_key_rev in exclude_edge_keys:
                 continue
 
+        # Freshness window: True when M8 sniped pool is within _FRESH_WINDOW_SECONDS
+        _freshness_window = bool(entry.get("freshness_window", False))
+
         # Forward: sym0 → sym1
         if not (exclude_edge_keys and edge_key_fwd in exclude_edge_keys):
             # Curve: per-direction index lookup
@@ -332,6 +336,7 @@ def build_graph_from_inventory(
                 pool_id=_pool_id,
                 vault_address=_vault_address,
                 pool_kind=_pool_kind,
+                freshness_window=_freshness_window,
             )
             adjacency[sym0][sym1].append(fwd_edge)
             built_count += 1
@@ -368,6 +373,7 @@ def build_graph_from_inventory(
                 pool_id=_pool_id,
                 vault_address=_vault_address,
                 pool_kind=_pool_kind,
+                freshness_window=_freshness_window,
             )
             adjacency[sym1][sym0].append(rev_edge)
             built_count += 1

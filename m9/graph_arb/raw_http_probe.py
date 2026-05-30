@@ -243,6 +243,49 @@ def probe_quote_raw_http(
             hex_result = _eth_call_raw(rpc_url, route.quoter, calldata, client)
             amount_out, gas_est = _decode_v4_response(hex_result, zero_for_one)
 
+        elif route.adapter_type == "maverick_v2":
+            # PoolInformation.calculateSwap(pool, amount, tokenAIn, exactOutput, sqrtPriceLimit)
+            # Selector: 0x2764cd0b  (keccak256("calculateSwap(address,uint128,bool,bool,uint256)")[:4])
+            # route.quoter is set to pool_address by builder.py for maverick_v2.
+            # route.token_in_index is repurposed as token_a_in flag (1=True, 0=False)
+            # when set by bridge_builder from adapter_metadata.yaml token_a field.
+            from dex.adapters.maverick_v2 import (
+                MAVERICK_V2_POOL_INFO_ADDRESS,
+                _encode_calculate_swap,
+                _decode_calculate_swap,
+                _SELECTOR_TOKEN_A,
+            )
+            pool_lc = route.quoter.lower()
+            token_in_lc = token_in.address.lower()
+
+            # Determine tokenAIn direction.
+            # If token_in_index is explicitly set (0=False, 1=True), use it directly.
+            # Otherwise, fetch tokenA() from the pool to determine direction.
+            token_a_in: bool
+            if route.token_in_index is not None:
+                token_a_in = bool(route.token_in_index)
+            else:
+                # Live tokenA() lookup: GET tokenA address from pool contract
+                _ta_calldata = "0x" + _SELECTOR_TOKEN_A.hex()
+                try:
+                    _ta_result = _eth_call_raw(rpc_url, pool_lc, _ta_calldata, client)
+                    _ta_raw = _ta_result[2:] if _ta_result.startswith("0x") else _ta_result
+                    _token_a_addr = "0x" + _ta_raw[24:64]
+                    token_a_in = token_in_lc == _token_a_addr.lower()
+                except Exception as _ta_exc:
+                    raise ValueError(
+                        f"Maverick V2 tokenA() lookup failed for pool {pool_lc}: {_ta_exc}"
+                    ) from _ta_exc
+
+            calldata = _encode_calculate_swap(
+                pool_address=pool_lc,
+                amount_in=amount_in,
+                token_a_in=token_a_in,
+            )
+            hex_result = _eth_call_raw(rpc_url, MAVERICK_V2_POOL_INFO_ADDRESS, calldata, client)
+            amount_out, _ = _decode_calculate_swap(hex_result)
+            gas_est = None
+
         else:
             raise ValueError(f"unsupported adapter_type: {route.adapter_type!r}")
 

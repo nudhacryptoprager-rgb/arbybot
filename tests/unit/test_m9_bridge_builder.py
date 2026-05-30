@@ -1093,23 +1093,35 @@ class TestConfigSeedContract:
         assert len(result["active_routes"]) == n_base
 
     def test_seed_mode_injects_adapter_metadata_routes(self, tmp_path):
-        """When include_config_seed=True, adapter_metadata Curve routes are injected."""
+        """When include_config_seed=True, adapter_metadata Curve+Balancer routes are injected."""
         metrics, result = self._build(tmp_path, include_seed=True)
-        # The real adapter_metadata.yaml has 2 Curve pools on base.
+        # The real adapter_metadata.yaml has Curve pools and Balancer pools on base.
         # If it has >=1 pool, metadata_seeded_count must be > 0.
         # Guard: only check if adapter_metadata.yaml actually has pools configured.
         from m9.graph_arb.adapter_metadata import load_adapter_metadata
+        import yaml as _yaml
+        from pathlib import Path as _Path
         meta = load_adapter_metadata()
         curve_base_count = len(meta.curve_pools.get("base", {}))
-        if curve_base_count > 0:
+        balancer_base_count = len(meta.balancer_pools.get("base", {}))
+        # Also count simple_routes.base entries (ve33/aerodrome_v2_stable/uniswap_v2 family)
+        _meta_path = _Path("config/adapter_metadata.yaml")
+        simple_base_count = 0
+        if _meta_path.exists():
+            with open(_meta_path, encoding="utf-8") as _fh:
+                _raw = _yaml.safe_load(_fh) or {}
+            _sr = (_raw.get("simple_routes") or {}).get("base", [])
+            simple_base_count = len(_sr) if isinstance(_sr, list) else 0
+        total_seed_count = curve_base_count + balancer_base_count + simple_base_count
+        if total_seed_count > 0:
             seed_routes = [
                 r for r in result.get("active_routes", [])
                 if r.get("source") == "adapter_metadata"
             ]
             assert len(seed_routes) > 0, (
-                "Seed mode must inject adapter_metadata routes when Curve pools are configured"
+                "Seed mode must inject adapter_metadata routes when pools are configured"
             )
-            assert metrics["metadata_seeded_count"] == curve_base_count
+            assert metrics["metadata_seeded_count"] == total_seed_count
             assert metrics["include_config_seed"] is True
 
     def test_seed_mode_routes_not_factory_verified(self, tmp_path):

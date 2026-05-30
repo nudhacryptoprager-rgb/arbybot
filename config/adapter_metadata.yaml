@@ -197,3 +197,500 @@ balancer:
       #   assets:
       #     - "0x<token_address_1_ascending>"
       #     - "0x<token_address_2_ascending>"
+
+      # -----------------------------------------------------------------------
+      # Balancer pools on Base — verified via api-v3.balancer.fi GraphQL 2026-05-29
+      # All pools registered with Vault 0xba12222222228d8ba445958a75a0704d566bf2c8
+      # pool_id format: 0x<20-byte-pool-address><8-byte-nonce><4-byte-spec> = 64 hex
+      # assets order: ascending address (Balancer V2 invariant)
+      #
+      # Verify via: cast call 0xba12222222228d8ba445958a75a0704d566bf2c8 \
+      #   "getPoolTokens(bytes32)(address[],uint256[],uint256)" <pool_id> --rpc-url <BASE_RPC>
+      # -----------------------------------------------------------------------
+
+      # OLAS / USDC — DISABLED: 100% QUOTE_REVERT rate in Run7+Run8 (2026-05-29)
+      # Likely: pool_id mismatch or pool paused. Re-enable after on-chain verification.
+      # "0x5332584890d6e415a6dc910254d6430b8aab7e69000200000000000000000103":
+      #   pool_kind: "weighted"
+      #   pool_address: "0x5332584890d6e415a6dc910254d6430b8aab7e69"
+      #   assets:
+      #     - "0x54330d28ca3357f294334bdc454a032e7f353416"  # OLAS
+      #     - "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"  # USDC
+
+      # WETH / IMO — DISABLED: 100% QUOTE_REVERT rate in Run7+Run8 (122 reverts, 2026-05-29)
+      # Likely: pool_id mismatch or pool paused. Re-enable after on-chain verification.
+      # "0x007bb7a4bfc214df06474e39142288e99540f2b3000200000000000000000191":
+      #   pool_kind: "weighted"
+      #   pool_address: "0x007bb7a4bfc214df06474e39142288e99540f2b3"
+      #   assets:
+      #     - "0x4200000000000000000000000000000000000006"  # WETH
+      #     - "0x5a7a2bf9ffae199f088b25837dcd7e115cf8e1bb"  # IMO
+
+      # AaveUSDC / GYD — GYROE, TVL ~$201k (2026-05-29)
+      # pool_addr first 20 bytes: 0x79fe0750be76913e83a0f0eb60ba1ab7fa6fda5d
+      # assets ascending: AaveUSDC(0x4ea7...) < GYD(0xca5d...)
+      "0x79fe0750be76913e83a0f0eb60ba1ab7fa6fda5d00020000000000000000019f":
+        pool_kind: "stable"
+        pool_address: "0x79fe0750be76913e83a0f0eb60ba1ab7fa6fda5d"
+        assets:
+          - "0x4ea71a20e655794051d1ee8b6e4a3269b13ccacc"  # AaveUSDC
+          - "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8"  # GYD
+
+# ---------------------------------------------------------------------------
+# Maverick V2
+# ---------------------------------------------------------------------------
+# Per-pool metadata for Maverick V2 directional-liquidity bins.
+# token_a: the pool's tokenA address (lowercase).  Used to set tokenAIn=True/False
+# correctly in PoolInformation.calculateSwap.  If not specified, the adapter
+# falls back to a live tokenA() eth_call on the pool contract.
+#
+# token_a MUST be verified on-chain: cast call <pool_addr> "tokenA()(address)" --rpc-url <BASE_RPC>
+#
+# Adding pools:
+#   1. Find the pool address via Maverick Factory.lookupPool(tokenA, tokenB, fee, tickSpacing).
+#   2. Verify tokenA() on-chain.
+#   3. Add entry below.
+#   4. Add a unit test to verify token_a lookup.
+
+maverick:
+  base:
+    pool_info_address: "0x67b70f73bee50ab48f0e8d75b94d4f6dced6ad72"  # PoolInformation
+    factory_address: "0x0a7e848aca42d879ef06507fca0e7b33a0a63c1e"   # Factory
+
+    pools:
+      # -----------------------------------------------------------------------
+      # No pools pre-configured yet.
+      # Pools discovered via M8 sniper will use live tokenA() lookup.
+      # Add entries here after on-chain verification for RPC efficiency.
+      # Example entry format:
+      # "0x<pool_address>":
+      #   token_a: "0x<token_a_address>"  # result of pool.tokenA()
+      # -----------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Simple pre-configured routes (config-seed)
+# ---------------------------------------------------------------------------
+# For adapter types where per-pool metadata is just (token0, token1, pool_address):
+#   - ve33 (Aerodrome volatile AMM, xy=k invariant)
+#   - aerodrome_v2_stable (Aerodrome stable AMM, x³y+xy³=k)
+#   - uniswap_v2 / sushiswap_v2 / baseswap_v2 (Uniswap V2 forks)
+#
+# Pool addresses verified on-chain via factory.getPool(tokenA, tokenB, stable)
+# or factory.getPair(tokenA, tokenB) on 2026-05-30.
+#
+# Used by bridge_builder._build_static_simple_routes() when include_config_seed=True.
+# All token symbols MUST be present in config/exotic_base_anchor.yaml [tokens] section.
+#
+# Format:
+#   pool_address: "0x..." (lowercase, 40 hex chars)
+#   dex_id: matches key in exotic_base_anchor.yaml [dexes]
+#   adapter_type: canonical adapter type string
+#   token0: symbol (alphabetical pair_id is derived from sorted([token0, token1]))
+#   token1: symbol
+
+simple_routes:
+  base:
+    # -----------------------------------------------------------------------
+    # Aerodrome ve33 — volatile AMM (xy=k). Factory: 0x420dd381b31aef6683db6b902084cb0ffece40da
+    # Query: factory.getPool(tokenA, tokenB, false)
+    # Verified on-chain 2026-05-30.
+    # -----------------------------------------------------------------------
+    - pool_address: "0xcdac0d6c6c59727a65f871236188350531885c43"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "USDC"
+      token1: "WETH"
+
+    - pool_address: "0x7f670f78b17dec44d5ef68a48740b6f8849cc2e6"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "AERO"
+      token1: "WETH"
+
+    - pool_address: "0x6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "AERO"
+      token1: "USDC"
+
+    - pool_address: "0x44ecc644449fc3a9858d2007caa8cfaa4c561f91"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "cbETH"
+      token1: "WETH"
+
+    - pool_address: "0x9dff4b5ae4fd673213502ab8fbf6d36015efb3e1"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "EURC"
+      token1: "WETH"
+
+    - pool_address: "0xfdf5139b38525627b47538536042a7c8d2686bd9"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "EURC"
+      token1: "USDC"
+
+    - pool_address: "0x2578365b3dfa7ffe60108e181efb79feddec2319"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "cbBTC"
+      token1: "WETH"
+
+    - pool_address: "0x9c38b55f9a9aba91bbcedeb12bf4428f47a6a0b8"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "cbBTC"
+      token1: "USDC"
+
+    - pool_address: "0xdb79cecfd1897d2f60b0ea7af072ca9a9e71047c"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "USDC"
+      token1: "VIRTUAL"
+
+    - pool_address: "0xa6385c73961dd9c58db2ef0c4eb98ce4b60651e8"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "WETH"
+      token1: "wstETH"
+
+    - pool_address: "0xfbb7df8b446f6d216702c0c3898fb681a21186d3"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "BRETT"
+      token1: "USDC"
+
+    - pool_address: "0x0f450c2205f36b5f6f95ca62f8ba88a2bad2463d"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "TOSHI"
+      token1: "USDC"
+
+    - pool_address: "0x637ad8d2611d3efe2ef41fdbb40b9f21abaf9585"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "DEGEN"
+      token1: "USDC"
+
+    - pool_address: "0x21594b992f68495dd28d605834b58889d0a727c7"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "VIRTUAL"
+      token1: "WETH"
+
+    - pool_address: "0x9287c921f5d920ceee0d07d7c58d476e46acc640"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "DAI"
+      token1: "WETH"
+
+    - pool_address: "0x4f5f4b7381b2445937dab831fc1952ecbb834e53"
+      dex_id: "aerodrome"
+      adapter_type: "ve33"
+      token0: "DAI"
+      token1: "USDC"
+
+    # -----------------------------------------------------------------------
+    # Aerodrome V2 Stable — stable AMM (x³y+xy³=k, ~1bps fee).
+    # Factory: 0x420dd381b31aef6683db6b902084cb0ffece40da
+    # Query: factory.getPool(tokenA, tokenB, true)
+    # Verified on-chain 2026-05-30.
+    # -----------------------------------------------------------------------
+    - pool_address: "0x9e8bfeb5c73f3f897bebdb49cc4161fece0b0c55"
+      dex_id: "aerodrome_v2_stable"
+      adapter_type: "aerodrome_v2_stable"
+      token0: "cbETH"
+      token1: "WETH"
+
+    - pool_address: "0x29bbb5f85f01702ec85d217ceeb2d9657700cf04"
+      dex_id: "aerodrome_v2_stable"
+      adapter_type: "aerodrome_v2_stable"
+      token0: "WETH"
+      token1: "wstETH"
+
+    - pool_address: "0x67b00b46fa4f4f24c03855c5c8013c0b938b3eec"
+      dex_id: "aerodrome_v2_stable"
+      adapter_type: "aerodrome_v2_stable"
+      token0: "DAI"
+      token1: "USDC"
+
+    - pool_address: "0x27a8afa3bd49406e48a074350fb7b2020c43b2bd"
+      dex_id: "aerodrome_v2_stable"
+      adapter_type: "aerodrome_v2_stable"
+      token0: "USDbC"
+      token1: "USDC"
+
+    - pool_address: "0x7f6095fecb6b67c08f1b8397701d666d71d703e0"
+      dex_id: "aerodrome_v2_stable"
+      adapter_type: "aerodrome_v2_stable"
+      token0: "crvUSD"
+      token1: "USDC"
+
+    - pool_address: "0xef0d374fe41fc6da7f8ed7c56c10a8f2a4f75313"
+      dex_id: "aerodrome_v2_stable"
+      adapter_type: "aerodrome_v2_stable"
+      token0: "EURC"
+      token1: "USDC"
+
+    # -----------------------------------------------------------------------
+    # Uniswap V2 on Base — factory: 0x8909dc15e40173ff4699343b6eb8132c65e18ec6
+    # Query: factory.getPair(tokenA, tokenB)
+    # Verified on-chain 2026-05-30.
+    # -----------------------------------------------------------------------
+    - pool_address: "0x88a43bbdf9d098eec7bceda4e2494615dfd9bb9c"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDC"
+      token1: "WETH"
+
+    - pool_address: "0x9c15578ccc8e6530dd1c282e679aa2d63f1be607"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbETH"
+      token1: "WETH"
+
+    - pool_address: "0xf848c131722ceec41109597f60be73ccb4fe74ed"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "WETH"
+      token1: "wstETH"
+
+    - pool_address: "0x4fe4a5f570b046e3704acd72fef6c508a310d3aa"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbBTC"
+      token1: "WETH"
+
+    - pool_address: "0x081ec5d6b68a28c9e3a73ec97e351161dbb5e8ef"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "AERO"
+      token1: "WETH"
+
+    - pool_address: "0x9ded8b880fa4128ba9c564823e403c1ea5e04b8d"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "AERO"
+      token1: "USDC"
+
+    - pool_address: "0x7202fc266e547f0ee4c982b7543260e7d2e38ed8"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "EURC"
+      token1: "WETH"
+
+    - pool_address: "0x412a35141dd2fbda680969baeaae6da40234ae92"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "EURC"
+      token1: "USDC"
+
+    - pool_address: "0xb2839134b8151964f19f6f3c7d59c70ae52852f5"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "DAI"
+      token1: "WETH"
+
+    - pool_address: "0x950847d1dd451b67a2fc1795c0c9a53cf88e63a2"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "DAI"
+      token1: "USDC"
+
+    - pool_address: "0x82b5486ae10201990030f60b1ef65f51eaf7d290"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDC"
+      token1: "VIRTUAL"
+
+    - pool_address: "0xe31c372a7af875b3b5e0f3713b17ef51556da667"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "VIRTUAL"
+      token1: "WETH"
+
+    - pool_address: "0xe0b2d3a2c11794b65e4e5b20b3e3b670a4cbafb0"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "BRETT"
+      token1: "USDC"
+
+    - pool_address: "0xb34380ba6a17b022782c7fc91e319c10c168fb98"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "BRETT"
+      token1: "WETH"
+
+    - pool_address: "0xc5accd3e4f6df1912498775807e0972b3ec43f29"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDbC"
+      token1: "USDC"
+
+    - pool_address: "0xe5947c01fb3a4b6703f9416c29ff736285bfd403"
+      dex_id: "uniswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbBTC"
+      token1: "USDC"
+
+    # -----------------------------------------------------------------------
+    # SushiSwap V2 on Base — factory: 0x71524b4f93c58fcbf659783284e38825f0622859
+    # Query: factory.getPair(tokenA, tokenB)
+    # Verified on-chain 2026-05-30.
+    # -----------------------------------------------------------------------
+    - pool_address: "0x2f8818d1b0f3e3e295440c1c0cddf40aaa21fa87"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDC"
+      token1: "WETH"
+
+    - pool_address: "0xc8d3aa9182c29a0bd8cf71da3e6c2a35c05bbdbb"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbETH"
+      token1: "WETH"
+
+    - pool_address: "0x976346ba596e4dc0af5e5c966553b3f05f8a21b2"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "WETH"
+      token1: "wstETH"
+
+    - pool_address: "0x2963c3e74e865b8684edab7e78aeb0d0bc13256e"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbBTC"
+      token1: "WETH"
+
+    - pool_address: "0xca99c89b041c5da128ae2c98a326135e0ee08f14"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "AERO"
+      token1: "WETH"
+
+    - pool_address: "0x5bd15d58e55f46cdc49093b8d99c75e385cb4ef9"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "AERO"
+      token1: "USDC"
+
+    - pool_address: "0xd035d4c8f848dde156ba097fa33df20f6068e29d"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "DAI"
+      token1: "WETH"
+
+    - pool_address: "0xf12084a6393b01c1bf7490cf2430cfd5d390ba5d"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "DAI"
+      token1: "USDC"
+
+    - pool_address: "0x404e927b203375779a6abd52a2049ce0adf6609b"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "BRETT"
+      token1: "WETH"
+
+    - pool_address: "0x34b6927565bef0be15634778f711bec10de21f44"
+      dex_id: "sushiswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDbC"
+      token1: "USDC"
+
+    # -----------------------------------------------------------------------
+    # BaseSwap V2 on Base — factory: 0xfda619b6d20975be80a10332cd39b9a4b0faa8bb
+    # Query: factory.getPair(tokenA, tokenB)
+    # Verified on-chain 2026-05-30.
+    # -----------------------------------------------------------------------
+    - pool_address: "0xab067c01c7f5734da168c699ae9d23a4512c9fdb"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDC"
+      token1: "WETH"
+
+    - pool_address: "0x07cfa5df24fb17486af0cbf6c910f24253a674d3"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbETH"
+      token1: "WETH"
+
+    - pool_address: "0x1e4a2fa367b545f1299811dcd314d37700568636"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "WETH"
+      token1: "wstETH"
+
+    - pool_address: "0x940ba0b0aff1bd0b5ffee55597208e843cf0b853"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbBTC"
+      token1: "WETH"
+
+    - pool_address: "0x9ceb7088753cb9b91d26987ea92c4674e8c0f32b"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "AERO"
+      token1: "WETH"
+
+    - pool_address: "0x3019f959c1fa8f4854e5ed8a477a38267f6bcef5"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "AERO"
+      token1: "USDC"
+
+    - pool_address: "0x5d638f2367d2e7b72cb7ee9adb7157968bb47bb8"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "EURC"
+      token1: "WETH"
+
+    - pool_address: "0x197bce1af47ae54b51d3a432a8d65529b3ea4fac"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "EURC"
+      token1: "USDC"
+
+    - pool_address: "0x0feb1490f80b6978002c3e501753562f2f2853b2"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "DAI"
+      token1: "WETH"
+
+    - pool_address: "0x8b7cc11ff640a494e5a31a82415bb0d831e62363"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "DAI"
+      token1: "USDC"
+
+    - pool_address: "0x34fb40820c2d530c35edc84ed27e13d90e40ceb1"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "VIRTUAL"
+      token1: "WETH"
+
+    - pool_address: "0x548ef63484843747f6e4a69026b061acc082f65d"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "BRETT"
+      token1: "USDC"
+
+    - pool_address: "0x78b9a3e9b16391df3a379ea0c5b9c1aef4b55ab7"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "BRETT"
+      token1: "WETH"
+
+    - pool_address: "0xc52328d5af54a12da68459ffc6d0845e91a8395f"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "USDbC"
+      token1: "USDC"
+
+    - pool_address: "0x6839a0f1dd342e9cf2ceedb958a90c391b4816c5"
+      dex_id: "baseswap_v2"
+      adapter_type: "uniswap_v2"
+      token0: "cbBTC"
+      token1: "USDC"
+

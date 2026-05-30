@@ -63,13 +63,17 @@ _DEX_ID_TO_ADAPTER_TYPE: Dict[str, str] = {
     # pool_id and vault_address loaded from config/adapter_metadata.yaml
     "balancer_stable": "balancer_stable",
     "balancer_weighted": "balancer_weighted",
+    # Maverick V2: directional liquidity bins; quotes via PoolInformation.calculateSwap
+    "maverick_v2": "maverick_v2",
 }
 _UNSUPPORTED_ADAPTER = "unsupported"
 
 # Adapter types that are correctly identified but do NOT yet have a working M9 quote
 # adapter.  Events from these dexes are quarantined with an explicit reason code rather
 # than silently entering active_routes (which would cause QUOTE_DECODE errors at runtime).
-# NOTE: balancer_stable and balancer_weighted are now wired via BalancerVaultAdapter.
+# NOTE: balancer_stable, balancer_weighted, and maverick_v2 are now wired via their
+# respective quote adapters. _PENDING_ADAPTER_TYPES is empty — all adapter types
+# recognised above have working M9 quote adapters.
 _PENDING_ADAPTER_TYPES: frozenset = frozenset()
 
 # Per-adapter quarantine reason for pending adapters
@@ -248,9 +252,138 @@ def _build_static_curve_routes(chain: str = "base") -> List[Dict[str, Any]]:
     return routes
 
 
-# ---------------------------------------------------------------------------
-# Core bridge logic
-# ---------------------------------------------------------------------------
+def _build_static_balancer_routes(chain: str = "base") -> List[Dict[str, Any]]:
+    """Return route entries for pre-configured Balancer pools from adapter_metadata.yaml.
+
+    SEED-ONLY: use only with include_config_seed=True (smoke / bootstrap mode).
+    Routes produced here are tagged source='adapter_metadata' and counted in
+    bridge_source_metrics['metadata_seeded_count'].
+    """
+    try:
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+        meta = load_adapter_metadata()
+        chain_pools = meta.balancer_pools.get(chain, {})
+    except Exception:
+        return []
+
+    # We need a symbol↔address reverse map to assign token0/token1 names.
+    # Build it from known token addresses (same map as in token_price_fetcher).
+    _ADDR_TO_SYM: Dict[str, str] = {
+        "0x4200000000000000000000000000000000000006": "WETH",
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
+        "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": "EURC",
+        "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": "cbBTC",
+        "0x940181a94a35a4569e4529a3cdfb74e38fd98631": "AERO",
+        "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b": "VIRTUAL",
+        "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
+        "0x417ac0e078398c154edfadd9ef675d30be60af93": "crvUSD",
+        "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC",
+        "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": "cbETH",
+        "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452": "wstETH",
+        # Balancer-specific tokens
+        "0x54330d28ca3357f294334bdc454a032e7f353416": "OLAS",
+        "0x5a7a2bf9ffae199f088b25837dcd7e115cf8e1bb": "IMO",
+        "0x4ea71a20e655794051d1ee8b6e4a3269b13ccacc": "AaveUSDC",
+        "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8": "GYD",
+    }
+
+    routes: List[Dict[str, Any]] = []
+    for pool_id, pool in chain_pools.items():
+        assets = list(pool.assets)
+        if len(assets) < 2:
+            continue
+        sym0 = _ADDR_TO_SYM.get(assets[0].lower(), assets[0][:8])
+        sym1 = _ADDR_TO_SYM.get(assets[1].lower(), assets[1][:8])
+        pair_id = "_".join(sorted([sym0, sym1]))
+        routes.append({
+            "route_id": f"balancer_meta_{pool.pool_address.lower()}",
+            "pair_id": pair_id,
+            "dex_id": f"balancer_{pool.pool_kind}",
+            "adapter_type": f"balancer_{pool.pool_kind}" if pool.pool_kind in ("stable", "weighted") else "balancer_stable",
+            "token0": sym0,
+            "token1": sym1,
+            "token0_addr": assets[0].lower(),
+            "token1_addr": assets[1].lower(),
+            "fee": 0,
+            "tick_spacing": None,
+            "factory_address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+            "pool_address": pool.pool_address.lower(),
+            "pool_id": pool_id.lower(),
+            "vault_address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+            "factory_verified": False,
+            "metadata_seeded": True,
+            "source": "adapter_metadata",
+            "pool_kind": pool.pool_kind,
+            "liquidity_ok": True,
+            "depth_probe_ok": True,
+            "status": "active",
+            "quoter_addr": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+            "effective_depth_usd": 50.0,
+        })
+    return routes
+
+
+def _build_static_simple_routes(chain: str = "base") -> List[Dict[str, Any]]:
+    """Load pre-configured V2/ve33/aerodrome_v2_stable routes from adapter_metadata.yaml.
+
+    Reads the ``simple_routes.<chain>`` list from adapter_metadata.yaml.
+    Each entry requires: pool_address, dex_id, adapter_type, token0, token1.
+
+    SEED-ONLY: use only with include_config_seed=True (smoke / bootstrap mode).
+    Routes are tagged source='adapter_metadata' and counted in metadata_seeded_count.
+    """
+    import yaml as _yaml
+    from pathlib import Path as _Path
+
+    p = _Path("config/adapter_metadata.yaml")
+    if not p.exists():
+        return []
+    try:
+        with open(p, encoding="utf-8") as fh:
+            raw = _yaml.safe_load(fh) or {}
+    except Exception:
+        return []
+
+    chain_routes = (raw.get("simple_routes") or {}).get(chain, [])
+    if not isinstance(chain_routes, list):
+        return []
+
+    routes: List[Dict[str, Any]] = []
+    for r in chain_routes:
+        if not isinstance(r, dict):
+            continue
+        pool_addr = str(r.get("pool_address", "")).lower()
+        if not pool_addr or len(pool_addr) != 42:
+            continue
+        sym0 = str(r.get("token0", ""))
+        sym1 = str(r.get("token1", ""))
+        if not sym0 or not sym1:
+            continue
+        dex_id = str(r.get("dex_id", ""))
+        adapter_type = str(r.get("adapter_type", "uniswap_v2"))
+        factory = str(r.get("factory_address", ""))
+        pair_id = "_".join(sorted([sym0, sym1]))
+        routes.append({
+            "route_id": f"meta_{adapter_type}_{pool_addr[2:10]}",
+            "pair_id": pair_id,
+            "dex_id": dex_id,
+            "adapter_type": adapter_type,
+            "token0": sym0,
+            "token1": sym1,
+            "fee": int(r.get("fee", 0)),
+            "tick_spacing": None,
+            "factory_address": factory,
+            "pool_address": pool_addr,
+            "factory_verified": False,
+            "metadata_seeded": True,
+            "source": "adapter_metadata",
+            "effective_depth_usd": 50.0,
+            "liquidity_ok": True,
+            "depth_probe_ok": True,
+            "status": "active",
+        })
+    return routes
+
 
 def build_bridge_inventory(
     sniper_path: str = _DEFAULT_SNIPER,
@@ -452,6 +585,24 @@ def build_bridge_inventory(
             if _scr.get("pool_address", "").lower() not in _base_active_addrs:
                 base_active = list(base_active) + [_scr]
                 _metadata_seeded_routes.append(_scr)
+        # Balancer config-seed: inject pre-configured V2 Vault pools
+        _static_balancer = _build_static_balancer_routes(chain="base")
+        _base_active_addrs_b = frozenset(
+            r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
+        )
+        for _sbr in _static_balancer:
+            if _sbr.get("pool_address", "").lower() not in _base_active_addrs_b:
+                base_active = list(base_active) + [_sbr]
+                _metadata_seeded_routes.append(_sbr)
+        # Simple routes config-seed: ve33, aerodrome_v2_stable, uniswap_v2 family
+        _static_simple = _build_static_simple_routes(chain="base")
+        _base_active_addrs_s = frozenset(
+            r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
+        )
+        for _ssr in _static_simple:
+            if _ssr.get("pool_address", "").lower() not in _base_active_addrs_s:
+                base_active = list(base_active) + [_ssr]
+                _metadata_seeded_routes.append(_ssr)
     _metadata_seeded_count: int = len(_metadata_seeded_routes)
 
     # factory_verified_count counts routes from base inventory (not metadata seeds)

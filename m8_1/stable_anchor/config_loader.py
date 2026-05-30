@@ -20,6 +20,7 @@ _VALID_ADAPTER_TYPES = {
     "curve_stable",
     "balancer_stable",
     "uniswap_v2",
+    "maverick_v2",
 }
 
 
