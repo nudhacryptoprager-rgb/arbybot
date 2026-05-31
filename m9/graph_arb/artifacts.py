@@ -917,6 +917,16 @@ def build_artifact(
         infra_telemetry["dynamic_size_selection_rate"] = round(
             len(_dynamic_results) / max(len(cycle_results), 1), 4
         )
+    # Depth-aware sizing telemetry (package #2): how many cycles carried a measured
+    # bottleneck depth and how many had their size ladder clamped by it.
+    _depth_known = [qr for qr in cycle_results if qr.cycle_min_depth_usd is not None]
+    _depth_capped = [qr for qr in cycle_results if getattr(qr, "depth_capped", False)]
+    infra_telemetry["depth_aware_known_count"] = len(_depth_known)
+    infra_telemetry["depth_aware_capped_count"] = len(_depth_capped)
+    if cycle_results:
+        infra_telemetry["depth_aware_known_rate"] = round(
+            len(_depth_known) / max(len(cycle_results), 1), 4
+        )
     # Verified inventory availability (Step 4 GPT fix)
     infra_telemetry["verified_inventory_exists"] = verified_inventory_exists
     # Source of sizes_usd (Fix 7): "config.scan_params" | "cli_default" | "cli_override"

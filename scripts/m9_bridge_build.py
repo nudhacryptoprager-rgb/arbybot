@@ -64,6 +64,26 @@ def _parse_args() -> argparse.Namespace:
             "Do NOT use in production — production relies on m9_curve_discovery.py."
         ),
     )
+    p.add_argument(
+        "--registry",
+        default="data/runs/_rolling/m8_pending_pairs.json",
+        help=(
+            "M8.2 pending-pair registry path (cross-run single->multi venue "
+            "accumulator). Promotes long-tail tokens once seen on >=2 venues."
+        ),
+    )
+    p.add_argument(
+        "--no-registry",
+        action="store_true",
+        default=False,
+        help="Disable the M8.2 pending-pair registry (no promotion, no persistence).",
+    )
+    p.add_argument(
+        "--registry-ttl-seconds",
+        type=float,
+        default=None,
+        help="TTL for venue observations in the registry (default 48h).",
+    )
     return p.parse_args()
 
 
@@ -91,6 +111,8 @@ def main() -> int:
         base_inv_path=args.base_inv,
         output_path=args.output,
         include_config_seed=args.include_config_seed_pools,
+        registry_path=(None if args.no_registry else args.registry),
+        registry_ttl_seconds=args.registry_ttl_seconds,
     )
 
     log.info("Bridge funnel:")
@@ -102,6 +124,10 @@ def main() -> int:
     log.info("  depth_ok_count           : %d", metrics["depth_ok_count"])
     log.info("  graph_ready_from_m8      : %d", metrics["graph_ready_from_m8"])
     log.info("  graph_ready_total        : %d", metrics["graph_ready_total"])
+    log.info("  registry_enabled         : %s", metrics.get("registry_enabled", False))
+    log.info("  registry_tokens_tracked  : %d", metrics.get("registry_tokens_tracked", 0))
+    log.info("  registry_multi_venue     : %d", metrics.get("registry_multi_venue_tokens", 0))
+    log.info("  registry_promoted_routes : %d", metrics.get("registry_promoted_routes", 0))
     log.info("  metadata_seeded_count    : %d  [seed=%s]",
              metrics.get("metadata_seeded_count", 0),
              metrics.get("include_config_seed", False))

@@ -135,3 +135,197 @@ class TestVe33AdapterTypes:
         """uniswap_v2 uses getReserves; must not be in VE33 adapter set."""
         assert "uniswap_v2" not in probe._VE33_ADAPTER_TYPES
 
+
+# ---------------------------------------------------------------------------
+# Package #8: M8 long-tail anchor-side marginal depth enrichment
+# ---------------------------------------------------------------------------
+
+
+def _u256(value: int) -> str:
+    return "0x" + value.to_bytes(32, "big").hex()
+
+
+class TestComputeMarginalDepth:
+    """Price-agnostic two-point marginal depth math (no RPC, no decimals)."""
+
+    def test_no_impact_full_depth(self):
+        # Linear pool: probe rate equals ref rate → impact 0 → full probe depth.
+        res = probe.compute_marginal_depth(
+            ref_in=2_000_000, ref_out=2_000,
+            probe_in=100_000_000, probe_out=100_000,
+            probe_size_usd=100.0,
+        )
+        assert res["probe_ok"] is True
+        assert res["price_impact_at_100usd"] == 0.0
+        assert res["effective_depth_usd"] == 100.0
+        assert res["depth_reject_reason"] is None
+        assert res["depth_method"] == "marginal_anchor"
+
+    def test_low_effective_depth(self):
+        # 20% degradation of marginal rate → LOW_EFFECTIVE_DEPTH.
+        res = probe.compute_marginal_depth(
+            ref_in=2_000_000, ref_out=2_000,
+            probe_in=100_000_000, probe_out=80_000,
+            probe_size_usd=100.0,
+        )
+        assert res["probe_ok"] is True
+        assert abs(res["price_impact_at_100usd"] - 0.2) < 1e-6
+        assert res["depth_reject_reason"] == "LOW_EFFECTIVE_DEPTH"
+        # est_depth = 100 * 0.10 / 0.20 = 50
+        assert res["effective_depth_usd"] == 50.0
+
+    def test_toxic_price_impact(self):
+        # 50% degradation → TOXIC_PRICE_IMPACT.
+        res = probe.compute_marginal_depth(
+            ref_in=2_000_000, ref_out=2_000,
+            probe_in=100_000_000, probe_out=50_000,
+            probe_size_usd=100.0,
+        )
+        assert res["depth_reject_reason"] == "TOXIC_PRICE_IMPACT"
+        assert res["effective_depth_usd"] == 20.0
+
+    def test_negative_impact_clamped(self):
+        # Probe rate better than ref (rounding/tiny pool) → impact clamped to 0.
+        res = probe.compute_marginal_depth(
+            ref_in=2_000_000, ref_out=2_000,
+            probe_in=100_000_000, probe_out=110_000,
+            probe_size_usd=100.0,
+        )
+        assert res["price_impact_at_100usd"] == 0.0
+        assert res["effective_depth_usd"] == 100.0
+
+    def test_zero_amount_in_error(self):
+        res = probe.compute_marginal_depth(
+            ref_in=0, ref_out=2_000,
+            probe_in=100_000_000, probe_out=100_000,
+            probe_size_usd=100.0,
+        )
+        assert res["probe_ok"] is False
+        assert res["probe_error"] == "ZERO_AMOUNT_IN"
+
+    def test_zero_amount_out_error(self):
+        res = probe.compute_marginal_depth(
+            ref_in=2_000_000, ref_out=2_000,
+            probe_in=100_000_000, probe_out=0,
+            probe_size_usd=100.0,
+        )
+        assert res["probe_ok"] is False
+        assert res["probe_error"] == "ZERO_AMOUNT_OUT"
+
+
+class TestAnchorLeg:
+    def test_anchor_is_token0(self):
+        route = {"token0": "USDC", "token1": "MEME",
+                 "token0_addr": "0xaa", "token1_addr": "0xbb"}
+        assert probe._anchor_leg(route) == ("USDC", "0xaa", "0xbb")
+
+    def test_anchor_is_token1(self):
+        route = {"token0": "MEME", "token1": "WETH",
+                 "token0_addr": "0xaa", "token1_addr": "0xbb"}
+        assert probe._anchor_leg(route) == ("WETH", "0xbb", "0xaa")
+
+    def test_no_anchor(self):
+        route = {"token0": "MEME", "token1": "PEPE",
+                 "token0_addr": "0xaa", "token1_addr": "0xbb"}
+        assert probe._anchor_leg(route) is None
+
+
+class TestProbeRouteMarginalDepth:
+    _USDC = "0x" + "00" * 19 + "11"
+    _MEME = "0x" + "00" * 19 + "22"
+
+    def _v3_route(self):
+        return {
+            "token0": "USDC", "token1": "MEME",
+            "token0_addr": self._USDC, "token1_addr": self._MEME,
+            "adapter_type": "uniswap_v3", "dex_id": "uniswap_v3", "fee": 3000,
+            "pool_address": "0x" + "cc" * 20,
+        }
+
+    def test_v3_linear_no_impact(self, monkeypatch):
+        # Stub quoter: return amount_in 1:1 → no marginal degradation.
+        def _stub(rpc_url, to, data):
+            raw = data[2:]
+            amount = int(raw[136:200], 16)  # selector(8)+addr(64)+addr(64)=136
+            return _u256(amount)
+
+        monkeypatch.setattr(probe, "_raw_eth_call", _stub)
+        res = probe.probe_route_marginal_depth(
+            self._v3_route(), rpc_url="http://rpc",
+            dex_quoters={"uniswap_v3": "0x" + "99" * 20},
+        )
+        assert res["probe_ok"] is True
+        assert res["effective_depth_usd"] == 100.0
+        assert res["depth_reject_reason"] is None
+
+    def test_v3_sublinear_low_depth(self, monkeypatch):
+        # Stub quoter: out grows as sqrt(amount) → bigger trade has worse rate.
+        import math
+
+        def _stub(rpc_url, to, data):
+            raw = data[2:]
+            amount = int(raw[136:200], 16)
+            out = int(math.isqrt(amount) * 1000)
+            return _u256(out)
+
+        monkeypatch.setattr(probe, "_raw_eth_call", _stub)
+        res = probe.probe_route_marginal_depth(
+            self._v3_route(), rpc_url="http://rpc",
+            dex_quoters={"uniswap_v3": "0x" + "99" * 20},
+        )
+        assert res["probe_ok"] is True
+        # sqrt pool always has positive impact at larger size
+        assert res["price_impact_at_100usd"] > 0
+
+    def test_v4_skipped(self):
+        route = self._v3_route()
+        route["adapter_type"] = "uniswap_v4"
+        res = probe.probe_route_marginal_depth(route, rpc_url="http://rpc")
+        assert res["probe_ok"] is False
+        assert res["probe_error"] == "V4_DEPTH_UNSUPPORTED"
+
+    def test_no_anchor_error(self):
+        route = self._v3_route()
+        route["token0"], route["token1"] = "MEME", "PEPE"
+        res = probe.probe_route_marginal_depth(route, rpc_url="http://rpc")
+        assert res["probe_error"] == "NO_ANCHOR_FOR_DEPTH"
+
+    def test_no_quoter_error(self):
+        # v3 route with no quoter available → NO_QUOTER
+        res = probe.probe_route_marginal_depth(
+            self._v3_route(), rpc_url="http://rpc", dex_quoters={},
+        )
+        assert res["probe_error"] == "NO_QUOTER"
+
+
+class TestEnrichRoutesMissingDepth:
+    def test_skips_already_enriched(self, monkeypatch):
+        calls = {"n": 0}
+
+        def _stub(*a, **k):
+            calls["n"] += 1
+            return {"probe_ok": True, "effective_depth_usd": 42.0,
+                    "price_impact_at_100usd": 0.0, "depth_reject_reason": None,
+                    "depth_method": "marginal_anchor"}
+
+        monkeypatch.setattr(probe, "probe_route_marginal_depth", _stub)
+        routes = [
+            {"effective_depth_usd": 500.0, "pool_address": "0x" + "11" * 20},
+            {"effective_depth_usd": None, "pool_address": "0x" + "22" * 20,
+             "token0": "USDC", "token1": "MEME"},
+        ]
+        counts = probe.enrich_routes_missing_depth(routes, rpc_url="http://rpc", sleep_s=0)
+        assert counts["candidates"] == 1
+        assert counts["probed_ok"] == 1
+        assert routes[0]["effective_depth_usd"] == 500.0  # untouched
+        assert routes[1]["effective_depth_usd"] == 42.0   # enriched
+
+    def test_skips_placeholder_pool(self, monkeypatch):
+        monkeypatch.setattr(
+            probe, "probe_route_marginal_depth",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not probe")),
+        )
+        routes = [{"effective_depth_usd": None, "pool_address": "0x" + "0" * 40}]
+        counts = probe.enrich_routes_missing_depth(routes, rpc_url="http://rpc", sleep_s=0)
+        assert counts["candidates"] == 0
+

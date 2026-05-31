@@ -304,6 +304,12 @@ def build_graph_from_inventory(
         # Freshness window: True when M8 sniped pool is within _FRESH_WINDOW_SECONDS
         _freshness_window = bool(entry.get("freshness_window", False))
 
+        # Depth-aware sizing input: measured on-chain depth (pool_depth_probe / package #8).
+        _raw_depth = entry.get("effective_depth_usd")
+        _effective_depth_usd: Optional[float] = (
+            float(_raw_depth) if _raw_depth is not None else None
+        )
+
         # Forward: sym0 → sym1
         if not (exclude_edge_keys and edge_key_fwd in exclude_edge_keys):
             # Curve: per-direction index lookup
@@ -337,6 +343,7 @@ def build_graph_from_inventory(
                 vault_address=_vault_address,
                 pool_kind=_pool_kind,
                 freshness_window=_freshness_window,
+                effective_depth_usd=_effective_depth_usd,
             )
             adjacency[sym0][sym1].append(fwd_edge)
             built_count += 1
@@ -374,6 +381,7 @@ def build_graph_from_inventory(
                 vault_address=_vault_address,
                 pool_kind=_pool_kind,
                 freshness_window=_freshness_window,
+                effective_depth_usd=_effective_depth_usd,
             )
             adjacency[sym1][sym0].append(rev_edge)
             built_count += 1

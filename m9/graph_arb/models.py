@@ -34,6 +34,7 @@ class GraphEdge:
     vault_address: Optional[str] = None   # Balancer: Vault contract address
     pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
     freshness_window: bool = False        # True when M8 sniped pool is within _FRESH_WINDOW_SECONDS
+    effective_depth_usd: Optional[float] = None  # measured on-chain depth (pool_depth_probe)
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):
@@ -100,6 +101,20 @@ class GraphCycle:
         return self.edges[0].token_in_sym
 
     @property
+    def min_effective_depth_usd(self) -> Optional[float]:
+        """Bottleneck on-chain depth of the cycle (min over edges).
+
+        Returns None when no edge carries a measured ``effective_depth_usd``,
+        so callers can distinguish "unknown depth" from "shallow depth".
+        """
+        depths = [
+            e.effective_depth_usd
+            for e in self.edges
+            if e.effective_depth_usd is not None
+        ]
+        return min(depths) if depths else None
+
+    @property
     def min_factory_class(self) -> str:
         """Return the 'worst' factory class in the cycle (used for ranking)."""
         order = {"EFFICIENT_BASELINE": 0, "MID_EFFICIENCY": 1, "LOW_EFFICIENCY": 2}
@@ -126,6 +141,8 @@ class CycleQuoteResult:
     size_candidates_usd: tuple = ()
     depth_curve: Optional[List[Dict[str, Any]]] = None
     dynamic_size_source: Optional[str] = None
+    cycle_min_depth_usd: Optional[float] = None  # bottleneck effective_depth_usd of cycle
+    depth_capped: bool = False  # True when the size ladder was clamped by cycle depth
 
 
 @dataclass

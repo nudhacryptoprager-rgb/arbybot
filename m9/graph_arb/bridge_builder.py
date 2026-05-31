@@ -400,6 +400,8 @@ def build_bridge_inventory(
     output_path: str = _BRIDGE_OUTPUT,
     include_config_seed: bool = False,
     curve_discovery_path: str = _DEFAULT_CURVE_DISCOVERY,
+    registry_path: Optional[str] = None,
+    registry_ttl_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Build the M9 bridge inventory from M8/M8.1 sources + base depth inventory.
 
@@ -409,6 +411,12 @@ def build_bridge_inventory(
             These routes are tagged source='adapter_metadata' and counted separately
             in metadata_seeded_count — NOT as factory_verified.
             Default False: production mode relies on dynamic discovery only.
+        registry_path: When provided, enable the M8.2 pending-pair registry —
+            a persistent cross-run accumulator that promotes long-tail tokens to
+            active_routes once they are observed on >=2 distinct quoteable venues
+            (even across separate sniper windows).  Default None disables it
+            (keeps unit tests side-effect free).
+        registry_ttl_seconds: TTL for venue observations in the registry.
 
     Returns bridge_source_metrics dict.  Writes the output artifact to output_path.
     """
@@ -469,7 +477,32 @@ def build_bridge_inventory(
         )
     ]
 
-    # Stage 4: cross_dex_seen — token symbol seen in ≥2 events
+    # ------------------------------------------------------------------
+    # Stage 3b: M8.2 pending-pair registry update (cross-run accumulator)
+    # Record every anchor-connected event as a (dex_id, pool) venue observation
+    # keyed by the exotic token's address.  Promotion (single→multi venue) is
+    # applied later, after m8_new_routes is built.  Enabled only when
+    # registry_path is provided (keeps unit tests side-effect free).
+    # ------------------------------------------------------------------
+    _registry: Optional[Dict[str, Any]] = None
+    _registry_stats: Dict[str, int] = {}
+
+    def _is_quoteable_dex(dex_id: str) -> bool:
+        _adp = _DEX_ID_TO_ADAPTER_TYPE.get(dex_id, "uniswap_v3")
+        return _adp != _UNSUPPORTED_ADAPTER and _adp not in _PENDING_ADAPTER_TYPES
+
+    if registry_path is not None:
+        from m8.discovery import pending_pair_registry as _ppr
+        _ttl = (
+            registry_ttl_seconds
+            if registry_ttl_seconds is not None
+            else _ppr.DEFAULT_TTL_SECONDS
+        )
+        _registry = _ppr.load_registry(registry_path)
+        _registry_stats = _ppr.update_registry(
+            _registry, anchor_connected_events, now_ts, ttl_seconds=_ttl
+        )
+
     # (proxy for the same underlying token existing on multiple DEXes)
     all_syms: List[str] = []
     for e in anchor_connected_events:
@@ -734,6 +767,40 @@ def build_bridge_inventory(
     # Extend m8_new_routes with fresh-window admissions
     m8_new_routes = m8_new_routes + m8_fresh_window_routes
 
+    # ------------------------------------------------------------------
+    # Stage 6b: M8.2 registry promotion (single→multi venue).
+    # Tokens that have accumulated >=2 distinct quoteable venues across runs
+    # (persisted in the registry) are promoted: a route is built for every
+    # quoteable venue and injected into active_routes.  This unlocks arb cycles
+    # for long-tail tokens whose second venue appeared only after the first had
+    # expired from the sniper window — the structural single-venue barrier.
+    # Deduplicated by pool address against base inventory and existing M8 routes.
+    # ------------------------------------------------------------------
+    _registry_promoted_routes: List[Dict] = []
+    _registry_promoted_tokens: int = 0
+    if _registry is not None:
+        from m8.discovery import pending_pair_registry as _ppr
+        _promo_events = _ppr.promotable_events(_registry, _is_quoteable_dex)
+        _registry_promoted_tokens = len(
+            _ppr.multi_venue_tokens(_registry, _is_quoteable_dex)
+        )
+        _existing_addrs = set(base_pool_addrs) | {
+            r["pool_address"].lower() for r in m8_new_routes if r.get("pool_address")
+        }
+        for _pe in _promo_events:
+            _pe_pool = (_pe.get("pool", "") or "").lower()
+            if not _pe_pool or _pe_pool in _existing_addrs:
+                continue
+            if not _v4_hook_ok(_pe):
+                continue
+            _route = _build_m8_route(_pe, freshness_window=False)
+            _route["promoted_from_registry"] = True
+            _route["promotion_reason"] = _ppr.PROMOTION_REASON
+            _registry_promoted_routes.append(_route)
+            _existing_addrs.add(_pe_pool)
+        m8_new_routes = m8_new_routes + _registry_promoted_routes
+
+
     # Unsupported M8 routes (truly unknown adapters) are quarantined.
     m8_quarantined_routes: List[Dict] = [
         {
@@ -939,6 +1006,39 @@ def build_bridge_inventory(
         # Curve factory discovery count (production path, no seed flag required)
         "curve_discovery_count": _curve_discovery_count,
     }
+
+    # ------------------------------------------------------------------
+    # M8.2 pending-pair registry diagnostics + persistence
+    # ------------------------------------------------------------------
+    if _registry is not None and registry_path is not None:
+        from m8.discovery import pending_pair_registry as _ppr
+        bridge_source_metrics["registry_enabled"] = True
+        bridge_source_metrics["registry_tokens_tracked"] = _registry_stats.get(
+            "tokens_tracked", 0
+        )
+        bridge_source_metrics["registry_venues_tracked"] = _registry_stats.get(
+            "venues_tracked", 0
+        )
+        bridge_source_metrics["registry_multi_venue_tokens"] = _registry_promoted_tokens
+        bridge_source_metrics["registry_new_tokens"] = _registry_stats.get(
+            "new_tokens", 0
+        )
+        bridge_source_metrics["registry_new_venues"] = _registry_stats.get(
+            "new_venues", 0
+        )
+        bridge_source_metrics["registry_pruned_venues"] = _registry_stats.get(
+            "pruned_venues", 0
+        )
+        bridge_source_metrics["registry_pruned_tokens"] = _registry_stats.get(
+            "pruned_tokens", 0
+        )
+        bridge_source_metrics["registry_promoted_routes"] = len(
+            _registry_promoted_routes
+        )
+        _ppr.save_registry(_registry, registry_path)
+    else:
+        bridge_source_metrics["registry_enabled"] = False
+        bridge_source_metrics["registry_promoted_routes"] = 0
 
     # ------------------------------------------------------------------
     # Write output artifact

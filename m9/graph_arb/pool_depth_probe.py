@@ -386,6 +386,298 @@ def probe_pool_depth(
     return result
 
 
+# ---------------------------------------------------------------------------
+# M8 long-tail depth enrichment (package #8)
+#
+# M8-sniped routes carry their own on-chain token addresses (token0_addr /
+# token1_addr) but the *exotic* leg has no entry in config tokens and no known
+# USD price, so probe_pool_depth() cannot enrich them. Instead we measure depth
+# with a price-agnostic two-point marginal probe: quote a tiny reference size and
+# a probe size FROM THE ANCHOR SIDE, then compare the realised marginal rates.
+# The exotic token's USD price and decimals cancel in the rate ratio, so we only
+# need the anchor's price/decimals (always known) plus the exotic token address.
+# ---------------------------------------------------------------------------
+
+# Anchor token decimals (Base). Used to size the anchor-side probe amount.
+_ANCHOR_DECIMALS: Dict[str, int] = {
+    "WETH": 18,
+    "WETH_BASE": 18,
+    "USDC": 6,
+    "EURC": 6,
+    "DAI": 18,
+    "USDT": 6,
+    "cbBTC": 8,
+}
+
+# Default reference size (USD) for the near-spot marginal rate.
+_REF_SIZE_USD = 2.0
+
+
+def compute_marginal_depth(
+    ref_in: int,
+    ref_out: int,
+    probe_in: int,
+    probe_out: int,
+    probe_size_usd: float,
+    impact_threshold_low: float = _IMPACT_THRESHOLD_LOW,
+    impact_threshold_toxic: float = _IMPACT_THRESHOLD_TOXIC,
+) -> Dict[str, Any]:
+    """Price-agnostic depth from a two-point marginal quote.
+
+    A tiny reference quote (``ref``) establishes the near-spot marginal rate, and
+    the probe-size quote measures the realised rate. Price impact at probe size is
+    the relative degradation of the marginal rate::
+
+        rate_ref   = ref_out  / ref_in
+        rate_probe = probe_out / probe_in
+        impact     = 1 - rate_probe / rate_ref   (clamped to >= 0)
+
+    Both the exotic token's USD price and its decimals cancel in the rate ratio,
+    so this needs neither for the output token. Returns the same field shape as
+    ``probe_pool_depth`` so it can be written directly onto a route entry.
+    """
+    result: Dict[str, Any] = {
+        "effective_depth_usd": None,
+        "price_impact_at_100usd": None,
+        "probe_ok": False,
+        "probe_error": None,
+        "depth_reject_reason": None,
+        "depth_method": "marginal_anchor",
+    }
+    if ref_in <= 0 or probe_in <= 0:
+        result["probe_error"] = "ZERO_AMOUNT_IN"
+        return result
+    if ref_out <= 0 or probe_out <= 0:
+        result["probe_error"] = "ZERO_AMOUNT_OUT"
+        return result
+
+    rate_ref = ref_out / ref_in
+    rate_probe = probe_out / probe_in
+    if rate_ref <= 0:
+        result["probe_error"] = "ZERO_SPOT_RATE"
+        return result
+
+    impact = 1.0 - (rate_probe / rate_ref)
+    if impact < 0:
+        impact = 0.0  # probe rate better than ref (rounding / tiny pool); treat as no impact
+    result["price_impact_at_100usd"] = round(impact, 6)
+    result["probe_ok"] = True
+
+    if impact <= impact_threshold_low:
+        result["effective_depth_usd"] = round(float(probe_size_usd), 2)
+    else:
+        est_depth = probe_size_usd * impact_threshold_low / max(impact, 1e-9)
+        result["effective_depth_usd"] = round(est_depth, 2)
+
+    if impact >= impact_threshold_toxic:
+        result["depth_reject_reason"] = "TOXIC_PRICE_IMPACT"
+    elif impact > impact_threshold_low:
+        result["depth_reject_reason"] = "LOW_EFFECTIVE_DEPTH"
+
+    return result
+
+
+def _anchor_leg(route: Dict[str, Any]) -> Optional[tuple]:
+    """Return (anchor_sym, anchor_addr, exotic_addr) or None if no anchor leg."""
+    sym0 = route.get("token0") or ""
+    sym1 = route.get("token1") or ""
+    addr0 = route.get("token0_addr") or ""
+    addr1 = route.get("token1_addr") or ""
+    if sym0 in _ANCHOR_DECIMALS:
+        return (sym0, addr0, addr1)
+    if sym1 in _ANCHOR_DECIMALS:
+        return (sym1, addr1, addr0)
+    return None
+
+
+def probe_route_marginal_depth(
+    route: Dict[str, Any],
+    rpc_url: str,
+    dex_quoters: Optional[Dict[str, str]] = None,
+    probe_size_usd: float = _PROBE_SIZE_USD,
+    ref_size_usd: float = _REF_SIZE_USD,
+) -> Dict[str, Any]:
+    """Measure depth for one M8 long-tail route via anchor-side marginal probe.
+
+    Quotes anchor -> exotic at ``ref_size_usd`` and ``probe_size_usd`` and derives
+    a price-agnostic price impact. Uses the route's embedded token addresses, so it
+    works for exotic tokens absent from config. Returns the same field shape as
+    ``probe_pool_depth`` (with an extra ``depth_method`` marker).
+    """
+    dex_quoters = dex_quoters or {}
+    result: Dict[str, Any] = {
+        "effective_depth_usd": None,
+        "price_impact_at_100usd": None,
+        "probe_ok": False,
+        "probe_error": None,
+        "depth_reject_reason": None,
+        "depth_method": "marginal_anchor",
+    }
+
+    adapter_type = route.get("adapter_type", "uniswap_v3")
+    if adapter_type == "uniswap_v4":
+        result["probe_error"] = "V4_DEPTH_UNSUPPORTED"
+        return result
+
+    leg = _anchor_leg(route)
+    if leg is None:
+        result["probe_error"] = "NO_ANCHOR_FOR_DEPTH"
+        return result
+    anchor_sym, anchor_addr, exotic_addr = leg
+    if not anchor_addr or not exotic_addr:
+        result["probe_error"] = "MISSING_TOKEN_ADDR"
+        return result
+
+    anchor_dec = _ANCHOR_DECIMALS[anchor_sym]
+    anchor_price = _TOKEN_PRICE_USD.get(anchor_sym, 1.0)
+    ref_in = int(ref_size_usd / anchor_price * (10 ** anchor_dec))
+    probe_in = int(probe_size_usd / anchor_price * (10 ** anchor_dec))
+    if ref_in <= 0 or probe_in <= 0:
+        result["probe_error"] = "ZERO_AMOUNT_IN"
+        return result
+
+    pool_address = route.get("pool_address", "") or ""
+    quoter = route.get("quoter_addr", "") or dex_quoters.get(route.get("dex_id", ""), "")
+    fee = int(route.get("fee") or 0)
+    tick_spacing = route.get("tick_spacing")
+
+    def _quote(amount_in: int) -> Optional[int]:
+        try:
+            if adapter_type in _VE33_ADAPTER_TYPES:
+                target = quoter or pool_address
+                if not target:
+                    return None
+                calldata = _encode_ve33_amount_out(amount_in, anchor_addr)
+                hexr = _raw_eth_call(rpc_url, target, calldata)
+                if not hexr or hexr == "0x":
+                    return None
+                return _decode_quote_response(hexr)
+            if adapter_type in _V2_FORK_ADAPTER_TYPES:
+                target = pool_address or quoter
+                if not target:
+                    return None
+                return _v2_amount_out_from_reserves(
+                    target, anchor_addr, exotic_addr, amount_in, rpc_url,
+                    fee_bps=_route_v2_fee_bps(route),
+                )
+            if adapter_type == "aerodrome_slipstream" and tick_spacing:
+                if not quoter:
+                    return None
+                calldata = _encode_slipstream_call(
+                    anchor_addr, exotic_addr, amount_in, int(tick_spacing)
+                )
+                hexr = _raw_eth_call(rpc_url, quoter, calldata)
+                if not hexr or hexr == "0x":
+                    return None
+                return _decode_quote_response(hexr)
+            # default: v3-family quoter
+            if not quoter:
+                return None
+            calldata = _encode_v3_call(anchor_addr, exotic_addr, amount_in, fee)
+            hexr = _raw_eth_call(rpc_url, quoter, calldata)
+            if not hexr or hexr == "0x":
+                return None
+            return _decode_quote_response(hexr)
+        except Exception as exc:  # noqa: BLE001 - normalise to probe error
+            log.debug("marginal quote failed: %s", exc)
+            return None
+
+    if (
+        adapter_type not in _VE33_ADAPTER_TYPES
+        and adapter_type not in _V2_FORK_ADAPTER_TYPES
+        and not quoter
+    ):
+        result["probe_error"] = "NO_QUOTER"
+        return result
+
+    ref_out = _quote(ref_in)
+    if ref_out is None:
+        result["probe_error"] = "REF_QUOTE_FAILED"
+        return result
+    probe_out = _quote(probe_in)
+    if probe_out is None:
+        result["probe_error"] = "PROBE_QUOTE_FAILED"
+        return result
+
+    depth = compute_marginal_depth(
+        ref_in=ref_in,
+        ref_out=ref_out,
+        probe_in=probe_in,
+        probe_out=probe_out,
+        probe_size_usd=probe_size_usd,
+    )
+    depth["probe_amount_in"] = probe_in
+    depth["probe_amount_out"] = probe_out
+    return depth
+
+
+def enrich_routes_missing_depth(
+    routes: List[Dict[str, Any]],
+    rpc_url: str,
+    dex_quoters: Optional[Dict[str, str]] = None,
+    probe_size_usd: float = _PROBE_SIZE_USD,
+    ref_size_usd: float = _REF_SIZE_USD,
+    sleep_s: float = 0.1,
+) -> Dict[str, int]:
+    """Fill ``effective_depth_usd`` for routes that still lack it (M8 long-tail).
+
+    Only routes where ``effective_depth_usd`` is None and a ``pool_address`` is
+    present are probed; already-enriched base routes are left untouched. Mutates
+    each probed route in place and returns funnel counts.
+    """
+    counts = {
+        "candidates": 0,
+        "probed_ok": 0,
+        "probe_failed": 0,
+        "no_anchor": 0,
+        "toxic": 0,
+        "low_depth": 0,
+        "skipped_v4": 0,
+    }
+    for route in routes:
+        if route.get("effective_depth_usd") is not None:
+            continue
+        pool_addr = route.get("pool_address") or ""
+        if not pool_addr or pool_addr == "0x" + "0" * 40:
+            continue
+        counts["candidates"] += 1
+
+        probe = probe_route_marginal_depth(
+            route,
+            rpc_url=rpc_url,
+            dex_quoters=dex_quoters,
+            probe_size_usd=probe_size_usd,
+            ref_size_usd=ref_size_usd,
+        )
+
+        route["effective_depth_usd"] = probe["effective_depth_usd"]
+        route["price_impact_at_100usd"] = probe["price_impact_at_100usd"]
+        route["depth_reject_reason"] = probe["depth_reject_reason"]
+        route["depth_probe_ok"] = probe["probe_ok"]
+        route["depth_method"] = probe.get("depth_method", "marginal_anchor")
+
+        if probe["probe_ok"]:
+            counts["probed_ok"] += 1
+            reject = probe.get("depth_reject_reason")
+            if reject == "TOXIC_PRICE_IMPACT":
+                counts["toxic"] += 1
+            elif reject == "LOW_EFFECTIVE_DEPTH":
+                counts["low_depth"] += 1
+        else:
+            err = probe.get("probe_error")
+            if err == "NO_ANCHOR_FOR_DEPTH":
+                counts["no_anchor"] += 1
+            elif err == "V4_DEPTH_UNSUPPORTED":
+                counts["skipped_v4"] += 1
+            else:
+                counts["probe_failed"] += 1
+
+        if sleep_s:
+            time.sleep(sleep_s)
+
+    return counts
+
+
 # Default quarantine TTL: 7 days.  Entries older than this are considered expired
 # and pool_depth_filter will skip them (transient quarantine policy).
 _QUARANTINE_TTL_SECONDS = 7 * 24 * 3600  # 604800

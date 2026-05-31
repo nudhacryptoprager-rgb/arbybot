@@ -134,8 +134,24 @@ def run_bridge_rebuild(config: str, dry_run: bool) -> int:
     cmd = [
         sys.executable, "scripts/m9_bridge_build.py",
         "--config", config,
+        "--registry", "data/runs/_rolling/m8_pending_pairs.json",
     ]
     return _run(cmd, dry_run, "BRIDGE_REBUILD")
+
+
+def run_depth_enrich(dry_run: bool) -> int:
+    """Enrich freshly-rebuilt bridge routes with effective_depth_usd.
+
+    Bridge rebuild resets M8 route depth to None, so depth-aware sizing (M9) needs
+    this probe pass to repopulate effective_depth_usd before the graph scan.
+    Soft-failure: a non-zero rc only means some pools could not be probed (V4 /
+    rate-limit); M9 still runs and treats missing depth as uncapped.
+    """
+    cmd = [
+        sys.executable, "scripts/m9_enrich_bridge_depth.py",
+        "--chain", "base",
+    ]
+    return _run(cmd, dry_run, "DEPTH_ENRICH")
 
 
 def run_m9_scan(config: str, duration_minutes: float, dry_run: bool, inventory: str | None = None) -> int:
@@ -310,6 +326,10 @@ def main() -> None:
                     log.info("Reached --cycles=%d; stopping.", args.cycles)
                     break
                 continue
+
+            # Step 3b: Depth enrichment — repopulate effective_depth_usd on the fresh
+            # bridge so M9 depth-aware sizing has data (bridge reset M8 depth to None).
+            run_depth_enrich(args.dry_run)
 
             # Step 4: M9 scan — pass bridge inventory so bridge_source_metrics is in artifact
             # Step 5: M8-stale guard — skip M9 if bridge artifact reports m8_stale=True

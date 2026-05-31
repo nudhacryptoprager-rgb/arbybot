@@ -26,6 +26,35 @@ STATUS_POSITIVE_GROSS = "POSITIVE_GROSS"
 STATUS_NEGATIVE_GROSS = "NEGATIVE_GROSS"
 STATUS_CYCLE_QUOTE_TIMEOUT = "CYCLE_QUOTE_TIMEOUT"
 
+# Depth-aware sizing (package #2): fraction of the bottleneck pool's
+# effective_depth_usd that the quote ladder is allowed to reach.  effective_depth_usd
+# is the notional at which marginal price impact hits the LOW threshold (~10%), so a
+# fraction of 1.0 caps trades at that point. Kept <1.0 for a slippage safety margin.
+_DEPTH_SIZE_FRACTION: float = 1.0
+
+
+def cap_sizes_to_depth(
+    sizes_usd: "tuple[float, ...]",
+    depth_usd: Optional[float],
+    max_fraction: float = _DEPTH_SIZE_FRACTION,
+) -> "tuple[float, ...]":
+    """Clamp a size ladder to the bottleneck pool depth.
+
+    Returns the subset of ``sizes_usd`` that does not exceed
+    ``max_fraction * depth_usd``.  When every size exceeds the cap, the single
+    smallest size is kept (least slippage) so the cycle still gets one data
+    point.  When ``depth_usd`` is None/<=0 the ladder is returned unchanged.
+    """
+    if depth_usd is None or depth_usd <= 0:
+        return sizes_usd
+    cap = depth_usd * max_fraction
+    kept = tuple(s for s in sizes_usd if s <= cap)
+    if kept:
+        return kept
+    # All sizes above cap: keep only the smallest (shallow pool → minimal probe).
+    return (min(sizes_usd),) if sizes_usd else sizes_usd
+
+
 # ---------------------------------------------------------------------------
 # Edge-level quote cache (Step 9)
 # ---------------------------------------------------------------------------
@@ -275,16 +304,33 @@ def quote_cycle_dynamic_sync(
     timeout_s: float = 10.0,
     quote_backend: str = BACKEND_DIRECT_HTTP,
     rpc_url: Optional[str] = None,
+    depth_aware: bool = True,
+    depth_size_fraction: float = _DEPTH_SIZE_FRACTION,
 ) -> CycleQuoteResult:
     """Quote a cycle across a bounded USD ladder and select the best size.
 
     This is opt-in because each extra size can add RPC pressure.  The selected
     result is the quoteable size with the highest gross_bps.  If no size is
     quoteable, return the first failed quote with the depth_curve attached.
+
+    Depth-aware sizing (package #2): when ``depth_aware`` is True and the cycle's
+    bottleneck pool reports an ``effective_depth_usd`` (from pool_depth_probe),
+    the ladder is clamped to ``depth_size_fraction * min_effective_depth_usd`` so
+    we never quote a notional larger than the shallowest pool can absorb.  When
+    no edge carries a measured depth, the ladder is used unchanged.
     """
     candidates = tuple(float(s) for s in sizes_usd if float(s) > 0)
     if not candidates:
         candidates = (1000.0,)
+
+    cycle_depth = cycle.min_effective_depth_usd if depth_aware else None
+    depth_capped = False
+    if isinstance(cycle_depth, (int, float)) and not isinstance(cycle_depth, bool) and cycle_depth > 0:
+        capped = cap_sizes_to_depth(candidates, cycle_depth, depth_size_fraction)
+        depth_capped = capped != candidates
+        candidates = capped
+    else:
+        cycle_depth = None
 
     results: List[CycleQuoteResult] = []
     depth_curve: List[Dict[str, Any]] = []
@@ -320,6 +366,8 @@ def quote_cycle_dynamic_sync(
     selected.size_candidates_usd = candidates
     selected.depth_curve = depth_curve
     selected.dynamic_size_source = "multi_size_quote" if quoteable else "multi_size_no_quoteable"
+    selected.cycle_min_depth_usd = cycle_depth
+    selected.depth_capped = depth_capped
     return selected
 
 
