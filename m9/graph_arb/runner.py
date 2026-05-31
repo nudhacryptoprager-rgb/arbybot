@@ -112,11 +112,15 @@ def _write_revert_quarantine(
     log: "logging.Logger",
     output_path: str = _REVERT_QUARANTINE_PATH,
 ) -> None:
-    """Write QUOTE_REVERT-dominant routes to a quarantine feedback file.
+    """Write persistently-failing routes to a quarantine feedback file.
 
-    Routes where ≥80% of their leg failures are QUOTE_REVERT are structurally broken
-    (pool does not exist at the given fee tier).  Writing them here allows the next
-    inventory refresh to quarantine them before they waste quote budget.
+    Routes where ≥80% of their leg failures are QUOTE_REVERT or QUOTE_RPC_ERROR are
+    structurally broken (pool does not exist, has no liquidity, or the adapter cannot
+    reach the quoter).  Writing them here allows the next run to exclude them from the
+    graph before they waste quote budget.
+
+    Both QUOTE_REVERT and QUOTE_RPC_ERROR count as "hard failure" since V4 pools with
+    no liquidity/hooks often manifest as RPC-level errors rather than EVM reverts.
     """
     import json as _json
     from datetime import datetime as _dt, timezone as _tz
@@ -124,7 +128,9 @@ def _write_revert_quarantine(
     from collections import defaultdict as _dd
 
     # Accumulate per-route leg error counts
-    route_errors: "_dd[str, dict]" = _dd(lambda: {"QUOTE_REVERT": 0, "OTHER": 0, "pair_id": ""})
+    # "HARD" = QUOTE_REVERT or QUOTE_RPC_ERROR; "OTHER" = everything else
+    _HARD_ERRORS = frozenset({"QUOTE_REVERT", "QUOTE_RPC_ERROR"})
+    route_errors: "_dd[str, dict]" = _dd(lambda: {"HARD": 0, "OTHER": 0, "pair_id": ""})
     for qr in cycle_results:
         edges = qr.cycle.edges
         for i, leg in enumerate(qr.leg_results or []):
@@ -133,26 +139,26 @@ def _write_revert_quarantine(
             if not leg.ok and leg.reject_reason:
                 entry = route_errors[leg.route_id]
                 entry["pair_id"] = edges[i].pair_id
-                if leg.reject_reason == "QUOTE_REVERT":
-                    entry["QUOTE_REVERT"] += 1
+                if leg.reject_reason in _HARD_ERRORS:
+                    entry["HARD"] += 1
                 else:
                     entry["OTHER"] += 1
 
     quarantine = []
     for route_id, counts in route_errors.items():
-        revert = counts["QUOTE_REVERT"]
-        total = revert + counts["OTHER"]
+        hard = counts["HARD"]
+        total = hard + counts["OTHER"]
         if total == 0:
             continue
-        revert_rate = revert / total
-        if revert_rate >= _REVERT_DOMINANT_THRESHOLD:
+        hard_rate = hard / total
+        if hard_rate >= _REVERT_DOMINANT_THRESHOLD and total >= 5:
             quarantine.append(
                 {
                     "route_id": route_id,
                     "pair_id": counts["pair_id"],
-                    "revert_count": revert,
+                    "revert_count": hard,
                     "total_leg_errors": total,
-                    "revert_rate": round(revert_rate, 4),
+                    "revert_rate": round(hard_rate, 4),
                     "quarantine_reason": "QUOTE_REVERT_DOMINANT",
                 }
             )
@@ -616,7 +622,9 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Productive lane: load quarantined pool addresses (Steps 2+3)
     _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
     _exclude_pool_addresses: "Optional[frozenset[str]]" = None
+    _exclude_route_ids: "Optional[frozenset[str]]" = None
     _depth_quarantine_skipped = 0
+    _revert_quarantine_skipped = 0
     if _lane == "productive":
         from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
         _quarantine_path = getattr(args, "pool_quarantine_path", "data/quarantine/m9_pool_depth_quarantine.json")
@@ -629,6 +637,76 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             )
         else:
             log.info("Productive lane enabled: no quarantine addresses loaded (check path or placeholders)")
+
+    # Productive lane: load quarantined pool addresses (Steps 2+3)
+    _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
+    _exclude_pool_addresses: "Optional[frozenset[str]]" = None
+    _exclude_route_ids: "Optional[frozenset[str]]" = None
+    _depth_quarantine_skipped = 0
+    _revert_quarantine_skipped = 0
+    if _lane == "productive":
+        from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
+        _quarantine_path = getattr(args, "pool_quarantine_path", "data/quarantine/m9_pool_depth_quarantine.json")
+        _loaded = load_quarantined_pool_addresses(_quarantine_path)
+        if _loaded:
+            _exclude_pool_addresses = _loaded
+            log.info(
+                "Productive lane enabled: %d quarantined pools will be excluded from graph",
+                len(_loaded),
+            )
+        else:
+            log.info("Productive lane enabled: no quarantine addresses loaded (check path or placeholders)")
+
+        # Load revert-quarantine from previous run and convert probe route_ids to pool addresses.
+        # Probe route_id format: "{dex_id}:{token_in}-{token_out}@{fee}" — different from the
+        # inventory route_id field (M8 sniper format: "m8_base_0x...").  We resolve pool_address
+        # matches by comparing (dex_id, fee, pair symbols as frozenset) against the inventory.
+        try:
+            import json as _rq_json
+            _rq_path = getattr(args, "revert_quarantine_path", _REVERT_QUARANTINE_PATH)
+            with open(_rq_path, encoding="utf-8") as _rq_fh:
+                _rq_data = _rq_json.load(_rq_fh)
+            # Build lookup: (dex_id, frozenset({sym0, sym1}), fee_int) → True
+            _rq_lookup: "dict[tuple, bool]" = {}
+            for _rq_entry in _rq_data.get("routes", []):
+                _rq_id = _rq_entry.get("route_id", "")
+                # Format: "dex_id:SYM0-SYM1@fee"
+                try:
+                    _rq_dex, _rest = _rq_id.split(":", 1)
+                    _rq_pair_str, _rq_fee_str = _rest.rsplit("@", 1)
+                    _rq_syms = frozenset(_rq_pair_str.split("-", 1))
+                    _rq_lookup[(_rq_dex, _rq_syms, int(_rq_fee_str))] = True
+                except Exception:
+                    pass
+            if _rq_lookup:
+                # Resolve matching pool_addresses from the already-loaded inventory
+                _rq_extra_addrs: set = set()
+                try:
+                    with open(inventory_path, encoding="utf-8") as _inv_fh2:
+                        _inv_raw2 = _rq_json.load(_inv_fh2)
+                    for _inv_r in _inv_raw2.get("active_routes", []):
+                        _inv_dex = _inv_r.get("dex_id", "")
+                        _inv_pair = _inv_r.get("pair_id", "")
+                        _inv_fee = int(_inv_r.get("fee") or 0)
+                        _inv_syms = frozenset(_inv_pair.replace("-", "_").split("_")) if _inv_pair else frozenset()
+                        _inv_pool = _inv_r.get("pool_address", "")
+                        if (_inv_dex, _inv_syms, _inv_fee) in _rq_lookup and _inv_pool:
+                            _rq_extra_addrs.add(_inv_pool.lower())
+                except Exception as _rq_inv_exc:
+                    log.debug("Revert quarantine pool lookup failed: %s", _rq_inv_exc)
+                if _rq_extra_addrs:
+                    _revert_quarantine_skipped = len(_rq_extra_addrs)
+                    # Merge with existing depth-quarantine exclusions
+                    _exclude_pool_addresses = (_exclude_pool_addresses or frozenset()) | frozenset(_rq_extra_addrs)
+                    log.info(
+                        "Revert quarantine: resolved %d pool_addresses from %d probe route_ids "
+                        "(QUOTE_REVERT feedback from previous run)",
+                        _revert_quarantine_skipped, len(_rq_lookup),
+                    )
+        except FileNotFoundError:
+            log.debug("No revert quarantine file found at %s — first run or cleared", _REVERT_QUARANTINE_PATH)
+        except Exception as _rq_exc:
+            log.warning("Failed to load revert quarantine: %s", _rq_exc)
 
     try:
         adjacency = build_graph_from_inventory(
@@ -675,6 +753,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
             cost_model=_cost_model,
         )
@@ -727,6 +806,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
             cost_model=_cost_model,
         )
@@ -761,6 +841,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
             cost_model=_cost_model,
         )
@@ -1097,6 +1178,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             prequote_min_bps=_prequote_min_bps,
             pool_quality_lane=_lane,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+            revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
             m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
             cost_model=_cost_model,
@@ -1197,6 +1279,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         prequote_min_bps=_prequote_min_bps,
         pool_quality_lane=_lane,
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
+        revert_quarantine_skipped=_revert_quarantine_skipped,
         bridge_source_metrics=_bridge_source_metrics,
         m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
         cost_model=_cost_model,

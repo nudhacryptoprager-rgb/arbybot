@@ -411,6 +411,8 @@ def build_artifact(
     pool_quality_lane: str = "discovery",
     # Count of pools excluded by productive lane depth/quarantine filter
     depth_quarantine_skipped: int = 0,
+    # Count of pools excluded via revert-quarantine feedback from previous run
+    revert_quarantine_skipped: int = 0,
     # M8→M9 bridge provenance block (bridge_builder.build_bridge_inventory output)
     bridge_source_metrics: Optional[Dict[str, Any]] = None,
     # M8 pool address set for cycle origin annotation in top_cycles (step 9 RCA)
@@ -567,6 +569,8 @@ def build_artifact(
     scan_scope["pool_quality_lane"] = pool_quality_lane
     if depth_quarantine_skipped > 0:
         scan_scope["depth_quarantine_skipped"] = depth_quarantine_skipped
+    if revert_quarantine_skipped > 0:
+        scan_scope["revert_quarantine_skipped"] = revert_quarantine_skipped
 
     # Graph topology dict (canonical key in rolling artifact)
     graph_topology = {

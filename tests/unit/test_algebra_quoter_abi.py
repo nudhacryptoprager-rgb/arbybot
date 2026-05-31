@@ -34,7 +34,7 @@ class TestAlgebraQuoterABI:
         
         # The implementation uses this selector
         # From strategy/quotes.py read_algebra_quoter
-        implementation_selector = "0x2d58eb1d"
+        implementation_selector = "0x2d9ebd1d"
         
         assert documented_selector == implementation_selector, (
             f"Selector mismatch: documented={documented_selector}, "
@@ -84,7 +84,7 @@ class TestAlgebraEncodingDecoding:
         limit_sqrt_price = 0  # no limit
         
         # Encoding as done in strategy/quotes.py
-        SELECTOR = "0x2d58eb1d"
+        SELECTOR = "0x2d9ebd1d"
         token_in_padded = token_in[2:].lower().zfill(64)
         token_out_padded = token_out[2:].lower().zfill(64)
         amount_in_hex = hex(amount_in)[2:].zfill(64)
@@ -93,7 +93,7 @@ class TestAlgebraEncodingDecoding:
         call_data = f"{SELECTOR}{token_in_padded}{token_out_padded}{amount_in_hex}{sqrt_price_limit}"
         
         # Verify structure: 0x + 8 chars selector + 4 params * 64 chars = 266 chars total
-        assert call_data.startswith("0x2d58eb1d")
+        assert call_data.startswith("0x2d9ebd1d")
         assert len(call_data) == 2 + 8 + 64*4  # "0x" + selector + 4 params
         
         # Verify addresses are padded correctly (left-padded with zeros)

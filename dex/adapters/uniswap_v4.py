@@ -49,12 +49,41 @@ _V4_ZERO_HOOKS: str = "0x" + "0" * 40
 #   - Does NOT conditionally revert for arbitrary callers
 #   - Does NOT charge variable/unknown fees beyond pool fee
 #   - Behaviour is deterministic and amount-preserving
+#   - getHookPermissions().afterSwapReturnDelta == False
+#   - getHookPermissions().beforeSwapReturnDelta == False
 #
 # Leave empty until specific hooks are audited. The empty whitelist
 # maintains current bridge behavior (only zero-address admitted).
 _KNOWN_HOOK_TYPES: dict[str, str] = {
     # Example (currently commented — add only after on-chain verification):
     # "0x000000000019d2ee56f594feef0abe7e1f3f45fe": "uniswap_protocol_fee_hook",
+}
+
+# ---------------------------------------------------------------------------
+# Known UNSAFE hooks (verified on-chain — DO NOT WHITELIST)
+# ---------------------------------------------------------------------------
+# These addresses have been audited and confirmed to modify swap amounts via
+# afterSwapReturnDelta or beforeSwapReturnDelta hook permissions.
+# Quoting them with a standard V4 Quoter produces incorrect output amounts.
+#
+# Audit date: 2026-05-26 | Basescan source verification | Base mainnet
+# ---------------------------------------------------------------------------
+_KNOWN_UNSAFE_HOOKS: dict[str, str] = {
+    # DopplerHookInitializer — Doppler/Airlock token launchpad bonding curve
+    # Basescan: https://basescan.org/address/0xbdf938149ac6a781f94faa0ed45e6a0e984c6544#code
+    # afterSwapReturnDelta=True, updateDynamicLPFee(), collectFees() — modifies amounts
+    # Pool count (Base, 2026-05-26): ~131 pools
+    "0xbdf938149ac6a781f94faa0ed45e6a0e984c6544": "doppler_hook_initializer",
+    # ZoraV4CoinHook — Zora creator coin launchpad with creator rewards
+    # Basescan: https://basescan.org/address/0x0469a4bd3724dc86c9542f4694c976da13c450c0#code
+    # afterSwapReturnDelta=True, beforeSwapReturnDelta=True — steals delta for creator fees
+    # Pool count (Base, 2026-05-26): ~95 pools
+    "0x0469a4bd3724dc86c9542f4694c976da13c450c0": "zora_v4_coin_hook",
+    # PositionManager (Flaunch) — memecoin fair launch with fee distribution hooks
+    # Basescan: https://basescan.org/address/0x23321f11a6d44fd1ab790044fdfde5758c902fdc#code
+    # afterSwapReturnDelta=True, beforeSwapReturnDelta=True — modifies amounts for fee splits
+    # Pool count (Base, 2026-05-26): ~70 pools
+    "0x23321f11a6d44fd1ab790044fdfde5758c902fdc": "flaunch_position_manager",
 }
 
 # Lowercase set for O(1) lookup

@@ -104,7 +104,7 @@ logger = get_logger(__name__)
 
 _ARTIFACT_WRITE_INTERVAL_S: float = 30.0
 _MAX_BLOCKS_PER_CALL: int = 2000   # conservative RPC limit
-_MAX_RECENT_EVENTS_IN_ARTIFACT: int = 20
+_MAX_RECENT_EVENTS_IN_ARTIFACT: int = 500  # increased from 20: 24h lookback finds ~500 pools; bridge builder needs full set
 _DEFAULT_CHAIN: str = "base"
 _DEFAULT_BLOCKS_BACK: int = 50
 _DEFAULT_POLL_INTERVAL_S: float = 30.0
@@ -837,7 +837,7 @@ def _build_and_write_artifact(
     # Build per-dex recent events (last _MAX_PER_DEX_EVENTS per dex) from the
     # full recent_events buffer.  This prevents V4-dominance from pushing V2/V3
     # events out of the artifact window (fixes bridge M8→M9 graph_ready_from_m8=0).
-    _MAX_PER_DEX_EVENTS: int = 5
+    _MAX_PER_DEX_EVENTS: int = 100  # increased from 5: ensure minority DEX events (V2/V3/ve33) survive
     _per_dex_build: Dict[str, List[Dict[str, Any]]] = {}
     for e in recent_events:
         tok0_sym: Optional[str] = symbol_map.get(e.token0) if symbol_map else None

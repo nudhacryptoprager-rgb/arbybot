@@ -21,6 +21,9 @@ _VALID_ADAPTER_TYPES = {
     "balancer_stable",
     "uniswap_v2",
     "maverick_v2",
+    # Algebra-protocol DEXes (Camelot V3, QuickSwap V3): dynamic-fee concentrated liquidity.
+    # Quotes via quoteExactInputSingle(tokenIn,tokenOut,amountIn,limitSqrtPrice=0) — no fee param.
+    "algebra",
 }
 
 

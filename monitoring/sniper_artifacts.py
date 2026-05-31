@@ -176,8 +176,10 @@ def make_sniper_artifact(
         },
     }
 
-    # Optional: include recent events for dashboard (capped)
-    events = (recent_events or [])[:20]
+    # Optional: include recent events for dashboard (capped).
+    # 500 events: 24h lookback (~515 pools/day on Base); bridge builder reads this for M9 inventory.
+    _MAX_RECENT = 500
+    events = (recent_events or [])[:_MAX_RECENT]
     artifact["recent_events"] = events
     # Per-dex event window: last N events per dex so minority-dex events
     # (V2, V3, ve33) are not pushed out by high-volume V4 in the global window.

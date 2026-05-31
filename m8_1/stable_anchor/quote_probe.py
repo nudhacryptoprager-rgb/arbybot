@@ -20,6 +20,11 @@ _SLIP_SELECTOR = bytes.fromhex("9e7defe6")  # quoteExactInputSingle((address,add
 # keccak256 computed: aa9d21cb
 _V4_SELECTOR = bytes.fromhex("aa9d21cb")
 _V4_ZERO_HOOKS = "0x" + "0" * 40  # zero address = vanilla pool
+# Algebra dynamic-fee Quoter (Camelot V3, QuickSwap V3, ...):
+# quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice)
+#   returns (uint256 amountOut, uint16 fee)   ← fee is dynamic OUTPUT, never an input
+# keccak256("quoteExactInputSingle(address,address,uint256,uint160)")[:4] = 2d9ebd1d
+_ALGEBRA_SELECTOR = bytes.fromhex("2d9ebd1d")
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,29 @@ def _encode_v3_call(token_in: str, token_out: str, amount_in: int, fee: int) -> 
     # QuoterV2 struct: (tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96)
     payload = addr_in + addr_out + amount_bytes + fee_bytes + sqrt_limit
     return "0x" + _V3_SELECTOR.hex() + payload.hex()
+
+
+def _encode_algebra_call(token_in: str, token_out: str, amount_in: int) -> str:
+    """Encode Algebra dynamic-fee Quoter.quoteExactInputSingle call.
+
+    Algebra (Camelot V3, QuickSwap V3) uses dynamic fees, so the quoter takes
+    NO fee-tier argument: (tokenIn, tokenOut, amountIn, limitSqrtPrice).
+    Returns (uint256 amountOut, uint16 fee); fee is an output, not an input.
+    """
+    addr_in = int(token_in, 16).to_bytes(32, "big")
+    addr_out = int(token_out, 16).to_bytes(32, "big")
+    amount_bytes = amount_in.to_bytes(32, "big")
+    limit_sqrt = (0).to_bytes(32, "big")  # 0 = no price limit (full traversal)
+    payload = addr_in + addr_out + amount_bytes + limit_sqrt
+    return "0x" + _ALGEBRA_SELECTOR.hex() + payload.hex()
+
+
+def _decode_algebra_response(hex_result: str) -> int:
+    """Decode Algebra quoter response (uint256 amountOut, uint16 fee) → amount_out."""
+    raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if len(raw) < 64:
+        raise ValueError(f"algebra response too short: {len(raw)} hex chars")
+    return int(raw[:64], 16)
 
 
 def _encode_slipstream_call(
@@ -185,6 +213,12 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
             calldata = _encode_v3_call(token_in.address, token_out.address, amount_in, route.fee)
             result = w3.eth.call({"to": quoter_addr, "data": calldata})
             amount_out, gas_est = _decode_quote_response(result.hex() if isinstance(result, bytes) else result)
+        elif route.adapter_type == "algebra":
+            # Algebra dynamic-fee quoter (Camelot V3 / QuickSwap V3): no fee-tier input.
+            calldata = _encode_algebra_call(token_in.address, token_out.address, amount_in)
+            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            amount_out = _decode_algebra_response(result.hex() if isinstance(result, bytes) else result)
+            gas_est = None
         elif route.adapter_type == "aerodrome_slipstream":
             if route.tick_spacing is None:
                 raise ValueError("missing tick_spacing on slipstream route")
@@ -258,6 +292,26 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
             # constant product formula
             amount_out = (amount_in * 997 * reserve_out) // (reserve_in * 1000 + amount_in * 997)
             gas_est = None
+        elif route.adapter_type == "maverick_v2":
+            # Maverick V2 directional bins: PoolInformation.calculateSwap(pool, amount,
+            # tokenAIn, exactOutput, sqrtPriceLimit). route.quoter is the pool address
+            # (set by builder.py). Direction (tokenAIn) is resolved via route.token_in_index
+            # (0/1 when seeded from adapter_metadata.yaml token_a) or a live tokenA() lookup.
+            from dex.adapters.maverick_v2 import MaverickV2Adapter
+            _mv = MaverickV2Adapter(w3, enabled=True, dex_id=route.dex_id)
+            _token_a_override: Optional[str] = None
+            if route.token_in_index is not None:
+                # token_in_index encodes tokenAIn flag: 1 ⇒ token_in IS tokenA.
+                _token_a_override = token_in.address if route.token_in_index == 1 else token_out.address
+            _mv_res = _mv.get_quote(
+                pool_address=route.quoter,
+                token_in=token_in.address,
+                token_out=token_out.address,
+                amount_in=amount_in,
+                token_a_address=_token_a_override,
+            )
+            amount_out = _mv_res["amount_out"]
+            gas_est = _mv_res.get("gas_estimate")
         else:
             raise ValueError(f"unsupported adapter_type: {route.adapter_type!r}")
 

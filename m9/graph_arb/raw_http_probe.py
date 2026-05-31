@@ -22,8 +22,10 @@ from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
 from m8_1.stable_anchor.quote_probe import (
     QuoteResult,
+    _decode_algebra_response,
     _decode_quote_response,
     _decode_v4_response,
+    _encode_algebra_call,
     _encode_slipstream_call,
     _encode_v3_call,
     _encode_v4_call,
@@ -149,6 +151,14 @@ def probe_quote_raw_http(
             )
             hex_result = _eth_call_raw(rpc_url, route.quoter, calldata, client)
             amount_out, gas_est = _decode_quote_response(hex_result)
+
+        elif route.adapter_type == "algebra":
+            # Algebra dynamic-fee quoter (Camelot V3 / QuickSwap V3): no fee-tier input.
+            # route.quoter is the Algebra QuoterV2 address (set by builder.py from dexes.yaml).
+            calldata = _encode_algebra_call(token_in.address, token_out.address, amount_in)
+            hex_result = _eth_call_raw(rpc_url, route.quoter, calldata, client)
+            amount_out = _decode_algebra_response(hex_result)
+            gas_est = None
 
         elif route.adapter_type == "aerodrome_slipstream":
             if route.tick_spacing is None:

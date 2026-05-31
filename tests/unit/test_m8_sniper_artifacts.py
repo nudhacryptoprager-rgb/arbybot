@@ -137,10 +137,15 @@ class TestMakeSniperArtifact:
         art = make_sniper_artifact()
         assert art["recent_events"] == []
 
-    def test_recent_events_capped_at_20(self):
+    def test_recent_events_capped_at_500(self):
+        events = [{"pool": f"0x{i:040x}"} for i in range(600)]
+        art = make_sniper_artifact(recent_events=events)
+        assert len(art["recent_events"]) == 500
+
+    def test_recent_events_below_cap_stored_fully(self):
         events = [{"pool": f"0x{i:040x}"} for i in range(30)]
         art = make_sniper_artifact(recent_events=events)
-        assert len(art["recent_events"]) == 20
+        assert len(art["recent_events"]) == 30
 
     def test_source_field(self):
         art = make_sniper_artifact()

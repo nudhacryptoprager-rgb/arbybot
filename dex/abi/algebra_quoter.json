@@ -9,7 +9,7 @@
     "Full ABI: https://arbiscan.io/address/0xAF20b56e3b54F3EB05eb5BB33c0Fa6e6D8959533#code"
   ],
   "quoteExactInputSingle": {
-    "selector": "0x2d58eb1d",
+    "selector": "0x2d9ebd1d",
     "inputs": [
       { "name": "tokenIn", "type": "address", "description": "Input token address" },
       { "name": "tokenOut", "type": "address", "description": "Output token address" },

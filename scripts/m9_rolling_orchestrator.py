@@ -105,7 +105,17 @@ def run_m8_sniper(chain: str, duration_minutes: float, dry_run: bool) -> int:
         "--duration-minutes", str(duration_minutes),
         "--skip-preflight",
         "--skip-self-test",
-        "--prefer-ws",
+        # NOTE: --prefer-ws removed intentionally. Alchemy WS triggers HTTP fallback
+        # at 300s interval (30s * 10) giving only 3 polls per 15 min → graph_ready_from_m8=0.
+        # HTTP polling at 30s is reliable and sufficient for M9_GRAPH_LONG_TAIL_SHADOW
+        # (simulate_only=true; cross-DEX mismatch windows last minutes, not seconds).
+        # Re-enable --prefer-ws only when a stable non-rate-limited WS provider is confirmed.
+        #
+        # --blocks-back 43200: ~24h lookback on Base (2s/block × 43200 = 86400s).
+        # Default of 50 (100s) was too narrow — M8 found 0 new pools per orchestrator cycle,
+        # causing graph_ready_from_m8=0 permanently. 24h window ensures we catch long-tail
+        # pools even if the orchestrator ran infrequently.
+        "--blocks-back", "43200",
     ]
     # ARBY_SNIPER_ENABLE=1 activates live block polling; without it M8 exits in ~183ms
     return _run(cmd, dry_run, "M8_SNIPER", extra_env={"ARBY_SNIPER_ENABLE": "1"})

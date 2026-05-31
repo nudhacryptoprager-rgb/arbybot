@@ -65,6 +65,14 @@ _DEX_ID_TO_ADAPTER_TYPE: Dict[str, str] = {
     "balancer_weighted": "balancer_weighted",
     # Maverick V2: directional liquidity bins; quotes via PoolInformation.calculateSwap
     "maverick_v2": "maverick_v2",
+    # Algebra (dynamic-fee concentrated liquidity): Camelot V3, QuickSwap V3, etc.
+    # Quotes via quoteExactInputSingle(tokenIn,tokenOut,amountIn,limitSqrtPrice) — no fee
+    # tier input (fee is dynamic). Wired in raw_http_probe / quote_probe as adapter_type
+    # "algebra". Primarily an Arbitrum/Polygon path; kept here so cross-curve long-tail
+    # tokens on Algebra DEXes enter the M9 graph instead of silent quarantine.
+    "algebra": "algebra",
+    "camelot_v3": "algebra",
+    "quickswap_v3": "algebra",
 }
 _UNSUPPORTED_ADAPTER = "unsupported"
 

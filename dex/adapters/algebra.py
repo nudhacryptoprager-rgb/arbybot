@@ -251,8 +251,8 @@ class AlgebraAdapter:
         
         try:
             # Selector: keccak256("quoteExactInputSingle(address,address,uint256,uint160)")[:4]
-            # = 0x2d58eb1d
-            SELECTOR = "0x2d58eb1d"
+            # = 0x2d9ebd1d
+            SELECTOR = "0x2d9ebd1d"
             
             # Encode call data
             token_in_padded = token_in[2:].lower().zfill(64)

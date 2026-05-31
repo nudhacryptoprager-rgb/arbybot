@@ -77,7 +77,7 @@ def read_algebra_quoter(
     # Try Style 1: quoteExactInputSingle(address,address,uint256,uint160) - Camelot
     style1_error = None
     try:
-        SELECTOR_SINGLE = "0x2d58eb1d"
+        SELECTOR_SINGLE = "0x2d9ebd1d"
         
         token_in_padded = token_in[2:].lower().zfill(64)
         token_out_padded = token_out[2:].lower().zfill(64)

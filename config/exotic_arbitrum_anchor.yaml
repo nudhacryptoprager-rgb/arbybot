@@ -1,0 +1,121 @@
+# PATH: config/exotic_arbitrum_anchor.yaml
+# M9 Graph-Arb anchor config — Arbitrum One chain
+#
+# Used by m9/graph_arb/builder.py via M8_1Config (m8_1.stable_anchor.config_loader)
+# Schema: m8_1.0
+#
+# NOTE: ALL addresses MUST be lowercase 0x + 40 hex chars (_ADDR_RE = r"^0x[0-9a-f]{40}$")
+# NOTE: use "quoter:" key (not "quoter_v2:") — _parse_dex reads raw.get("quoter")
+#
+# DEX registry (canonical addresses verified on Arbiscan):
+#   uniswap_v3:   factory 0x1F98431c..., quoterV2 0x61fFE014bA17...
+#   sushiswap_v3: factory 0x1af415a1..., quoter   0x0524E833...
+#   camelot_v3:   factory 0x1a3c9B1d..., quoter   0x0Fc73040...  [Algebra protocol]
+#
+# WORKFLOW:
+#   # Build seed inventory (queries Camelot V3 factory on-chain):
+#   py -3.11 scripts/build_arb_m9_seed_inventory.py
+#
+#   # Run M9 shadow scan (2-min test, no prequote):
+#   $env:ARBITRUM_RPC="https://arbitrum-one-rpc.publicnode.com"
+#   py -3.11 -u -m m9.graph_arb.runner --chain arbitrum --duration-minutes 2 \
+#       --config config/exotic_arbitrum_anchor.yaml \
+#       --inventory data/tmp/m9_arb_bridge.json \
+#       --quote-backend raw_http --quote-workers 1 --no-prequote \
+#       --artifact-path data/runs/_rolling/m9_arb_latest.json
+
+schema_version: "m8_1.0"
+chain: arbitrum_one
+chain_id: 42161
+
+dexes:
+  uniswap_v3:
+    adapter_type: uniswap_v3
+    factory: "0x1f98431c8ad98523631ae4a59f267346ea31f984"
+    # QuoterV2 on Arbitrum One (Uniswap V3 official deployment)
+    quoter: "0x61ffe014ba17989e743c5f6cb21bf9697530b21e"
+    fee_tiers: [100, 500, 3000, 10000]
+    enabled: true
+
+  sushiswap_v3:
+    adapter_type: uniswap_v3
+    factory: "0x1af415a1eba07a4986a52b6f2e7de7003d82231e"
+    # SushiSwap V3 Quoter on Arbitrum One
+    quoter: "0x0524e833ccd057e4d7a296e3aaab9f7675964ce1"
+    fee_tiers: [100, 500, 3000, 10000]
+    enabled: true
+
+  # Camelot V3 — Algebra concentrated liquidity protocol
+  # Dynamic fees (no fee-tier parameter): quoteExactInputSingle(tokenIn,tokenOut,amountIn,0)
+  # Quoter: https://arbiscan.io/address/0x0Fc73040b26E9bC8514fA028D998E73A254Fa76E
+  camelot_v3:
+    adapter_type: algebra
+    factory: "0x1a3c9b1d2f0529d97f2afc5136cc23e58f1fd35b"
+    quoter: "0x0fc73040b26e9bc8514fa028d998e73a254fa76e"
+    fee_tiers: []
+    enabled: true
+
+tokens:
+  WETH:
+    address: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
+    decimals: 18
+  USDC:
+    address: "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+    decimals: 6
+  USDT:
+    address: "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
+    decimals: 6
+  ARB:
+    address: "0x912ce59144191c1204e64559fe8253a0e49e6548"
+    decimals: 18
+  WBTC:
+    address: "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f"
+    decimals: 8
+  LINK:
+    address: "0xf97f4df75117a78c1a5a0dbb814af92458539fb4"
+    decimals: 18
+
+# Pairs can be empty — M9 builder derives pairs from inventory active_routes
+pairs: []
+
+factory_ladder: {}
+
+health_filter:
+  min_liquidity: 0
+  require_slot0_unlocked: false
+  require_sqrt_price_positive: false
+
+quote_gate:
+  target_quote_success_rate: 0.0
+  target_rpc_error_rate_max: 1.0
+  async_max_workers: 2
+  async_timeout_s: 15
+  retry_backoff_s: 1.0
+
+sizes_usd: [100.0, 250.0]
+
+cost_model:
+  default_profile: "default"
+  profiles:
+    default:
+      gas_usd: 0.05
+      l1_fee_usd: 0.0
+      slippage_bps: 5.0
+  gas_mode_default: "static"
+  paper_haircut: 0.0
+  slippage_mode_default: "static"
+
+replay:
+  enabled_by_default: false
+  top_n_near_misses: 0
+  anvil_url_default: "http://127.0.0.1:8545"
+  fork_block_default: "latest"
+  require_non_stub: false
+
+simulation:
+  univ3_router02: "0x0000000000000000000000000000000000000000"
+  aero_router: "0x0000000000000000000000000000000000000000"
+  simulation_test_addr: "0x0000000000000000000000000000000000000000"
+  usdc_usdt_v3_pool: "0x0000000000000000000000000000000000000000"
+
+public_rpc_blocklist: []
