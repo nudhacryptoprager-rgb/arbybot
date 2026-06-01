@@ -53,3 +53,37 @@ tools/foundry/
 **/m4_stability_agg*.json
 **/_latest.json
 **/online_runs_report_*.md
+
+# --- Context savings: historical / operational (M9-active work uses docs/status/) ---
+archive/
+archive/**
+
+data/quarantine/
+data/quarantine/**
+data/registry/
+data/registry/**
+
+# Static dashboard HTML (edit monitoring/*.py explicitly when needed)
+monitoring/*.html
+
+# VCS / Cursor project metadata (not product source)
+.git/
+.cursor/projects/
+**/.cursor/projects/**
+
+# One-off local analysis scripts
+scripts/_*.py
+
+# --- Legacy milestones & scratch (re-open paths in brief when touching M4/M7) ---
+m4/
+m4/**
+m7/
+m7/**
+execution/flash_loan/
+execution/flash_loan/**
+
+workdocs/
+workdocs/**
+
+todo_RPC_blockers.md
+setting_timlid.md

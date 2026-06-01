@@ -191,6 +191,9 @@ class CycleQuoteResult:
     asymmetry_bps: Optional[float] = None  # |forward + reverse| gross spread (Step 3)
     toxicity_reasons: Optional[List[str]] = None  # gauntlet reasons when downgraded (Step 1)
     precision_pass: Optional[bool] = None  # precision-gate verdict (Step 5)
+    # Phantom validation RCA (set when reject_reason=PHANTOM_QUOTE_BPS_OVERFLOW)
+    raw_gross_bps: Optional[float] = None  # gross before phantom zeroing
+    phantom_ceiling_bps: Optional[float] = None  # depth-aware ceiling that was exceeded
 
 
 @dataclass

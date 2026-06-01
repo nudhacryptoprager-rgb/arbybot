@@ -530,6 +530,9 @@ class TestM9GraphArtifactBuilder:
         diag = a.get("quote_failure_diagnostics")
         assert isinstance(diag, dict)
         assert "by_reject_reason" in diag
+        phantom_diag = a.get("phantom_quote_diagnostics")
+        assert isinstance(phantom_diag, dict)
+        assert phantom_diag.get("blocker_class_hint") == "PHANTOM_VALIDATION"
         assert "m8_participation" in a
 
     def test_infra_status_blocked_when_qsr_below_acceptance(self):
@@ -573,6 +576,42 @@ class TestM9GraphArtifactBuilder:
         assert a["infra_status"] == "INFRA_OR_QUOTE_QUALITY_BLOCKED"
         assert a["economics_blocker_class"] == "PROVIDER_QUALITY_BLOCKED"
         assert a["economics_gate_status"] == "BLOCKED_QSR"
+
+    def test_oversized_vs_depth_excluded_from_qsr(self):
+        """P0a: OVERSIZED_VS_DEPTH cycles are excluded from the QSR denominator.
+
+        A real but extreme quote whose notional overwhelms the bottleneck pool
+        depth is neither a quote failure nor a market signal, so it must not
+        deflate QSR.  With 2 successful + 2 failed + 6 oversized, QSR is
+        2/(2+2)=0.5, NOT 2/10=0.2.
+        """
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        mock_cycle = _make_mock_cycle()
+
+        def _mk(status, reject):
+            return CycleQuoteResult(
+                cycle=mock_cycle, size_usd=1000.0, amount_in=1000,
+                amount_out=1001 if status == "NEGATIVE_GROSS" else 0,
+                gross_bps=-5.0 if status == "NEGATIVE_GROSS" else 0.0,
+                status=status, reject_reason=reject, leg_results=[], elapsed_s=0.1,
+            )
+
+        results = (
+            [_mk("NEGATIVE_GROSS", None)] * 2
+            + [_mk("QUOTE_FAILED", "CYCLE_QUOTE_FAILED")] * 2
+            + [_mk("OVERSIZED_VS_DEPTH", "OVERSIZED_VS_DEPTH")] * 6
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=results,
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        assert a["qsr"] == 0.5
+        assert a["oversized_vs_depth_count"] == 6
+        # Oversized cycles must not be aggregated as phantom rejects.
+        assert a["phantom_quote_diagnostics"]["phantom_count"] == 0
 
     def test_economics_blocker_class_not_blocked_when_positive(self):
         from m9.graph_arb.artifacts import build_artifact

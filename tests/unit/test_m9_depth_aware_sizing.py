@@ -65,10 +65,13 @@ class TestCapSizesToDepth:
         # depth 200, fraction 0.5 → cap 100 → keep <=100
         assert cap_sizes_to_depth(sizes, 200.0, 0.5) == (50.0, 100.0)
 
-    def test_all_above_cap_keeps_smallest(self):
+    def test_all_above_cap_probes_at_cap(self):
         sizes = (100.0, 500.0, 1000.0)
-        # depth 20, fraction 1.0 → cap 20, all exceed → keep smallest
-        assert cap_sizes_to_depth(sizes, 20.0, 1.0) == (100.0,)
+        # depth 20, fraction 1.0 → cap 20, all exceed → P0b: probe AT the cap
+        # (not the smallest oversized size, which would force a ~-99% slippage
+        # artifact). cap=20 is above the $1 floor, so the probe is $20.
+        assert cap_sizes_to_depth(sizes, 20.0, 1.0) == (20.0,)
+        assert 100.0 not in cap_sizes_to_depth(sizes, 20.0, 1.0)
 
     def test_all_within_cap_unchanged(self):
         sizes = (10.0, 20.0)

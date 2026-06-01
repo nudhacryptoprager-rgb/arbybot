@@ -25,12 +25,27 @@ STATUS_ZERO_AMOUNT_IN = "ZERO_AMOUNT_IN"
 STATUS_POSITIVE_GROSS = "POSITIVE_GROSS"
 STATUS_NEGATIVE_GROSS = "NEGATIVE_GROSS"
 STATUS_CYCLE_QUOTE_TIMEOUT = "CYCLE_QUOTE_TIMEOUT"
+# P0a: a catastrophically *negative* gross that exceeds the depth-aware phantom
+# ceiling is NOT a phantom (impossible positive arb) and NOT an RPC failure — it
+# is a real, if extreme, quote of a notional that overwhelms the bottleneck pool
+# depth.  It is reported under its own status so it is excluded from the quote
+# success rate (QSR) denominator rather than inflating phantom/quote failures.
+STATUS_OVERSIZED_VS_DEPTH = "OVERSIZED_VS_DEPTH"
+_REJECT_OVERSIZED_VS_DEPTH = "OVERSIZED_VS_DEPTH"
+_REJECT_PHANTOM_QUOTE_BPS_OVERFLOW = "PHANTOM_QUOTE_BPS_OVERFLOW"
 
 # Depth-aware sizing (package #2): fraction of the bottleneck pool's
 # effective_depth_usd that the quote ladder is allowed to reach.  effective_depth_usd
 # is the notional at which marginal price impact hits the LOW threshold (~10%), so a
 # fraction of 1.0 caps trades at that point. Kept <1.0 for a slippage safety margin.
 _DEPTH_SIZE_FRACTION: float = 1.0
+
+# P0b: when every ladder size exceeds the bottleneck depth we synthesize a single
+# probe AT the depth cap instead of quoting a notional many times the pool depth
+# (which yields a guaranteed ~-99% price-impact "loss" that is an artifact of
+# oversizing, not the market).  The probe is floored to a tiny minimum so the
+# USD->amount_in conversion never rounds to dust/zero on ultra-thin pools.
+_MIN_DEPTH_PROBE_USD: float = 1.0
 
 
 def cap_sizes_to_depth(
@@ -41,9 +56,13 @@ def cap_sizes_to_depth(
     """Clamp a size ladder to the bottleneck pool depth.
 
     Returns the subset of ``sizes_usd`` that does not exceed
-    ``max_fraction * depth_usd``.  When every size exceeds the cap, the single
-    smallest size is kept (least slippage) so the cycle still gets one data
-    point.  When ``depth_usd`` is None/<=0 the ladder is returned unchanged.
+    ``max_fraction * depth_usd``.  When every ladder size exceeds the cap we do
+    NOT keep the smallest oversized size (P0b): quoting a notional many times the
+    pool depth produces a guaranteed ~-99% price-impact "loss" that is an
+    artifact of oversizing, not a market signal.  Instead we synthesize a single
+    probe AT the depth cap (floored to ``_MIN_DEPTH_PROBE_USD``) so the cycle
+    still yields one realistic data point.  When ``depth_usd`` is None/<=0 the
+    ladder is returned unchanged.
     """
     if depth_usd is None or depth_usd <= 0:
         return sizes_usd
@@ -51,8 +70,12 @@ def cap_sizes_to_depth(
     kept = tuple(s for s in sizes_usd if s <= cap)
     if kept:
         return kept
-    # All sizes above cap: keep only the smallest (shallow pool → minimal probe).
-    return (min(sizes_usd),) if sizes_usd else sizes_usd
+    if not sizes_usd:
+        return sizes_usd
+    # All sizes above cap: probe at the depth cap itself (floored), not the
+    # smallest oversized size, so price impact reflects the pool's real capacity.
+    probe = max(cap, _MIN_DEPTH_PROBE_USD)
+    return (round(probe, 6),)
 
 
 # ---------------------------------------------------------------------------
@@ -270,18 +293,37 @@ def quote_cycle_sync(
     # phantom (revert data decoded as amount_out, wrong token indices, or a thin
     # one-directional pool).  Unknown-depth pools get the strictest ceiling.
     from m9.graph_arb.profit_validation import depth_aware_phantom_ceiling_bps
-    _max_reasonable_bps = depth_aware_phantom_ceiling_bps(cycle.min_effective_depth_usd)
+
+    _cycle_depth = cycle.min_effective_depth_usd
+    _max_reasonable_bps = depth_aware_phantom_ceiling_bps(_cycle_depth)
     if abs(gross_bps) > _max_reasonable_bps:
+        # P0a: split the overflow by sign.
+        #  * POSITIVE overflow → an impossible arbitrage spread → genuine phantom
+        #    (revert data decoded as amount_out, wrong token indices, etc.).  This
+        #    is a real quote failure and counts against QSR.
+        #  * NEGATIVE overflow → a real (if extreme) quote of a notional that
+        #    overwhelms the bottleneck pool depth.  Not a phantom and not an RPC
+        #    failure → its own status so it is excluded from the QSR denominator
+        #    rather than masquerading as a quote failure.
+        if gross_bps > 0:
+            _ovf_status = STATUS_QUOTE_FAILED
+            _ovf_reject = _REJECT_PHANTOM_QUOTE_BPS_OVERFLOW
+        else:
+            _ovf_status = STATUS_OVERSIZED_VS_DEPTH
+            _ovf_reject = _REJECT_OVERSIZED_VS_DEPTH
         return CycleQuoteResult(
             cycle=cycle,
             size_usd=size_usd,
             amount_in=initial_amount,
             amount_out=0,
             gross_bps=0.0,
-            status=STATUS_QUOTE_FAILED,
-            reject_reason="PHANTOM_QUOTE_BPS_OVERFLOW",
+            status=_ovf_status,
+            reject_reason=_ovf_reject,
             leg_results=leg_results,
             elapsed_s=time.monotonic() - started,
+            raw_gross_bps=round(gross_bps, 4),
+            phantom_ceiling_bps=round(_max_reasonable_bps, 4),
+            cycle_min_depth_usd=_cycle_depth,
         )
 
     status = STATUS_POSITIVE_GROSS if gross_bps > 0 else STATUS_NEGATIVE_GROSS
@@ -296,6 +338,7 @@ def quote_cycle_sync(
         reject_reason=None,
         leg_results=leg_results,
         elapsed_s=time.monotonic() - started,
+        cycle_min_depth_usd=_cycle_depth,
     )
 
 

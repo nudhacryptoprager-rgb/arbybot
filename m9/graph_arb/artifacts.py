@@ -50,6 +50,12 @@ _DATA_COMPLETENESS_ACCEPTANCE_THRESHOLD = 0.98
 # Pair count threshold: at or below this → anchor-heavy inventory
 _ANCHOR_HEAVY_PAIR_THRESHOLD = 15
 
+# Rolling artifacts are an operational interface, not an append-only debug log.
+# Keep enough RCA detail for the active blocker while dropping long legacy tails.
+_MAX_ROUTE_ERROR_HISTOGRAM_ROUTES = 40
+_MAX_EDGE_ERROR_HISTOGRAM_EDGES = 40
+_MAX_QUOTE_DIAGNOSTIC_TOP_ROUTES = 12
+
 
 def compute_estimated_cost_bps(
     size_usd: float,
@@ -352,10 +358,35 @@ def _compute_route_error_histogram(
     return histogram
 
 
+def _route_error_count(errors: Any) -> int:
+    if isinstance(errors, dict):
+        return sum(v for v in errors.values() if isinstance(v, int))
+    return 0
+
+
+def _trim_route_error_histogram(
+    histogram: Dict[str, Dict[str, int]],
+    *,
+    limit: int = _MAX_ROUTE_ERROR_HISTOGRAM_ROUTES,
+) -> tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
+    """Keep top route-error offenders and expose explicit trim metadata."""
+    if not isinstance(histogram, dict):
+        return histogram, {"total": 0, "kept": 0, "dropped": 0}
+    total = len(histogram)
+    if total <= limit:
+        return histogram, {"total": total, "kept": total, "dropped": 0}
+    items = sorted(
+        histogram.items(),
+        key=lambda kv: (-_route_error_count(kv[1]), kv[0]),
+    )
+    kept = dict(items[:limit])
+    return kept, {"total": total, "kept": len(kept), "dropped": total - len(kept)}
+
+
 def _compute_quote_failure_diagnostics(
     cycle_results: List[CycleQuoteResult],
     *,
-    top_n: int = 30,
+    top_n: int = _MAX_QUOTE_DIAGNOSTIC_TOP_ROUTES,
 ) -> Dict[str, Any]:
     """Leg-level quote failure RCA: reject reasons, HTTP status, top routes/edges.
 
@@ -413,6 +444,96 @@ def _compute_quote_failure_diagnostics(
         "by_http_status": by_http_status,
         "top_routes": top_routes,
         "top_edges": top_edges,
+    }
+
+
+_PHANTOM_REJECT = "PHANTOM_QUOTE_BPS_OVERFLOW"
+_MAX_PHANTOM_DIAGNOSTIC_TOP = 20
+
+
+def _compute_phantom_quote_diagnostics(
+    cycle_results: List[CycleQuoteResult],
+    *,
+    top_n: int = _MAX_PHANTOM_DIAGNOSTIC_TOP,
+) -> Dict[str, Any]:
+    """Cycle-level RCA for depth-aware phantom rejects (not RPC/provider failures)."""
+    total = len(cycle_results)
+    phantoms = [qr for qr in cycle_results if qr.reject_reason == _PHANTOM_REJECT]
+    phantom_count = len(phantoms)
+    depth_unknown = 0
+    pool_agg: Dict[str, Dict[str, Any]] = {}
+    route_agg: Dict[str, Dict[str, Any]] = {}
+    samples: List[Dict[str, Any]] = []
+
+    for qr in phantoms:
+        depth = (
+            qr.cycle_min_depth_usd
+            if qr.cycle_min_depth_usd is not None
+            else qr.cycle.min_effective_depth_usd
+        )
+        if depth is None or depth <= 0:
+            depth_unknown += 1
+        raw = qr.raw_gross_bps if qr.raw_gross_bps is not None else qr.gross_bps
+        ceiling = qr.phantom_ceiling_bps
+        overflow_bps = (
+            round(abs(raw) - ceiling, 4)
+            if raw is not None and ceiling is not None
+            else None
+        )
+        for edge in qr.cycle.edges:
+            pool_key = edge.pool_address.lower()
+            pool_row = pool_agg.setdefault(
+                pool_key,
+                {
+                    "pool_address": edge.pool_address,
+                    "pair_id": edge.pair_id,
+                    "dex_id": edge.dex_id,
+                    "adapter_type": edge.adapter_type,
+                    "phantom_count": 0,
+                },
+            )
+            pool_row["phantom_count"] += 1
+            rid = edge.route_id
+            route_row = route_agg.setdefault(
+                rid,
+                {
+                    "route_id": rid,
+                    "pair_id": edge.pair_id,
+                    "pool_address": edge.pool_address,
+                    "adapter_type": edge.adapter_type,
+                    "phantom_count": 0,
+                },
+            )
+            route_row["phantom_count"] += 1
+        if len(samples) < top_n:
+            samples.append(
+                {
+                    "cycle_id": qr.cycle.cycle_id,
+                    "pair_path": [e.pair_id for e in qr.cycle.edges],
+                    "raw_gross_bps": raw,
+                    "phantom_ceiling_bps": ceiling,
+                    "overflow_bps": overflow_bps,
+                    "cycle_min_depth_usd": depth,
+                    "size_usd": qr.size_usd,
+                }
+            )
+
+    top_pools = sorted(pool_agg.values(), key=lambda x: -x["phantom_count"])[:top_n]
+    top_routes = sorted(route_agg.values(), key=lambda x: -x["phantom_count"])[:top_n]
+
+    return {
+        "blocker_class_hint": "PHANTOM_VALIDATION",
+        "economics_interpretation": (
+            "Phantom overflow is a quote-validation blocker, not PROVIDER_QUALITY or MARKET."
+        ),
+        "phantom_count": phantom_count,
+        "phantom_rate": round(phantom_count / max(total, 1), 6),
+        "cycles_total": total,
+        "depth_unknown_count": depth_unknown,
+        "depth_unknown_rate": round(depth_unknown / max(phantom_count, 1), 6),
+        "top_pools": top_pools,
+        "top_routes": top_routes,
+        "sample_overflows": samples,
     }
 
 
@@ -611,13 +732,22 @@ def build_artifact(
     positive_cycle_multi_hit_count = sum(1 for v in _positive_repeat_counts.values() if v >= 2)
     positive_cycle_max_repeat = max(_positive_repeat_counts.values(), default=0)
 
-    # QSR: quote success rate (exclude ZERO_AMOUNT_IN — not a quoting attempt)
-    quoted = [qr for qr in cycle_results if qr.status != "ZERO_AMOUNT_IN"]
+    # QSR: quote success rate. Exclude ZERO_AMOUNT_IN (not a quoting attempt)
+    # and OVERSIZED_VS_DEPTH (P0a: a real but extreme quote whose notional
+    # overwhelms the bottleneck pool depth; neither a quote failure nor a market
+    # signal, so it must not deflate QSR).
+    quoted = [
+        qr for qr in cycle_results
+        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
+    ]
     qsr = (
         sum(1 for qr in quoted if qr.status not in ("QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT"))
         / len(quoted)
         if quoted
         else 0.0
+    )
+    oversized_vs_depth_count = sum(
+        1 for qr in cycle_results if qr.status == "OVERSIZED_VS_DEPTH"
     )
 
     # Economics gate (applies only when we have actual quote results)
@@ -648,17 +778,32 @@ def build_artifact(
 
     # Histograms: compute from cycle_results if not provided externally
     computed_cycle_histogram = _compute_cycle_reject_histogram(cycle_results)
-    computed_route_hist = (
+    computed_route_hist_full = (
         route_error_histogram
         if route_error_histogram is not None
         else _compute_route_error_histogram(cycle_results)
     )
-    computed_edge_hist = (
+    computed_edge_hist_full = (
         edge_error_histogram
         if edge_error_histogram is not None
         else _compute_edge_error_histogram(cycle_results)
     )
     quote_failure_diagnostics = _compute_quote_failure_diagnostics(cycle_results)
+    phantom_quote_diagnostics = _compute_phantom_quote_diagnostics(cycle_results)
+    computed_route_hist, _route_hist_trim = _trim_route_error_histogram(computed_route_hist_full)
+    _edge_hist_total = len(computed_edge_hist_full) if isinstance(computed_edge_hist_full, list) else 0
+    computed_edge_hist = (
+        computed_edge_hist_full[:_MAX_EDGE_ERROR_HISTOGRAM_EDGES]
+        if isinstance(computed_edge_hist_full, list)
+        else computed_edge_hist_full
+    )
+    _edge_hist_trim = {
+        "total": _edge_hist_total,
+        "kept": len(computed_edge_hist) if isinstance(computed_edge_hist, list) else 0,
+        "dropped": max(_edge_hist_total - len(computed_edge_hist), 0)
+        if isinstance(computed_edge_hist, list)
+        else 0,
+    }
 
     # scan_scope: use provided dict or derive minimal version from topology
     if scan_scope is None:
@@ -706,10 +851,10 @@ def build_artifact(
     )
     # Provider-level error counts from route error histogram (per-leg, not per-cycle)
     _provider_rpc_error_count = sum(
-        v.get("QUOTE_RPC_ERROR", 0) for v in computed_route_hist.values() if isinstance(v, dict)
+        v.get("QUOTE_RPC_ERROR", 0) for v in computed_route_hist_full.values() if isinstance(v, dict)
     )
     _provider_decode_error_count = sum(
-        v.get("QUOTE_DECODE", 0) for v in computed_route_hist.values() if isinstance(v, dict)
+        v.get("QUOTE_DECODE", 0) for v in computed_route_hist_full.values() if isinstance(v, dict)
     )
     # Quote error rates (relative to total cycles_found, not quoted only)
     # quote_rpc_error_rate uses provider route histogram (per-leg) — cycles reject as
@@ -888,6 +1033,7 @@ def build_artifact(
         "positive_cycle_multi_hit_count": positive_cycle_multi_hit_count,  # cycles positive ≥2 sweeps
         "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id
         "qsr": round(qsr, 4),
+        "oversized_vs_depth_count": oversized_vs_depth_count,  # excluded from QSR denominator
         "infra_status": infra_status,
         "quote_rpc_error_rate": quote_rpc_error_rate,
         "quote_revert_rate": quote_revert_rate,
@@ -901,6 +1047,15 @@ def build_artifact(
         "route_error_histogram": computed_route_hist,
         "edge_error_histogram": computed_edge_hist,
         "quote_failure_diagnostics": quote_failure_diagnostics,
+        "phantom_quote_diagnostics": phantom_quote_diagnostics,
+        "artifact_compaction": {
+            "route_error_histogram": _route_hist_trim,
+            "edge_error_histogram": _edge_hist_trim,
+            "quote_failure_diagnostics_top_routes_kept": len(
+                quote_failure_diagnostics.get("top_routes") or []
+            ),
+            "json_format": "compact",
+        },
         "m8_participation": {
             "m8_pool_addrs_tracked": _m8_pool_addrs_tracked,
             "graph_ready_from_m8": _graph_ready_from_m8,
@@ -1145,7 +1300,7 @@ def write_artifact(artifact: Dict[str, Any], artifact_path: str = ROLLING_PATH) 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as fh:
-        json.dump(artifact, fh, indent=2)
+        json.dump(artifact, fh, ensure_ascii=False, separators=(",", ":"))
     # On Windows, os.replace can raise PermissionError if antivirus scans
     # the .tmp file between write and rename.  Retry with backoff.
     for attempt in range(6):

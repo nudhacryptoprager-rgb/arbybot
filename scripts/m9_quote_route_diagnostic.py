@@ -54,13 +54,31 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _resolve_rpc_url(chain: str) -> str:
-    from core.rpc_urls import resolve_rpc_http
+def resolve_diagnostic_rpc(
+    chain: str,
+    env: Optional[Dict[str, str]] = None,
+) -> tuple[str, str, Dict[str, Any]]:
+    """Resolve HTTP RPC the same way as ``m9.graph_arb.runner`` (env-aware).
 
-    url, _provider, _diag = resolve_rpc_http(chain)
+    Must pass ``chain_id`` + ``network`` — calling ``resolve_rpc_http("base")`` as a
+    positional arg wrongly binds the string to ``chain_id`` and ignores ``BASE_RPC``.
+    """
+    from core.rpc_urls import _CHAIN_KEY_TO_ID, resolve_rpc_http
+
+    env_map = dict(env if env is not None else os.environ)
+    chain_key = chain.lower()
+    chain_id = _CHAIN_KEY_TO_ID.get(chain_key)
+    url, provider, diag = resolve_rpc_http(
+        chain_id=chain_id,
+        network=chain_key,
+        env=env_map,
+    )
     if not url:
-        raise RuntimeError(f"No RPC URL for chain={chain!r}")
-    return url
+        raise RuntimeError(
+            f"No RPC URL for chain={chain!r} (chain_id={chain_id}). "
+            f"Set BASE_RPC or ALCHEMY_API_KEY. diagnostics={diag}"
+        )
+    return url, provider, diag
 
 
 def _select_edges(
@@ -116,7 +134,7 @@ def run_diagnostic(args: argparse.Namespace) -> Dict[str, Any]:
     from m9.graph_arb.quoter import _make_dex_route, _make_token_info
     from m9.graph_arb.raw_http_probe import probe_quote_raw_http
 
-    rpc_url = _resolve_rpc_url(args.chain)
+    rpc_url, rpc_provider, rpc_diag = resolve_diagnostic_rpc(args.chain)
     edges = _select_edges(
         args.inventory,
         args.config,
@@ -167,7 +185,10 @@ def run_diagnostic(args: argparse.Namespace) -> Dict[str, Any]:
         "chain": args.chain,
         "inventory_path": args.inventory,
         "config_path": args.config,
+        "rpc_url": rpc_url,
         "rpc_url_prefix": rpc_url[:48],
+        "rpc_provider": rpc_provider,
+        "rpc_source": rpc_diag.get("source"),
         "routes_probed": len(rows),
         "routes_ok": ok_count,
         "route_qsr": round(qsr, 4),
@@ -188,7 +209,10 @@ def main() -> int:
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out.write_text(
+        json.dumps(report, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
     log.info(
         "Wrote %s — route_qsr=%.4f (%d/%d ok)",
         out,
