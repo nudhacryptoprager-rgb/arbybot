@@ -598,6 +598,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             for r in _inv_raw.get("active_routes", [])
             if r.get("source") == "m8_sniper" and r.get("pool_address")
         )
+        if _bridge_source_metrics is not None:
+            _bridge_source_metrics["m8_pool_addrs_tracked"] = len(_m8_pool_addrs)
         # Extend with M8-context pools (existing base routes for M8-tracked tokens).
         # These are base-inventory routes for non-anchor tokens that M8 sniped a new
         # pool for — confirming those tokens are active. Cycles that traverse any of
@@ -618,44 +620,26 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     except Exception as _bsm_exc:
         log.debug("Bridge metrics extraction skipped: %s", _bsm_exc)
 
-    # Build graph
-    # Productive lane: load quarantined pool addresses (Steps 2+3)
+    # Build graph — productive lane applies hard quarantine only (soft tags kept).
     _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
     _exclude_pool_addresses: "Optional[frozenset[str]]" = None
     _exclude_route_ids: "Optional[frozenset[str]]" = None
     _depth_quarantine_skipped = 0
     _revert_quarantine_skipped = 0
+    _discovery_cycles_found: "Optional[int]" = None
     if _lane == "productive":
         from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
         _quarantine_path = getattr(args, "pool_quarantine_path", "data/quarantine/m9_pool_depth_quarantine.json")
-        _loaded = load_quarantined_pool_addresses(_quarantine_path)
+        _loaded = load_quarantined_pool_addresses(_quarantine_path, hard_only=True)
         if _loaded:
             _exclude_pool_addresses = _loaded
+            _depth_quarantine_skipped = len(_loaded)
             log.info(
-                "Productive lane enabled: %d quarantined pools will be excluded from graph",
+                "Productive lane enabled: %d hard-quarantined pools excluded from graph",
                 len(_loaded),
             )
         else:
-            log.info("Productive lane enabled: no quarantine addresses loaded (check path or placeholders)")
-
-    # Productive lane: load quarantined pool addresses (Steps 2+3)
-    _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
-    _exclude_pool_addresses: "Optional[frozenset[str]]" = None
-    _exclude_route_ids: "Optional[frozenset[str]]" = None
-    _depth_quarantine_skipped = 0
-    _revert_quarantine_skipped = 0
-    if _lane == "productive":
-        from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
-        _quarantine_path = getattr(args, "pool_quarantine_path", "data/quarantine/m9_pool_depth_quarantine.json")
-        _loaded = load_quarantined_pool_addresses(_quarantine_path)
-        if _loaded:
-            _exclude_pool_addresses = _loaded
-            log.info(
-                "Productive lane enabled: %d quarantined pools will be excluded from graph",
-                len(_loaded),
-            )
-        else:
-            log.info("Productive lane enabled: no quarantine addresses loaded (check path or placeholders)")
+            log.info("Productive lane enabled: no hard quarantine addresses loaded (check path or placeholders)")
 
         # Load revert-quarantine from previous run and convert probe route_ids to pool addresses.
         # Probe route_id format: "{dex_id}:{token_in}-{token_out}@{fee}" — different from the
@@ -708,6 +692,26 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         except Exception as _rq_exc:
             log.warning("Failed to load revert quarantine: %s", _rq_exc)
 
+        try:
+            _disc_adj = build_graph_from_inventory(
+                inventory_path=inventory_path,
+                config_path=args.config,
+                require_factory_verified=getattr(args, "require_factory_verified", False),
+                exclude_pool_addresses=None,
+                min_effective_depth_usd=0.0,
+                lane="discovery",
+            )
+            if _disc_adj:
+                _discovery_cycles_found = len(
+                    find_cycles(_disc_adj, max_cycles=min(args.cycles_limit, 5000))
+                )
+                log.info(
+                    "Discovery topology reference: %d cycles before productive filters",
+                    _discovery_cycles_found,
+                )
+        except Exception as _disc_topo_exc:
+            log.debug("Discovery topology reference skipped: %s", _disc_topo_exc)
+
     try:
         adjacency = build_graph_from_inventory(
             inventory_path=inventory_path,
@@ -752,6 +756,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
+            discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
@@ -774,6 +779,19 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         if _bridge_source_metrics is not None:
             _bridge_source_metrics["graph_edges_from_m8"] = _graph_edges_from_m8
+            _gr_m8 = _bridge_source_metrics.get("graph_ready_from_m8")
+            if _gr_m8 and _graph_edges_from_m8 == 0:
+                log.warning(
+                    "M8 bridge has graph_ready_from_m8=%s but 0 edges in productive graph "
+                    "(quarantine, factory_verified, or pair_id parse failure)",
+                    _gr_m8,
+                )
+            elif _gr_m8 and _graph_edges_from_m8 > 0:
+                log.info(
+                    "M8 graph participation: graph_ready_from_m8=%s edges_in_graph=%d",
+                    _gr_m8,
+                    _graph_edges_from_m8,
+                )
         log.info("Graph edges from M8 sniper routes: %d", _graph_edges_from_m8)
     cycles = find_cycles(adjacency, max_cycles=args.cycles_limit)
     # --- Fee-cap pre-filter (Step 2 hardening) -----------------------------------
@@ -823,6 +841,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
+            discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
@@ -858,6 +877,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
             pool_quality_lane=_lane,
+            discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
@@ -1195,6 +1215,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             provider_router_snapshot=_router.snapshot(),
             prequote_min_bps=_prequote_min_bps,
             pool_quality_lane=_lane,
+            discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
@@ -1320,6 +1341,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         provider_router_snapshot=_router.snapshot(),
         prequote_min_bps=_prequote_min_bps,
         pool_quality_lane=_lane,
+        discovery_cycles_found=_discovery_cycles_found,
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         revert_quarantine_skipped=_revert_quarantine_skipped,
         bridge_source_metrics=_bridge_source_metrics,

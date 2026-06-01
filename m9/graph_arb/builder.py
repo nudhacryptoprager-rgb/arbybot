@@ -14,6 +14,8 @@ from m9.graph_arb.adapter_metadata import load_adapter_metadata, AdapterMetadata
 
 logger = logging.getLogger(__name__)
 
+_ZERO_ETH_ADDRESS = "0x" + "0" * 40
+
 _DEFAULT_INVENTORY = "data/tmp/m8_1_exotic_inventory_latest.json"
 # Merged shadow inventory (M8 + M8.1 + gap edges) takes priority when present
 _SHADOW_INVENTORY = "data/tmp/m9_shadow_inventory_with_gap_edges.json"
@@ -46,6 +48,89 @@ def _parse_pair_symbols(pair_id: str) -> "tuple[str, str]":
     if len(parts) != 2:
         raise ValueError(f"Cannot parse pair_id: {pair_id!r}")
     return parts[0], parts[1]
+
+
+def _is_valid_eth_address(addr: object) -> bool:
+    """True for non-zero 0x-prefixed 20-byte hex addresses."""
+    if not isinstance(addr, str):
+        return False
+    a = addr.strip().lower()
+    if not a.startswith("0x") or len(a) != 42 or a == _ZERO_ETH_ADDRESS:
+        return False
+    try:
+        int(a[2:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _decimals_for_symbol(sym: str, cfg: M8_1Config, override: object) -> int:
+    if override is not None:
+        try:
+            return int(override)
+        except (TypeError, ValueError):
+            pass
+    tc = cfg.tokens.get(sym)
+    return int(tc.decimals) if tc is not None else 18
+
+
+def _merge_inventory_token_addresses(
+    token_map: Dict[str, TokenInfo],
+    active_routes: list,
+    cfg: M8_1Config,
+) -> None:
+    """Augment token_map with on-chain addresses from M8 bridge routes.
+
+    Config tokens win on conflict. Inventory fills missing symbols and replaces
+    placeholder zero addresses that would otherwise collapse QSR.
+    """
+    for entry in active_routes:
+        pair_id = entry.get("pair_id", "")
+        if "_" not in pair_id:
+            continue
+        try:
+            sym0, sym1 = _parse_pair_symbols(pair_id)
+        except ValueError:
+            continue
+
+        addr0 = entry.get("token0_addr") or ""
+        addr1 = entry.get("token1_addr") or ""
+        if not _is_valid_eth_address(addr0):
+            t0_field = entry.get("token0", "")
+            if _is_valid_eth_address(t0_field):
+                addr0 = t0_field
+        if not _is_valid_eth_address(addr1):
+            t1_field = entry.get("token1", "")
+            if _is_valid_eth_address(t1_field):
+                addr1 = t1_field
+
+        for sym, addr, dec_key in (
+            (sym0, addr0, "token0_decimals"),
+            (sym1, addr1, "token1_decimals"),
+        ):
+            if not sym or not _is_valid_eth_address(addr):
+                continue
+            addr_l = addr.lower()
+            decimals = _decimals_for_symbol(sym, cfg, entry.get(dec_key))
+            existing = token_map.get(sym)
+            if existing is None:
+                token_map[sym] = TokenInfo(symbol=sym, address=addr_l, decimals=decimals)
+                continue
+            if not _is_valid_eth_address(existing.address):
+                token_map[sym] = TokenInfo(symbol=sym, address=addr_l, decimals=decimals)
+                continue
+            if existing.address.lower() != addr_l:
+                logger.debug(
+                    "Inventory token address differs from config; keeping config",
+                    extra={
+                        "context": {
+                            "event": "graph_build_token_addr_conflict",
+                            "symbol": sym,
+                            "config_addr": existing.address,
+                            "inventory_addr": addr_l,
+                        }
+                    },
+                )
 
 
 def build_graph_from_inventory(
@@ -119,10 +204,11 @@ def build_graph_from_inventory(
         )
         return {}
 
-    # Build token lookup: symbol → TokenInfo
+    # Build token lookup: symbol → TokenInfo (config), then M8 route addresses.
     token_map: Dict[str, TokenInfo] = {}
     for sym, tc in cfg.tokens.items():
         token_map[sym] = TokenInfo(symbol=sym, address=tc.address, decimals=tc.decimals)
+    _merge_inventory_token_addresses(token_map, active_routes, cfg)
 
     adjacency: Dict[str, Dict[str, List[GraphEdge]]] = defaultdict(lambda: defaultdict(list))
     built_count = 0
@@ -280,18 +366,18 @@ def build_graph_from_inventory(
                     }
                 },
             )
-            # Fall back to placeholder
+            # Last resort: placeholder (quote will fail — should be rare after merge)
             if t0 is None:
                 t0 = TokenInfo(
                     symbol=sym0,
-                    address="0x" + "0" * 40,
-                    decimals=18,
+                    address=_ZERO_ETH_ADDRESS,
+                    decimals=_decimals_for_symbol(sym0, cfg, entry.get("token0_decimals")),
                 )
             if t1 is None:
                 t1 = TokenInfo(
                     symbol=sym1,
-                    address="0x" + "0" * 40,
-                    decimals=18,
+                    address=_ZERO_ETH_ADDRESS,
+                    decimals=_decimals_for_symbol(sym1, cfg, entry.get("token1_decimals")),
                 )
 
         edge_key_fwd = f"{route_id}>{sym0}@{sym1}"

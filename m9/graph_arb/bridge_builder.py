@@ -841,9 +841,11 @@ def build_bridge_inventory(
         for e in pending_events
     ]
 
-    # graph_ready_from_m8 = supported anchor-connected multi-venue-confirmed M8 pools
-    # + fresh-window admissions (single-venue but fresh sniper artifact)
-    graph_ready_from_m8 = len(supported_events) + len(m8_fresh_window_routes)
+    # graph_ready_from_m8 = deduped M8 routes actually added to active_routes
+    # (not raw supported-event count — pools already in base do not inflate this).
+    graph_ready_from_m8 = len(m8_new_routes)
+    m8_supported_event_count = len(supported_events)
+    m8_fresh_window_routes_count = len(m8_fresh_window_routes)
 
     # Single-venue blocked routes: cross_dex_seen but only 1 distinct DEX.
     # These are quarantined because they cannot form an arb cycle (no second venue to
@@ -974,6 +976,8 @@ def build_bridge_inventory(
         "depth_ok_count": depth_ok_count,
         "anchor_connected_from_base": anchor_connected_from_base,
         "graph_ready_from_m8": graph_ready_from_m8,
+        "m8_supported_event_count": m8_supported_event_count,
+        "m8_fresh_window_routes_count": m8_fresh_window_routes_count,
         "graph_ready_total": len(base_active) + len(m8_new_routes),
         "graph_ready_from_m8_new": len(m8_new_routes),
         "unsupported_dex_count": _unsupported_dex_count,

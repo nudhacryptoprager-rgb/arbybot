@@ -250,6 +250,8 @@ class TestBridgeBuilderIntegration:
             "depth_ok_count",
             "anchor_connected_from_base",
             "graph_ready_from_m8",
+            "m8_supported_event_count",
+            "m8_fresh_window_routes_count",
             "graph_ready_total",
             "m8_stale",
             "m8_1_stale",
@@ -337,7 +339,8 @@ class TestBridgeBuilderIntegration:
         )
 
         assert metrics["cross_dex_seen_count"] == 2  # AERO seen in 2 events
-        assert metrics["graph_ready_from_m8"] == 2   # both events' pool in base
+        assert metrics["m8_supported_event_count"] == 2
+        assert metrics["graph_ready_from_m8"] == 0  # pool already in base inventory
 
     def test_pair_id_uses_underscore_not_slash(self, tmp_path):
         """M8 bridge pair_id must use '_' separator вЂ” required by M9 _parse_pair_symbols().

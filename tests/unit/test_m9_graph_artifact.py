@@ -293,6 +293,13 @@ class TestM9GraphArtifactSchema:
             }
             assert v in valid, f"economics_blocker_class invalid: {v!r}"
 
+    def test_infra_status_valid_if_present(self):
+        d = _load_rolling()
+        v = d.get("infra_status")
+        if v is not None:
+            valid = {"NOT_RUN", "OK", "INFRA_OR_QUOTE_QUALITY_BLOCKED"}
+            assert v in valid, f"infra_status invalid: {v!r}"
+
     def test_risk_metrics_if_present(self):
         d = _load_rolling()
         rm = d.get("risk_metrics")
@@ -492,6 +499,80 @@ class TestM9GraphArtifactBuilder:
     def test_economics_blocker_class_not_run_when_empty(self):
         a = _empty_artifact()
         assert a["economics_blocker_class"] == "NOT_RUN"
+        assert a["infra_status"] == "NOT_RUN"
+
+    def test_quote_failure_diagnostics_present(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle,
+            size_usd=1000.0,
+            amount_in=1000,
+            amount_out=0,
+            gross_bps=0.0,
+            status="QUOTE_FAILED",
+            reject_reason="CYCLE_QUOTE_FAILED",
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[qr],
+            topology=_make_topology(),
+            sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+        )
+        diag = a.get("quote_failure_diagnostics")
+        assert isinstance(diag, dict)
+        assert "by_reject_reason" in diag
+        assert "m8_participation" in a
+
+    def test_infra_status_blocked_when_qsr_below_acceptance(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        mock_cycle = _make_mock_cycle()
+        failed = CycleQuoteResult(
+            cycle=mock_cycle,
+            size_usd=1000.0,
+            amount_in=1000,
+            amount_out=0,
+            gross_bps=0.0,
+            status="QUOTE_FAILED",
+            reject_reason="CYCLE_QUOTE_FAILED",
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        ok = CycleQuoteResult(
+            cycle=mock_cycle,
+            size_usd=1000.0,
+            amount_in=1000,
+            amount_out=1001,
+            gross_bps=10.0,
+            status="POSITIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[failed, failed, failed, ok],
+            topology=_make_topology(),
+            sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+        )
+        assert a["qsr"] == 0.25
+        assert a["infra_status"] == "INFRA_OR_QUOTE_QUALITY_BLOCKED"
+        assert a["economics_blocker_class"] == "PROVIDER_QUALITY_BLOCKED"
+        assert a["economics_gate_status"] == "BLOCKED_QSR"
 
     def test_economics_blocker_class_not_blocked_when_positive(self):
         from m9.graph_arb.artifacts import build_artifact

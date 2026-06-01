@@ -8,6 +8,39 @@ from m9.graph_arb.models import GraphCycle, GraphEdge, GraphTopology
 _MAX_CYCLES_PER_START = 500
 _MAX_EDGES_PER_DIRECTION = 8
 
+_FACTORY_ORDER = {"EFFICIENT_BASELINE": 0, "MID_EFFICIENCY": 1, "LOW_EFFICIENCY": 2}
+
+# Prefer exotic / long-tail adapter families when fee and factory class tie.
+_ADAPTER_PRIORITY = {
+    "uniswap_v4": 0,
+    "uniswap_v2": 1,
+    "ve33": 2,
+    "aerodrome_v2_stable": 2,
+    "curve_stable": 3,
+    "uniswap_v3": 4,
+}
+
+
+def _edge_rank_key(edge: GraphEdge) -> tuple:
+    """Deterministic expansion rank: lower fee/factory cost first, then adapter family."""
+    fc = _FACTORY_ORDER.get(edge.factory_class, 99)
+    ap = _ADAPTER_PRIORITY.get(edge.adapter_type, 50)
+    return (edge.fee_bps, fc, ap, edge.route_id)
+
+
+def _ranked_neighbor_items(
+    neighbors: "Dict[str, List[GraphEdge]]",
+) -> List[tuple[str, List[GraphEdge]]]:
+    """Rank neighbors by best outgoing edge, then cap per direction."""
+    ranked: List[tuple[str, List[GraphEdge], tuple]] = []
+    for next_token, edges in neighbors.items():
+        if not edges:
+            continue
+        sorted_edges = sorted(edges, key=_edge_rank_key)[:_MAX_EDGES_PER_DIRECTION]
+        ranked.append((next_token, sorted_edges, _edge_rank_key(sorted_edges[0])))
+    ranked.sort(key=lambda item: (item[2], item[0]))
+    return [(token, edge_list) for token, edge_list, _ in ranked[:_MAX_EDGES_PER_DIRECTION]]
+
 
 def find_cycles(
     adjacency: "Dict[str, Dict[str, List[GraphEdge]]]",
@@ -76,13 +109,9 @@ def _dfs_cycles(
         return
 
     neighbors = adjacency.get(current, {})
-    neighbor_items = list(neighbors.items())[:_MAX_EDGES_PER_DIRECTION]
+    neighbor_items = _ranked_neighbor_items(neighbors)
 
-    for next_token, edges in neighbor_items:
-        if len(edges) == 0:
-            continue
-
-        candidate_edges = edges[:_MAX_EDGES_PER_DIRECTION]
+    for next_token, candidate_edges in neighbor_items:
         for edge in candidate_edges:
             if exclude_factory_classes and edge.factory_class in exclude_factory_classes:
                 continue

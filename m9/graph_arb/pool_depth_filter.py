@@ -23,14 +23,46 @@ _DEFAULT_QUARANTINE_PATH = "data/quarantine/m9_pool_depth_quarantine.json"
 # Placeholder addresses used in the quarantine file before depth probe fills them
 _PLACEHOLDER_PREFIXES = {"0x000000000000000000000000000000000000000"}
 
+# Tiered quarantine: productive lane hard-drops only fatal reasons by default.
+# Soft reasons remain visible in discovery lane and as metadata tags.
+_HARD_QUARANTINE_REASONS = frozenset({
+    "HONEYPOT",
+    "FACTORY_NO_POOL",
+    "ZERO_LIQUIDITY",
+    "POOL_ZERO_LIQUIDITY",
+    "UNSUPPORTED_DEX_TYPE",
+    "UNKNOWN_V4_HOOK",
+    "BLACKLISTED",
+    "STRUCTURAL_SINGLE_VENUE_TOPOLOGY",
+})
+
+_SOFT_QUARANTINE_REASONS = frozenset({
+    "TOXIC_PRICE_IMPACT",
+    "LOW_EFFECTIVE_DEPTH",
+})
+
+
+def _entry_quarantine_reason(entry: dict) -> str:
+    return str(
+        entry.get("reject_reason")
+        or entry.get("quarantine_reason")
+        or ""
+    ).strip()
+
 
 def load_quarantined_pool_addresses(
     quarantine_path: str = _DEFAULT_QUARANTINE_PATH,
+    *,
+    hard_only: bool = True,
 ) -> FrozenSet[str]:
     """Load pool addresses from the depth quarantine file.
 
     Returns frozenset of lowercase pool addresses that must be excluded
     from the M9 productive graph lane.
+
+    When ``hard_only=True`` (default), soft reasons such as
+    ``TOXIC_PRICE_IMPACT`` and ``LOW_EFFECTIVE_DEPTH`` are retained as
+    metadata but do not hard-drop pools from the productive graph.
 
     Placeholder addresses (0x0000...0001, 0x0000...0002) are silently skipped —
     they are filled in by pool_depth_probe after an on-chain run.
@@ -71,6 +103,15 @@ def load_quarantined_pool_addresses(
                 entry.get("fee"),
             )
             continue
+        reason = _entry_quarantine_reason(entry)
+        if hard_only and reason in _SOFT_QUARANTINE_REASONS:
+            logger.debug(
+                "Soft quarantine (not hard-dropped in productive lane): pair=%s reason=%s pool=%s",
+                entry.get("pair_id"),
+                reason,
+                addr_lower[:14],
+            )
+            continue
         # Respect TTL: if retry_after_utc is set and has passed, skip (transient quarantine)
         retry_after = entry.get("retry_after_utc")
         if retry_after:
@@ -102,6 +143,32 @@ def load_quarantined_pool_addresses(
                 }
             },
         )
+    return frozenset(addresses)
+
+
+def load_soft_quarantined_pool_addresses(
+    quarantine_path: str = _DEFAULT_QUARANTINE_PATH,
+) -> FrozenSet[str]:
+    """Return pool addresses tagged with soft quarantine reasons (metadata only)."""
+    path = Path(quarantine_path)
+    if not path.exists():
+        return frozenset()
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return frozenset()
+
+    addresses: set[str] = set()
+    for entry in data.get("quarantined_pools", []):
+        addr = entry.get("pool_address", "")
+        if not addr or not addr.startswith("0x"):
+            continue
+        addr_lower = addr.lower()
+        if any(addr_lower.startswith(p.lower()) for p in _PLACEHOLDER_PREFIXES):
+            continue
+        if _entry_quarantine_reason(entry) in _SOFT_QUARANTINE_REASONS:
+            addresses.add(addr_lower)
     return frozenset(addresses)
 
 

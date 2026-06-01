@@ -238,6 +238,41 @@ class TestBuildGraphFromInventory:
         with pytest.raises(RuntimeError, match="CONFIG_MISSING"):
             build_graph_from_inventory(inventory_path=inv, config_path=missing_cfg)
 
+    def test_exotic_symbol_resolves_token_addr_from_inventory(self, tmp_path):
+        """Long-tail symbols not in config must use token0_addr/token1_addr from M8 routes."""
+        from m9.graph_arb.builder import build_graph_from_inventory
+
+        pepe_addr = "0x" + "1" * 40
+        weth_addr = "0x4200000000000000000000000000000000000006"
+        inv = {
+            "active_routes": [
+                {
+                    "pair_id": "PEPE_WETH",
+                    "dex_id": "uniswap_v3",
+                    "fee": 500,
+                    "factory_class": "EFFICIENT_BASELINE",
+                    "pool_address": "0x" + "a" * 40,
+                    "route_id": "uniswap_v3:PEPE_WETH@500",
+                    "token0_addr": pepe_addr,
+                    "token1_addr": weth_addr,
+                }
+            ],
+            "pools": [],
+        }
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        cfg = self._make_minimal_config(tmp_path)
+        adjacency = build_graph_from_inventory(inventory_path=str(p), config_path=cfg)
+        pepe_out_edges = [
+            edge
+            for edge_list in adjacency.get("PEPE", {}).values()
+            for edge in edge_list
+            if edge.token_in_sym == "PEPE"
+        ]
+        assert pepe_out_edges, "Expected PEPE -> * edge"
+        assert all(e.token_in_addr.lower() == pepe_addr.lower() for e in pepe_out_edges)
+        assert not any(e.token_in_addr == self._ZERO_ADDR for e in pepe_out_edges)
+
     def test_no_zero_quoter_edges_with_valid_config(self, tmp_path):
         """Safety contract: every emitted edge must have non-zero quoter_addr."""
         from m9.graph_arb.builder import build_graph_from_inventory
@@ -572,13 +607,17 @@ class TestPoolDepthFilter:
         }
         qfile = tmp_path / "quarantine.json"
         qfile.write_text(json.dumps(quarantine))
-        addresses = load_quarantined_pool_addresses(str(qfile))
+        addresses = load_quarantined_pool_addresses(str(qfile), hard_only=True)
         assert isinstance(addresses, frozenset)
-        # Real address should be included
-        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" in addresses
+        # Soft reason must not hard-drop in productive lane
+        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" not in addresses
+        assert len(addresses) == 0
+
+        addresses_all = load_quarantined_pool_addresses(str(qfile), hard_only=False)
+        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" in addresses_all
+        assert len(addresses_all) == 1
         # Placeholder should be skipped
-        assert "0x0000000000000000000000000000000000000001" not in addresses
-        assert len(addresses) == 1
+        assert "0x0000000000000000000000000000000000000001" not in addresses_all
 
     def test_load_quarantined_pool_addresses_missing_file(self, tmp_path):
         """Missing quarantine file returns empty frozenset (not error)."""

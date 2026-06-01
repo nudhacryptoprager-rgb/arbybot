@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,7 @@ _ECON_PASS = "PASS"
 # Topology gate statuses
 _TOPO_NO_CYCLES = "NO_CYCLES"
 _TOPO_CYCLES_FOUND = "CYCLES_FOUND"
+_TOPO_FILTER_BLOCKED = "TOPOLOGY_FILTER_BLOCKED"
 
 # Near-positive threshold for router-sim eligibility (bps below zero)
 _ROUTER_SIM_BPS_FLOOR = -10.0
@@ -35,6 +37,15 @@ _BLOCKER_NOT_BLOCKED = "NOT_BLOCKED"
 _BLOCKER_PROVIDER_QUALITY = "PROVIDER_QUALITY_BLOCKED"
 _BLOCKER_INVENTORY_ANCHOR = "INVENTORY_TOO_ANCHOR_HEAVY"
 _BLOCKER_MARKET = "MARKET_NO_POSITIVE_GROSS"
+
+# Infra / quote-quality status (distinct from economics verdict)
+_INFRA_NOT_RUN = "NOT_RUN"
+_INFRA_OK = "OK"
+_INFRA_QUOTE_QUALITY_BLOCKED = "INFRA_OR_QUOTE_QUALITY_BLOCKED"
+
+# M9 acceptance: QSR and data completeness gates (aligned with runtime_gates)
+_QSR_ACCEPTANCE_THRESHOLD = 0.8
+_DATA_COMPLETENESS_ACCEPTANCE_THRESHOLD = 0.98
 
 # Pair count threshold: at or below this → anchor-heavy inventory
 _ANCHOR_HEAVY_PAIR_THRESHOLD = 15
@@ -314,6 +325,20 @@ def _compute_toxic_pool_families(
     return result[:20]  # top 20 toxic pool families
 
 
+def _http_status_from_raw_error(raw_error: Optional[str]) -> Optional[int]:
+    if not raw_error:
+        return None
+    match = re.search(r"\bHTTP\s+(\d{3})\b", raw_error)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    if raw_error == "provider_throttle_cooldown":
+        return 429
+    return None
+
+
 def _compute_route_error_histogram(
     cycle_results: List[CycleQuoteResult],
 ) -> Dict[str, Dict[str, int]]:
@@ -325,6 +350,70 @@ def _compute_route_error_histogram(
                 route_errors = histogram.setdefault(leg.route_id, {})
                 route_errors[leg.reject_reason] = route_errors.get(leg.reject_reason, 0) + 1
     return histogram
+
+
+def _compute_quote_failure_diagnostics(
+    cycle_results: List[CycleQuoteResult],
+    *,
+    top_n: int = 30,
+) -> Dict[str, Any]:
+    """Leg-level quote failure RCA: reject reasons, HTTP status, top routes/edges.
+
+    Helps separate RPC overload (429/cooldown) from adapter/config bugs (decode/revert).
+    """
+    by_reject: Dict[str, int] = {}
+    by_http_status: Dict[str, int] = {}
+    route_agg: Dict[str, Dict[str, Any]] = {}
+
+    for qr in cycle_results:
+        edges = qr.cycle.edges
+        for i, leg in enumerate(qr.leg_results or []):
+            if leg.ok or not leg.reject_reason:
+                continue
+            by_reject[leg.reject_reason] = by_reject.get(leg.reject_reason, 0) + 1
+            http_status = _http_status_from_raw_error(leg.raw_error)
+            if http_status is not None:
+                key = str(http_status)
+                by_http_status[key] = by_http_status.get(key, 0) + 1
+            elif leg.raw_error:
+                by_http_status["other"] = by_http_status.get("other", 0) + 1
+
+            edge = edges[i] if i < len(edges) else None
+            rid = leg.route_id
+            entry = route_agg.setdefault(
+                rid,
+                {
+                    "route_id": rid,
+                    "pair_id": edge.pair_id if edge else None,
+                    "dex_id": edge.dex_id if edge else None,
+                    "adapter_type": edge.adapter_type if edge else None,
+                    "pool_address": edge.pool_address if edge else None,
+                    "errors": {},
+                    "sample_raw_error": None,
+                },
+            )
+            entry["errors"][leg.reject_reason] = entry["errors"].get(leg.reject_reason, 0) + 1
+            if entry["sample_raw_error"] is None and leg.raw_error:
+                entry["sample_raw_error"] = str(leg.raw_error)[:200]
+            if entry.get("http_status") is None and http_status is not None:
+                entry["http_status"] = http_status
+
+    top_routes = sorted(
+        route_agg.values(),
+        key=lambda x: -sum(x["errors"].values()),
+    )[:top_n]
+    for row in top_routes:
+        row["error_count"] = sum(row["errors"].values())
+
+    top_edges = _compute_edge_error_histogram(cycle_results)[:top_n]
+
+    return {
+        "leg_failures_total": sum(by_reject.values()),
+        "by_reject_reason": by_reject,
+        "by_http_status": by_http_status,
+        "top_routes": top_routes,
+        "top_edges": top_edges,
+    }
 
 
 def _compute_edge_error_histogram(
@@ -409,6 +498,8 @@ def build_artifact(
     prequote_min_bps: float = -500.0,
     # Pool-quality gate lane: 'discovery' or 'productive' (Steps 2+3)
     pool_quality_lane: str = "discovery",
+    # Discovery-lane cycle count when productive lane filters graph to zero cycles
+    discovery_cycles_found: Optional[int] = None,
     # Count of pools excluded by productive lane depth/quarantine filter
     depth_quarantine_skipped: int = 0,
     # Count of pools excluded via revert-quarantine feedback from previous run
@@ -532,7 +623,7 @@ def build_artifact(
     # Economics gate (applies only when we have actual quote results)
     if cycles_found == 0:
         econ_status = _ECON_BLOCKED_NO_CYCLES
-    elif cycle_results and qsr < 0.5:
+    elif cycle_results and qsr < _QSR_ACCEPTANCE_THRESHOLD:
         econ_status = _ECON_BLOCKED_QSR
     elif cycles_positive_gross == 0:
         econ_status = _ECON_BLOCKED_NO_POSITIVE_GROSS
@@ -544,7 +635,16 @@ def build_artifact(
     gate_acceptance = econ_status == _ECON_PASS
 
     # Topology gate
-    topology_gate = _TOPO_CYCLES_FOUND if cycles_found > 0 else _TOPO_NO_CYCLES
+    if cycles_found > 0:
+        topology_gate = _TOPO_CYCLES_FOUND
+    elif (
+        discovery_cycles_found is not None
+        and discovery_cycles_found > 0
+        and pool_quality_lane == "productive"
+    ):
+        topology_gate = _TOPO_FILTER_BLOCKED
+    else:
+        topology_gate = _TOPO_NO_CYCLES
 
     # Histograms: compute from cycle_results if not provided externally
     computed_cycle_histogram = _compute_cycle_reject_histogram(cycle_results)
@@ -558,6 +658,7 @@ def build_artifact(
         if edge_error_histogram is not None
         else _compute_edge_error_histogram(cycle_results)
     )
+    quote_failure_diagnostics = _compute_quote_failure_diagnostics(cycle_results)
 
     # scan_scope: use provided dict or derive minimal version from topology
     if scan_scope is None:
@@ -684,9 +785,8 @@ def build_artifact(
     )
     if cycles_found == 0 or not cycle_results:
         economics_blocker_class = _BLOCKER_NOT_RUN
-    elif qsr < 0.5:
-        # QSR below threshold means data is unreliable; blocker is provider quality,
-        # even if some cycles appear positive-gross (those results are not trustworthy).
+    elif qsr < _QSR_ACCEPTANCE_THRESHOLD:
+        # QSR below acceptance means quote/infra data is unreliable; not a market verdict.
         economics_blocker_class = _BLOCKER_PROVIDER_QUALITY
     elif cycles_positive_gross > 0:
         economics_blocker_class = _BLOCKER_NOT_BLOCKED
@@ -694,6 +794,24 @@ def build_artifact(
         economics_blocker_class = _BLOCKER_INVENTORY_ANCHOR
     else:
         economics_blocker_class = _BLOCKER_MARKET
+
+    _data_completeness_early: Optional[float] = None
+    if multicall_stats and multicall_stats.get("requested_total", 0) > 0:
+        _data_completeness_early = round(
+            multicall_stats.get("fetched_total", 0) / multicall_stats["requested_total"],
+            4,
+        )
+    if not cycle_results:
+        infra_status = _INFRA_NOT_RUN
+    elif qsr < _QSR_ACCEPTANCE_THRESHOLD:
+        infra_status = _INFRA_QUOTE_QUALITY_BLOCKED
+    elif (
+        _data_completeness_early is not None
+        and _data_completeness_early < _DATA_COMPLETENESS_ACCEPTANCE_THRESHOLD
+    ):
+        infra_status = _INFRA_QUOTE_QUALITY_BLOCKED
+    else:
+        infra_status = _INFRA_OK
 
     # M9 risk metrics placeholders (M9.4 — not yet implemented)
     risk_metrics = {
@@ -727,10 +845,18 @@ def build_artifact(
     _cycles_with_m8_pool: int = 0
     _positive_cycles_with_m8_pool: int = 0
     _m8_multi_venue_verified: Optional[int] = None
+    _graph_edges_from_m8: Optional[int] = None
+    _graph_ready_from_m8: Optional[int] = None
+    _m8_pool_addrs_tracked: Optional[int] = None
     if bridge_source_metrics is not None:
         _cycles_with_m8_pool = bridge_source_metrics.get("cycles_with_m8_pool") or 0
         _positive_cycles_with_m8_pool = bridge_source_metrics.get("positive_cycles_with_m8_pool") or 0
         _m8_multi_venue_verified = bridge_source_metrics.get("m8_multi_venue_verified_count")
+        _graph_edges_from_m8 = bridge_source_metrics.get("graph_edges_from_m8")
+        _graph_ready_from_m8 = bridge_source_metrics.get("graph_ready_from_m8")
+        _m8_pool_addrs_tracked = bridge_source_metrics.get("m8_pool_addrs_tracked")
+    if m8_pool_addrs_for_annotation is not None and _m8_pool_addrs_tracked is None:
+        _m8_pool_addrs_tracked = len(m8_pool_addrs_for_annotation)
 
     artifact: Dict[str, Any] = {
         "schema_family": SCHEMA_FAMILY,
@@ -762,6 +888,7 @@ def build_artifact(
         "positive_cycle_multi_hit_count": positive_cycle_multi_hit_count,  # cycles positive ≥2 sweeps
         "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id
         "qsr": round(qsr, 4),
+        "infra_status": infra_status,
         "quote_rpc_error_rate": quote_rpc_error_rate,
         "quote_revert_rate": quote_revert_rate,
         "provider_rpc_error_count": _provider_rpc_error_count,
@@ -773,12 +900,21 @@ def build_artifact(
         "risk_metrics": risk_metrics,
         "route_error_histogram": computed_route_hist,
         "edge_error_histogram": computed_edge_hist,
+        "quote_failure_diagnostics": quote_failure_diagnostics,
+        "m8_participation": {
+            "m8_pool_addrs_tracked": _m8_pool_addrs_tracked,
+            "graph_ready_from_m8": _graph_ready_from_m8,
+            "graph_edges_from_m8": _graph_edges_from_m8,
+            "cycles_with_m8_pool": _cycles_with_m8_pool,
+            "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,
+        },
         "scan_scope": scan_scope,
         "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation, _cost_profile_for_compute) for qr in top_cycles],
         "top_opportunities": [_build_top_opportunity(qr, _cost_profile_for_compute) for qr in top_cycles],
         "toxic_pool_families": _toxic_pool_families,
         "graph_topology": graph_topology,
         "topology_gate": topology_gate,
+        "discovery_cycles_found": discovery_cycles_found,
         "gap_candidates_path": gap_candidates_path,
         "run_context": run_context,
     }
