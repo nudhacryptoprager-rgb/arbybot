@@ -48,7 +48,7 @@ _FRESH_WINDOW_SECONDS: int = 3600   # 1 hour
 _DEX_ID_TO_ADAPTER_TYPE: Dict[str, str] = {
     "uniswap_v2": "uniswap_v2",
     "uniswap_v3": "uniswap_v3",
-    "uniswap_v4": "uniswap_v4",         # P3: quote adapter pending — explicit quarantine
+    "uniswap_v4": "uniswap_v4",         # quoted via raw_http_probe; safe-hook pools admitted, unknown hooks quarantined
     "pancakeswap_v3": "uniswap_v3",
     "sushiswap_v3": "uniswap_v3",
     "sushiswap_v2": "uniswap_v2",

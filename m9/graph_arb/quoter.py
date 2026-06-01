@@ -265,10 +265,13 @@ def quote_cycle_sync(
     else:
         gross_bps = 0.0
 
-    # Sanity cap: gross_bps outside ±10000 bps (±100%) indicates a phantom quote
-    # (e.g., ABI-revert data mistakenly decoded as amount_out, wrong token indices).
-    _MAX_REASONABLE_BPS = 10_000.0
-    if abs(gross_bps) > _MAX_REASONABLE_BPS:
+    # Depth-aware phantom ceiling (Step 3): a round-trip cycle reporting a
+    # spread larger than the plausible ceiling for its bottleneck depth is a
+    # phantom (revert data decoded as amount_out, wrong token indices, or a thin
+    # one-directional pool).  Unknown-depth pools get the strictest ceiling.
+    from m9.graph_arb.profit_validation import depth_aware_phantom_ceiling_bps
+    _max_reasonable_bps = depth_aware_phantom_ceiling_bps(cycle.min_effective_depth_usd)
+    if abs(gross_bps) > _max_reasonable_bps:
         return CycleQuoteResult(
             cycle=cycle,
             size_usd=size_usd,
@@ -369,6 +372,53 @@ def quote_cycle_dynamic_sync(
     selected.cycle_min_depth_usd = cycle_depth
     selected.depth_capped = depth_capped
     return selected
+
+
+def quote_cycle_roundtrip_sync(
+    cycle: GraphCycle,
+    size_usd: float,
+    w3: Any,
+    token_price_usd: Optional[Dict[str, float]] = None,
+    timeout_s: float = 10.0,
+    quote_backend: str = BACKEND_DIRECT_HTTP,
+    rpc_url: Optional[str] = None,
+) -> CycleQuoteResult:
+    """Quote a cycle forward AND in reverse, rejecting asymmetric phantoms.
+
+    Step 3 round-trip validation: a genuine closed arbitrage cycle and its
+    reverse cannot both be profitable.  This quotes both directions, records
+    ``reverse_gross_bps`` / ``asymmetry_bps`` on the forward result, and
+    downgrades the forward result to a phantom rejection when the pair is
+    internally inconsistent.
+
+    This doubles RPC cost, so it is opt-in (used to *confirm* a candidate, not
+    for the bulk discovery sweep).
+    """
+    from m9.graph_arb.profit_validation import detect_asymmetry, REASON_ASYMMETRIC_ROUNDTRIP
+
+    forward = quote_cycle_sync(
+        cycle, size_usd, w3, token_price_usd, timeout_s, quote_backend, rpc_url,
+    )
+    if forward.status not in (STATUS_POSITIVE_GROSS, STATUS_NEGATIVE_GROSS):
+        return forward
+
+    reverse = quote_cycle_sync(
+        cycle.reversed(), size_usd, w3, token_price_usd, timeout_s, quote_backend, rpc_url,
+    )
+    if reverse.status not in (STATUS_POSITIVE_GROSS, STATUS_NEGATIVE_GROSS):
+        # Reverse leg not quoteable → cannot confirm symmetry; leave forward as-is
+        # but record that the reverse was missing.
+        forward.reverse_gross_bps = None
+        return forward
+
+    forward.reverse_gross_bps = reverse.gross_bps
+    forward.asymmetry_bps = abs(forward.gross_bps + reverse.gross_bps)
+
+    if detect_asymmetry(forward.gross_bps, reverse.gross_bps):
+        forward.gross_bps = 0.0
+        forward.status = STATUS_QUOTE_FAILED
+        forward.reject_reason = REASON_ASYMMETRIC_ROUNDTRIP
+    return forward
 
 
 async def quote_cycle_async(

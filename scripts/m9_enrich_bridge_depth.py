@@ -125,10 +125,18 @@ def main() -> int:
 
     log.info(
         "Depth enrichment: candidates=%d probed_ok=%d failed=%d no_anchor=%d "
-        "skipped_v4=%d toxic=%d low_depth=%d",
+        "skipped_v4=%d toxic=%d low_depth=%d v4_candidates=%d v4_ok=%d v4_failed=%d",
         counts["candidates"], counts["probed_ok"], counts["probe_failed"],
         counts["no_anchor"], counts["skipped_v4"], counts["toxic"], counts["low_depth"],
+        counts["v4_depth_candidates"], counts["v4_depth_probe_ok"],
+        counts["v4_depth_probe_failed"],
     )
+
+    metrics = inventory.setdefault("bridge_source_metrics", {})
+    metrics["v4_depth_candidates"] = counts["v4_depth_candidates"]
+    metrics["v4_depth_probe_ok"] = counts["v4_depth_probe_ok"]
+    metrics["v4_depth_probe_failed"] = counts["v4_depth_probe_failed"]
+    metrics["v4_depth_skipped_unsupported"] = counts["skipped_v4"]
 
     if args.dry_run:
         log.info("Dry-run: not writing inventory")

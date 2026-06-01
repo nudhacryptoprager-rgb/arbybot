@@ -119,6 +119,13 @@ base:
     router: "0x327Df1E6de05895d2ab08513aaDD9313Fe505d86"
     note: "M7.E1.34k: BaseSwap V2 — Base-native UniswapV2 fork"
 
+  uniswap_v4:
+    adapter_type: "uniswap_v4"
+    factory: "0x498581ff718922c3f8e6A244956aF099B2652b2b"
+    quoter: "0x0d5e0F971eD27FBfF6c2837bf31316121532048D"
+    fee_tiers: [100, 500, 3000, 10000]
+    note: "M9: Base Uniswap V4 PoolManager + Quoter for M8 long-tail depth enrichment"
+
 linea:
   lynex_v3:
     adapter_type: "algebra"

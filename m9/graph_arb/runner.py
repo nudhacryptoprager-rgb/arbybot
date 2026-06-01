@@ -776,6 +776,24 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _bridge_source_metrics["graph_edges_from_m8"] = _graph_edges_from_m8
         log.info("Graph edges from M8 sniper routes: %d", _graph_edges_from_m8)
     cycles = find_cycles(adjacency, max_cycles=args.cycles_limit)
+    # --- Fee-cap pre-filter (Step 2 hardening) -----------------------------------
+    # Any cycle whose *total* fee exceeds _MAX_CYCLE_FEE_BPS can never be
+    # profitable at realistic price discrepancies.  Cycles with fees like
+    # 17000-19000 bps (170-190%) are meme/honeypot pools with predatory fee
+    # tiers.  Quoting them wastes RPC budget and inflates the revert rate.
+    # 1000 bps = 10% total is already well above any legitimate trading fee.
+    _MAX_CYCLE_FEE_BPS = 1000.0
+    _before_fee_cap = len(cycles)
+    cycles = [c for c in cycles if c.total_fee_bps <= _MAX_CYCLE_FEE_BPS]
+    _fee_cap_dropped = _before_fee_cap - len(cycles)
+    if _fee_cap_dropped:
+        log.info(
+            "Fee-cap pre-filter: dropped %d cycles (total_fee_bps>%.0f), kept %d",
+            _fee_cap_dropped,
+            _MAX_CYCLE_FEE_BPS,
+            len(cycles),
+        )
+    # -----------------------------------------------------------------------------
     topology = analyze_topology(adjacency, cycles)
     ranked = rank_cycles(cycles)
 
@@ -1207,7 +1225,31 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     cycle_results = all_results
 
-    # Persist pool state cache to disk for next session warm-up
+    # Toxicity gauntlet (Step 1): re-tag phantom / honeypot-failing *positive*
+    # cycles so they never reach the artifact as candidates.  This is strictly
+    # conservative — it can only downgrade positives, never invent them — so it
+    # is safe to run by default.  require_known_depth stays False here to avoid
+    # destroying discovery telemetry; the strict precision gate (Step 5) is what
+    # enforces known-depth + sell-verified acceptance.
+    _gauntlet_telemetry = None
+    try:
+        from m9.graph_arb.profit_validation import apply_profit_gauntlet
+
+        _gauntlet_telemetry = apply_profit_gauntlet(
+            cycle_results, require_known_depth=False
+        )
+        log.info(
+            "Toxicity gauntlet: evaluated=%d downgraded=%d reasons=%s",
+            _gauntlet_telemetry["evaluated_positive"],
+            _gauntlet_telemetry["downgraded"],
+            _gauntlet_telemetry["reason_histogram"],
+        )
+        if _bridge_source_metrics is not None:
+            _bridge_source_metrics["profit_gauntlet"] = _gauntlet_telemetry
+    except Exception as _gauntlet_exc:  # pragma: no cover - defensive
+        log.warning("Toxicity gauntlet skipped (non-fatal): %s", _gauntlet_exc)
+
+
     if _prequote_enabled:
         try:
             _pool_cache.save()

@@ -156,50 +156,25 @@ def _encode_v4_call(
     hooks_b = int(hooks_addr, 16).to_bytes(32, "big")
     zfo_b = (1 if zero_for_one else 0).to_bytes(32, "big")
     amount_b = exact_amount.to_bytes(32, "big")
+    # quoteExactInputSingle takes one QuoteExactSingleParams struct. Because
+    # hookData is dynamic bytes, ABI encoding starts with a top-level offset to
+    # the struct body; hookData offset is relative to that struct body.
+    params_offset = (32).to_bytes(32, "big")
     # hookData offset = 8 * 32 = 256 (head: 8 static words before hookData length)
     hookdata_offset = (8 * 32).to_bytes(32, "big")
     hookdata_len = (0).to_bytes(32, "big")
     payload = c0 + c1 + fee_b + ts_b + hooks_b + zfo_b + amount_b + hookdata_offset + hookdata_len
-    return "0x" + _V4_SELECTOR.hex() + payload.hex(), zero_for_one
+    return "0x" + _V4_SELECTOR.hex() + (params_offset + payload).hex(), zero_for_one
 
 
 def _decode_v4_response(hex_result: str, zero_for_one: bool) -> "tuple[int, Optional[int]]":
-    """Decode V4 Quoter response: (int128[] deltaAmounts, uint160, uint32).
-
-    Returns (amount_out, None).
-    deltaAmounts[0] = delta for currency0 (negative = in, positive = out)
-    deltaAmounts[1] = delta for currency1
-    For zeroForOne=True: amount_out = abs(deltaAmounts[1]) (positive delta for currency1)
-    For zeroForOne=False: amount_out = abs(deltaAmounts[0]) (positive delta for currency0)
-    """
+    """Decode V4 Quoter response: ``(uint256 amountOut, uint256 gasEstimate)``."""
     raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
-    if len(raw) < 5 * 64:
+    if len(raw) < 64:
         raise ValueError(f"V4 response too short: {len(raw) // 2} bytes")
-    # Word 0: offset to deltaAmounts array (should be 0x60 = 96)
-    da_offset_bytes = int(raw[:64], 16)  # byte offset
-    da_offset_hex = da_offset_bytes * 2  # convert to hex-char position
-    if da_offset_hex + 64 > len(raw):
-        raise ValueError("V4 deltaAmounts array out of bounds")
-    da_len = int(raw[da_offset_hex:da_offset_hex + 64], 16)
-    if da_len < 2:
-        raise ValueError(f"Expected >=2 deltaAmounts, got {da_len}")
-    val0_hex = raw[da_offset_hex + 64:da_offset_hex + 128]
-    val1_hex = raw[da_offset_hex + 128:da_offset_hex + 192]
-    if len(val0_hex) < 64 or len(val1_hex) < 64:
-        raise ValueError("V4 deltaAmounts values truncated")
-    val0 = int(val0_hex, 16)
-    val1 = int(val1_hex, 16)
-    # Sign-extend from int128 (value may be negative in 256-bit word)
-    if val0 >= 2 ** 255:
-        val0 -= 2 ** 256
-    if val1 >= 2 ** 255:
-        val1 -= 2 ** 256
-    if zero_for_one:
-        # currency0 in (negative), currency1 out (positive)
-        return abs(val1), None
-    else:
-        # currency1 in (negative), currency0 out (positive)
-        return abs(val0), None
+    amount_out = int(raw[:64], 16)
+    gas_estimate = int(raw[64:128], 16) if len(raw) >= 128 else None
+    return amount_out, gas_estimate
 
 
 def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "TokenInfo", amount_in: int) -> "QuoteResult":

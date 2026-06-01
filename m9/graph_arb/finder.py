@@ -101,8 +101,13 @@ def _dfs_cycles(
                     if len(cycles) >= max_cycles:
                         return
 
-            elif next_token not in path_tokens[1:] and depth + 1 < max_length:
-                # Continue DFS
+            elif next_token not in path_tokens and depth + 1 < max_length:
+                # Continue DFS. Exclude the start token (path_tokens[0]) too:
+                # it may only be used to CLOSE the cycle (handled above), never
+                # revisited as an interior node. Allowing an interior revisit of
+                # the start produced non-simple "figure-8" cycles such as
+                # WETH->XCHAT->WETH->AERO->WETH (two concatenated round-trips),
+                # which surface as low-grade asymmetry phantoms.
                 _dfs_cycles(
                     start_token=start_token,
                     adjacency=adjacency,

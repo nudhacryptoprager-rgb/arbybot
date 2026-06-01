@@ -277,12 +277,19 @@ class TestProbeRouteMarginalDepth:
         # sqrt pool always has positive impact at larger size
         assert res["price_impact_at_100usd"] > 0
 
-    def test_v4_skipped(self):
+    def test_v4_no_longer_skipped(self):
+        """After V4 depth support was added, uniswap_v4 routes are no longer
+        early-exited with V4_DEPTH_UNSUPPORTED. Without tick_spacing or quoter
+        the probe fails with REF_QUOTE_FAILED (quote returns None), not the old
+        V4_DEPTH_UNSUPPORTED sentinel."""
         route = self._v3_route()
         route["adapter_type"] = "uniswap_v4"
         res = probe.probe_route_marginal_depth(route, rpc_url="http://rpc")
         assert res["probe_ok"] is False
-        assert res["probe_error"] == "V4_DEPTH_UNSUPPORTED"
+        # Must NOT return old "unsupported" error — V4 depth is now supported
+        assert res["probe_error"] != "V4_DEPTH_UNSUPPORTED"
+        # Expected: no quoter addr → NO_QUOTER, or quote fails → REF_QUOTE_FAILED
+        assert res["probe_error"] in ("NO_QUOTER", "REF_QUOTE_FAILED")
 
     def test_no_anchor_error(self):
         route = self._v3_route()
@@ -329,3 +336,59 @@ class TestEnrichRoutesMissingDepth:
         counts = probe.enrich_routes_missing_depth(routes, rpc_url="http://rpc", sleep_s=0)
         assert counts["candidates"] == 0
 
+    def test_v4_missing_quoter_writes_visible_probe_error(self):
+        routes = [{
+            "effective_depth_usd": None,
+            "pool_address": "0x" + "44" * 20,
+            "adapter_type": "uniswap_v4",
+            "dex_id": "uniswap_v4",
+            "token0": "USDC",
+            "token1": "MEME",
+            "token0_addr": "0x" + "00" * 19 + "11",
+            "token1_addr": "0x" + "00" * 19 + "22",
+            "fee": 3000,
+            "tick_spacing": 60,
+        }]
+
+        counts = probe.enrich_routes_missing_depth(
+            routes,
+            rpc_url="http://rpc",
+            dex_quoters={},
+            sleep_s=0,
+        )
+
+        assert counts["candidates"] == 1
+        assert counts["v4_depth_candidates"] == 1
+        assert counts["v4_depth_probe_ok"] == 0
+        assert counts["v4_depth_probe_failed"] == 1
+        assert counts["skipped_v4"] == 0
+        assert routes[0]["depth_probe_ok"] is False
+        assert routes[0]["depth_probe_error"] == "REF_QUOTE_FAILED"
+
+    def test_v4_success_updates_v4_depth_counters(self, monkeypatch):
+        def _stub(*a, **k):
+            return {
+                "probe_ok": True,
+                "probe_error": None,
+                "effective_depth_usd": 100.0,
+                "price_impact_at_100usd": 0.0,
+                "depth_reject_reason": None,
+                "depth_method": "marginal_anchor",
+            }
+
+        monkeypatch.setattr(probe, "probe_route_marginal_depth", _stub)
+        routes = [{
+            "effective_depth_usd": None,
+            "pool_address": "0x" + "55" * 20,
+            "adapter_type": "uniswap_v4",
+            "dex_id": "uniswap_v4",
+            "token0": "USDC",
+            "token1": "MEME",
+        }]
+
+        counts = probe.enrich_routes_missing_depth(routes, rpc_url="http://rpc", sleep_s=0)
+
+        assert counts["v4_depth_candidates"] == 1
+        assert counts["v4_depth_probe_ok"] == 1
+        assert counts["v4_depth_probe_failed"] == 0
+        assert routes[0]["depth_probe_error"] is None

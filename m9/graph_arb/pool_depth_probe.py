@@ -75,6 +75,11 @@ _SLIP_SELECTOR = bytes.fromhex("9e7defe6")
 _VE33_GET_AMOUNT_OUT_SELECTOR = bytes.fromhex("f140a35a")
 # UniswapV2 pool selector: getReserves() -> (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
 _V2_GET_RESERVES_SELECTOR = bytes.fromhex("0902f1ac")
+# V4 Quoter selector: quoteExactInputSingle(((address,address,uint24,int24,address),bool,uint128,bytes))
+# keccak256("quoteExactInputSingle((PoolKey,bool,uint128,bytes))") = aa9d21cb
+_V4_SELECTOR = bytes.fromhex("aa9d21cb")
+# V4 zero-hooks address (vanilla pool with no hooks)
+_V4_ZERO_HOOKS: str = "0x" + "0" * 40
 # Adapter type sets for routing
 _VE33_ADAPTER_TYPES = frozenset({
     "ve33",
@@ -163,6 +168,49 @@ def _encode_v3_call(token_in: str, token_out: str, amount_in: int, fee: int) -> 
     sqrt_limit = (0).to_bytes(32, "big")
     payload = addr_in + addr_out + amount_bytes + fee_bytes + sqrt_limit
     return "0x" + _V3_SELECTOR.hex() + payload.hex()
+
+
+def _encode_v4_call_depth(
+    token_in: str, token_out: str, fee: int, tick_spacing: int,
+    hooks: Optional[str], exact_amount: int
+) -> "tuple[str, bool]":
+    """Encode V4 Quoter.quoteExactInputSingle call for depth probe.
+
+    V4 PoolKey = (currency0, currency1, fee, tickSpacing, hooks) — sorted by address.
+    Returns (calldata_hex, zero_for_one).
+    """
+    addr_in_int = int(token_in, 16)
+    addr_out_int = int(token_out, 16)
+    if addr_in_int < addr_out_int:
+        currency0, currency1 = token_in, token_out
+        zero_for_one = True
+    else:
+        currency0, currency1 = token_out, token_in
+        zero_for_one = False
+    hooks_addr = hooks if (hooks and hooks != _V4_ZERO_HOOKS) else _V4_ZERO_HOOKS
+    c0 = int(currency0, 16).to_bytes(32, "big")
+    c1 = int(currency1, 16).to_bytes(32, "big")
+    fee_b = fee.to_bytes(32, "big")
+    ts_b = tick_spacing.to_bytes(32, "big", signed=True)
+    hooks_b = int(hooks_addr, 16).to_bytes(32, "big")
+    zfo_b = (1 if zero_for_one else 0).to_bytes(32, "big")
+    amount_b = exact_amount.to_bytes(32, "big")
+    # quoteExactInputSingle takes one QuoteExactSingleParams struct. Because
+    # that struct contains dynamic bytes, ABI encoding starts with a top-level
+    # offset to the struct body; hookData offset is relative to the struct body.
+    params_offset = (32).to_bytes(32, "big")
+    hookdata_offset = (8 * 32).to_bytes(32, "big")  # offset to hookData ABI field
+    hookdata_len = (0).to_bytes(32, "big")            # empty hookData
+    payload = c0 + c1 + fee_b + ts_b + hooks_b + zfo_b + amount_b + hookdata_offset + hookdata_len
+    return "0x" + _V4_SELECTOR.hex() + (params_offset + payload).hex(), zero_for_one
+
+
+def _decode_v4_response_depth(hex_result: str, zero_for_one: bool) -> int:
+    """Decode V4 Quoter response ``(uint256 amountOut, uint256 gasEstimate)``."""
+    raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if len(raw) < 64:
+        raise ValueError(f"V4 response too short: {len(raw) // 2} bytes")
+    return int(raw[:64], 16)
 
 
 def _encode_slipstream_call(
@@ -306,6 +354,7 @@ def probe_pool_depth(
     # Encode calldata or compute amount_out directly (for v2 forks via getReserves)
     amount_out_precomputed: Optional[int] = None
     calldata: Optional[str] = None
+    _v4_zero_for_one: Optional[bool] = None
     try:
         if adapter_type in _VE33_ADAPTER_TYPES:
             calldata = _encode_ve33_amount_out(amount_in, addr0)
@@ -327,6 +376,14 @@ def probe_pool_depth(
                 return result
         elif adapter_type == "aerodrome_slipstream" and tick_spacing:
             calldata = _encode_slipstream_call(addr0, addr1, amount_in, int(tick_spacing))
+        elif adapter_type == "uniswap_v4":
+            if not tick_spacing:
+                result["probe_error"] = "V4_MISSING_TICK_SPACING"
+                return result
+            hooks = route.get("hooks")
+            calldata, _v4_zero_for_one = _encode_v4_call_depth(
+                addr0, addr1, fee, int(tick_spacing), hooks, amount_in
+            )
         else:
             calldata = _encode_v3_call(addr0, addr1, amount_in, fee)
     except Exception as exc:
@@ -337,7 +394,7 @@ def probe_pool_depth(
         # v2 forks: reserves-based computation, no RPC quoter call needed
         amount_out = amount_out_precomputed
     else:
-        # Call quoter (v3, slipstream, ve33)
+        # Call quoter (v3, slipstream, ve33, v4)
         if not calldata:
             result["probe_error"] = "NO_CALLDATA"
             return result
@@ -346,7 +403,11 @@ def probe_pool_depth(
             result["probe_error"] = "QUOTE_FAILED_OR_REVERT"
             return result
         try:
-            amount_out = _decode_quote_response(hex_result)
+            if _v4_zero_for_one is not None:
+                # V4: use dedicated decoder that handles int128[] deltaAmounts
+                amount_out = _decode_v4_response_depth(hex_result, _v4_zero_for_one)
+            else:
+                amount_out = _decode_quote_response(hex_result)
         except Exception as exc:
             result["probe_error"] = f"DECODE_ERROR:{exc}"
             return result
@@ -515,9 +576,6 @@ def probe_route_marginal_depth(
     }
 
     adapter_type = route.get("adapter_type", "uniswap_v3")
-    if adapter_type == "uniswap_v4":
-        result["probe_error"] = "V4_DEPTH_UNSUPPORTED"
-        return result
 
     leg = _anchor_leg(route)
     if leg is None:
@@ -570,6 +628,17 @@ def probe_route_marginal_depth(
                 if not hexr or hexr == "0x":
                     return None
                 return _decode_quote_response(hexr)
+            if adapter_type == "uniswap_v4":
+                if not quoter or not tick_spacing:
+                    return None
+                hooks = route.get("hooks")
+                v4_calldata, v4_zfo = _encode_v4_call_depth(
+                    anchor_addr, exotic_addr, fee, int(tick_spacing), hooks, amount_in
+                )
+                hexr = _raw_eth_call(rpc_url, quoter, v4_calldata)
+                if not hexr or hexr == "0x":
+                    return None
+                return _decode_v4_response_depth(hexr, v4_zfo)
             # default: v3-family quoter
             if not quoter:
                 return None
@@ -585,6 +654,7 @@ def probe_route_marginal_depth(
     if (
         adapter_type not in _VE33_ADAPTER_TYPES
         and adapter_type not in _V2_FORK_ADAPTER_TYPES
+        and adapter_type != "uniswap_v4"
         and not quoter
     ):
         result["probe_error"] = "NO_QUOTER"
@@ -633,6 +703,9 @@ def enrich_routes_missing_depth(
         "toxic": 0,
         "low_depth": 0,
         "skipped_v4": 0,
+        "v4_depth_candidates": 0,
+        "v4_depth_probe_ok": 0,
+        "v4_depth_probe_failed": 0,
     }
     for route in routes:
         if route.get("effective_depth_usd") is not None:
@@ -641,6 +714,9 @@ def enrich_routes_missing_depth(
         if not pool_addr or pool_addr == "0x" + "0" * 40:
             continue
         counts["candidates"] += 1
+        is_v4_route = route.get("adapter_type") == "uniswap_v4"
+        if is_v4_route:
+            counts["v4_depth_candidates"] += 1
 
         probe = probe_route_marginal_depth(
             route,
@@ -654,16 +730,21 @@ def enrich_routes_missing_depth(
         route["price_impact_at_100usd"] = probe["price_impact_at_100usd"]
         route["depth_reject_reason"] = probe["depth_reject_reason"]
         route["depth_probe_ok"] = probe["probe_ok"]
+        route["depth_probe_error"] = probe.get("probe_error")
         route["depth_method"] = probe.get("depth_method", "marginal_anchor")
 
         if probe["probe_ok"]:
             counts["probed_ok"] += 1
+            if is_v4_route:
+                counts["v4_depth_probe_ok"] += 1
             reject = probe.get("depth_reject_reason")
             if reject == "TOXIC_PRICE_IMPACT":
                 counts["toxic"] += 1
             elif reject == "LOW_EFFECTIVE_DEPTH":
                 counts["low_depth"] += 1
         else:
+            if is_v4_route:
+                counts["v4_depth_probe_failed"] += 1
             err = probe.get("probe_error")
             if err == "NO_ANCHOR_FOR_DEPTH":
                 counts["no_anchor"] += 1

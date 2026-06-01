@@ -76,6 +76,50 @@ def cycle_net_bps(gross_bps: float, adapter_types: List[str]) -> float:
     return gross_bps - cycle_cost_bps(adapter_types)
 
 
+# Size & depth aware slippage (Step 4) -------------------------------------
+# ``effective_depth_usd`` is the notional at which marginal price impact hits
+# the LOW threshold (~10% = 1000 bps).  We model per-leg impact linearly in
+# (size / depth) up to that point, plus a small base.  Unknown depth incurs a
+# conservative penalty because we cannot prove the pool absorbs the size.
+_BASE_SLIPPAGE_BPS: float = 5.0
+_UNKNOWN_DEPTH_SLIPPAGE_PENALTY_BPS: float = 50.0
+_DEPTH_IMPACT_BPS_AT_FULL: float = 1000.0
+_MAX_SLIPPAGE_BPS: float = 5000.0
+
+
+def size_aware_slippage_bps(
+    size_usd: float,
+    depth_usd: Optional[float],
+    base_bps: float = _BASE_SLIPPAGE_BPS,
+) -> float:
+    """Estimate per-leg slippage in bps for ``size_usd`` against ``depth_usd``."""
+    if depth_usd is None or depth_usd <= 0:
+        return base_bps + _UNKNOWN_DEPTH_SLIPPAGE_PENALTY_BPS
+    impact = (size_usd / depth_usd) * _DEPTH_IMPACT_BPS_AT_FULL
+    return min(base_bps + impact, _MAX_SLIPPAGE_BPS)
+
+
+def net_bps_size_aware(
+    gross_bps: float,
+    adapter_types: List[str],
+    size_usd: float,
+    depth_usd: Optional[float],
+    token_tax_bps: float = 0.0,
+    mev_haircut_bps: float = 0.0,
+) -> float:
+    """Honest net: gross minus adapter cost, size-aware slippage, tax and MEV."""
+    leg_count = max(len(adapter_types), 1)
+    slippage_total = size_aware_slippage_bps(size_usd, depth_usd) * leg_count
+    return (
+        gross_bps
+        - cycle_cost_bps(adapter_types)
+        - slippage_total
+        - token_tax_bps
+        - mev_haircut_bps
+    )
+
+
+
 def adapter_family(adapter_type: str) -> str:
     """Return a coarse operational adapter family."""
     _map: Dict[str, str] = {

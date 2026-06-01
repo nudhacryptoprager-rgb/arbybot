@@ -48,6 +48,41 @@ class GraphEdge:
         if self.fee_bps < 0:
             raise ValueError(f"fee_bps must be >= 0, got {self.fee_bps}")
 
+    def reversed(self) -> "GraphEdge":
+        """Return the opposite-direction hop through the same pool.
+
+        Used for round-trip / asymmetry validation (Step 3).  Pool identity
+        fields (route_id, pool_address, fee, hooks, ...) are preserved; only the
+        token in/out orientation (and Curve coin indices) are swapped.
+        """
+        return GraphEdge(
+            token_in_sym=self.token_out_sym,
+            token_out_sym=self.token_in_sym,
+            token_in_addr=self.token_out_addr,
+            token_out_addr=self.token_in_addr,
+            token_in_decimals=self.token_out_decimals,
+            token_out_decimals=self.token_in_decimals,
+            route_id=self.route_id,
+            dex_id=self.dex_id,
+            adapter_type=self.adapter_type,
+            fee=self.fee,
+            tick_spacing=self.tick_spacing,
+            quoter_addr=self.quoter_addr,
+            pool_address=self.pool_address,
+            fee_bps=self.fee_bps,
+            factory_class=self.factory_class,
+            pair_id=self.pair_id,
+            factory_verified=self.factory_verified,
+            hooks=self.hooks,
+            token_in_index=self.token_out_index,
+            token_out_index=self.token_in_index,
+            pool_id=self.pool_id,
+            vault_address=self.vault_address,
+            pool_kind=self.pool_kind,
+            freshness_window=self.freshness_window,
+            effective_depth_usd=self.effective_depth_usd,
+        )
+
 
 @dataclass
 class GraphCycle:
@@ -114,6 +149,15 @@ class GraphCycle:
         ]
         return min(depths) if depths else None
 
+    def reversed(self) -> "GraphCycle":
+        """Return the same cycle traversed in the opposite direction.
+
+        A genuine arbitrage cycle and its reverse cannot both be profitable;
+        quoting both lets the validator reject one-directional phantoms
+        (Step 3 round-trip asymmetry).
+        """
+        return GraphCycle(edges=tuple(e.reversed() for e in reversed(self.edges)))
+
     @property
     def min_factory_class(self) -> str:
         """Return the 'worst' factory class in the cycle (used for ranking)."""
@@ -143,6 +187,10 @@ class CycleQuoteResult:
     dynamic_size_source: Optional[str] = None
     cycle_min_depth_usd: Optional[float] = None  # bottleneck effective_depth_usd of cycle
     depth_capped: bool = False  # True when the size ladder was clamped by cycle depth
+    reverse_gross_bps: Optional[float] = None  # gross of the reversed cycle (round-trip, Step 3)
+    asymmetry_bps: Optional[float] = None  # |forward + reverse| gross spread (Step 3)
+    toxicity_reasons: Optional[List[str]] = None  # gauntlet reasons when downgraded (Step 1)
+    precision_pass: Optional[bool] = None  # precision-gate verdict (Step 5)
 
 
 @dataclass

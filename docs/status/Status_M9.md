@@ -1,37 +1,32 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: PRODUCTIVE_GATE_PASS — Session 15a (2026-05-28): `ci_m9_productive_gate.py` PASS. All thresholds met: `toxic_route_rate=0.6331 (<0.90)`, `qsr=0.9364 (≥0.80)`, `data_completeness=1.0 (≥0.98)`, `multicall_success_rate=1.0 (≥0.90)`, `duration_fulfilled=True`, `unverified_active_routes=0`. Fixes: publicnode.com as PRIMARY (no 429s), V3-only pool filter (dc=1.0), `--productive-lane` quarantine (62 thin pools excluded, edge_count 344→228).
+**Status**: RUNTIME_VALIDATED__V4_DEPTH_VISIBLE__M9_PRODUCTIVE_TOPOLOGY_BLOCKED — Session 2026-06-01: V4 depth support is live and visible in bridge enrichment, but M9 productive-state gate is blocked because `--productive-lane` currently leaves zero 3/4-hop cycles. This is not an RPC 429 regression and not a V4 ABI blocker.
 
-**Session 15a changes (2026-05-28):**
-- ✅ **pool_depth_probe run**: probed 172 active routes at $100; 37 TOXIC_PRICE_IMPACT, 21 LOW_EFFECTIVE_DEPTH; quarantine updated 60→62 entries (added 2×WETH_crvUSD)
-- ✅ **`--productive-lane` active**: 60 quarantined pools excluded from graph at startup; `pool_quality_lane: productive`; edge_count 344→228; `depth_quarantine_skipped: 60`
-- ✅ **toxic_route_rate=0.6331**: down from 1.0 (session 14o discovery mode); 1660/2622 quoted cycles TOXIC (thin exotic pairs that passed quarantine filter)
-- ✅ **qsr=0.9364**: above 0.80 threshold; 0 http_429s with publicnode.com PRIMARY
-- ✅ **data_completeness=1.0, multicall_success_rate=1.0**: V3-only pool filter in runner.py confirmed working
-- ✅ **ci_m9_productive_gate.py: PASS** (exit code 0)
+**Session 2026-06-01 changes:**
+- ✅ **V4 ABI corrected**: V4 Quoter calldata now uses top-level dynamic struct offset and decodes `(uint256 amountOut, uint256 gasEstimate)`.
+- ✅ **Config-driven V4 quoter**: Base `uniswap_v4` quoter lives in `config/dexes.yaml`, not in code.
+- ✅ **V4 depth telemetry added**: bridge enrichment reports `v4_depth_candidates`, `v4_depth_probe_ok`, `v4_depth_probe_failed`, `v4_depth_skipped_unsupported`.
+- ✅ **M8 online smoke**: 44 raw logs, 44 parsed, 44 candidates, 0 RPC errors; dex mix: uniswap_v4=41, uniswap_v2=2, uniswap_v3=1.
+- ✅ **M8.1 online**: candidates=1144, passes=210, qsr=1.0000.
+- ✅ **M8.2 bridge**: graph_ready_from_m8=29, graph_ready_total=129, registry_promoted_routes=4.
+- ✅ **V4 depth enrichment**: v4_candidates=4, v4_ok=3, v4_failed=1, skipped_v4=0.
+- ❌ **M9 productive**: cycles_found=0, cycles_quoteable=0, qsr=0.0, runtime_gates.all_pass=false.
+- ⚠️ **Discovery comparison**: discovery graph still finds candidates, but quoted cycles remain `uniswap_v3` only; V4/V2/ve33 edges do not yet participate in cycles.
 
-### Artifacts — Session 15a (2026-05-28T15:57:27Z)
+### Artifacts — Session 2026-06-01
 ```
-generated_at_utc: 2026-05-28T15:57:27Z
-rpc_provider: publicnode, BASE_RPC=https://base.publicnode.com
-duration_fulfilled: True, elapsed_s: 928.2, sweeps_completed: 14
-cycles_found: 2800, cycles_quoteable: 2622, cycles_positive_gross: 0
-qsr: 0.9364  ✅ PASS (threshold 0.80)
-multicall_success_rate: 1.0  ✅ PASS (threshold 0.90)
-data_completeness: 1.0  ✅ PASS (threshold 0.98)
-toxic_route_rate: 0.6331  ✅ PASS (threshold <0.90)
-duration_fulfilled: True  ✅ PASS
-unverified_active_routes: 0  ✅ PASS
-runtime_gates.all_pass: True  ✅
-pool_quality_lane: productive
-depth_quarantine_skipped: 60
-http_429_count: 0
-economics_gate_status: BLOCKED_NO_POSITIVE_GROSS
-economics_blocker_class: MARKET_NO_POSITIVE_GROSS
-loss_reason_histogram: {UNFAVORABLE_PRICES: 747, FEE_DRAG: 215, TOXIC_ROUTE_PRICE_IMPACT: 1660, QUOTE_FAILED: 178}
+new_pool_sniper_latest.json: generated_at_utc=2026-06-01T09:40:06Z, candidates=44, rpc_errors=0
+m8_1_stable_anchor_latest.json: generated_at_utc=2026-06-01T09:40:15Z, candidates=1144, passes=210, qsr=1.0000
+m9_bridge_inventory_latest.json: graph_ready_from_m8=29, graph_ready_total=129, v4_ok=3, skipped_v4=0
+m9_graph_latest.json: generated_at_utc=2026-06-01T09:43:05Z, cycles_found=0, qsr=0.0, runtime_gates.all_pass=false
+pytest tests/unit -q: 6358 passed, 6 skipped, 1 warning
+ci_full_pipeline.py --mode ci: PASS
+check_repo_safety.py: PASS (2 pre-existing docs-bloat warnings)
 ```
 
 ---
+
+**Previous Status**: PRODUCTIVE_GATE_PASS — Session 15a (2026-05-28): `ci_m9_productive_gate.py` PASS. All thresholds met: `toxic_route_rate=0.6331 (<0.90)`, `qsr=0.9364 (≥0.80)`, `data_completeness=1.0 (≥0.98)`, `multicall_success_rate=1.0 (≥0.90)`, `duration_fulfilled=True`, `unverified_active_routes=0`. Fixes: publicnode.com as PRIMARY (no 429s), V3-only pool filter (dc=1.0), `--productive-lane` quarantine (62 thin pools excluded, edge_count 344→228).
 
 **Previous Status**: RUNTIME_BLOCKED__MULTICALL_BYPASSES_FAILOVER — Session 13 (2026-05-28): BUG-N1 (ProviderRouter failover) confirmed working at routing level — 3 failovers in session 12b. Curve discovery fixed (26 pools). Pool verifier: 172 active routes. qsr=0.1395 FAIL — root cause: multicall quote path reads raw `BASE_RPC` (dRPC), bypasses ProviderRouter entirely → 86% 429 rate → economics_blocker_class=PROVIDER_QUALITY_BLOCKED.
 
