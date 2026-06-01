@@ -1,0 +1,15 @@
+---
+description: Stage-neutral current-context handoff rule for Cursor executor tasks.
+globs: ["docs/agent_context/**", "docs/status/**", "Roadmap.md", "CURSOR.md"]
+alwaysApply: false
+---
+
+# Current Work Context
+
+- Use `docs/agent_context/ARBY3_CURRENT_CONTEXT.md` as the compact handoff only
+  when the task needs current milestone orientation or the user/GPT references it.
+- Treat that file as a mutable handoff, not evidence and not source of truth.
+- If the active milestone changes, refresh the context file before using it for
+  Cursor work.
+- Do not claim real profit, milestone PASS, or production readiness from context
+  files. Evidence must come from fresh artifacts supplied by the user or GPT.

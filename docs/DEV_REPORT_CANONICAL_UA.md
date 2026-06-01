@@ -41,7 +41,9 @@ Get-Content docs/DEV_REPORT_LATEST.md -Encoding UTF8
 # Або через chcp
 chcp 65001 | Out-Null; Get-Content docs/DEV_REPORT_LATEST.md
 
-# VS Code (рекомендовано для review)
+# Cursor або VS Code (рекомендовано для review)
+cursor docs/DEV_REPORT_LATEST.md
+# або
 code docs/DEV_REPORT_LATEST.md
 ```
 

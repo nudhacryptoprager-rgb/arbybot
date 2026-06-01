@@ -1,0 +1,15 @@
+---
+description: Documentation discipline for Cursor edits.
+globs: ["docs/**/*.md", "*.md", ".cursor/rules/*.mdc"]
+alwaysApply: true
+---
+
+# Docs Policy
+
+- Do not create versioned DEV_REPORT files.
+- Only `docs/DEV_REPORT_LATEST.md` may be overwritten for a DEV REPORT.
+- Do not add release version strings to docs unless the canonical docs policy explicitly allows it.
+- Do not add local timestamps to docs.
+- Update `Status_*.md` only after verification evidence exists from the same session.
+- Do not update `Roadmap.md` without explicit user approval.
+- Run `py -3.11 scripts/check_repo_safety.py` after documentation edits.

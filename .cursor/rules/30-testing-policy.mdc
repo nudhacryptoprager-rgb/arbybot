@@ -1,0 +1,17 @@
+---
+description: Test order and loop limits for Cursor patch tasks.
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Testing Policy
+
+- Start with the narrowest relevant targeted test.
+- Then run the broader gate requested by GPT or the user.
+- Use Windows Python as `py -3.11`; do not use another Python version.
+- Standard deterministic gates are:
+  - `py -3.11 scripts/check_repo_safety.py`
+  - `py -3.11 -m pytest tests/unit -q`
+  - `py -3.11 scripts/ci_full_pipeline.py --mode ci`
+- Do not enter an endless test-fix loop.
+- After two failed fix attempts for the same failing test or gate, stop and report the blocker with the exact failing command and the touched files.

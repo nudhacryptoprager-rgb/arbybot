@@ -1,0 +1,55 @@
+# Cursor context exclusions for ARBY3.
+# Git ignore prevents accidental commits; this file prevents expensive or unsafe
+# workspace indexing by Cursor.
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+ENV/
+env/
+
+# Runtime artifacts and generated data
+data/runs/
+data/runs/**
+data/snapshots/
+data/snapshots/**
+data/reports/
+data/reports/**
+data/trades/
+data/trades/**
+data/tmp/
+data/tmp/**
+data/cache/
+data/cache/**
+*.sqlite
+*.sqlite3
+
+# Logs and caches
+logs/
+logs/**
+*.log
+__pycache__/
+**/__pycache__/**
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Build and local tooling output
+build/
+dist/
+*.egg-info/
+tools/foundry/
+
+# Large or ephemeral generated artifacts
+**/run_summary_*.json
+**/stability_summary_*.json
+**/execution_report_*.json
+**/signals_*.json
+**/m4_stability_agg*.json
+**/_latest.json
+**/online_runs_report_*.md

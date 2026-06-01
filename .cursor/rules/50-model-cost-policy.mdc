@@ -1,0 +1,13 @@
+---
+description: Keep model usage economical in Cursor.
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Model Cost Policy
+
+- Use cheap/default models for simple patches, doc edits, imports, aliases, and test updates.
+- Do not use MAX, Opus-class, GPT-heavy, or the most expensive model for routine patch tasks.
+- Use a premium model only for a genuinely hard debugging or architecture task and only after the user chooses that path in the current chat.
+- Keep task context small: target files, relevant test output, and the latest GPT instructions.
+- Do not ask Cursor to ingest the entire repository for routine work.

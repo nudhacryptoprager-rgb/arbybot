@@ -1,8 +1,17 @@
-# ARBY3 Workflow (ChatGPT <-> Claude <-> VSCode <-> GitHub)
+# ARBY3 Workflow (GPT / Codex <-> Cursor <-> GitHub)
 
 > **Provenance**: SHA tracking removed. Evidence based on `run_timestamp` + rolling artifacts.
 > See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
 > See `docs/status/Status_M4.md` for current milestone status.
+
+## Agent Workflow
+
+- GPT / Codex is the team-lead reviewer: planning, critique, acceptance, and
+  exact next-step instructions.
+- Cursor is the developer-agent executor: small patches only, bounded by
+  `CURSOR.md` and `.cursor/rules/*.mdc`.
+- GitHub remains the collaboration and CI surface.
+- Legacy GitHub Copilot / Claude helper files are not the active executor path.
 
 ## Нові режими та діагностика
 - Для збору simulation_error_histogram (діагностичний прогін simulation для всіх кандидатів) використовуйте прапорець --sim-anyway (або ARBY_SIM_BYPASS_GUARD=1).
