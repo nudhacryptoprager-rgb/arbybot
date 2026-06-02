@@ -146,6 +146,45 @@ class TestCurveConfigDrivenIndices:
         assert captured, "eth_call was not invoked"
         return captured[0]
 
+    def _capture_calldata_kind(self, pool_kind: Optional[str]) -> str:
+        """Capture Curve calldata for a given pool_kind (selector selection test)."""
+        from m9.graph_arb import raw_http_probe as probe
+        from m8_1.stable_anchor.pairs import TokenInfo
+
+        route = _make_route(
+            adapter_type="curve_stable",
+            token_in_index=0,
+            token_out_index=1,
+            pool_kind=pool_kind,
+        )
+        token_in = TokenInfo(symbol="USDC", address="0x" + "aa" * 20, decimals=6)
+        token_out = TokenInfo(symbol="USDT", address="0x" + "bb" * 20, decimals=6)
+        captured: list = []
+
+        def fake_eth_call(rpc_url, to, calldata, client):
+            captured.append(calldata)
+            return "0x" + (1_000_000).to_bytes(32, "big").hex()
+
+        with patch.object(probe, "_eth_call_raw", side_effect=fake_eth_call):
+            probe.probe_quote_raw_http(
+                rpc_url="http://localhost:8545",
+                route=route,
+                token_in=token_in,
+                token_out=token_out,
+                amount_in=1_000_000,
+            )
+        assert captured, "eth_call was not invoked"
+        return captured[0]
+
+    def test_stable_pool_uses_int128_selector(self):
+        """pool_kind 'stable' (and None default) must use get_dy(int128,...) 5e0d443f."""
+        assert self._capture_calldata_kind("stable").startswith("0x5e0d443f")
+        assert self._capture_calldata_kind(None).startswith("0x5e0d443f")
+
+    def test_crypto_pool_uses_uint256_selector(self):
+        """pool_kind 'crypto' must use get_dy(uint256,...) 556d6e9f."""
+        assert self._capture_calldata_kind("crypto").startswith("0x556d6e9f")
+
     def test_explicit_indices_used_in_calldata(self):
         """Non-default indices (1, 2) must appear in calldata."""
         calldata = self._capture_calldata(1, 2)
@@ -312,6 +351,27 @@ class TestAdapterMetadataLoader:
         assert idx_in is None
         assert idx_out is None
 
+    def test_curve_pool_kind_getter(self, tmp_path):
+        """curve_pool_kind returns the declared variant or None for unknown pools."""
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+        yaml_content = textwrap.dedent("""
+            curve:
+              base:
+                pools:
+                  "0xaaaa000000000000000000000000000000000000":
+                    pool_kind: crypto
+                    coin_indices:
+                      WETH: 0
+                      USDC: 1
+        """)
+        f = tmp_path / "meta.yaml"
+        f.write_text(yaml_content, encoding="utf-8")
+        meta = load_adapter_metadata(str(f))
+        assert meta.curve_pool_kind(
+            "0xaaaa000000000000000000000000000000000000", chain="base"
+        ) == "crypto"
+        assert meta.curve_pool_kind("0xdead", chain="base") is None
+
     def test_balancer_pool_meta_from_yaml(self, tmp_path):
         from m9.graph_arb.adapter_metadata import load_adapter_metadata
         pool_id = "0x" + "ab" * 32
@@ -472,9 +532,75 @@ class TestCheckCurvePoolsConfigured:
         from m9.graph_arb.adapter_metadata import load_adapter_metadata
 
         meta = load_adapter_metadata("config/adapter_metadata.yaml")
-        # Two pools should be present after Step 1
         assert "base" in meta.curve_pools, "No 'base' chain in curve_pools"
         assert len(meta.curve_pools["base"]) >= 2, (
             f"Expected >=2 Curve pools on Base, got {len(meta.curve_pools['base'])}"
+        )
+
+    def test_merge_curve_pool_indices_artifact(self, tmp_path):
+        """Rolling artifact overlays config seed pools at load time."""
+        import json
+
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+
+        yaml_path = tmp_path / "meta.yaml"
+        yaml_path.write_text(
+            "curve:\n  base:\n    pool_indices_artifact: rolling.json\n    pools: {}\n",
+            encoding="utf-8",
+        )
+        rolling = tmp_path / "rolling.json"
+        rolling.write_text(
+            json.dumps(
+                {
+                    "schema_version": "m9_curve_pool_indices.1",
+                    "chain": "base",
+                    "pools": {
+                        "0xaaaa000000000000000000000000000000000001": {
+                            "pool_kind": "stable",
+                            "coin_indices": {"USDC": 0, "WETH": 1},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        meta = load_adapter_metadata(
+            str(yaml_path),
+            curve_pool_indices_path=str(rolling),
+        )
+        idx_in, idx_out = meta.curve_indices(
+            "0xaaaa000000000000000000000000000000000001", "USDC", "WETH", chain="base"
+        )
+        assert idx_in == 0 and idx_out == 1
+
+    def test_bridge_inventory_curve_pools_have_coin_indices_when_artifact_present(self):
+        """Bridge curve pools must resolve via rolling artifact (not hardcoded in tests)."""
+        import json
+        from pathlib import Path
+
+        from m9.graph_arb.adapter_metadata import (
+            check_curve_pools_configured,
+            load_adapter_metadata,
+        )
+
+        inv_path = Path("data/runs/_rolling/m9_bridge_inventory_latest.json")
+        indices_path = Path("data/runs/_rolling/m9_curve_pool_indices_latest.json")
+        if not inv_path.exists() or not indices_path.exists():
+            pytest.skip("rolling bridge inventory or curve pool indices artifact missing")
+        inv = json.loads(inv_path.read_text(encoding="utf-8"))
+        pools = sorted(
+            {
+                r["pool_address"].lower()
+                for r in inv.get("active_routes", [])
+                if r.get("adapter_type") == "curve_stable" and r.get("pool_address")
+            }
+        )
+        if not pools:
+            pytest.skip("no curve_stable routes in bridge inventory")
+        meta = load_adapter_metadata("config/adapter_metadata.yaml")
+        missing = check_curve_pools_configured(meta, pools)
+        assert missing == [], (
+            f"curve pools missing coin_indices (run discover_curve_indices.py): "
+            f"{missing[:10]}"
         )
 

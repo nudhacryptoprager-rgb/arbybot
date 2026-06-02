@@ -184,7 +184,7 @@ quote_gate:
   async_timeout_s: 10
   retry_backoff_s: 1.0
 
-sizes_usd: [100.0]
+sizes_usd: [1.0, 5.0, 10.0]
 
 # Step 8 (GPT): lock scan_params in config — runner reads these as overrides
 # over CLI defaults when CLI was not explicitly changed.
@@ -192,9 +192,10 @@ sizes_usd: [100.0]
 # Fix 7: sizes_usd here sets infra_telemetry.sizes_usd_source="config.scan_params".
 # Fix 8: always run with --require-factory-verified for production proof-runs.
 scan_params:
-  sizes_usd: [100.0, 250.0, 500.0]          # free-tier safe ladder
+  sizes_usd: [1.0, 5.0, 10.0]               # micro-depth ladder for thin M8 bridge pools
   dynamic_sizes: true                        # canonical productive default (Fix 6)
   dynamic_size_max_cycles: 3                 # conservative for free-tier RPC
+  cycle_lengths: [2, 3, 4]
 
 cost_model:
   default_profile: default

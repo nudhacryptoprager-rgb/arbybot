@@ -1,10 +1,14 @@
 # Adapter metadata for config-driven quote routing.
 # Purpose: per-pool data that cannot be inferred from on-chain events alone.
 #
-# This file is the SINGLE source of truth for:
-#   - Curve pool coin indices (which token is coin[0], coin[1], etc.)
+# This file is the SINGLE source of truth for trust anchors:
+#   - Curve factory address, anchor token map, vault addresses
 #   - Balancer pool IDs (32-byte hex registered with the Vault)
-#   - Balancer vault address per chain
+#   - Optional smoke/seed Curve pools (include_config_seed only)
+#
+# Bridge / sniper Curve coin indices are NOT listed here. They are generated
+# on-chain by scripts/discover_curve_indices.py into the rolling artifact
+# referenced by curve.base.pool_indices_artifact (merged at load time).
 #
 # Format rules:
 #   - All pool addresses MUST be lowercase 0x + 40 hex chars
@@ -50,6 +54,12 @@ curve:
       "0x417ac0e078398c154edfadd9ef675d30be60af93": "crvUSD"
       "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC"
       "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI"
+      "0x69420f9e38a4e60a62224c489be4bf7a94402496": "MONEY"
+      "0xeb466342c4d449bc9f53a865d5cb90586f405215": "axlUSDC"
+      "0x59d9356e565ab3a36dd77763fc0d87feaf85508c": "USDS"
+
+    # Rolling artifact: scripts/discover_curve_indices.py (overwrite each run)
+    pool_indices_artifact: "data/runs/_rolling/m9_curve_pool_indices_latest.json"
 
     pools:
       # -----------------------------------------------------------------------

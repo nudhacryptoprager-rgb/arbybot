@@ -105,6 +105,7 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             "m9_bridge_inventory_latest.json",
             # M9: factory-enumerated Curve pool discovery (rolling, overwritten)
             "m9_curve_discovery_latest.json",
+            "m9_curve_pool_indices_latest.json",
             # M9: Arbitrum One graph-arb shadow scanner rolling artifact
             "m9_arb_latest.json",
         }

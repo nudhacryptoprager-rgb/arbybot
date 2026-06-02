@@ -30,7 +30,9 @@ def _make_sniper_artifact(events: list) -> Dict[str, Any]:
     }
 
 
-def _make_anchor_artifact(near_miss_count: int = 2) -> Dict[str, Any]:
+def _make_anchor_artifact(
+    near_miss_count: int = 2, passes_total: int = 0
+) -> Dict[str, Any]:
     near_miss = [
         {
             "pair_id": "AERO_USDC",
@@ -46,13 +48,11 @@ def _make_anchor_artifact(near_miss_count: int = 2) -> Dict[str, Any]:
         "schema_family": "stable_anchor",
         "generated_at_utc": "2026-05-24T10:00:00",
         "status": "ACTIVE",
-        "metrics": {},
+        "metrics": {"stable_anchor_passes_total": passes_total},
         "top_routes": [],
         "near_miss_routes": near_miss,
         "pairs_probed": ["AERO_USDC"],
     }
-
-
 def _make_base_inv(n_active: int = 5) -> Dict[str, Any]:
     active = [
         {
@@ -256,6 +256,37 @@ class TestBridgeBuilderIntegration:
         ]
         for key in required_keys:
             assert key in metrics, f"Missing key: {key}"
+
+    def test_m8_1_contribution_counts_passes_not_near_miss(self, tmp_path):
+        """m8_1_anchor_routes_input reflects passing anchor probes, not rejects.
+
+        M8.1 emits active_routes=[] by design and only a capped sample of
+        near_miss rejects.  Its real contribution is metrics.stable_anchor_passes_total.
+        Counting near_miss (rejects) understated the contribution as the reject
+        sample size.  The corrected metric must report passes; the near-miss
+        sample size is exposed separately for transparency.
+        """
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        sniper = tmp_path / "sniper.json"
+        anchor = tmp_path / "anchor.json"
+        base = tmp_path / "base.json"
+        out = tmp_path / "bridge_out.json"
+
+        self._write_json(sniper, _make_sniper_artifact([]))
+        # 3 rejected near-misses but 324 passing anchor quote probes.
+        self._write_json(anchor, _make_anchor_artifact(near_miss_count=3, passes_total=324))
+        self._write_json(base, _make_base_inv(2))
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+        )
+
+        assert metrics["m8_1_anchor_routes_input"] == 324
+        assert metrics["m8_1_anchor_near_miss_count"] == 3
 
     def test_output_artifact_has_bridge_source_metrics(self, tmp_path):
         """bridge_source_metrics is embedded in the output artifact."""

@@ -912,12 +912,26 @@ def build_bridge_inventory(
     }
 
     # ------------------------------------------------------------------
-    # M8.1 anchor routes contributed to base (routes already in base from M8.1)
+    # M8.1 anchor probe contribution.
+    #
+    # M8.1 (route_discovery_scope="quote_probe_only") is a single-leg quote
+    # health probe over stable-anchor pairs.  It intentionally emits
+    # active_routes=[] (see scripts/m8_1_stable_anchor_run.py): it confirms that
+    # on-chain quotes SUCCEED for anchor candidates, it does NOT assemble arb
+    # routes.  Its true contribution is the count of passing anchor quote probes
+    # (metrics.stable_anchor_passes_total), NOT the capped sample of rejected
+    # near_miss_routes.  Counting near_miss (rejects) here understated/misreported
+    # M8.1's contribution as 0/50.  We report passes as the contribution and keep
+    # the near-miss sample size separately for transparency.
     # ------------------------------------------------------------------
     m8_1_anchor_routes_input = 0
+    m8_1_anchor_near_miss_count = 0
     if anchor:
-        # Check both near_miss_routes (legacy) and active_routes (current schema)
-        m8_1_anchor_routes_input = len(
+        _anchor_metrics = anchor.get("metrics", {}) or {}
+        m8_1_anchor_routes_input = int(
+            _anchor_metrics.get("stable_anchor_passes_total", 0) or 0
+        )
+        m8_1_anchor_near_miss_count = len(
             anchor.get("near_miss_routes", []) or anchor.get("active_routes", [])
         )
 
@@ -967,6 +981,7 @@ def build_bridge_inventory(
     bridge_source_metrics: Dict[str, Any] = {
         "m8_new_pools_input": m8_new_pools_input,
         "m8_1_anchor_routes_input": m8_1_anchor_routes_input,
+        "m8_1_anchor_near_miss_count": m8_1_anchor_near_miss_count,
         "token_verified_count": len(token_verified_events),
         "anchor_connected_count": len(anchor_connected_events),
         "cross_dex_seen_count": cross_dex_seen_count,
@@ -1006,6 +1021,32 @@ def build_bridge_inventory(
         # Curve factory discovery count (production path, no seed flag required)
         "curve_discovery_count": _curve_discovery_count,
     }
+
+    # Curve rolling indices artifact coverage (bridge inventory curve_stable routes)
+    try:
+        from m9.graph_arb.adapter_metadata import (
+            check_curve_pools_configured,
+            load_adapter_metadata,
+        )
+
+        _curve_meta = load_adapter_metadata()
+        _curve_route_addrs = sorted(
+            {
+                str(r.get("pool_address", "")).lower()
+                for r in base_active
+                if r.get("adapter_type") == "curve_stable" and r.get("pool_address")
+            }
+        )
+        _curve_missing = check_curve_pools_configured(_curve_meta, _curve_route_addrs)
+        bridge_source_metrics["curve_stable_route_count"] = len(_curve_route_addrs)
+        bridge_source_metrics["curve_indices_configured_count"] = (
+            len(_curve_route_addrs) - len(_curve_missing)
+        )
+        bridge_source_metrics["curve_indices_missing_count"] = len(_curve_missing)
+        if _curve_missing:
+            bridge_source_metrics["curve_indices_missing_sample"] = _curve_missing[:5]
+    except Exception:
+        pass
 
     # ------------------------------------------------------------------
     # M8.2 pending-pair registry diagnostics + persistence

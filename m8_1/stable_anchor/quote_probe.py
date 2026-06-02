@@ -216,7 +216,12 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
             # Fallback 0/1 is only safe for 2-pool USDC/USDT when no metadata loaded.
             idx_in = route.token_in_index if route.token_in_index is not None else 0
             idx_out = route.token_out_index if route.token_out_index is not None else 1
-            calldata = "0x" + "5e0d443f" + idx_in.to_bytes(32, "big").hex() + idx_out.to_bytes(32, "big").hex() + amount_in.to_bytes(32, "big").hex()
+            # Curve has two incompatible get_dy ABIs: stable/plain uses
+            # int128 indices (selector 5e0d443f), crypto/tricrypto uses uint256
+            # indices (selector 556d6e9f). The wrong selector reverts (never
+            # phantom). Select by declared pool_kind; unknown defaults to stable.
+            _curve_selector = "556d6e9f" if route.pool_kind == "crypto" else "5e0d443f"
+            calldata = "0x" + _curve_selector + idx_in.to_bytes(32, "big").hex() + idx_out.to_bytes(32, "big").hex() + amount_in.to_bytes(32, "big").hex()
             result = w3.eth.call({"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result[2:]
             amount_out = int(raw[:64], 16)

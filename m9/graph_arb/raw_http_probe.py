@@ -192,9 +192,19 @@ def probe_quote_raw_http(
                 )
             idx_in = route.token_in_index
             idx_out = route.token_out_index
+            # Curve has TWO incompatible get_dy ABIs:
+            #   stable/plain pools: get_dy(int128,int128,uint256)  selector 5e0d443f
+            #   crypto/tricrypto pools: get_dy(uint256,uint256,uint256) selector 556d6e9f
+            # Using the int128 selector on a crypto pool (or vice-versa) reverts.
+            # Select by declared pool_kind; unknown/None defaults to the stable ABI
+            # (a wrong selector reverts — it never produces a phantom amount_out).
+            if route.pool_kind == "crypto":
+                _curve_selector = "556d6e9f"
+            else:
+                _curve_selector = "5e0d443f"
             calldata = (
                 "0x"
-                + "5e0d443f"
+                + _curve_selector
                 + idx_in.to_bytes(32, "big").hex()
                 + idx_out.to_bytes(32, "big").hex()
                 + amount_in.to_bytes(32, "big").hex()

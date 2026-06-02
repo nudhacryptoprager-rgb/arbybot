@@ -340,7 +340,10 @@ def build_graph_from_inventory(
         _pool_kind: Optional[str] = None
 
         if adapter_type == "curve_stable":
-            _pool_kind = "stable"
+            # Variant ("stable"/"crypto") drives the get_dy ABI selector in the
+            # quoter. Read it from the rolling indices artifact; default to
+            # "stable" when the pool is not yet classified.
+            _pool_kind = _adapter_meta.curve_pool_kind(pool_address, chain=_meta_chain) or "stable"
         elif adapter_type in ("balancer_stable", "balancer_weighted"):
             _pool_kind = "stable" if adapter_type == "balancer_stable" else "weighted"
             _b_pool = _adapter_meta.balancer_pool_meta(pool_address, chain=_meta_chain)

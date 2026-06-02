@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from m9.graph_arb.models import CycleQuoteResult, GraphTopology
+from m9.graph_arb.pool_scorecard import (
+    build_pool_scorecards,
+    recommend_quarantine,
+)
 
 SCHEMA_FAMILY = "m9_graph_arb"
 SCHEMA_REVISION = "m9.1"
@@ -317,7 +321,7 @@ def _compute_toxic_pool_families(
         # catastrophic-impact filter actually sees them — otherwise the dominant
         # depth-toxic pools are invisible in toxic_pool_families (the metric the
         # operator relies on to identify pools poisoning every cycle).
-        effective_gross = qr.raw_gross_bps if qr.raw_gross_bps is not None else qr.gross_bps
+        effective_gross = qr.raw_gross_bps if isinstance(qr.raw_gross_bps, (int, float)) else qr.gross_bps
         pfgb = effective_gross + fee_drag
         if pfgb >= -500:
             continue  # not a toxic-impact cycle
@@ -1000,6 +1004,14 @@ def build_artifact(
     # Step 7: toxic_pool_families — operator-visible list of pools dominating toxic cycles
     _toxic_pool_families = _compute_toxic_pool_families(cycle_results)
 
+    # Per-pool fair data-quality scorecards: classify each observed pool as
+    # HEALTHY / PROBATION / LOW_SAMPLE / TOXIC from attributed, sampled evidence
+    # (deeper partners are credited; transient RPC noise is ignored). TOXIC pools
+    # become soft, TTL'd quarantine recommendations the operator/executor can
+    # promote into data/quarantine/m9_pool_depth_quarantine.json.
+    _pool_scorecards = build_pool_scorecards(cycle_results)
+    _pool_quarantine_recommendations = recommend_quarantine(_pool_scorecards)
+
     # Dashboard fields: pull M8 cycle participation metrics from bridge_source_metrics
     # to top-level so CI gates and dashboards can read them without nested traversal.
     _cycles_with_m8_pool: int = 0
@@ -1082,6 +1094,8 @@ def build_artifact(
         "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation, _cost_profile_for_compute) for qr in top_cycles],
         "top_opportunities": [_build_top_opportunity(qr, _cost_profile_for_compute) for qr in top_cycles],
         "toxic_pool_families": _toxic_pool_families,
+        "pool_scorecards": _pool_scorecards,
+        "pool_quarantine_recommendations": _pool_quarantine_recommendations,
         "graph_topology": graph_topology,
         "topology_gate": topology_gate,
         "discovery_cycles_found": discovery_cycles_found,
