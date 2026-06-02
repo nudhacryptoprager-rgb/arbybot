@@ -1,0 +1,102 @@
+# M9 active-config manifest — single inventory for branch m9 / Base shadow lane.
+# Used by scripts/audit_m9_active_config.py (do not delete configs listed as legacy_required).
+schema_version: m9_active_manifest.1
+branch: m9
+chain: base
+chain_id: 8453
+primary_config: config/exotic_base_anchor.yaml
+
+# Config files that define the current M9 productive surface.
+active_configs:
+  - path: config/exotic_base_anchor.yaml
+    role: M9_PRIMARY
+  - path: config/new_pool_factories.yaml
+    role: M9_M8_FACTORY_ANCHORS
+  - path: config/adapter_metadata.yaml
+    role: M9_TRUST_ANCHORS
+  - path: config/dexes.yaml
+    role: GLOBAL_DEX_REGISTRY
+  - path: config/core_tokens.yaml
+    role: TOKEN_REGISTRY
+  - path: config/chains.yaml
+    role: CHAIN_REGISTRY
+  - path: config/enricher.yaml
+    role: M8_ENRICHER
+  - path: config/m9_active_manifest.yaml
+    role: M9_MANIFEST
+
+# Production bridge must NOT inject YAML seed pools (rolling discovery only).
+adapter_metadata_policy:
+  production_include_config_seed: false
+  trust_anchors_in_yaml: true
+  production_pools_from_rolling:
+    - data/runs/_rolling/m9_curve_discovery_latest.json
+    - data/runs/_rolling/m9_curve_pool_indices_latest.json
+
+# Canonical rolling operational artifacts (overwrite each run).
+runtime_rolling_current:
+  - data/runs/_rolling/m9_bridge_inventory_latest.json
+  - data/runs/_rolling/m9_curve_discovery_latest.json
+  - data/runs/_rolling/m9_curve_pool_indices_latest.json
+  - data/runs/_rolling/m9_graph_latest.json
+  - data/runs/_rolling/m9_quote_route_diagnostic_latest.json
+
+# Valid rolling artifacts but not required every session.
+runtime_rolling_optional:
+  - data/runs/_rolling/m8_pending_pairs.json
+  - data/runs/_rolling/m8_1_stable_anchor_latest.json
+  - data/runs/_rolling/m9_depth_enriched_inventory.json
+  - data/runs/_rolling/_latest.json
+  - data/runs/_rolling/run_summary_latest.json
+
+# M4/M5/onboard — required by CI and milestone contracts; not M9 primary.
+legacy_required_by_tests:
+  - config/real_minimal.yaml
+  - config/real_roundtrip_probe.yaml
+  - config/real_roundtrip_probe_arbitrum.yaml
+  - config/real_intent_arbitrum_one.yaml
+  - config/onboard_base_stage1.yaml
+  - config/onboard_base_stage2.yaml
+  - config/onboard_base_discovery.yaml
+  - config/onboard_base_profit.yaml
+  - config/onboard_mantle_stage2.yaml
+  - config/onboard_scroll_stage1.yaml
+  - config/onboard_linea_stage1.yaml
+  - config/onboard_arbitrum_one_candidate.yaml
+  - config/onboard_zksync_candidate.yaml
+
+# Tmp diagnostic globs — safe to prune when not referenced by manifest latest paths.
+tmp_stale_globs:
+  - data/tmp/m9_graph_*.json
+  - data/tmp/m9_revert_quarantine.json
+
+tmp_keep:
+  - data/tmp/m9_config_audit.json
+
+# Cache files — readers must enforce schema + freshness (see core/cache_freshness.py).
+cache_artifacts:
+  - path: data/cache/dynamic_anchors_base.json
+    schema_id: dynamic_anchors
+    max_age_seconds: 86400
+  - path: data/cache/dynamic_anchors.json
+    schema_id: dynamic_anchors
+    max_age_seconds: 86400
+
+# Base DEX ids in exotic_base_anchor.dexes vs config/dexes.yaml base section.
+dex_registry:
+  chain: base
+  shared_with_dexes_yaml:
+    - uniswap_v3
+    - pancakeswap_v3
+    - sushiswap_v3
+    - aerodrome_slipstream
+    - aerodrome
+    - sushiswap_v2
+    - baseswap_v2
+    - uniswap_v4
+  m9_only_in_exotic:
+    - uniswap_v2
+    - aerodrome_v2_stable
+    - curve_stable
+    - balancer_vault
+    - maverick_v2

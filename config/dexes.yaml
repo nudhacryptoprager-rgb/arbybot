@@ -126,6 +126,36 @@ base:
     fee_tiers: [100, 500, 3000, 10000]
     note: "M9: Base Uniswap V4 PoolManager + Quoter for M8 long-tail depth enrichment"
 
+  uniswap_v2:
+    adapter_type: "uniswap_v2"
+    factory: "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"
+    m9_only: true
+    note: "M9 exotic_base_anchor; canonical Base UniswapV2 factory"
+
+  aerodrome_v2_stable:
+    adapter_type: "aerodrome_v2_stable"
+    factory: "0x420dd381b31aef6683db6b902084cb0ffece40da"
+    m9_only: true
+    note: "M9 exotic_base_anchor; Aerodrome stable pools (same factory as ve33)"
+
+  curve_stable:
+    adapter_type: "curve_stable"
+    factory: "0xd2002373543ce3527023c75e7518c274a51ce712"
+    m9_only: true
+    note: "M9 Curve Stable-NG; pools from rolling m9_curve_discovery_latest.json"
+
+  balancer_vault:
+    adapter_type: "balancer_stable"
+    factory: "0xba12222222228d8ba445958a75a0704d566bf2c8"
+    m9_only: true
+    note: "M9 Balancer V2 vault; pool_ids in adapter_metadata trust anchors only"
+
+  maverick_v2:
+    adapter_type: "maverick_v2"
+    factory: "0x0a7e848aca42d879ef06507fca0e7b33a0a63c1e"
+    m9_only: true
+    note: "M9 Maverick V2; productive gate not proven in Status_M9"
+
 linea:
   lynex_v3:
     adapter_type: "algebra"

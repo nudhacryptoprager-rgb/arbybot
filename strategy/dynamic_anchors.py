@@ -208,7 +208,30 @@ class DynamicAnchorManager:
         """Load cached anchor data."""
         if not self.cache_path.exists():
             return
-        
+
+        try:
+            from core.cache_freshness import cache_freshness
+
+            chain_key = None
+            name = self.cache_path.name
+            if name.startswith("dynamic_anchors_") and name.endswith(".json"):
+                chain_key = name[len("dynamic_anchors_") : -len(".json")]
+            fresh, reason = cache_freshness(
+                self.cache_path,
+                schema_id="dynamic_anchors",
+                chain=chain_key,
+                max_age_seconds=float(self.config.get("max_sample_age_seconds", _env_max_age)),
+            )
+            if not fresh:
+                logger.warning(
+                    "Skipping stale dynamic_anchors cache %s (%s)",
+                    self.cache_path,
+                    reason,
+                )
+                return
+        except Exception as exc:
+            logger.debug("cache freshness check skipped: %s", exc)
+
         try:
             with open(self.cache_path) as f:
                 data = json.load(f)

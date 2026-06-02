@@ -22,10 +22,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+import time
 import yaml  # type: ignore[import]
 
-RPC_URL = os.environ.get("BASE_RPC", "https://base.publicnode.com")
+from core.rpc_rate_limiter import rpc_throttle
+
+def _resolve_rpc_url() -> str:
+    try:
+        from core.env import load_root_dotenv
+
+        load_root_dotenv()
+        from core.rpc_urls import resolve_rpc_http
+
+        url, _, _ = resolve_rpc_http(chain_id=8453, network="base")
+        if url:
+            return url
+    except Exception:
+        pass
+    return os.environ.get("BASE_RPC", "https://base-rpc.publicnode.com")
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
+RPC_URL = ""
 DEFAULT_INVENTORY = REPO_ROOT / "data/runs/_rolling/m9_bridge_inventory_latest.json"
 DEFAULT_METADATA = REPO_ROOT / "config/adapter_metadata.yaml"
 DEFAULT_ANCHOR = REPO_ROOT / "config/exotic_base_anchor.yaml"
@@ -41,10 +59,22 @@ COINS_SELECTOR_INT128 = "23746eb8"
 # the matching selector instead of producing generic QUOTE_REVERT.
 GET_DY_SELECTOR_INT128 = "5e0d443f"   # get_dy(int128,int128,uint256)   -> stable/plain
 GET_DY_SELECTOR_UINT256 = "556d6e9f"  # get_dy(uint256,uint256,uint256) -> crypto/tricrypto
-# Nominal probe amount used only to detect which get_dy ABI the pool exposes.
-# ABI-shape detection is independent of dx magnitude (wrong selector reverts
-# regardless of arguments), so a fixed small nominal value is sufficient.
-_VARIANT_PROBE_DX = 10 ** 6
+def _load_token_decimals(anchor_path: Path) -> dict[str, int]:
+    decimals: dict[str, int] = {}
+    if anchor_path.exists():
+        anchor = yaml.safe_load(anchor_path.read_text(encoding="utf-8")) or {}
+        for sym, spec in (anchor.get("tokens") or {}).items():
+            dec = (spec or {}).get("decimals")
+            if dec is not None:
+                decimals[str(sym)] = int(dec)
+    return decimals
+
+
+def _probe_amount_for_decimals(decimals: int) -> int:
+    """~1 unit of token in native decimals (avoids WETH dust reverts on get_dy probe)."""
+    if decimals <= 6:
+        return 10**decimals
+    return 10 ** max(decimals - 3, 9)
 
 
 def _classify_curve_variant(int128_ok: bool, uint256_ok: bool) -> tuple[str | None, str]:
@@ -67,6 +97,13 @@ def _classify_curve_variant(int128_ok: bool, uint256_ok: bool) -> tuple[str | No
 
 def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _inventory_source_label(inventory_path: Path) -> str:
+    try:
+        return str(inventory_path.relative_to(REPO_ROOT)).replace("\\", "/")
+    except ValueError:
+        return str(inventory_path)
 
 
 def _load_known_tokens(anchor_path: Path, metadata_path: Path) -> dict[str, str]:
@@ -96,8 +133,22 @@ def eth_call(to: str, data: str) -> tuple[str | None, str | None]:
         "method": "eth_call",
         "params": [{"to": to, "data": data}, "latest"],
     }
-    resp = httpx.post(RPC_URL, json=payload, timeout=10)
-    resp.raise_for_status()
+    rpc_throttle.acquire(n=1)
+    for attempt in range(3):
+        resp = httpx.post(RPC_URL, json=payload, timeout=10)
+        if resp.status_code == 429 and attempt < 2:
+            time.sleep(1.0 * (2**attempt))
+            continue
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 429 and attempt < 2:
+                time.sleep(1.0 * (2**attempt))
+                continue
+            return None, str(exc)
+        break
+    else:
+        return None, "HTTP 429: rate limited"
     body = resp.json()
     if "error" in body:
         err = body["error"]
@@ -139,6 +190,7 @@ def _probe_get_dy(
     selector: str,
     idx_in: int,
     idx_out: int,
+    probe_dx: int,
 ) -> tuple[bool, str | None]:
     """Return (ok, rpc_error) for a single get_dy probe call."""
     calldata = (
@@ -146,7 +198,7 @@ def _probe_get_dy(
         + selector
         + idx_in.to_bytes(32, "big").hex()
         + idx_out.to_bytes(32, "big").hex()
-        + _VARIANT_PROBE_DX.to_bytes(32, "big").hex()
+        + probe_dx.to_bytes(32, "big").hex()
     )
     result, err = eth_call(pool, calldata)
     return result is not None, err
@@ -156,6 +208,8 @@ def probe_curve_variant(
     pool: str,
     idx_in: int,
     idx_out: int,
+    *,
+    probe_dx: int,
 ) -> tuple[str | None, str, dict]:
     """Classify get_dy ABI for one (idx_in -> idx_out) direction.
 
@@ -166,10 +220,12 @@ def probe_curve_variant(
         "pool": pool,
         "idx_in": idx_in,
         "idx_out": idx_out,
-        "dx": _VARIANT_PROBE_DX,
+        "dx": probe_dx,
         "attempts": [],
     }
-    int128_ok, int128_err = _probe_get_dy(pool, GET_DY_SELECTOR_INT128, idx_in, idx_out)
+    int128_ok, int128_err = _probe_get_dy(
+        pool, GET_DY_SELECTOR_INT128, idx_in, idx_out, probe_dx
+    )
     debug["attempts"].append(
         {
             "selector": GET_DY_SELECTOR_INT128,
@@ -180,7 +236,9 @@ def probe_curve_variant(
     uint256_ok = False
     uint256_err: str | None = None
     if not int128_ok:
-        uint256_ok, uint256_err = _probe_get_dy(pool, GET_DY_SELECTOR_UINT256, idx_in, idx_out)
+        uint256_ok, uint256_err = _probe_get_dy(
+            pool, GET_DY_SELECTOR_UINT256, idx_in, idx_out, probe_dx
+        )
         debug["attempts"].append(
             {
                 "selector": GET_DY_SELECTOR_UINT256,
@@ -244,13 +302,18 @@ def probe_curve_variant_best(
     pool: str,
     coin_indices: dict[str, int],
     route_pairs: list[tuple[str, str]],
+    token_decimals: dict[str, int],
 ) -> tuple[str | None, str, dict]:
     """Try bridge-relevant symbol directions until one get_dy ABI probe succeeds."""
     probes: list[dict] = []
     for sym_in, sym_out in _iter_symbol_probe_pairs(coin_indices, route_pairs):
         idx_in = coin_indices[sym_in]
         idx_out = coin_indices[sym_out]
-        pool_kind, status, detail = probe_curve_variant(pool, idx_in, idx_out)
+        dec_in = token_decimals.get(sym_in, 18)
+        probe_dx = _probe_amount_for_decimals(dec_in)
+        pool_kind, status, detail = probe_curve_variant(
+            pool, idx_in, idx_out, probe_dx=probe_dx
+        )
         probes.append(
             {
                 "token_in": sym_in,
@@ -297,6 +360,9 @@ def _pool_entry(
 
 
 def main() -> None:
+    global RPC_URL  # used by eth_call / get_coin
+    RPC_URL = _resolve_rpc_url()
+
     parser = argparse.ArgumentParser(description="Discover Curve coin indices for bridge pools")
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
@@ -324,6 +390,7 @@ def main() -> None:
         sys.exit(1)
 
     known_tokens = _load_known_tokens(args.anchor, args.metadata)
+    token_decimals = _load_token_decimals(args.anchor)
     if len(known_tokens) < 2:
         print("ERROR: no token symbols loaded from config", file=sys.stderr)
         sys.exit(1)
@@ -335,6 +402,33 @@ def main() -> None:
 
     print(f"Discovering coin indices for {len(curve_pools)} curve_stable pools")
     print(f"RPC: {RPC_URL}\n")
+
+    if not curve_pools:
+        artifact = {
+            "schema_version": SCHEMA_VERSION,
+            "chain": "base",
+            "generated_at_utc": _iso_now(),
+            "discovery_status": "NO_CURVE_ROUTES_IN_BRIDGE",
+            "source_inventory": _inventory_source_label(args.inventory),
+            "pools_discovered": 0,
+            "pools_failed": 0,
+            "probe_status_histogram": {},
+            "pool_kind_counts": {},
+            "pools": {},
+            "hint": (
+                "Bridge inventory has zero curve_stable routes. Run "
+                "scripts/m9_curve_discovery.py, rebuild bridge "
+                "(scripts/m9_bridge_build.py), then re-run this script."
+            ),
+        }
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        print(
+            "NO_CURVE_ROUTES_IN_BRIDGE: wrote explicit empty artifact "
+            f"-> {args.output}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     pools_out: dict[str, dict] = {}
     failed: list[str] = []
@@ -359,17 +453,22 @@ def main() -> None:
             pool_addr,
             entry["coin_indices"],
             route_pairs_by_pool.get(pool_addr, []),
+            token_decimals,
         )
         if pool_kind is None:
-            print(f"SKIP ({probe_status})")
-            failed.append(pool_addr)
-            if args.debug:
-                failed_detail[pool_addr] = {
-                    "reason": probe_status,
-                    "coin_indices": entry["coin_indices"],
-                    "probe": probe_debug,
-                }
-            continue
+            if args.strict_probe:
+                print(f"SKIP ({probe_status})")
+                failed.append(pool_addr)
+                if args.debug:
+                    failed_detail[pool_addr] = {
+                        "reason": probe_status,
+                        "coin_indices": entry["coin_indices"],
+                        "probe": probe_debug,
+                    }
+                continue
+            pool_kind = "stable"
+            probe_status = probe_status or "QUOTE_REVERT_BOTH"
+            print(f"WARN ({probe_status}) admit indices")
         entry["pool_kind"] = pool_kind
         entry["curve_variant"] = pool_kind
         entry["probe_status"] = probe_status
@@ -380,18 +479,23 @@ def main() -> None:
         pools_out[pool_addr] = entry
 
     by_status: dict[str, int] = {}
+    by_kind: dict[str, int] = {}
     for entry in pools_out.values():
         st = str(entry.get("probe_status", "UNKNOWN"))
         by_status[st] = by_status.get(st, 0) + 1
+        pk = str(entry.get("pool_kind", "unknown"))
+        by_kind[pk] = by_kind.get(pk, 0) + 1
 
     artifact = {
         "schema_version": SCHEMA_VERSION,
         "chain": "base",
         "generated_at_utc": _iso_now(),
-        "source_inventory": str(args.inventory.relative_to(REPO_ROOT)).replace("\\", "/"),
+        "discovery_status": "OK",
+        "source_inventory": _inventory_source_label(args.inventory),
         "pools_discovered": len(pools_out),
         "pools_failed": len(failed),
         "probe_status_histogram": by_status,
+        "pool_kind_counts": by_kind,
         "pools": pools_out,
     }
     if args.debug and failed_detail:

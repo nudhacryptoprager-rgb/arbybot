@@ -633,6 +633,42 @@ class TestProductiveGateToxicRateCheck:
         assert "toxic_route_rate" in captured.out
 
 
+class TestProductiveGateNoCyclesDynamicSize:
+    """cycles_found=0 must not be misread as missing --dynamic-sizes flag."""
+
+    def test_strict_bridge_explains_dynamic_size_when_intent_on(self, tmp_path, capsys):
+        import json
+
+        from scripts.ci_m9_productive_gate import run_gate, EXIT_FAIL
+
+        art = {
+            "schema_revision": "m9.1",
+            "sweeps_completed": 1,
+            "elapsed_s": 60.0,
+            "duration_fulfilled": False,
+            "cycles_found": 0,
+            "runtime_gates": {"all_pass": False},
+            "infra_telemetry": {
+                "dynamic_size_intent": True,
+                "dynamic_size_enabled": False,
+                "unverified_active_routes": 0,
+            },
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 1,
+                "m8_stale": False,
+                "m8_1_stale": False,
+            },
+        }
+        p = tmp_path / "m9_art.json"
+        p.write_text(json.dumps(art), encoding="utf-8")
+        assert run_gate(p, strict_bridge=True) == EXIT_FAIL
+        out = capsys.readouterr().out
+        assert "NO_CYCLES" in out
+        assert "cycles_found=0" in out
+        assert "dynamic_size_enabled=False because cycles_found=0" in out
+        assert "dynamic_size_intent=False" not in out
+
+
 # ---------------------------------------------------------------------------
 # pool_depth_probe: _update_quarantine logic (GPT Step 1/2/3)
 # ---------------------------------------------------------------------------

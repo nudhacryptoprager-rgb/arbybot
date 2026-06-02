@@ -321,10 +321,31 @@ def main() -> int:
     if not anchor_tokens:
         log.warning("No anchor_tokens configured for chain=%s; all pools will be admitted", args.chain)
 
-    # Resolve RPC
-    rpc_env, rpc_default = _RPC_CONFIG.get(args.chain, ("BASE_RPC", "https://base-rpc.publicnode.com"))
-    rpc_url = os.environ.get(rpc_env) or rpc_default
-    log.info("Chain=%s factory=%s rpc=%s", args.chain, factory, rpc_url[:40] + "...")
+    # Resolve RPC (prefer BASE_RPC / dRPC via centralized resolver)
+    rpc_url: str | None = None
+    rpc_provider = "unknown"
+    try:
+        from core.env import load_root_dotenv
+
+        load_root_dotenv()
+        from core.rpc_urls import resolve_rpc_http
+
+        _cid = 8453 if args.chain == "base" else None
+        rpc_url, rpc_provider, _ = resolve_rpc_http(
+            chain_id=_cid, network=args.chain,
+        )
+    except Exception as exc:
+        log.warning("resolve_rpc_http failed: %s", exc)
+    if not rpc_url:
+        rpc_env, rpc_default = _RPC_CONFIG.get(
+            args.chain, ("BASE_RPC", "https://base-rpc.publicnode.com"),
+        )
+        rpc_url = os.environ.get(rpc_env) or rpc_default
+        rpc_provider = "env_fallback"
+    log.info(
+        "Chain=%s factory=%s rpc_provider=%s rpc=%s",
+        args.chain, factory, rpc_provider, rpc_url[:40] + "...",
+    )
 
     try:
         from web3 import Web3

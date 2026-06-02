@@ -537,6 +537,41 @@ class TestCheckCurvePoolsConfigured:
             f"Expected >=2 Curve pools on Base, got {len(meta.curve_pools['base'])}"
         )
 
+    def test_merge_curve_factory_discovery_artifact(self, tmp_path, monkeypatch):
+        """Factory discovery rolling JSON supplies coin_indices at load time."""
+        import json
+
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+
+        factory = tmp_path / "factory.json"
+        factory.write_text(
+            json.dumps(
+                {
+                    "schema_version": "m9_curve_discovery.1",
+                    "chain": "base",
+                    "discovered_pools": [
+                        {
+                            "pool_address": "0xbbbb000000000000000000000000000000000002",
+                            "pool_kind": "stable",
+                            "coin_indices": {"USDC": 0, "USDbC": 1},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        missing = tmp_path / "no_indices.json"
+        missing.write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("ARBY_CURVE_FACTORY_DISCOVERY", str(factory))
+        meta = load_adapter_metadata(
+            "config/adapter_metadata.yaml",
+            curve_pool_indices_path=str(missing),
+        )
+        idx_in, idx_out = meta.curve_indices(
+            "0xbbbb000000000000000000000000000000000002", "USDC", "USDbC", chain="base"
+        )
+        assert idx_in == 0 and idx_out == 1
+
     def test_merge_curve_pool_indices_artifact(self, tmp_path):
         """Rolling artifact overlays config seed pools at load time."""
         import json

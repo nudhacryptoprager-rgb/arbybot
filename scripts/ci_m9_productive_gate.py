@@ -212,13 +212,34 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
                 flush=True,
             )
 
-        # GPT Step 8: dynamic_size_enabled must be True in productive lane
+        # GPT Step 8: dynamic sizing — distinguish operator intent vs zero-cycle runs
         it_strict = art.get("infra_telemetry") or {}
-        if not it_strict.get("dynamic_size_enabled", False):
+        _cycles_found = int(art.get("cycles_found") or 0)
+        _dyn_intent = bool(it_strict.get("dynamic_size_intent", False))
+        _dyn_enabled = bool(it_strict.get("dynamic_size_enabled", False))
+        if not _dyn_enabled:
+            if _cycles_found == 0 and _dyn_intent:
+                print(
+                    "  INFO: dynamic_size_enabled=False because cycles_found=0 "
+                    "(dynamic_size_intent=True; no cycles reached the quoter — "
+                    "fix topology/QSR first, not --dynamic-sizes flag)",
+                    flush=True,
+                )
+            elif not _dyn_intent:
+                issues.append(
+                    "STRICT_BRIDGE: dynamic_size_intent=False "
+                    "(productive lane requires --dynamic-sizes; "
+                    "fix: orchestrator run_m9_scan must pass --dynamic-sizes flag)"
+                )
+            else:
+                issues.append(
+                    "STRICT_BRIDGE: dynamic_size_enabled=False with cycles_found>0 "
+                    "(unexpected: cycles quoted but no dynamic size candidates recorded)"
+                )
+        if _cycles_found == 0:
             issues.append(
-                "STRICT_BRIDGE: dynamic_size_enabled=False "
-                "(productive lane requires --dynamic-sizes; "
-                "fix: orchestrator run_m9_scan must pass --dynamic-sizes flag)"
+                "NO_CYCLES: cycles_found=0 — graph too small or topology gate blocked "
+                "(check bridge graph_ready_total, productive-lane quarantine, multi-venue gate)"
             )
 
         # GPT Step 9: quote_backend must be raw_http and quote_workers must be 1

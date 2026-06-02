@@ -219,6 +219,51 @@ simulation:
   univ3_router02: "0x0000000000000000000000000000000000000000"
   aero_router: "0x0000000000000000000000000000000000000000"
   simulation_test_addr: "0x0000000000000000000000000000000000000000"
+
+# M9 DEX productivity gates (discovery vs productive soak — see m9_active_manifest.yaml)
+m9_dex_productivity:
+  curve_stable:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  uniswap_v2:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  aerodrome_v2_stable:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  aerodrome:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  aerodrome_slipstream:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  uniswap_v3:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  uniswap_v4:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "V4 long-tail hooks; admit via M8 sniper only until QSR proven"
+  balancer_vault:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "No M9 route_qsr proof on Balancer legs in latest diagnostic"
+  maverick_v2:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "Sparse configured pools; not in latest route_qsr pass set"
+  pancakeswap_v3:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  sushiswap_v3:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  sushiswap_v2:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  baseswap_v2:
+    enabled_for_discovery: true
+    enabled_for_productive: true
   usdc_usdt_v3_pool: "0x0000000000000000000000000000000000000000"
 
 public_rpc_blocklist: []

@@ -130,6 +130,12 @@ def _select_edges(
 
 
 def run_diagnostic(args: argparse.Namespace) -> Dict[str, Any]:
+    try:
+        from core.env import load_root_dotenv
+
+        load_root_dotenv()
+    except Exception:
+        pass
     from m8_1.stable_anchor.quote_probe import size_usd_to_amount_in
     from m9.graph_arb.quoter import _make_dex_route, _make_token_info
     from m9.graph_arb.raw_http_probe import probe_quote_raw_http

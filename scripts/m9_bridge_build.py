@@ -131,6 +131,26 @@ def main() -> int:
     log.info("  metadata_seeded_count    : %d  [seed=%s]",
              metrics.get("metadata_seeded_count", 0),
              metrics.get("include_config_seed", False))
+    log.info(
+        "  curve_discovery_loaded   : %d",
+        metrics.get("curve_discovery_artifact_loaded_count", 0),
+    )
+    log.info(
+        "  curve_discovery_admitted : %d",
+        metrics.get("curve_discovery_admitted_count", 0),
+    )
+    log.info(
+        "  curve_stable_routes      : %d",
+        metrics.get("curve_stable_route_count", 0),
+    )
+    log.info(
+        "  curve_indices_missing    : %d",
+        metrics.get("curve_indices_missing_count", 0),
+    )
+    log.info(
+        "  single_venue_blocked     : %d",
+        metrics.get("structural_single_venue_blocked_count", 0),
+    )
     log.info("  m8_stale                 : %s", metrics["m8_stale"])
     log.info("  m8_1_stale               : %s", metrics["m8_1_stale"])
     log.info("Written: %s", args.output)
@@ -139,6 +159,25 @@ def main() -> int:
     if metrics["graph_ready_total"] == 0:
         log.error("FAIL: graph_ready_total=0 — bridge inventory is empty")
         return 1
+
+    if metrics["graph_ready_total"] < 10:
+        log.warning(
+            "WARN: graph_ready_total=%d — universe too small for M9 soak "
+            "(multi-venue gate may have blocked most M8 events; "
+            "structural_single_venue_blocked=%d)",
+            metrics["graph_ready_total"],
+            metrics.get("structural_single_venue_blocked_count", 0),
+        )
+    if metrics.get("curve_stable_route_count", 0) == 0:
+        log.warning(
+            "WARN: curve_stable_route_count=0 — run scripts/m9_curve_discovery.py "
+            "then rebuild bridge before discover_curve_indices.py"
+        )
+    if metrics.get("curve_discovery_artifact_loaded_count", 0) == 0:
+        log.warning(
+            "WARN: curve_discovery_artifact_loaded_count=0 — "
+            "m9_curve_discovery_latest.json missing/stale/empty"
+        )
 
     # Warn if staleness is high (non-fatal: still proceed)
     if metrics["m8_stale"]:

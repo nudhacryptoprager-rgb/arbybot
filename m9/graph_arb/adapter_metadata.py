@@ -24,7 +24,9 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_PATH = "config/adapter_metadata.yaml"
 _DEFAULT_CURVE_POOL_INDICES = "data/runs/_rolling/m9_curve_pool_indices_latest.json"
+_DEFAULT_CURVE_FACTORY_DISCOVERY = "data/runs/_rolling/m9_curve_discovery_latest.json"
 _CURVE_POOL_INDICES_SCHEMA = "m9_curve_pool_indices.1"
+_CURVE_FACTORY_DISCOVERY_SCHEMA = "m9_curve_discovery.1"
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,49 @@ def _resolve_curve_pool_indices_path(
     if configured:
         return Path(configured)
     return Path(_DEFAULT_CURVE_POOL_INDICES)
+
+
+def _merge_curve_factory_discovery_artifact(
+    meta: AdapterMetadata,
+    artifact_path: Path,
+    chain: str = "base",
+) -> None:
+    """Overlay coin_indices from m9_curve_discovery_latest.json (factory enumeration)."""
+    if not artifact_path.exists():
+        return
+    try:
+        raw = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Failed to load curve factory discovery from %s: %s", artifact_path, exc)
+        return
+    if raw.get("schema_version") != _CURVE_FACTORY_DISCOVERY_SCHEMA:
+        return
+    if raw.get("chain") and raw.get("chain") != chain:
+        return
+    chain_pools = dict(meta.curve_pools.get(chain, {}))
+    merged = 0
+    for pool in raw.get("discovered_pools") or []:
+        if not isinstance(pool, dict):
+            continue
+        pool_addr = str(pool.get("pool_address", "")).lower()
+        coin_raw = pool.get("coin_indices") or {}
+        if not pool_addr or not isinstance(coin_raw, dict) or len(coin_raw) < 2:
+            continue
+        try:
+            coin_indices = {str(sym): int(idx) for sym, idx in coin_raw.items()}
+        except (ValueError, TypeError):
+            continue
+        pool_kind = str(pool.get("pool_kind", "stable"))
+        chain_pools[pool_addr] = _CurvePool(
+            pool_address=pool_addr,
+            pool_kind=pool_kind,
+            coin_indices=coin_indices,
+        )
+        merged += 1
+    if chain_pools:
+        meta.curve_pools[chain] = chain_pools
+    if merged:
+        log.debug("Merged %d curve pools from factory discovery %s", merged, artifact_path)
 
 
 def _merge_curve_pool_indices_artifact(
@@ -299,6 +344,10 @@ def load_adapter_metadata(
             meta.balancer_pools[chain_name] = chain_pools_b
 
     if merge_rolling_indices:
+        factory_path = Path(
+            os.environ.get("ARBY_CURVE_FACTORY_DISCOVERY", _DEFAULT_CURVE_FACTORY_DISCOVERY)
+        )
+        _merge_curve_factory_discovery_artifact(meta, factory_path, chain="base")
         indices_path = _resolve_curve_pool_indices_path(
             meta, "base", curve_pool_indices_path
         )

@@ -5,6 +5,11 @@ and the variant/probe_status fields emitted into the rolling indices artifact.
 """
 from __future__ import annotations
 
+import json
+import sys
+
+import pytest
+
 from scripts.discover_curve_indices import (
     _classify_curve_variant,
     _iter_symbol_probe_pairs,
@@ -95,14 +100,47 @@ class TestProbePairSelection:
         )
 
 
+class TestDiscoverNoCurveRoutesGuard:
+    def test_empty_bridge_writes_explicit_status(self, tmp_path, monkeypatch):
+        import scripts.discover_curve_indices as disc
+
+        inv = tmp_path / "inv.json"
+        inv.write_text(
+            '{"active_routes": [{"adapter_type": "uniswap_v3", "pool_address": "0x11"}]}',
+            encoding="utf-8",
+        )
+        out = tmp_path / "indices.json"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "discover_curve_indices.py",
+                "--inventory",
+                str(inv),
+                "--output",
+                str(out),
+                "--metadata",
+                "config/adapter_metadata.yaml",
+                "--anchor",
+                "config/exotic_base_anchor.yaml",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc:
+            disc.main()
+        assert exc.value.code == 2
+        data = json.loads(out.read_text(encoding="utf-8"))
+        assert data["discovery_status"] == "NO_CURVE_ROUTES_IN_BRIDGE"
+        assert data["pools_discovered"] == 0
+
+
 class TestProbeCurveVariantBest:
     def test_mocked_best_picks_winning_route_pair(self, monkeypatch):
         pool = "0x" + "11" * 20
         coin_indices = {"USDC": 2, "WETH": 0, "crvUSD": 1}
         calls: list[tuple[int, int]] = []
 
-        def fake_probe(_pool: str, idx_in: int, idx_out: int):
-            calls.append((idx_in, idx_out))
+        def fake_probe(_pool: str, idx_in: int, idx_out: int, *, probe_dx: int):
+            calls.append((idx_in, idx_out, probe_dx))
             if (idx_in, idx_out) == (2, 0):
                 return "stable", "QUOTE_OK_INT128", {}
             return None, "QUOTE_REVERT_BOTH", {}
@@ -115,7 +153,8 @@ class TestProbeCurveVariantBest:
             pool,
             coin_indices,
             [("USDC", "WETH")],
+            {"USDC": 6, "WETH": 18, "crvUSD": 18},
         )
         assert kind == "stable"
         assert status == "QUOTE_OK_INT128"
-        assert (2, 0) in calls
+        assert any(c[0] == 2 and c[1] == 0 for c in calls)

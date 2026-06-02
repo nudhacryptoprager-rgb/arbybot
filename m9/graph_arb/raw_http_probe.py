@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from typing import Any, Optional
 
 import httpx
@@ -50,8 +51,18 @@ def _get_client() -> httpx.Client:
     return _local.client
 
 
-def _eth_call_raw(url: str, to: str, data: str, client: httpx.Client) -> str:
+def _eth_call_raw(
+    url: str,
+    to: str,
+    data: str,
+    client: httpx.Client,
+    *,
+    max_retries: int = 3,
+    base_retry_delay_s: float = 1.0,
+) -> str:
     """Send a single eth_call JSON-RPC request. Returns hex result string.
+
+    Retries HTTP 429 with exponential backoff (same policy as pool_verifier).
 
     Raises:
         httpx.HTTPStatusError: on HTTP 4xx/5xx (caller checks .response.status_code)
@@ -63,8 +74,31 @@ def _eth_call_raw(url: str, to: str, data: str, client: httpx.Client) -> str:
         "method": "eth_call",
         "params": [{"to": to, "data": data}, "latest"],
     }
-    resp = client.post(url, content=json.dumps(payload))
-    resp.raise_for_status()
+    last_exc: httpx.HTTPStatusError | None = None
+    for attempt in range(max_retries):
+        resp = client.post(url, content=json.dumps(payload))
+        if resp.status_code == 429:
+            if attempt + 1 < max_retries:
+                time.sleep(base_retry_delay_s * (2**attempt))
+                continue
+            resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if (
+                exc.response is not None
+                and exc.response.status_code == 429
+                and attempt + 1 < max_retries
+            ):
+                time.sleep(base_retry_delay_s * (2**attempt))
+                continue
+            raise
+        break
+    else:
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("eth_call retry loop exhausted")
     body = resp.json()
     if "error" in body:
         err = body["error"]

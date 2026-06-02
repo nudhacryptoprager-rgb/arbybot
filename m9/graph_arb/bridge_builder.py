@@ -600,6 +600,7 @@ def build_bridge_inventory(
     # Deduplicates by pool_address against existing base_active.
     # ------------------------------------------------------------------
     _disc_routes = _load_curve_discovery_routes(chain="base", discovery_path=curve_discovery_path)
+    _curve_discovery_artifact_loaded_count: int = len(_disc_routes)
     _base_active_addrs_disc = frozenset(
         r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
     )
@@ -1018,7 +1019,9 @@ def build_bridge_inventory(
         # seed routes come from manual config, not from factory event + on-chain verify.
         "metadata_seeded_count": _metadata_seeded_count,
         "include_config_seed": include_config_seed,
-        # Curve factory discovery count (production path, no seed flag required)
+        # Curve factory discovery (production path, no seed flag required)
+        "curve_discovery_artifact_loaded_count": _curve_discovery_artifact_loaded_count,
+        "curve_discovery_admitted_count": _curve_discovery_count,
         "curve_discovery_count": _curve_discovery_count,
     }
 
