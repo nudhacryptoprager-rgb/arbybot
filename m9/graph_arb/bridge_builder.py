@@ -23,7 +23,7 @@ import json
 from collections import Counter as _Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dex.adapters.uniswap_v4 import is_safe_v4_hook as _is_safe_v4_hook
 
@@ -92,6 +92,7 @@ _DEFAULT_ANCHOR = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
 _DEFAULT_BASE_INV = "data/tmp/m9_depth_enriched_inventory.json"
 _BRIDGE_OUTPUT = "data/runs/_rolling/m9_bridge_inventory_latest.json"
 _DEFAULT_CURVE_DISCOVERY = "data/runs/_rolling/m9_curve_discovery_latest.json"
+_DEFAULT_CROSS_DEX_EXPANSION = "data/runs/_rolling/m8_cross_dex_expansion_latest.json"
 
 _SCHEMA_VERSION = "m9_bridge_inventory.1"
 
@@ -216,6 +217,45 @@ def _load_curve_discovery_routes(
             "pool_kind": str(pool.get("pool_kind", "stable")),
         })
     return routes
+
+
+def _load_cross_dex_expansion_routes(
+    expansion_path: str = _DEFAULT_CROSS_DEX_EXPANSION,
+    chain: str = "base",
+    max_age_seconds: float = 48 * 3600,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Load M8.2 cross-DEX expansion routes_admitted from rolling artifact."""
+    from datetime import timezone as _tz
+
+    p = Path(expansion_path)
+    empty: Tuple[List[Dict[str, Any]], Dict[str, Any]] = ([], {})
+    if not p.exists():
+        return empty
+    try:
+        with open(p, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return empty
+    if data.get("chain") and data.get("chain") != chain:
+        return empty
+    ts_str = data.get("generated_at_utc", "")
+    if ts_str:
+        try:
+            from datetime import datetime as _dt
+
+            ts = _dt.fromisoformat(ts_str.rstrip("Z")).replace(tzinfo=_tz.utc)
+            age = (_dt.now(tz=_tz.utc) - ts).total_seconds()
+            if age > max_age_seconds:
+                return empty
+        except Exception:
+            pass
+    routes = list(data.get("routes_admitted") or [])
+    summary = data.get("summary") or {}
+    return routes, {
+        "reject_reason_histogram": data.get("reject_reason_histogram") or {},
+        "multi_venue_tokens": summary.get("multi_venue_tokens", 0),
+        "tokens_in": summary.get("tokens_in", 0),
+    }
 
 
 def _build_static_curve_routes(chain: str = "base") -> List[Dict[str, Any]]:
@@ -400,6 +440,7 @@ def build_bridge_inventory(
     output_path: str = _BRIDGE_OUTPUT,
     include_config_seed: bool = False,
     curve_discovery_path: str = _DEFAULT_CURVE_DISCOVERY,
+    expansion_path: Optional[str] = _DEFAULT_CROSS_DEX_EXPANSION,
     registry_path: Optional[str] = None,
     registry_ttl_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -417,6 +458,7 @@ def build_bridge_inventory(
             (even across separate sniper windows).  Default None disables it
             (keeps unit tests side-effect free).
         registry_ttl_seconds: TTL for venue observations in the registry.
+        expansion_path: M8.2 cross-DEX expansion artifact; None disables merge.
 
     Returns bridge_source_metrics dict.  Writes the output artifact to output_path.
     """
@@ -801,6 +843,29 @@ def build_bridge_inventory(
             _existing_addrs.add(_pe_pool)
         m8_new_routes = m8_new_routes + _registry_promoted_routes
 
+    # ------------------------------------------------------------------
+    # Stage 6c: M8.2 cross-DEX expansion routes (multi-venue from factory resolve)
+    # ------------------------------------------------------------------
+    _expansion_routes: List[Dict] = []
+    _expansion_meta: Dict[str, Any] = {}
+    if expansion_path:
+        _expansion_routes, _expansion_meta = _load_cross_dex_expansion_routes(
+            expansion_path, chain="base"
+        )
+        _expansion_existing = set(base_pool_addrs) | {
+            r["pool_address"].lower()
+            for r in m8_new_routes
+            if r.get("pool_address")
+        }
+        _expansion_admitted: List[Dict] = []
+        for _er in _expansion_routes:
+            _ep = (_er.get("pool_address") or "").lower()
+            if not _ep or _ep in _expansion_existing:
+                continue
+            _expansion_admitted.append(_er)
+            _expansion_existing.add(_ep)
+        m8_new_routes = m8_new_routes + _expansion_admitted
+        _expansion_routes = _expansion_admitted
 
     # Unsupported M8 routes (truly unknown adapters) are quarantined.
     m8_quarantined_routes: List[Dict] = [
@@ -1023,6 +1088,11 @@ def build_bridge_inventory(
         "curve_discovery_artifact_loaded_count": _curve_discovery_artifact_loaded_count,
         "curve_discovery_admitted_count": _curve_discovery_count,
         "curve_discovery_count": _curve_discovery_count,
+        "graph_ready_from_expansion": len(_expansion_routes),
+        "expansion_routes_input": len(_expansion_routes),
+        "expansion_multi_venue_count": _expansion_meta.get("multi_venue_tokens", 0),
+        "expansion_tokens_in": _expansion_meta.get("tokens_in", 0),
+        "expansion_reject_histogram": _expansion_meta.get("reject_reason_histogram", {}),
     }
 
     # Curve rolling indices artifact coverage (bridge inventory curve_stable routes)

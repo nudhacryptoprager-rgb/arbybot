@@ -214,6 +214,7 @@ def build_graph_from_inventory(
     built_count = 0
     unverified_skipped = 0
     depth_skipped = 0
+    curve_unindexed_skipped = 0
     _productive_lane = (lane == "productive")
 
     # Load per-pool adapter metadata (Curve coin indices, Balancer pool_id/vault_address).
@@ -407,35 +408,46 @@ def build_graph_from_inventory(
                 if adapter_type == "curve_stable"
                 else (None, None)
             )
-            fwd_edge = GraphEdge(
-                token_in_sym=sym0,
-                token_out_sym=sym1,
-                token_in_addr=t0.address,
-                token_out_addr=t1.address,
-                token_in_decimals=t0.decimals,
-                token_out_decimals=t1.decimals,
-                route_id=route_id,
-                dex_id=dex_id,
-                adapter_type=adapter_type,
-                fee=fee,
-                tick_spacing=tick_spacing,
-                quoter_addr=quoter_addr,
-                pool_address=pool_address,
-                fee_bps=fee_bps,
-                factory_class=factory_class,
-                pair_id=pair_id,
-                factory_verified=factory_verified_flag,
-                hooks=hooks,
-                token_in_index=_fwd_idx_in,
-                token_out_index=_fwd_idx_out,
-                pool_id=_pool_id,
-                vault_address=_vault_address,
-                pool_kind=_pool_kind,
-                freshness_window=_freshness_window,
-                effective_depth_usd=_effective_depth_usd,
-            )
-            adjacency[sym0][sym1].append(fwd_edge)
-            built_count += 1
+            # Curve quoting requires resolved coin indices: get_dy(i,j,dx) cannot
+            # be called without them. A curve_stable edge with unresolved indices
+            # is structurally unquoteable and would only emit QUOTE_REVERT, poisoning
+            # QSR. Skip admission (reversible: the edge re-enters automatically once
+            # discover_curve_indices classifies the pool). NOT a Curve disable —
+            # classified Curve pools are still admitted and quoted.
+            if adapter_type == "curve_stable" and (
+                _fwd_idx_in is None or _fwd_idx_out is None
+            ):
+                curve_unindexed_skipped += 1
+            else:
+                fwd_edge = GraphEdge(
+                    token_in_sym=sym0,
+                    token_out_sym=sym1,
+                    token_in_addr=t0.address,
+                    token_out_addr=t1.address,
+                    token_in_decimals=t0.decimals,
+                    token_out_decimals=t1.decimals,
+                    route_id=route_id,
+                    dex_id=dex_id,
+                    adapter_type=adapter_type,
+                    fee=fee,
+                    tick_spacing=tick_spacing,
+                    quoter_addr=quoter_addr,
+                    pool_address=pool_address,
+                    fee_bps=fee_bps,
+                    factory_class=factory_class,
+                    pair_id=pair_id,
+                    factory_verified=factory_verified_flag,
+                    hooks=hooks,
+                    token_in_index=_fwd_idx_in,
+                    token_out_index=_fwd_idx_out,
+                    pool_id=_pool_id,
+                    vault_address=_vault_address,
+                    pool_kind=_pool_kind,
+                    freshness_window=_freshness_window,
+                    effective_depth_usd=_effective_depth_usd,
+                )
+                adjacency[sym0][sym1].append(fwd_edge)
+                built_count += 1
 
         # Reverse: sym1 → sym0
         if not (exclude_edge_keys and edge_key_rev in exclude_edge_keys):
@@ -445,35 +457,40 @@ def build_graph_from_inventory(
                 if adapter_type == "curve_stable"
                 else (None, None)
             )
-            rev_edge = GraphEdge(
-                token_in_sym=sym1,
-                token_out_sym=sym0,
-                token_in_addr=t1.address,
-                token_out_addr=t0.address,
-                token_in_decimals=t1.decimals,
-                token_out_decimals=t0.decimals,
-                route_id=route_id,
-                dex_id=dex_id,
-                adapter_type=adapter_type,
-                fee=fee,
-                tick_spacing=tick_spacing,
-                quoter_addr=quoter_addr,
-                pool_address=pool_address,
-                fee_bps=fee_bps,
-                factory_class=factory_class,
-                pair_id=pair_id,
-                factory_verified=factory_verified_flag,
-                hooks=hooks,
-                token_in_index=_rev_idx_in,
-                token_out_index=_rev_idx_out,
-                pool_id=_pool_id,
-                vault_address=_vault_address,
-                pool_kind=_pool_kind,
-                freshness_window=_freshness_window,
-                effective_depth_usd=_effective_depth_usd,
-            )
-            adjacency[sym1][sym0].append(rev_edge)
-            built_count += 1
+            if adapter_type == "curve_stable" and (
+                _rev_idx_in is None or _rev_idx_out is None
+            ):
+                curve_unindexed_skipped += 1
+            else:
+                rev_edge = GraphEdge(
+                    token_in_sym=sym1,
+                    token_out_sym=sym0,
+                    token_in_addr=t1.address,
+                    token_out_addr=t0.address,
+                    token_in_decimals=t1.decimals,
+                    token_out_decimals=t0.decimals,
+                    route_id=route_id,
+                    dex_id=dex_id,
+                    adapter_type=adapter_type,
+                    fee=fee,
+                    tick_spacing=tick_spacing,
+                    quoter_addr=quoter_addr,
+                    pool_address=pool_address,
+                    fee_bps=fee_bps,
+                    factory_class=factory_class,
+                    pair_id=pair_id,
+                    factory_verified=factory_verified_flag,
+                    hooks=hooks,
+                    token_in_index=_rev_idx_in,
+                    token_out_index=_rev_idx_out,
+                    pool_id=_pool_id,
+                    vault_address=_vault_address,
+                    pool_kind=_pool_kind,
+                    freshness_window=_freshness_window,
+                    effective_depth_usd=_effective_depth_usd,
+                )
+                adjacency[sym1][sym0].append(rev_edge)
+                built_count += 1
 
     logger.info(
         "Graph built",
@@ -486,6 +503,7 @@ def build_graph_from_inventory(
                 "inventory_path": str(inv_path),
                 "unverified_skipped": unverified_skipped,
                 "depth_skipped": depth_skipped,
+                "curve_unindexed_skipped": curve_unindexed_skipped,
             }
         },
     )

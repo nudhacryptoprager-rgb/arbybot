@@ -69,14 +69,22 @@ def get_dex_adapter_type(chain: str, dex: str) -> Optional[str]:
         return None
 
 
-def get_chain_dexes(chain: str, adapter_types: Optional[List[str]] = None) -> List[str]:
+def get_chain_dexes(
+    chain: str,
+    adapter_types: Optional[List[str]] = None,
+    *,
+    include_m9_only: bool = False,
+) -> List[str]:
     """Get all configured DEXes for a chain from dexes.yaml.
     
     v3.2.17: Single source of truth for discovery DEX list.
+    M9: entries with ``m9_only: true`` are excluded unless ``include_m9_only=True``
+    so M4/M5 discovery_runtime does not pull Curve/Balancer/Maverick surfaces.
     
     Args:
         chain: Chain key
         adapter_types: Optional filter for adapter types (e.g., ["uniswap_v3", "algebra"])
+        include_m9_only: When False (default), skip dexes marked m9_only in dexes.yaml
         
     Returns:
         List of DEX keys configured for the chain
@@ -86,15 +94,14 @@ def get_chain_dexes(chain: str, adapter_types: Optional[List[str]] = None) -> Li
         dexes_config = load_dexes()
         chain_dexes = dexes_config.get(chain, {})
         
-        if not adapter_types:
-            return list(chain_dexes.keys())
-        
-        # Filter by adapter type
-        result = []
-        for dex_key, dex_cfg in chain_dexes.items():
-            if dex_cfg.get("adapter_type") in adapter_types:
-                result.append(dex_key)
-        return result
+        def _eligible(dex_key: str, dex_cfg: dict) -> bool:
+            if not include_m9_only and dex_cfg.get("m9_only"):
+                return False
+            if adapter_types is not None and dex_cfg.get("adapter_type") not in adapter_types:
+                return False
+            return True
+
+        return [k for k, cfg in chain_dexes.items() if _eligible(k, cfg)]
     except Exception:
         # Fallback to FACTORY_ADDRESSES
         return list(FACTORY_ADDRESSES.get(chain, {}).keys())

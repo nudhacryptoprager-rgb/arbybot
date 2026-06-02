@@ -65,6 +65,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--expansion",
+        default="data/runs/_rolling/m8_cross_dex_expansion_latest.json",
+        help="M8.2 cross-DEX expansion artifact path (set empty to disable)",
+    )
+    p.add_argument(
+        "--no-expansion",
+        action="store_true",
+        help="Disable M8.2 cross-DEX expansion merge",
+    )
+    p.add_argument(
         "--registry",
         default="data/runs/_rolling/m8_pending_pairs.json",
         help=(
@@ -113,6 +123,7 @@ def main() -> int:
         include_config_seed=args.include_config_seed_pools,
         registry_path=(None if args.no_registry else args.registry),
         registry_ttl_seconds=args.registry_ttl_seconds,
+        expansion_path=(None if args.no_expansion else args.expansion or None),
     )
 
     log.info("Bridge funnel:")
@@ -123,6 +134,8 @@ def main() -> int:
     log.info("  factory_verified_count   : %d", metrics["factory_verified_count"])
     log.info("  depth_ok_count           : %d", metrics["depth_ok_count"])
     log.info("  graph_ready_from_m8      : %d", metrics["graph_ready_from_m8"])
+    log.info("  graph_ready_from_expansion: %d", metrics.get("graph_ready_from_expansion", 0))
+    log.info("  expansion_multi_venue    : %d", metrics.get("expansion_multi_venue_count", 0))
     log.info("  graph_ready_total        : %d", metrics["graph_ready_total"])
     log.info("  registry_enabled         : %s", metrics.get("registry_enabled", False))
     log.info("  registry_tokens_tracked  : %d", metrics.get("registry_tokens_tracked", 0))

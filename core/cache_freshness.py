@@ -42,8 +42,11 @@ def cache_freshness(
 
     if schema_id:
         found = data.get("schema_version") or data.get("schema_id") or data.get("schema")
-        if found and schema_id not in str(found):
-            return False, f"schema_mismatch:{found}"
+        if found:
+            found_s = str(found)
+            legacy_ok = schema_id == "dynamic_anchors" and found_s in ("1.0", "1", "dynamic_anchors.1")
+            if schema_id not in found_s and not legacy_ok:
+                return False, f"schema_mismatch:{found}"
 
     if chain:
         file_chain = data.get("chain") or data.get("chain_key")
@@ -55,6 +58,13 @@ def cache_freshness(
         ts = _parse_iso_ts(data.get("generated_at_utc"))
         if ts is None:
             ts = _parse_iso_ts(data.get("updated_at_utc"))
+        if ts is None:
+            saved_at = data.get("saved_at")
+            if saved_at is not None:
+                try:
+                    ts = float(saved_at)
+                except (TypeError, ValueError):
+                    ts = None
         if ts is None:
             ts = float(data.get("last_updated") or data.get("updated_ts") or 0) or None
         if ts is None:

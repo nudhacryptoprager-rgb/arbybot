@@ -13,6 +13,7 @@ import logging
 import statistics
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -274,9 +275,20 @@ class DynamicAnchorManager:
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             
+            chain_key = None
+            name = self.cache_path.name
+            if name.startswith("dynamic_anchors_") and name.endswith(".json"):
+                chain_key = name[len("dynamic_anchors_") : -len(".json")]
+            now_ts = time.time()
             data = {
+                "schema_version": "dynamic_anchors.1",
+                "schema_id": "dynamic_anchors",
+                "generated_at_utc": datetime.now(tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "chain_key": chain_key,
                 "version": "1.0",
-                "saved_at": time.time(),
+                "saved_at": now_ts,
                 "pairs": {
                     pair: {
                         "pair": pair_data.pair,

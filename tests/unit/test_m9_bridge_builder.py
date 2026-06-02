@@ -1179,6 +1179,73 @@ class TestConfigSeedContract:
 
 
 # ---------------------------------------------------------------------------
+# TestCrossDexExpansionMerge: M8.2 expansion artifact → bridge routes
+# ---------------------------------------------------------------------------
+
+class TestCrossDexExpansionMerge:
+    def test_expansion_routes_merged_with_source_tag(self, tmp_path):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        expansion_path = tmp_path / "m8_cross_dex_expansion_latest.json"
+        expansion_path.write_text(
+            json.dumps({
+                "schema_version": "m8_cross_dex_expansion.1",
+                "generated_at_utc": "2099-01-01T00:00:00Z",
+                "chain": "base",
+                "summary": {"multi_venue_tokens": 1, "tokens_in": 1},
+                "routes_admitted": [{
+                    "route_id": "m8x_test",
+                    "pair_id": "FOO_USDC",
+                    "dex_id": "uniswap_v3",
+                    "adapter_type": "uniswap_v3",
+                    "token0": "FOO",
+                    "token1": "USDC",
+                    "pool_address": "0xexpansionpool000000000000000000000001",
+                    "factory_verified": True,
+                    "source": "m8_cross_dex_expansion",
+                }],
+            }),
+            encoding="utf-8",
+        )
+        base_inv = tmp_path / "base.json"
+        base_inv.write_text(
+            json.dumps({
+                "active_routes": [{
+                    "route_id": "base1",
+                    "pool_address": "0xbase0000000000000000000000000000000001",
+                    "token0": "USDC",
+                    "token1": "WETH",
+                    "factory_verified": True,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        sniper = tmp_path / "sniper.json"
+        sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
+        anchor = tmp_path / "anchor.json"
+        anchor.write_text(json.dumps({"active_routes": []}), encoding="utf-8")
+        out = tmp_path / "bridge.json"
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base_inv),
+            output_path=str(out),
+            include_config_seed=False,
+            curve_discovery_path=str(tmp_path / "nodisc.json"),
+            expansion_path=str(expansion_path),
+            registry_path=None,
+        )
+        result = json.loads(out.read_text(encoding="utf-8"))
+        exp_routes = [
+            r for r in result["active_routes"]
+            if r.get("source") == "m8_cross_dex_expansion"
+        ]
+        assert len(exp_routes) == 1
+        assert metrics["graph_ready_from_expansion"] == 1
+
+
+# ---------------------------------------------------------------------------
 # TestCurveDiscoveryContract: _load_curve_discovery_routes + bridge wiring
 # ---------------------------------------------------------------------------
 

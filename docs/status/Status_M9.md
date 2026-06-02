@@ -1,6 +1,6 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: RUNTIME_BLOCKED__QSR_BELOW_GATE — Session 2026-06-02: Bridge universe **restored** (`graph_ready_total=44`, `curve_indices_missing=0`). **QSR blocked** by RPC fanout + Curve reverts. **Config blocker added:** `M9_CONFIG_AND_RUNTIME_ARTIFACT_SPRAWL` — M9 DEX/adapter pieces exist but active universe needs manifest-driven cleanup (`config/m9_active_manifest.yaml`, `scripts/audit_m9_active_config.py`); config/runtime/cache were mixed with M4/M5/M7 legacy and diagnostic JSON.
+**Status**: RUNTIME_BLOCKED__M8_2_AND_QSR — Config manifest/audit **mostly closed** (`audit --strict` PASS on classification). Strategic blocker: **`M8_2_CROSS_DEX_EXPANSION`** skeleton landed (`scripts/m8_cross_dex_expand.py`, bridge merge `graph_ready_from_expansion`); needs fresh registry + online resolve before `graph_ready_from_expansion > 0` acceptance. QSR not validated (`route_qsr≈0.25`, soak `qsr≈0.0063`).
 
 **Session 2026-06-02 evidence:**
 
@@ -50,7 +50,7 @@
 4. Re-run route diagnostic on full 44 routes after RPC stable.
 5. **Do not** claim M9 PASS until `qsr≥0.8` with fresh artifact.
 
-`goal_status`: **BLOCKED** (RPC 429 + artifact sprawl) | Curve indices: **REACHED** | M8.2 cross-DEX expansion: **not started** | Economics: **not validated**  
+`goal_status`: **BLOCKED** (`M9_CONFIG_AUDIT_PARTIAL` + `M8_2_CROSS_DEX_EXPANSION_MISSING`) | Curve indices: **REACHED** | Economics: **not validated** (`qsr < 0.8`)  
 `execution_enabled`: false | `kill_switch_active`: true
 
 ---

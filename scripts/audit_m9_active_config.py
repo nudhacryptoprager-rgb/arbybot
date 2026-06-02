@@ -27,22 +27,50 @@ def _rel(p: Path) -> str:
         return str(p)
 
 
-def _classify_configs(manifest: Dict[str, Any]) -> Dict[str, str]:
-    active = {e["path"] for e in manifest.get("active_configs", []) if e.get("path")}
-    legacy = set(manifest.get("legacy_required_by_tests", []) or [])
+def _manifest_config_status(manifest: Dict[str, Any]) -> Dict[str, str]:
+    """Map config path -> audit status from manifest lists."""
     classified: Dict[str, str] = {}
-    for p in active:
-        classified[p] = "ACTIVE"
-    for p in legacy:
-        classified[p] = "LEGACY_REQUIRED_BY_TESTS"
+    for entry in manifest.get("active_configs", []) or []:
+        if entry.get("path"):
+            classified[entry["path"]] = "ACTIVE"
+    for path in manifest.get("legacy_required_by_tests", []) or []:
+        classified[path] = "LEGACY_REQUIRED_BY_TESTS"
+    for path in manifest.get("manual_probe_only", []) or []:
+        classified[path] = "MANUAL_PROBE_ONLY"
+    for path in manifest.get("archive_candidates", []) or []:
+        classified[path] = "ARCHIVE_CANDIDATE"
+    for path in manifest.get("delete_candidates", []) or []:
+        classified[path] = "DELETE_CANDIDATE"
+    return classified
+
+
+def _classify_configs(manifest: Dict[str, Any]) -> Dict[str, str]:
+    classified = _manifest_config_status(manifest)
     if not CONFIG_DIR.exists():
         return classified
     for cfg in sorted(CONFIG_DIR.glob("*.yaml")):
         rel = f"config/{cfg.name}"
-        if rel in classified:
-            continue
-        classified[rel] = "UNCLASSIFIED_CONFIG"
+        if rel not in classified:
+            classified[rel] = "UNCLASSIFIED_CONFIG"
     return classified
+
+
+def _adapter_metadata_bootstrap_audit() -> Dict[str, Any]:
+    """Count YAML seed pools; production must use rolling discovery only."""
+    meta_path = REPO_ROOT / "config" / "adapter_metadata.yaml"
+    if not meta_path.exists():
+        return {"bootstrap_pool_count": 0, "status": "MISSING"}
+    with open(meta_path, encoding="utf-8") as fh:
+        meta = yaml.safe_load(fh) or {}
+    pools = (meta.get("curve") or {}).get("base", {}).get("pools") or {}
+    balancer = (meta.get("balancer") or {}).get("base", {}).get("pools") or {}
+    count = len(pools) + len(balancer)
+    return {
+        "bootstrap_pool_count": count,
+        "status": "BOOTSTRAP_ONLY" if count > 0 else "ANCHORS_ONLY",
+        "curve_seed_pools": len(pools),
+        "balancer_seed_pools": len(balancer),
+    }
 
 
 def _dex_alignment(manifest: Dict[str, Any], exotic_path: Path) -> List[Dict[str, Any]]:
@@ -104,17 +132,26 @@ def run_audit(
         })
 
     runtime_rows: List[Dict[str, Any]] = []
-    for key in ("runtime_rolling_current", "runtime_rolling_optional"):
+    runtime_key_labels = {
+        "runtime_rolling_current": "RUNTIME_CURRENT",
+        "runtime_rolling_optional": "RUNTIME_OPTIONAL",
+        "runtime_global_rolling_optional": "RUNTIME_GLOBAL_OPTIONAL",
+    }
+    for key, label in runtime_key_labels.items():
         for rel in manifest.get(key, []) or []:
             full = REPO_ROOT / rel
-            st = "RUNTIME_CURRENT" if key == "runtime_rolling_current" else "RUNTIME_OPTIONAL"
             if not full.exists():
-                st = "RUNTIME_MISSING"
+                st = f"{label}_MISSING"
             else:
-                size = full.stat().st_size
-                if size > 500_000:
-                    st = f"{st}_LARGE"
-            runtime_rows.append({"path": rel, "status": st, "exists": full.exists(), "bytes": full.stat().st_size if full.exists() else 0})
+                st = label
+                if full.stat().st_size > 500_000:
+                    st = f"{label}_LARGE"
+            runtime_rows.append({
+                "path": rel,
+                "status": st,
+                "exists": full.exists(),
+                "bytes": full.stat().st_size if full.exists() else 0,
+            })
 
     cache_rows: List[Dict[str, Any]] = []
     for entry in manifest.get("cache_artifacts", []) or []:
@@ -153,6 +190,7 @@ def run_audit(
     manifest_runtime = {
         *(manifest.get("runtime_rolling_current") or []),
         *(manifest.get("runtime_rolling_optional") or []),
+        *(manifest.get("runtime_global_rolling_optional") or []),
     }
     rolling_dir = REPO_ROOT / "data" / "runs" / "_rolling"
     extra_runtime: List[Dict[str, Any]] = []
@@ -169,6 +207,8 @@ def run_audit(
             })
 
     dex_rows = _dex_alignment(manifest, exotic_config)
+    bootstrap = _adapter_metadata_bootstrap_audit()
+    policy = manifest.get("adapter_metadata_policy") or {}
 
     report: Dict[str, Any] = {
         "schema_version": "m9_config_audit.1",
@@ -180,21 +220,39 @@ def run_audit(
         "cache": cache_rows,
         "tmp": tmp_rows,
         "dex_alignment": dex_rows,
+        "adapter_metadata": {
+            **bootstrap,
+            "production_include_config_seed": policy.get("production_include_config_seed"),
+        },
         "summary": {},
     }
 
+    legacy_missing = sum(
+        1
+        for r in config_rows
+        if r["status"] == "LEGACY_REQUIRED_BY_TESTS" and not r["exists"]
+    )
+
     report["summary"] = {
         "active_missing": sum(1 for r in config_rows if r["status"] == "ACTIVE" and not r["exists"]),
+        "legacy_required_missing": legacy_missing,
         "unclassified_configs": sum(1 for r in config_rows if r["status"] == "UNCLASSIFIED_CONFIG"),
         "runtime_current_missing": sum(
-            1 for r in runtime_rows if r["status"] == "RUNTIME_MISSING"
+            1 for r in runtime_rows if r["status"] == "RUNTIME_CURRENT_MISSING"
         ),
         "cache_stale": sum(1 for r in cache_rows if r["status"] == "CACHE_STALE"),
+        "cache_stale_actionable": sum(
+            1
+            for r in cache_rows
+            if r["status"] == "CACHE_STALE"
+            and not str(r.get("reason", "")).startswith("stale_age")
+        ),
         "tmp_stale_count": len(tmp_rows),
         "runtime_stale_count": len(extra_runtime),
         "dex_shared_missing": sum(
             1 for r in dex_rows if r["status"] == "SHARED_MISSING_IN_DEXES"
         ),
+        "bootstrap_pool_count": bootstrap.get("bootstrap_pool_count", 0),
     }
     return report
 
@@ -214,12 +272,17 @@ def _print_report(report: Dict[str, Any]) -> None:
     )
     print("\n-- Config --")
     for row in report["config"]:
-        if row["status"] in ("ACTIVE", "LEGACY_REQUIRED_BY_TESTS", "UNCLASSIFIED_CONFIG"):
-            flag = "OK" if row["exists"] else "MISSING"
-            print(f"  [{row['status']}] {flag} {row['path']}")
-    print("\n-- Runtime (current) --")
+        flag = "OK" if row["exists"] else "MISSING"
+        print(f"  [{row['status']}] {flag} {row['path']}")
+    am = report.get("adapter_metadata", {})
+    print(
+        f"\n-- adapter_metadata: {am.get('status')} "
+        f"pools={am.get('bootstrap_pool_count')} "
+        f"production_include_config_seed={am.get('production_include_config_seed')}"
+    )
+    print("\n-- Runtime (M9 current) --")
     for row in report["runtime"]:
-        if "RUNTIME_CURRENT" in row["status"] or row["status"] == "RUNTIME_MISSING":
+        if row["status"].startswith("RUNTIME_CURRENT"):
             print(f"  [{row['status']}] {row['path']} ({row.get('bytes', 0)} bytes)")
     print("\n-- Cache --")
     for row in report["cache"]:
@@ -241,7 +304,11 @@ def main() -> int:
     parser.add_argument("--config", default="config/exotic_base_anchor.yaml")
     parser.add_argument("--manifest", default="config/m9_active_manifest.yaml")
     parser.add_argument("--json", dest="json_out", default=None, help="Write JSON report path")
-    parser.add_argument("--strict", action="store_true", help="Exit 1 on active missing or dex gaps")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 1 on active/legacy missing, unclassified configs, cache_stale, dex gaps",
+    )
     args = parser.parse_args()
 
     manifest_path = REPO_ROOT / args.manifest
@@ -263,6 +330,9 @@ def main() -> int:
     s = report["summary"]
     if args.strict and (
         s["active_missing"] > 0
+        or s.get("legacy_required_missing", 0) > 0
+        or s["unclassified_configs"] > 0
+        or s.get("cache_stale_actionable", 0) > 0
         or s["dex_shared_missing"] > 0
         or s["runtime_current_missing"] > 0
     ):

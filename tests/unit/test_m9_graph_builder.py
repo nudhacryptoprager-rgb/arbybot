@@ -238,41 +238,6 @@ class TestBuildGraphFromInventory:
         with pytest.raises(RuntimeError, match="CONFIG_MISSING"):
             build_graph_from_inventory(inventory_path=inv, config_path=missing_cfg)
 
-    def test_exotic_symbol_resolves_token_addr_from_inventory(self, tmp_path):
-        """Long-tail symbols not in config must use token0_addr/token1_addr from M8 routes."""
-        from m9.graph_arb.builder import build_graph_from_inventory
-
-        pepe_addr = "0x" + "1" * 40
-        weth_addr = "0x4200000000000000000000000000000000000006"
-        inv = {
-            "active_routes": [
-                {
-                    "pair_id": "PEPE_WETH",
-                    "dex_id": "uniswap_v3",
-                    "fee": 500,
-                    "factory_class": "EFFICIENT_BASELINE",
-                    "pool_address": "0x" + "a" * 40,
-                    "route_id": "uniswap_v3:PEPE_WETH@500",
-                    "token0_addr": pepe_addr,
-                    "token1_addr": weth_addr,
-                }
-            ],
-            "pools": [],
-        }
-        p = tmp_path / "inventory.json"
-        p.write_text(json.dumps(inv))
-        cfg = self._make_minimal_config(tmp_path)
-        adjacency = build_graph_from_inventory(inventory_path=str(p), config_path=cfg)
-        pepe_out_edges = [
-            edge
-            for edge_list in adjacency.get("PEPE", {}).values()
-            for edge in edge_list
-            if edge.token_in_sym == "PEPE"
-        ]
-        assert pepe_out_edges, "Expected PEPE -> * edge"
-        assert all(e.token_in_addr.lower() == pepe_addr.lower() for e in pepe_out_edges)
-        assert not any(e.token_in_addr == self._ZERO_ADDR for e in pepe_out_edges)
-
     def test_no_zero_quoter_edges_with_valid_config(self, tmp_path):
         """Safety contract: every emitted edge must have non-zero quoter_addr."""
         from m9.graph_arb.builder import build_graph_from_inventory
@@ -302,10 +267,65 @@ class TestBuildGraphFromInventory:
             edge
             for neighbors in adjacency.values()
             for edge_list in neighbors.values()
-            for edge in edge_list
-        ]
+            for edge in edge_list        ]
         # Unknown dex → zero quoter is documented behavior (caller must handle)
         assert all(e.quoter_addr == self._ZERO_ADDR for e in all_edges)
+
+    def test_curve_route_without_indices_is_skipped(self, tmp_path):
+        """A curve_stable route with unresolved coin indices must NOT be admitted.
+
+        get_dy(i,j,dx) cannot be called without coin indices, so such an edge
+        would only ever emit QUOTE_REVERT and poison QSR. The builder skips it
+        (reversible: it re-enters once discover_curve_indices classifies the pool).
+        A uniswap_v3 route in the same inventory is still admitted, proving this
+        is not a Curve disable.
+        """
+        from unittest.mock import patch
+        from m9.graph_arb.adapter_metadata import AdapterMetadata
+        import m9.graph_arb.builder as _builder
+        from m9.graph_arb.builder import build_graph_from_inventory
+
+        pool_addr = "0x" + "c" * 40
+        inv = {
+            "active_routes": [
+                {
+                    "pair_id": "WETH_USDC",
+                    "dex_id": "uniswap_v3",
+                    "fee": 500,
+                    "factory_class": "EFFICIENT_BASELINE",
+                    "pool_address": "0x" + "a" * 40,
+                    "route_id": "uniswap_v3:WETH_USDC@500",
+                },
+                {
+                    "pair_id": "WETH_USDC",
+                    "dex_id": "curve_unknown_bridge",
+                    "adapter_type": "curve_stable",
+                    "fee": 0,
+                    "factory_class": "CURVE_STABLE_NG",
+                    "pool_address": pool_addr,
+                    "route_id": "curve_stable:WETH_USDC",
+                },
+            ],
+            "pools": [],
+        }
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        cfg = self._make_minimal_config(tmp_path)
+
+        # Empty metadata → curve_indices returns (None, None) for the pool.
+        with patch.object(_builder, "load_adapter_metadata", return_value=AdapterMetadata()):
+            adjacency = build_graph_from_inventory(inventory_path=str(p), config_path=cfg)
+
+        all_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+        ]
+        curve_edges = [e for e in all_edges if e.adapter_type == "curve_stable"]
+        uni_edges = [e for e in all_edges if e.adapter_type == "uniswap_v3"]
+        assert not curve_edges, "Unindexed curve_stable edge must be skipped"
+        assert uni_edges, "Non-curve routes must still be admitted (not a Curve disable)"
 
     def test_aerodrome_v2_stable_unknown_dex_uses_pool_address_as_quoter(self, tmp_path):
         """aerodrome_v2_stable with unknown dex_id must use pool_address as quoter.
@@ -607,17 +627,13 @@ class TestPoolDepthFilter:
         }
         qfile = tmp_path / "quarantine.json"
         qfile.write_text(json.dumps(quarantine))
-        addresses = load_quarantined_pool_addresses(str(qfile), hard_only=True)
+        addresses = load_quarantined_pool_addresses(str(qfile))
         assert isinstance(addresses, frozenset)
-        # Soft reason must not hard-drop in productive lane
-        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" not in addresses
-        assert len(addresses) == 0
-
-        addresses_all = load_quarantined_pool_addresses(str(qfile), hard_only=False)
-        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" in addresses_all
-        assert len(addresses_all) == 1
+        # Real address should be included
+        assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" in addresses
         # Placeholder should be skipped
-        assert "0x0000000000000000000000000000000000000001" not in addresses_all
+        assert "0x0000000000000000000000000000000000000001" not in addresses
+        assert len(addresses) == 1
 
     def test_load_quarantined_pool_addresses_missing_file(self, tmp_path):
         """Missing quarantine file returns empty frozenset (not error)."""

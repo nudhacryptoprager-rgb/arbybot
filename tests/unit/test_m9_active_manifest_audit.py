@@ -20,6 +20,28 @@ def test_manifest_loads_and_lists_primary():
     assert "config/adapter_metadata.yaml" in paths
 
 
+def test_audit_strict_passes_when_runtime_present():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "audit_m9_active_config.py"),
+            "--strict",
+            "--json",
+            "data/tmp/m9_config_audit_strict.json",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    report = json.loads(
+        (ROOT / "data/tmp/m9_config_audit_strict.json").read_text(encoding="utf-8")
+    )
+    assert report["summary"]["unclassified_configs"] == 0
+    assert report["summary"]["active_missing"] == 0
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+
 def test_audit_script_runs():
     proc = subprocess.run(
         [
