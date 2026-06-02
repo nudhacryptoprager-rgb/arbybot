@@ -91,10 +91,21 @@ class GraphCycle:
     edges: tuple  # tuple[GraphEdge, ...]
 
     def __post_init__(self) -> None:
-        if len(self.edges) < 3:
+        if len(self.edges) < 2:
             raise ValueError(
-                f"GraphCycle requires >= 3 edges, got {len(self.edges)}"
+                f"GraphCycle requires >= 2 edges, got {len(self.edges)}"
             )
+        # 2-leg cycles (direct cross-venue arbitrage A->B->A) are only
+        # economically meaningful when the two hops traverse DIFFERENT pools.
+        # A 2-leg loop through the *same* pool is a guaranteed fee-loss
+        # round-trip, never an arbitrage. Reject it at construction so the
+        # finder/quoter never waste an RPC on a degenerate self-loop.
+        if len(self.edges) == 2:
+            if self.edges[0].pool_address.lower() == self.edges[1].pool_address.lower():
+                raise ValueError(
+                    "2-leg GraphCycle requires two distinct pools, got same pool "
+                    f"{self.edges[0].pool_address}"
+                )
         # Validate closed path
         for i, edge in enumerate(self.edges):
             next_edge = self.edges[(i + 1) % len(self.edges)]

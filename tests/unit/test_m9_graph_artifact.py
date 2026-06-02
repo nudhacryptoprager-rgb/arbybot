@@ -209,7 +209,7 @@ class TestM9GraphArtifactSchema:
 
     def test_topology_gate_valid(self):
         d = _load_rolling()
-        valid = {"NO_CYCLES", "CYCLES_FOUND"}
+        valid = {"NO_CYCLES", "CYCLES_FOUND", "TOPOLOGY_FILTER_BLOCKED"}
         assert d.get("topology_gate") in valid, (
             f"topology_gate must be one of {valid}, got {d.get('topology_gate')!r}"
         )
@@ -865,4 +865,108 @@ class TestInventoryPathInArtifact:
         assert "inventory_path" in ctx, "run_context.inventory_path missing from rolling artifact"
         inv = ctx["inventory_path"]
         assert inv, f"run_context.inventory_path is empty in rolling artifact: {inv!r}"
+
+
+# ---------------------------------------------------------------------------
+# Prequote funnel + dynamic-size intent telemetry (M9 2-leg RCA fixes)
+# ---------------------------------------------------------------------------
+
+class TestPrequoteFunnelTelemetry:
+    """Operator-visible funnel/intent fields around the prequote stage."""
+
+    def _build(self, cycle_results, **kwargs):
+        from m9.graph_arb.artifacts import build_artifact
+        return build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=cycle_results,
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+            **kwargs,
+        )
+
+    def _qr(self, status="NEGATIVE_GROSS", reject_reason=None, gross_bps=-5.0):
+        from m9.graph_arb.models import CycleQuoteResult
+        return CycleQuoteResult(
+            cycle=_make_mock_cycle(), size_usd=1000.0, amount_in=1000, amount_out=990,
+            gross_bps=gross_bps, status=status, reject_reason=reject_reason,
+            leg_results=[], elapsed_s=0.1,
+        )
+
+    def test_funnel_fields_present_with_no_skips(self):
+        """before == after == cycles_found when nothing was skipped."""
+        a = self._build([self._qr()])
+        it = a["infra_telemetry"]
+        assert it["productive_cycles_after_prequote"] == a["cycles_found"]
+        assert it["productive_cycles_before_prequote"] == a["cycles_found"]
+
+    def test_funnel_fields_reflect_skips(self):
+        """before == skipped + quoted; after == quoted only."""
+        a = self._build([self._qr(), self._qr()], prequote_cycles_skipped=8)
+        it = a["infra_telemetry"]
+        assert it["productive_cycles_after_prequote"] == 2
+        assert it["productive_cycles_before_prequote"] == 10
+        # skip_ratio = 8 / (8 + 2)
+        assert it["prequote_skip_ratio"] == pytest.approx(0.8)
+
+    def test_force_quote_keeps_skip_ratio_below_one(self):
+        """The funnel never reports skip_ratio==1.0 when cycles were quoted."""
+        a = self._build([self._qr(), self._qr()], prequote_cycles_skipped=0)
+        it = a["infra_telemetry"]
+        # No skips recorded → ratio key omitted, but funnel shows everything passed.
+        assert it["productive_cycles_after_prequote"] == 2
+        assert it.get("prequote_skip_ratio") is None
+
+    def test_dynamic_size_intent_reported_independently_of_results(self):
+        """--dynamic-sizes intent is True even when no cycle exercised dynamic sizing."""
+        a = self._build([self._qr()], dynamic_sizes_intent=True)
+        it = a["infra_telemetry"]
+        assert it["dynamic_size_intent"] is True
+        # No cycle carried size_candidates → observed enabled stays False.
+        assert it["dynamic_size_enabled"] is False
+
+    def test_dynamic_size_intent_defaults_false(self):
+        a = self._build([self._qr()])
+        assert a["infra_telemetry"]["dynamic_size_intent"] is False
+
+    def test_no_cycles_artifact_preserves_cli_telemetry(self):
+        """Zero-cycle early-exit artifacts must keep CLI intent, not reset to defaults.
+
+        Mirrors the runner's early-exit build_artifact() paths (empty graph /
+        no cycles / dry-run): even with cycle_results=[], the operator-supplied
+        quote_backend / quote_workers / prequote_min_bps / dynamic_sizes_intent
+        must be reflected instead of the schema defaults.
+        """
+        a = self._build(
+            [],
+            quote_backend="raw_http",
+            quote_workers=1,
+            prequote_min_bps=-9999.0,
+            dynamic_sizes_intent=True,
+        )
+        it = a["infra_telemetry"]
+        assert it["quote_backend"] == "raw_http"
+        assert it["quote_workers"] == 1
+        assert it["prequote_min_bps"] == -9999.0
+        assert it["dynamic_size_intent"] is True
+
+
+class TestTopOpportunityRejectFields:
+    """top_opportunities rows must carry cycle_id/status/reject_reason for failed cycles."""
+
+    def test_failed_cycle_has_reject_fields(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+        qr = CycleQuoteResult(
+            cycle=_make_mock_cycle(), size_usd=1000.0, amount_in=1000, amount_out=0,
+            gross_bps=0.0, status="CYCLE_QUOTE_FAILED", reject_reason="QUOTE_REVERT",
+            leg_results=[], elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base", duration_minutes=1.0, cycle_results=[qr],
+            topology=_make_topology(), sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z", started_at_mono=0.0, elapsed_s=60.0,
+        )
+        opp = a["top_opportunities"][0]
+        assert opp["cycle_id"] == "abc123def456"
+        assert opp["status"] == "CYCLE_QUOTE_FAILED"
+        assert opp["reject_reason"] == "QUOTE_REVERT"
 

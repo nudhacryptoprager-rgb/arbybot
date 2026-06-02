@@ -118,6 +118,14 @@ def _dfs_cycles(
 
             if next_token == start_token and depth + 1 in cycle_lengths:
                 # Found a valid cycle
+                # 2-leg guard: a direct A->B->A loop is only an arbitrage
+                # when the closing hop uses a DIFFERENT pool than the opening
+                # hop. Same-pool round-trips are guaranteed fee losses; skip
+                # them before constructing the cycle (the model rejects them
+                # anyway, but skipping avoids the exception churn).
+                if depth + 1 == 2 and path_edges:
+                    if edge.pool_address.lower() == path_edges[0].pool_address.lower():
+                        continue
                 cycle_edges = tuple(path_edges + [edge])
                 try:
                     cycle = GraphCycle(edges=cycle_edges)

@@ -484,6 +484,30 @@ class TestToxicPoolFamiliesInvariant:
             missing = required_fields - set(fam.keys())
             assert not missing, f"toxic_pool_families entry missing fields: {missing}"
 
+    def test_toxic_pool_families_captures_depth_zeroed_oversized_cycle(self):
+        """OVERSIZED_VS_DEPTH cycles zero out gross_bps but stash the real spread in
+        raw_gross_bps. The toxic-family aggregation must use raw_gross_bps so these
+        depth-toxic pools are not invisible (regression: qsr=0 runs showed an empty
+        toxic_pool_families despite thousands of OVERSIZED_VS_DEPTH cycles)."""
+        cycle = _make_cycle(factory_verified=True)
+        qr = CycleQuoteResult(
+            cycle=cycle, size_usd=1000.0, amount_in=1_000_000, amount_out=0,
+            gross_bps=0.0,  # zeroed by the depth-aware phantom ceiling
+            status="OVERSIZED_VS_DEPTH", reject_reason="OVERSIZED_VS_DEPTH",
+            leg_results=[], elapsed_s=0.05,
+            raw_gross_bps=-9000.0,  # real (extreme) spread before zeroing
+        )
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        fams = art["toxic_pool_families"]
+        assert len(fams) > 0, (
+            "Expected toxic pool families for an OVERSIZED_VS_DEPTH cycle with "
+            "raw_gross_bps=-9000 (gross_bps was zeroed)"
+        )
+        pool_addresses = {f["pool_address"].lower() for f in fams}
+        assert _POOL1.lower() in pool_addresses
+        # The reported gross must reflect the real spread, not the zeroed value.
+        assert all(f["min_gross_bps"] <= -500 for f in fams)
+
     def test_toxic_pool_families_sorted_by_cycle_count(self):
         """toxic_pool_families sorted by cycle_count descending (worst offenders first)."""
         cycle1 = _make_cycle(factory_verified=True)

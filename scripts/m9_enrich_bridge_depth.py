@@ -74,6 +74,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--probe-size-usd", type=float, default=100.0)
     p.add_argument("--ref-size-usd", type=float, default=2.0)
     p.add_argument("--dry-run", action="store_true", help="Probe but do not write")
+    p.add_argument(
+        "--allow-public-rpc",
+        action="store_true",
+        help=(
+            "Permit falling back to the rate-limited public mainnet.base.org endpoint. "
+            "By default the script hard-fails when no dedicated BASE_RPC is configured, "
+            "to avoid silent 429-throttled depth probes."
+        ),
+    )
     p.add_argument("--verbose", action="store_true")
     return p.parse_args()
 
@@ -86,7 +95,9 @@ def main() -> int:
     )
 
     # Resolve RPC URL (same policy as pool_depth_probe)
-    rpc_url: Optional[str] = os.environ.get("BASE_RPC", "https://mainnet.base.org")
+    _PUBLIC_FALLBACK_RPC = "https://mainnet.base.org"
+    _base_rpc_env = os.environ.get("BASE_RPC")
+    rpc_url: Optional[str] = _base_rpc_env or _PUBLIC_FALLBACK_RPC
     try:
         from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
         chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
@@ -98,6 +109,24 @@ def main() -> int:
     if not rpc_url:
         log.error("No RPC URL available. Set BASE_RPC env var.")
         return 1
+
+    # Guard: refuse to run depth probes against the public mainnet.base.org endpoint
+    # unless explicitly allowed. That endpoint is heavily rate-limited (429) and produces
+    # unreliable depth data — a silent fallback corrupts the enriched inventory.
+    _resolved_is_public = rpc_url.rstrip("/") == _PUBLIC_FALLBACK_RPC.rstrip("/")
+    if _resolved_is_public and not args.allow_public_rpc:
+        log.error(
+            "Refusing to enrich depth via public RPC %s (rate-limited, 429-prone). "
+            "Set BASE_RPC to a dedicated endpoint, or pass --allow-public-rpc to override.",
+            rpc_url,
+        )
+        return 1
+    if _resolved_is_public:
+        log.warning(
+            "Using public RPC %s for depth enrichment (--allow-public-rpc set); "
+            "expect 429 throttling and possibly incomplete depth data.",
+            rpc_url,
+        )
 
     inv_path = Path(args.inventory)
     if not inv_path.exists():

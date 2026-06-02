@@ -250,6 +250,34 @@ class TestShouldSkipCycle:
         # Default threshold is -500 bps, near-zero should NOT be skipped
         assert not should_skip_cycle(cycle, pool_states)
 
+    def test_force_quote_threshold_never_skips_empty_pool(self):
+        # --prequote-min-bps -9999 means "quote everything": even a known-empty pool
+        # (which would normally be skipped at the default threshold) must NOT be skipped.
+        pool = "0xpool1"
+        edge = _make_edge("0x0001", "0x0002", pool)
+        cycle = _make_cycle(edge)
+        pool_states = {pool: _pool_state(pool, _Q96, liquidity=0)}
+        # Sanity: it WOULD be skipped at the default threshold.
+        assert should_skip_cycle(cycle, pool_states)
+        # Force-quote: not skipped.
+        assert not should_skip_cycle(cycle, pool_states, min_spread_bps=-9999.0)
+
+    def test_force_quote_threshold_never_skips_very_negative_spread(self):
+        # A catastrophically negative cycle is skipped at -500 but force-quoted at -9999.
+        pool1, pool2 = "0xpool1", "0xpool2"
+        edges = [
+            _make_edge("0x000a", "0x000b", pool1, fee_bps=0),
+            _make_edge("0x000b", "0x000a", pool2, fee_bps=0),
+        ]
+        cycle = _make_cycle(*edges)
+        pool_states = {
+            pool1: _pool_state(pool1, int(math.sqrt(0.1) * _Q96)),
+            pool2: _pool_state(pool2, int(math.sqrt(10.0) * _Q96)),
+        }
+        assert should_skip_cycle(cycle, pool_states, min_spread_bps=-500.0)
+        assert not should_skip_cycle(cycle, pool_states, min_spread_bps=-9999.0)
+
+
 
 # ---------------------------------------------------------------------------
 # Priority bonus

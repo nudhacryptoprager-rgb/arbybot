@@ -214,6 +214,9 @@ def _build_top_opportunity(
         loss_reason = None
 
     return {
+        "cycle_id": cycle.cycle_id,
+        "status": qr.status,
+        "reject_reason": qr.reject_reason,
         "dex": dexes[0] if len(dexes) == 1 else ",".join(dexes),
         "factory": factories[0] if len(factories) == 1 else ",".join(factories),
         "factory_verified": factory_verified,
@@ -296,8 +299,11 @@ def _compute_toxic_pool_families(
 ) -> List[Dict[str, Any]]:
     """Aggregate top toxic pool families from TOXIC_ROUTE_PRICE_IMPACT cycles (Step 7).
 
-    A pool is considered toxic when it appears in any cycle whose
-    ``pre_fee_gross_bps < -500`` (catastrophic price impact).
+    A pool is considered toxic when it appears in any cycle whose effective
+    pre-fee gross (``raw_gross_bps`` when the cycle was depth-zeroed, else
+    ``gross_bps``) is ``< -500`` (catastrophic price impact). Using the
+    pre-zeroing value ensures OVERSIZED_VS_DEPTH cycles — whose ``gross_bps`` is
+    reset to 0 — are still attributed to the pools that caused them.
 
     Returns a list of pool-level dicts sorted by cycle_count descending (top 20).
     Each entry contains: pool_address, pair_id, dex_id, fee_bps, cycle_count,
@@ -306,7 +312,13 @@ def _compute_toxic_pool_families(
     pool_stats: Dict[str, Dict[str, Any]] = {}
     for qr in cycle_results:
         fee_drag = qr.cycle.total_fee_bps
-        pfgb = qr.gross_bps + fee_drag
+        # OVERSIZED_VS_DEPTH and phantom cycles zero out gross_bps and stash the
+        # real (extreme) spread in raw_gross_bps. Use that pre-zeroing value so the
+        # catastrophic-impact filter actually sees them — otherwise the dominant
+        # depth-toxic pools are invisible in toxic_pool_families (the metric the
+        # operator relies on to identify pools poisoning every cycle).
+        effective_gross = qr.raw_gross_bps if qr.raw_gross_bps is not None else qr.gross_bps
+        pfgb = effective_gross + fee_drag
         if pfgb >= -500:
             continue  # not a toxic-impact cycle
         for edge in qr.cycle.edges:
@@ -323,10 +335,10 @@ def _compute_toxic_pool_families(
                 }
             stats = pool_stats[key]
             stats["cycle_count"] += 1
-            if stats["min_gross_bps"] is None or qr.gross_bps < stats["min_gross_bps"]:
-                stats["min_gross_bps"] = round(qr.gross_bps, 4)
-            if stats["max_gross_bps"] is None or qr.gross_bps > stats["max_gross_bps"]:
-                stats["max_gross_bps"] = round(qr.gross_bps, 4)
+            if stats["min_gross_bps"] is None or effective_gross < stats["min_gross_bps"]:
+                stats["min_gross_bps"] = round(effective_gross, 4)
+            if stats["max_gross_bps"] is None or effective_gross > stats["max_gross_bps"]:
+                stats["max_gross_bps"] = round(effective_gross, 4)
     result = sorted(pool_stats.values(), key=lambda x: -x["cycle_count"])
     return result[:20]  # top 20 toxic pool families
 
@@ -617,6 +629,9 @@ def build_artifact(
     provider_router_snapshot: Optional[Dict[str, Any]] = None,
     # Effective prequote filter threshold used during this run
     prequote_min_bps: float = -500.0,
+    # Operator intent for dynamic sizing (CLI --dynamic-sizes / config), independent
+    # of whether any cycle survived prequote to actually exercise dynamic sizing.
+    dynamic_sizes_intent: bool = False,
     # Pool-quality gate lane: 'discovery' or 'productive' (Steps 2+3)
     pool_quality_lane: str = "discovery",
     # Discovery-lane cycle count when productive lane filters graph to zero cycles
@@ -1196,6 +1211,11 @@ def build_artifact(
         infra_telemetry["prequote_skip_ratio"] = round(
             prequote_cycles_skipped / _denom_prequote, 4
         )
+    # Productive-cycle funnel around the prequote stage (operator-visible regardless
+    # of whether anything was skipped). "before" = cycles that entered the prequote
+    # stage; "after" = cycles that survived and reached the quoter.
+    infra_telemetry["productive_cycles_before_prequote"] = prequote_cycles_skipped + cycles_found
+    infra_telemetry["productive_cycles_after_prequote"] = cycles_found
     # Scheduler name
     if scheduler_name is not None:
         infra_telemetry["scheduler_name"] = scheduler_name
@@ -1203,6 +1223,10 @@ def build_artifact(
     infra_telemetry["dynamic_size_enabled"] = bool(
         any(qr.size_candidates_usd for qr in cycle_results)
     )
+    # Operator intent (CLI/config) is reported separately from the observed result so
+    # that a run which requested --dynamic-sizes but quoted zero cycles still shows the
+    # intent was on, instead of a misleading dynamic_size_enabled=False.
+    infra_telemetry["dynamic_size_intent"] = bool(dynamic_sizes_intent)
     infra_telemetry["dynamic_size_selected_count"] = len(_dynamic_results)
     if _dynamic_results:
         infra_telemetry["dynamic_size_selection_rate"] = round(

@@ -34,6 +34,13 @@ log = logging.getLogger(__name__)
 # Default -500 bps (very conservative — only filter clearly hopeless cycles).
 _DEFAULT_SKIP_THRESHOLD_BPS: float = -500.0
 
+# Force-quote sentinel: when the operator passes a min_spread_bps at or below this
+# value (e.g. --prequote-min-bps -9999), the intent is "quote everything, do not
+# pre-filter". In that mode should_skip_cycle never skips — not even known-empty
+# pools — so the expensive quoter runs and surfaces the real reject reason
+# (e.g. QUOTE_REVERT) instead of silently dropping the cycle at prequote time.
+FORCE_QUOTE_THRESHOLD_BPS: float = -9000.0
+
 # Adapters whose price follows the standard V3 sqrtPriceX96 convention.
 _V3_COMPATIBLE_ADAPTERS = frozenset([
     "uniswap_v3",
@@ -138,6 +145,13 @@ def should_skip_cycle(
     A cycle is NOT skipped when pool states are missing — we fall back to
     the expensive Quoter to avoid false negatives.
     """
+    # Force-quote mode: an extremely permissive threshold means the operator
+    # explicitly wants every cycle quoted (no economic OR empty-pool pre-filter).
+    # Returning False here keeps prequote_skip_ratio < 1.0 and lets the quoter
+    # produce a real reject_reason for otherwise-dropped cycles.
+    if min_spread_bps <= FORCE_QUOTE_THRESHOLD_BPS:
+        return False
+
     # Case 1: any pool state is present and shows zero liquidity — definitely skip
     for edge in cycle.edges:
         state = pool_states.get(edge.pool_address.lower())

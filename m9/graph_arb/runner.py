@@ -107,6 +107,53 @@ _REVERT_QUARANTINE_PATH = "data/tmp/m9_revert_quarantine.json"
 _REVERT_DOMINANT_THRESHOLD = 0.8
 
 
+def resolve_revert_quarantine_addresses(
+    rq_data: dict,
+    inventory_routes: list,
+) -> set:
+    """Resolve the set of pool_addresses to exclude from a revert-quarantine file.
+
+    Two resolution paths:
+      * schema .2+ — each route entry carries ``pool_address`` directly; used as-is.
+        Robust even when a token symbol itself contains '-' (e.g. "open-slide").
+      * schema .1 (legacy) — entries have no ``pool_address``; resolve it by
+        reconstructing the exact probe route_id ``"{dex_id}:{token0}-{token1}@{fee}"``
+        from the inventory's explicit token0/token1/dex_id/fee fields and
+        string-comparing against the quarantine route_id (both directions). This
+        avoids fragmenting the pair string on '-', which mis-split hyphenated
+        symbols and silently failed to quarantine the reverting pool.
+
+    Returns a set of lowercased pool_address strings.
+    """
+    routes = rq_data.get("routes", []) or []
+    direct_addrs = {
+        (e.get("pool_address") or "").lower()
+        for e in routes
+        if e.get("pool_address")
+    }
+    legacy_ids = {
+        e.get("route_id", "")
+        for e in routes
+        if not e.get("pool_address") and e.get("route_id")
+    }
+    resolved: set = set(direct_addrs)
+    if legacy_ids:
+        for inv_r in inventory_routes or []:
+            inv_dex = inv_r.get("dex_id", "")
+            inv_fee_raw = inv_r.get("fee")
+            inv_fee = "" if inv_fee_raw is None else str(int(inv_fee_raw))
+            inv_t0 = inv_r.get("token0", "")
+            inv_t1 = inv_r.get("token1", "")
+            inv_pool = inv_r.get("pool_address", "")
+            if not (inv_dex and inv_t0 and inv_t1 and inv_pool):
+                continue
+            cand_fwd = f"{inv_dex}:{inv_t0}-{inv_t1}@{inv_fee}"
+            cand_rev = f"{inv_dex}:{inv_t1}-{inv_t0}@{inv_fee}"
+            if cand_fwd in legacy_ids or cand_rev in legacy_ids:
+                resolved.add(inv_pool.lower())
+    return resolved
+
+
 def _write_revert_quarantine(
     cycle_results: list,
     log: "logging.Logger",
@@ -130,7 +177,7 @@ def _write_revert_quarantine(
     # Accumulate per-route leg error counts
     # "HARD" = QUOTE_REVERT or QUOTE_RPC_ERROR; "OTHER" = everything else
     _HARD_ERRORS = frozenset({"QUOTE_REVERT", "QUOTE_RPC_ERROR"})
-    route_errors: "_dd[str, dict]" = _dd(lambda: {"HARD": 0, "OTHER": 0, "pair_id": ""})
+    route_errors: "_dd[str, dict]" = _dd(lambda: {"HARD": 0, "OTHER": 0, "pair_id": "", "pool_address": ""})
     for qr in cycle_results:
         edges = qr.cycle.edges
         for i, leg in enumerate(qr.leg_results or []):
@@ -139,6 +186,10 @@ def _write_revert_quarantine(
             if not leg.ok and leg.reject_reason:
                 entry = route_errors[leg.route_id]
                 entry["pair_id"] = edges[i].pair_id
+                # Record pool_address so the next run can quarantine by address directly,
+                # instead of re-parsing symbols from the route_id (which is ambiguous for
+                # tokens whose symbol contains '-', e.g. "open-slide").
+                entry["pool_address"] = (edges[i].pool_address or "").lower()
                 if leg.reject_reason in _HARD_ERRORS:
                     entry["HARD"] += 1
                 else:
@@ -156,6 +207,7 @@ def _write_revert_quarantine(
                 {
                     "route_id": route_id,
                     "pair_id": counts["pair_id"],
+                    "pool_address": counts["pool_address"],
                     "revert_count": hard,
                     "total_leg_errors": total,
                     "revert_rate": round(hard_rate, 4),
@@ -168,7 +220,7 @@ def _write_revert_quarantine(
 
     quarantine.sort(key=lambda x: -x["revert_rate"])
     out = {
-        "schema_version": "m9_revert_quarantine.1",
+        "schema_version": "m9_revert_quarantine.2",
         "generated_at_utc": _dt.now(tz=_tz.utc).isoformat(),
         "route_count": len(quarantine),
         "threshold": _REVERT_DOMINANT_THRESHOLD,
@@ -479,6 +531,13 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Fix 7: track source of sizes_usd for artifact invariant
     _sizes_usd_source: str = "cli_default"
     _cost_model: Optional[Dict[str, Any]] = None  # loaded from cost_model section in YAML
+    # cycle_lengths: which cycle topologies to enumerate. Default (3, 4):
+    #   2 = direct cross-venue arbitrage (A->B->A on two distinct pools)
+    #   3 = triangle (A->B->C->A)
+    #   4 = quadrilateral (A->B->C->D->A)
+    # Opt-in widening via scan_params.cycle_lengths so existing soaks keep
+    # the (3, 4) behavior until a config explicitly requests 2-leg/wider.
+    _cycle_lengths: "tuple[int, ...]" = (3, 4)
     try:
         import yaml  # noqa: PLC0415
         with open(args.config, encoding="utf-8") as _f:
@@ -493,6 +552,19 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         if _sp.get("dynamic_size_max_cycles") and args.dynamic_size_max_cycles == _CLI_DYN_MAX_DEFAULT:
             args.dynamic_size_max_cycles = int(_sp["dynamic_size_max_cycles"])
             log.info("scan_params: dynamic_size_max_cycles from config: %d", args.dynamic_size_max_cycles)
+        _cfg_cycle_lengths = _sp.get("cycle_lengths")
+        if _cfg_cycle_lengths:
+            try:
+                _parsed = tuple(sorted({int(v) for v in _cfg_cycle_lengths if int(v) >= 2}))
+                if _parsed:
+                    _cycle_lengths = _parsed
+                    log.info("scan_params: cycle_lengths from config: %s", _cycle_lengths)
+            except (TypeError, ValueError) as _cl_exc:
+                log.warning(
+                    "scan_params.cycle_lengths invalid (%s), using default %s",
+                    _cl_exc,
+                    _cycle_lengths,
+                )
         _cost_model = _cfg_raw.get("cost_model") or None
         if _cost_model:
             _profile = (_cost_model.get("profiles") or {}).get(
@@ -650,42 +722,29 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _rq_path = getattr(args, "revert_quarantine_path", _REVERT_QUARANTINE_PATH)
             with open(_rq_path, encoding="utf-8") as _rq_fh:
                 _rq_data = _rq_json.load(_rq_fh)
-            # Build lookup: (dex_id, frozenset({sym0, sym1}), fee_int) → True
-            _rq_lookup: "dict[tuple, bool]" = {}
-            for _rq_entry in _rq_data.get("routes", []):
-                _rq_id = _rq_entry.get("route_id", "")
-                # Format: "dex_id:SYM0-SYM1@fee"
-                try:
-                    _rq_dex, _rest = _rq_id.split(":", 1)
-                    _rq_pair_str, _rq_fee_str = _rest.rsplit("@", 1)
-                    _rq_syms = frozenset(_rq_pair_str.split("-", 1))
-                    _rq_lookup[(_rq_dex, _rq_syms, int(_rq_fee_str))] = True
-                except Exception:
-                    pass
-            if _rq_lookup:
-                # Resolve matching pool_addresses from the already-loaded inventory
-                _rq_extra_addrs: set = set()
-                try:
-                    with open(inventory_path, encoding="utf-8") as _inv_fh2:
-                        _inv_raw2 = _rq_json.load(_inv_fh2)
-                    for _inv_r in _inv_raw2.get("active_routes", []):
-                        _inv_dex = _inv_r.get("dex_id", "")
-                        _inv_pair = _inv_r.get("pair_id", "")
-                        _inv_fee = int(_inv_r.get("fee") or 0)
-                        _inv_syms = frozenset(_inv_pair.replace("-", "_").split("_")) if _inv_pair else frozenset()
-                        _inv_pool = _inv_r.get("pool_address", "")
-                        if (_inv_dex, _inv_syms, _inv_fee) in _rq_lookup and _inv_pool:
-                            _rq_extra_addrs.add(_inv_pool.lower())
-                except Exception as _rq_inv_exc:
-                    log.debug("Revert quarantine pool lookup failed: %s", _rq_inv_exc)
+            _rq_routes = _rq_data.get("routes", []) or []
+            _rq_direct_count = sum(1 for _e in _rq_routes if _e.get("pool_address"))
+            _rq_legacy_count = sum(
+                1 for _e in _rq_routes if not _e.get("pool_address") and _e.get("route_id")
+            )
+            if _rq_direct_count or _rq_legacy_count:
+                # Load the inventory once for legacy route_id → pool_address resolution.
+                _inv_routes2: list = []
+                if _rq_legacy_count:
+                    try:
+                        with open(inventory_path, encoding="utf-8") as _inv_fh2:
+                            _inv_routes2 = (_rq_json.load(_inv_fh2) or {}).get("active_routes", [])
+                    except Exception as _rq_inv_exc:
+                        log.debug("Revert quarantine pool lookup failed: %s", _rq_inv_exc)
+                _rq_extra_addrs = resolve_revert_quarantine_addresses(_rq_data, _inv_routes2)
                 if _rq_extra_addrs:
                     _revert_quarantine_skipped = len(_rq_extra_addrs)
                     # Merge with existing depth-quarantine exclusions
                     _exclude_pool_addresses = (_exclude_pool_addresses or frozenset()) | frozenset(_rq_extra_addrs)
                     log.info(
-                        "Revert quarantine: resolved %d pool_addresses from %d probe route_ids "
-                        "(QUOTE_REVERT feedback from previous run)",
-                        _revert_quarantine_skipped, len(_rq_lookup),
+                        "Revert quarantine: excluding %d pool_addresses "
+                        "(%d direct, %d legacy route_id entries) — QUOTE_REVERT feedback",
+                        _revert_quarantine_skipped, _rq_direct_count, _rq_legacy_count,
                     )
         except FileNotFoundError:
             log.debug("No revert quarantine file found at %s — first run or cleared", _REVERT_QUARANTINE_PATH)
@@ -755,6 +814,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
+            quote_backend=getattr(args, "quote_backend", "direct_http"),
+            quote_workers=getattr(args, "quote_workers", 4),
+            prequote_min_bps=getattr(args, "prequote_min_bps", -500.0),
+            dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
@@ -793,7 +856,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                     _graph_edges_from_m8,
                 )
         log.info("Graph edges from M8 sniper routes: %d", _graph_edges_from_m8)
-    cycles = find_cycles(adjacency, max_cycles=args.cycles_limit)
+    cycles = find_cycles(adjacency, cycle_lengths=_cycle_lengths, max_cycles=args.cycles_limit)
     # --- Fee-cap pre-filter (Step 2 hardening) -----------------------------------
     # Any cycle whose *total* fee exceeds _MAX_CYCLE_FEE_BPS can never be
     # profitable at realistic price discrepancies.  Cycles with fees like
@@ -840,6 +903,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
+            quote_backend=getattr(args, "quote_backend", "direct_http"),
+            quote_workers=getattr(args, "quote_workers", 4),
+            prequote_min_bps=getattr(args, "prequote_min_bps", -500.0),
+            dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
@@ -876,6 +943,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             rpc_public_fallback_used=rpc_public_fallback_used,
             unverified_active_routes=unverified_active_routes,
             sizes_usd_source=_sizes_usd_source,
+            quote_backend=getattr(args, "quote_backend", "direct_http"),
+            quote_workers=getattr(args, "quote_workers", 4),
+            prequote_min_bps=getattr(args, "prequote_min_bps", -500.0),
+            dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
@@ -1214,6 +1285,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             sizes_usd_source=_sizes_usd_source,
             provider_router_snapshot=_router.snapshot(),
             prequote_min_bps=_prequote_min_bps,
+            dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
@@ -1340,6 +1412,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         sizes_usd_source=_sizes_usd_source,
         provider_router_snapshot=_router.snapshot(),
         prequote_min_bps=_prequote_min_bps,
+        dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
         pool_quality_lane=_lane,
         discovery_cycles_found=_discovery_cycles_found,
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
