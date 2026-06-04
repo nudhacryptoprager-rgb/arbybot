@@ -1110,6 +1110,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         if _cycle_scheduler is not None:
             # Priority mode: scheduler picks the best candidates each sweep
             batch = _cycle_scheduler.next_batch(max_per_sweep)
+            from m9.graph_arb.cycle_scheduler import apply_sweep_budget
+
+            _max_per_adapter = int(os.environ.get("ARBY_M9_MAX_CYCLES_PER_ADAPTER", "8"))
+            batch = apply_sweep_budget(batch, max_per_adapter=_max_per_adapter)
             if not batch:
                 # Scheduler exhausted ready cycles; sleep briefly and retry
                 # rather than exiting early — respects the deadline contract.

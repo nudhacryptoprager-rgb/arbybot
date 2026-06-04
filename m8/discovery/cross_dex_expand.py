@@ -245,8 +245,11 @@ def _build_route(
         "tick_spacing": pool_entry.get("tick_spacing"),
         "hooks": pool_entry.get("hooks"),
         "quote_smoke": pool_entry.get("quote_smoke", "not_run"),
-        "expansion_productive_admit": productive,
+        "quote_smoke_status": pool_entry.get("quote_smoke_status")
+        or pool_entry.get("quote_smoke", "not_run"),
         "venues_quoteable": pool_entry.get("_venues_quoteable"),
+        "expansion_productive_admit": productive,
+        "reject_reason_histogram": pool_entry.get("reject_reason_histogram"),
     }
 
 
@@ -338,6 +341,13 @@ def expand_cross_dex(
                 )
         else:
             reject_hist["SINGLE_VENUE_ONLY"] += 1
+
+    try:
+        from m9.graph_arb.pool_quality import annotate_routes_pool_quality
+
+        annotate_routes_pool_quality(routes_admitted)
+    except Exception:
+        pass
 
     summary = {
         "tokens_in": len(pairs),

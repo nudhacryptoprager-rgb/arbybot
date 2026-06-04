@@ -1182,6 +1182,25 @@ def build_bridge_inventory(
         bridge_source_metrics["registry_promoted_routes"] = 0
 
     # ------------------------------------------------------------------
+    # Per-pool quality state (discovery → productive admission)
+    # ------------------------------------------------------------------
+    final_active = _without_curve_routes(base_active + m8_new_routes)
+    try:
+        from m9.graph_arb.pool_quality import (
+            annotate_routes_pool_quality,
+            productive_admission_histogram,
+        )
+
+        bridge_source_metrics["pool_quality_histogram"] = annotate_routes_pool_quality(
+            final_active
+        )
+        bridge_source_metrics["productive_admission_histogram"] = (
+            productive_admission_histogram(final_active)
+        )
+    except Exception as _pq_exc:
+        bridge_source_metrics["pool_quality_error"] = str(_pq_exc)[:200]
+
+    # ------------------------------------------------------------------
     # Write output artifact
     # ------------------------------------------------------------------
     output_artifact: Dict[str, Any] = {
@@ -1190,7 +1209,7 @@ def build_bridge_inventory(
         "bridge_source_metrics": bridge_source_metrics,
         "source_inventory": base_inv_path if base_inv else None,
         "total_candidates": len(base_active) + len(m8_new_routes),
-        "active_routes": _without_curve_routes(base_active + m8_new_routes),
+        "active_routes": final_active,
         "quarantined_routes": (
             (base_inv.get("quarantined_routes", []) if base_inv else [])
             + m8_quarantined_routes
@@ -1199,7 +1218,7 @@ def build_bridge_inventory(
         ),
         "pending_routes": m8_pending_routes,
         "summary": {
-            "active_count": len(_without_curve_routes(base_active + m8_new_routes)),
+            "active_count": len(final_active),
             "quarantined_count": (
                 len(base_inv.get("quarantined_routes", [])) if base_inv else 0
             ),

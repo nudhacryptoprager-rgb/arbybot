@@ -64,6 +64,10 @@ _RPC_ERROR_PENALTY: float = -28.0          # penalty to force cycle into cold qu
 
 _FAILED_STATUSES = frozenset(["QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT"])
 
+# Per-sweep quote budget defaults (env-overridable via runner).
+_DEFAULT_MAX_PER_ADAPTER: int = 8
+_DEFAULT_MAX_PER_LENGTH: Dict[int, int] = {2: 12, 3: 20, 4: 12}
+
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -292,3 +296,45 @@ class CyclePriorityScheduler:
             "score_max": round(max(scores), 2),
             "score_mean": round(sum(scores) / len(scores), 2),
         }
+
+
+def _adapter_family(cycle: GraphCycle) -> str:
+    """Coarse adapter family for per-sweep budget caps."""
+    types = {e.adapter_type for e in cycle.edges}
+    if "curve_stable" in types:
+        return "curve_stable"
+    if "balancer" in " ".join(types) or any("balancer" in (e.dex_id or "") for e in cycle.edges):
+        return "balancer"
+    if "uniswap_v4" in types:
+        return "uniswap_v4"
+    if types & {"uniswap_v2", "sushiswap_v2", "baseswap_v2"}:
+        return "uniswap_v2"
+    if "ve33" in types or "aerodrome_v2_stable" in types:
+        return "solidly"
+    if "aerodrome_slipstream" in types:
+        return "aerodrome_slipstream"
+    return "clmm"
+
+
+def apply_sweep_budget(
+    batch: List[GraphCycle],
+    *,
+    max_per_adapter: int = _DEFAULT_MAX_PER_ADAPTER,
+    max_per_length: Optional[Dict[int, int]] = None,
+) -> List[GraphCycle]:
+    """Cap cycles per adapter-family and per cycle length within one sweep."""
+    caps = max_per_length if max_per_length is not None else dict(_DEFAULT_MAX_PER_LENGTH)
+    adapter_counts: Dict[str, int] = defaultdict(int)
+    length_counts: Dict[int, int] = defaultdict(int)
+    selected: List[GraphCycle] = []
+    for cycle in batch:
+        fam = _adapter_family(cycle)
+        length = len(cycle.edges)
+        if adapter_counts[fam] >= max_per_adapter:
+            continue
+        if length_counts[length] >= caps.get(length, max_per_adapter):
+            continue
+        selected.append(cycle)
+        adapter_counts[fam] += 1
+        length_counts[length] += 1
+    return selected

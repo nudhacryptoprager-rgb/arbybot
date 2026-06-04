@@ -473,6 +473,8 @@ class TestPoolDepthFilter:
             "factory_class": "EFFICIENT_BASELINE",
             "pool_address": pool_address,
             "route_id": f"uniswap_v3:WETH_USDC@500",
+            "factory_verified": True,
+            "adapter_type": "uniswap_v3",
         }
         if effective_depth_usd is not None:
             entry["effective_depth_usd"] = effective_depth_usd
@@ -499,6 +501,12 @@ class TestPoolDepthFilter:
             "tokens": {
                 "WETH": {"address": "0x4200000000000000000000000000000000000006", "decimals": 18},
                 "USDC": {"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "decimals": 6},
+            },
+            "m9_dex_productivity": {
+                "uniswap_v3": {
+                    "enabled_for_discovery": True,
+                    "enabled_for_productive": True,
+                },
             },
         }
         p = tmp_path / "config.yaml"

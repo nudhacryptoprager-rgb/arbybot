@@ -240,6 +240,7 @@ def build_graph_from_inventory(
     invalid_token_addr_skipped = 0
     unknown_token_skipped = 0
     productivity_skipped = 0
+    admission_skipped = 0
     _productive_lane = (lane == "productive")
     _productive_dexes = (
         productive_dex_ids_from_config(config_path) if _productive_lane else frozenset()
@@ -273,6 +274,14 @@ def build_graph_from_inventory(
         if _productive_lane and _productive_dexes and dex_id not in _productive_dexes:
             productivity_skipped += 1
             continue
+
+        if _productive_lane:
+            from m9.graph_arb.pool_quality import productive_admission_ok
+
+            _min_depth = min_effective_depth_usd if min_effective_depth_usd > 0 else 50.0
+            if not productive_admission_ok(entry, min_depth_usd=_min_depth):
+                admission_skipped += 1
+                continue
 
         if exclude_factory_classes and factory_class in exclude_factory_classes:
             continue
@@ -562,6 +571,7 @@ def build_graph_from_inventory(
                 "invalid_token_addr_skipped": invalid_token_addr_skipped,
                 "unknown_token_skipped": unknown_token_skipped,
                 "productivity_skipped": productivity_skipped,
+                "admission_skipped": admission_skipped,
             }
         },
     )

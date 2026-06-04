@@ -583,6 +583,78 @@ def _compute_edge_error_histogram(
     return result
 
 
+def _compute_layer_telemetry(
+    cycle_results: List[CycleQuoteResult],
+    *,
+    qsr: float,
+    provider_router_snapshot: Optional[Dict[str, Any]] = None,
+    ws_freshness: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Per-layer QSR breakdown for unified data-driven pipeline."""
+    from collections import Counter
+
+    def _is_success(status: str) -> bool:
+        return status not in ("QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "ZERO_AMOUNT_IN")
+
+    quoted = [
+        qr for qr in cycle_results
+        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
+    ]
+    by_adapter: Counter[str] = Counter()
+    ok_adapter: Counter[str] = Counter()
+    by_length: Counter[int] = Counter()
+    ok_length: Counter[int] = Counter()
+    for qr in quoted:
+        adapters = {e.adapter_type for e in qr.cycle.edges}
+        fam = next(iter(adapters)) if len(adapters) == 1 else "mixed"
+        by_adapter[fam] += 1
+        if _is_success(qr.status):
+            ok_adapter[fam] += 1
+        ln = len(qr.cycle.edges)
+        by_length[ln] += 1
+        if _is_success(qr.status):
+            ok_length[ln] += 1
+
+    qsr_by_adapter = {
+        k: round(ok_adapter[k] / by_adapter[k], 4) if by_adapter[k] else 0.0
+        for k in by_adapter
+    }
+    qsr_by_cycle_length = {
+        str(k): round(ok_length[k] / by_length[k], 4) if by_length[k] else 0.0
+        for k in sorted(by_length)
+    }
+    cycles_by_length = {str(k): by_length[k] for k in sorted(by_length)}
+
+    out: Dict[str, Any] = {
+        "qsr_by_adapter": qsr_by_adapter,
+        "qsr_by_cycle_length": qsr_by_cycle_length,
+        "cycles_by_length": cycles_by_length,
+    }
+
+    if provider_router_snapshot:
+        out["qsr_by_provider"] = {
+            "primary": provider_router_snapshot.get("primary_netloc"),
+            "secondary_active": provider_router_snapshot.get("using_secondary"),
+            "failover_count": provider_router_snapshot.get("failover_count", 0),
+        }
+        out["provider_failover_count"] = int(
+            provider_router_snapshot.get("failover_count", 0) or 0
+        )
+    else:
+        out["qsr_by_provider"] = None
+        out["provider_failover_count"] = 0
+
+    if ws_freshness:
+        out["ws_event_freshness_s"] = ws_freshness.get("age_s") or ws_freshness.get(
+            "freshness_s"
+        )
+
+    depth_capped = sum(1 for qr in cycle_results if getattr(qr, "depth_capped", False))
+    out["depth_capped_count"] = depth_capped
+    out["global_qsr"] = round(qsr, 4)
+    return out
+
+
 def build_artifact(
     chain: str,
     duration_minutes: float,
@@ -1307,10 +1379,39 @@ def build_artifact(
             "pass": _revert_val < 0.05,
         },
     }
+    _depth_known_rate = infra_telemetry.get("depth_aware_known_rate")
+    runtime_gates["depth_aware_known_rate"] = {
+        "value": _depth_known_rate,
+        "threshold": 0.8,
+        "pass": bool(
+            _depth_known_rate is None
+            or _depth_known_rate >= 0.8
+        ),
+    }
+    _failover = 0
+    if provider_router_snapshot:
+        _failover = int(
+            provider_router_snapshot.get("failover_count", 0)
+            or provider_router_snapshot.get("failover_events", 0)
+            or 0
+        )
+    runtime_gates["provider_failover_count"] = {
+        "value": _failover,
+        "threshold": 50,
+        "pass": _failover < 50,
+    }
     runtime_gates["all_pass"] = all(
         v["pass"] for v in runtime_gates.values() if isinstance(v, dict) and "pass" in v
     )
     artifact["runtime_gates"] = runtime_gates
+
+    _layer = _compute_layer_telemetry(
+        cycle_results,
+        qsr=qsr,
+        provider_router_snapshot=provider_router_snapshot,
+        ws_freshness=ws_freshness,
+    )
+    artifact.update(_layer)
 
     # M8→M9 bridge provenance (optional; populated when runner uses bridge inventory)
     if bridge_source_metrics is not None:

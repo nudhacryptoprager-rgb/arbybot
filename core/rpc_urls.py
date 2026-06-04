@@ -148,6 +148,141 @@ def public_fallback_for(network: Optional[str]) -> Optional[str]:
     return _PUBLIC_FALLBACKS.get(net)
 
 
+# Host substrings indicating rate-limited / non-dedicated public endpoints.
+_PUBLIC_RPC_HOST_MARKERS = (
+    "publicnode.com",
+    "mainnet.base.org",
+    "llamarpc.com",
+    "blastapi.io",
+    "1rpc.io",
+    "meowrpc.com",
+    "blockpi.network/v1/rpc/public",
+    "omniatech.io/v1/",
+)
+
+
+def is_public_rpc_url(url: Optional[str]) -> bool:
+    """True when URL looks like a free/public RPC endpoint."""
+    u = (url or "").strip().lower()
+    if not u:
+        return True
+    return any(marker in u for marker in _PUBLIC_RPC_HOST_MARKERS)
+
+
+def require_dedicated_rpc_or_raise(
+    url: Optional[str],
+    *,
+    chain: str = "base",
+    env: Optional[dict] = None,
+) -> None:
+    """Hard-fail when ARBY_REQUIRE_DEDICATED_RPC=1 and URL is public."""
+    import os
+
+    env = env if env is not None else os.environ
+    flag = str(env.get("ARBY_REQUIRE_DEDICATED_RPC", "")).strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return
+    if is_public_rpc_url(url):
+        raise RuntimeError(
+            f"ARBY_REQUIRE_DEDICATED_RPC=1: refusing public RPC for chain={chain!r} "
+            f"url={url!r}. Set BASE_RPC_PRIMARY to a dedicated provider."
+        )
+
+
+def iter_dedicated_http_providers(
+    chain: str = "base",
+    *,
+    env: Optional[dict] = None,
+) -> list[tuple[str, str]]:
+    """Collect non-public HTTP RPC URLs for A/B (labels are provider class or role)."""
+    import os
+
+    env = dict(env if env is not None else os.environ)
+    chain_key = chain.lower().strip()
+    prefix = chain_key.upper()
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+
+    def add(url: str, label: str) -> None:
+        u = (url or "").strip()
+        if not u or u in seen or is_public_rpc_url(u):
+            return
+        seen.add(u)
+        out.append((label, u))
+
+    primary = (env.get(f"{prefix}_RPC_PRIMARY") or "").strip()
+    if primary:
+        add(primary, "primary")
+
+    api = (env.get("ALCHEMY_API_KEY") or "").strip()
+    if api:
+        url = build_alchemy_http_url(chain_key, api)
+        if url:
+            add(url, "alchemy")
+
+    secondary = (env.get(f"{prefix}_RPC_SECONDARY") or "").strip()
+    if secondary:
+        add(secondary, "secondary")
+
+    for key in ("DRPC_BASE_HTTP", "DRPC_HTTP", "ALCHEMY_BASE_HTTP"):
+        val = (env.get(key) or "").strip()
+        if val:
+            add(val, classify_provider(val))
+
+    if not primary:
+        fallback = (env.get(f"{prefix}_RPC") or "").strip()
+        if fallback:
+            add(fallback, classify_provider(fallback))
+
+    wss = (env.get(f"{prefix}_WSS") or "").strip()
+    if wss.startswith("wss://"):
+        add("https://" + wss[6:], classify_provider(wss))
+    elif wss.startswith("ws://"):
+        add("http://" + wss[5:], classify_provider(wss))
+
+    if not out:
+        chain_id = _CHAIN_KEY_TO_ID.get(chain_key)
+        http, prov, _ = resolve_rpc_http(chain_id=chain_id, network=chain_key, env=env)
+        if http:
+            add(http, prov if prov != "public" else "resolved")
+
+    return out
+
+
+def print_rpc_env_contract(chain: str = "base", *, env: Optional[dict] = None) -> None:
+    """Print env presence / policy flags without secret values."""
+    import os
+
+    env = dict(env if env is not None else os.environ)
+    prefix = chain.upper()
+    keys = (
+        f"{prefix}_RPC_PRIMARY",
+        f"{prefix}_RPC_SECONDARY",
+        f"{prefix}_WSS",
+        "ALCHEMY_API_KEY",
+        "ARBY_REQUIRE_DEDICATED_RPC",
+        "ARBY_PROVIDER_POOL_MODE",
+        "ARBY_USE_PUBLIC_POOL",
+    )
+
+    def _present(key: str) -> bool:
+        return bool((env.get(key) or "").strip())
+
+    print("RPC env contract (values redacted):")
+    for key in keys:
+        if key.startswith("ARBY_"):
+            val = (env.get(key) or "").strip()
+            print(f"  {key}={val or '(unset)'}")
+        else:
+            present = _present(key)
+            pub = False
+            if present:
+                pub = is_public_rpc_url(env.get(key))
+            print(f"  {key}: present={present} public={pub}")
+    dedicated = iter_dedicated_http_providers(chain, env=env)
+    print(f"  dedicated_http_providers: {len(dedicated)} ({', '.join(l[0] for l in dedicated) or 'none'})")
+
+
 def classify_provider(url: str) -> str:
     """Return a canonical provider type for an RPC URL.
 
@@ -310,10 +445,17 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
 
     net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
 
-    # 1) Chain-scoped env var (e.g. BASE_RPC, ARBITRUM_RPC)
+    # 1) Chain-scoped env var (e.g. BASE_RPC_PRIMARY, BASE_RPC)
     if net and net in _CHAIN_ENV_VARS:
         http_var, _ws_var = _CHAIN_ENV_VARS[net]
-        chain_url = env.get(http_var)
+        primary_var = f"{net.upper()}_RPC_PRIMARY"
+        chain_url = (env.get(primary_var) or "").strip() or None
+        if not chain_url:
+            fallback = (env.get(http_var) or "").strip()
+            if fallback and not is_public_rpc_url(fallback):
+                chain_url = fallback
+            elif fallback and is_public_rpc_url(fallback):
+                diagnostics["skipped_public_chain_env"] = http_var
         if chain_url:
             # Validate dRPC chain match
             drpc_ok, drpc_err = validate_drpc_url(chain_url, net)
@@ -322,7 +464,8 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
                 # Fall through to other resolution
             else:
                 prov = classify_provider(chain_url)
-                diagnostics["source"] = f"chain_env_{http_var}"
+                src = f"chain_env_{primary_var}" if env.get(primary_var) else f"chain_env_{http_var}"
+                diagnostics["source"] = src
                 return chain_url, prov, diagnostics
 
     # 2) Prefer explicit env var ONLY if it matches the requested chain_id

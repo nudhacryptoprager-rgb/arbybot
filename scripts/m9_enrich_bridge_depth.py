@@ -166,6 +166,13 @@ def main() -> int:
     metrics["v4_depth_probe_ok"] = counts["v4_depth_probe_ok"]
     metrics["v4_depth_probe_failed"] = counts["v4_depth_probe_failed"]
     metrics["v4_depth_skipped_unsupported"] = counts["skipped_v4"]
+    metrics["multicall_saved_calls_estimate"] = counts.get("multicall_saved_calls_estimate", 0)
+    try:
+        from m9.graph_arb.pool_quality import annotate_routes_pool_quality
+
+        metrics["pool_quality_histogram"] = annotate_routes_pool_quality(routes)
+    except Exception:
+        pass
 
     if args.dry_run:
         log.info("Dry-run: not writing inventory")

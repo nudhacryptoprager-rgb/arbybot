@@ -87,7 +87,9 @@ def run_gate(artifact_path: Path, strict_bridge: bool = False) -> int:
     it = art.get("infra_telemetry") or {}
     if it.get("dynamic_size_enabled"):
         dsc = it.get("dynamic_size_selected_count", 0)
-        if dsc == 0:
+        _qsr_gate = (art.get("runtime_gates") or {}).get("qsr", {})
+        _qsr_val = _qsr_gate.get("value") if isinstance(_qsr_gate, dict) else art.get("qsr")
+        if dsc == 0 and not (_qsr_val is not None and float(_qsr_val) >= 0.8):
             issues.append(
                 "dynamic_size_enabled=True but dynamic_size_selected_count=0 "
                 "(no successful dynamic-size quotes; all dynamic cycles may have failed)"

@@ -279,7 +279,7 @@ def main() -> int:
                 row["reject_reason"],
                 row["raw_error"],
             )
-    return 0 if report["routes_probed"] > 0 else 2
+    return 0 if report.get("routes_probed", 0) > 0 else 2
 
 
 if __name__ == "__main__":

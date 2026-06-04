@@ -167,9 +167,31 @@ def main() -> int:
     print(f"RPC Endpoint Check: chain={args.chain} network={network} chain_id={expected_cid}")
     print("=" * 60)
 
+    from core.rpc_urls import print_rpc_env_contract
+
+    print_rpc_env_contract(args.chain, env=env)
+    print()
+
     # Resolve
+    from core.rpc_urls import is_public_rpc_url, iter_dedicated_http_providers
+
     http_url, http_prov, http_diag = resolve_rpc_http(chain_id=expected_cid, network=network, env=env)
     ws_url, ws_prov, ws_diag = resolve_rpc_ws(chain_id=expected_cid, network=network, env=env)
+
+    dedicated = iter_dedicated_http_providers(args.chain, env=env)
+    if is_public_rpc_url(http_url) and dedicated:
+        pick = dedicated[0]
+        for label, url in dedicated:
+            if classify_provider(url) == "alchemy":
+                pick = (label, url)
+                break
+        http_url, http_prov = pick[1], classify_provider(pick[1])
+        http_diag = {**http_diag, "source": "dedicated_pool_override", "label": pick[0]}
+        if len(dedicated) > 1:
+            print(f"Note: default HTTP was public; using dedicated pool ({len(dedicated)} providers)")
+    elif is_public_rpc_url(http_url):
+        print("[FAIL] HTTP resolve: only public RPC configured; set BASE_RPC_PRIMARY or ALCHEMY_API_KEY")
+        return 4
 
     if not http_url:
         print(f"[FAIL] HTTP resolve: {http_diag}")
@@ -178,8 +200,12 @@ def main() -> int:
         print(f"[FAIL] WS resolve:   {ws_diag}")
         return 4
 
-    print(f"HTTP: provider={http_prov} source={http_diag.get('source')} url={http_url[:70]}...")
-    print(f"WS:   provider={ws_prov} source={ws_diag.get('source')} url={ws_url[:70]}...")
+    from m9.graph_arb.provider_router import _mask
+
+    print(f"HTTP: provider={http_prov} source={http_diag.get('source')} url={_mask(http_url)}")
+    print(f"WS:   provider={ws_prov} source={ws_diag.get('source')} url={_mask(ws_url)}")
+    if len(dedicated) > 1:
+        print(f"Secondary HTTP candidates: {len(dedicated) - 1} (A/B via rpc_provider_ab_test.py)")
     print()
 
     overall = True

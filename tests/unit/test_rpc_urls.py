@@ -2,6 +2,7 @@ import unittest
 from core.rpc_urls import (
     build_alchemy_http_url, build_alchemy_ws_url, public_fallback_for,
     classify_provider, validate_drpc_url, resolve_rpc_http, resolve_rpc_ws,
+    iter_dedicated_http_providers, is_public_rpc_url,
 )
 
 
@@ -136,6 +137,25 @@ class TestChainScopedEnvResolution(unittest.TestCase):
         url, prov, diag = resolve_rpc_http(chain_id=8453, network="base", env=env)
         self.assertIn("drpc.live", url)
         self.assertEqual(prov, "drpc")
+
+    def test_public_base_rpc_skipped_for_alchemy(self):
+        env = {
+            "BASE_RPC": "https://base-rpc.publicnode.com",
+            "ALCHEMY_API_KEY": "my_alchemy_key",
+        }
+        url, prov, diag = resolve_rpc_http(chain_id=8453, network="base", env=env)
+        self.assertEqual(prov, "alchemy")
+        self.assertIn("skipped_public_chain_env", diag)
+
+    def test_iter_dedicated_alchemy_before_drpc(self):
+        env = {
+            "ALCHEMY_API_KEY": "k",
+            "BASE_WSS": "wss://lb.drpc.live/base/key123",
+        }
+        providers = iter_dedicated_http_providers("base", env=env)
+        self.assertGreaterEqual(len(providers), 2)
+        self.assertEqual(providers[0][0], "alchemy")
+        self.assertFalse(is_public_rpc_url(providers[0][1]))
 
 
 class TestProviderProvenanceAdditive(unittest.TestCase):

@@ -706,7 +706,16 @@ def enrich_routes_missing_depth(
         "v4_depth_candidates": 0,
         "v4_depth_probe_ok": 0,
         "v4_depth_probe_failed": 0,
+        "multicall_saved_calls_estimate": 0,
     }
+    if os.environ.get("ARBY_DEPTH_USE_MULTICALL", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    ):
+        counts["multicall_saved_calls_estimate"] = _multicall_prefetch_v2_reserves(
+            routes, rpc_url
+        )
     for route in routes:
         if route.get("effective_depth_usd") is not None:
             continue
@@ -753,10 +762,60 @@ def enrich_routes_missing_depth(
             else:
                 counts["probe_failed"] += 1
 
+        try:
+            from m9.graph_arb.pool_quality import annotate_route_pool_quality
+
+            annotate_route_pool_quality(route)
+        except Exception:
+            pass
+
         if sleep_s:
             time.sleep(sleep_s)
 
     return counts
+
+
+def _multicall_prefetch_v2_reserves(
+    routes: List[Dict[str, Any]],
+    rpc_url: str,
+) -> int:
+    """Batch V2 getReserves via Multicall3; cache on route dict. Returns RPC calls saved."""
+    v2_addrs: List[str] = []
+    v2_routes: List[Dict[str, Any]] = []
+    for route in routes:
+        if route.get("effective_depth_usd") is not None:
+            continue
+        if route.get("adapter_type") not in _V2_FORK_ADAPTER_TYPES:
+            continue
+        pool = (route.get("pool_address") or "").lower()
+        if pool and pool != "0x" + "0" * 40:
+            v2_addrs.append(pool)
+            v2_routes.append(route)
+    if len(v2_addrs) < 2:
+        return 0
+    try:
+        from core.multicall import MulticallBatcher
+
+        batcher = MulticallBatcher(rpc_url)
+        if not batcher.initialize():
+            return 0
+        chunk_size = 40
+        saved = 0
+        for i in range(0, len(v2_addrs), chunk_size):
+            chunk_addrs = v2_addrs[i : i + chunk_size]
+            chunk_routes = v2_routes[i : i + chunk_size]
+            calls = batcher._encode_calls(chunk_addrs, "0x0902f1ac")
+            results = batcher._try_chunk_adaptive(calls, limiter=None)
+            for route, res in zip(chunk_routes, results):
+                ok, data = res[0], res[1]
+                if ok and data:
+                    route["_v2_reserves_cached"] = data.hex() if isinstance(data, bytes) else data
+            saved += max(len(chunk_addrs) - 1, 0)
+        batcher.stats["multicall_saved_calls_estimate"] = saved
+        return saved
+    except Exception as exc:
+        log.debug("V2 multicall prefetch skipped: %s", exc)
+        return 0
 
 
 # Default quarantine TTL: 7 days.  Entries older than this are considered expired

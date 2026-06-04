@@ -1,8 +1,32 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: RUNTIME_BLOCKED__M8_2_AND_QSR — Config manifest/audit **mostly closed** (`audit --strict` PASS on classification). Strategic blocker: **`M8_2_CROSS_DEX_EXPANSION`** skeleton landed (`scripts/m8_cross_dex_expand.py`, bridge merge `graph_ready_from_expansion`); needs fresh registry + online resolve before `graph_ready_from_expansion > 0` acceptance. QSR not validated (`route_qsr≈0.25`, soak `qsr≈0.0063`).
+**Status**: **UNIFIED_PIPELINE_CODE_READY__RUNTIME_NOT_VALIDATED** — Alchemy+dRPC available locally; **no new provider registrations** until A/B proves insufficient. Public RPC **forbidden for productive gate** (`BASE_RPC=publicnode` must not drive HTTP).
 
-**Session 2026-06-02 evidence:**
+**Session 2026-06-04 RPC pool evidence:**
+
+| Check | Provider class | Result |
+|-------|----------------|--------|
+| Env contract | `ALCHEMY_API_KEY`, `BASE_WSS` | present; `BASE_RPC_PRIMARY` / `SECONDARY` / `ARBY_PROVIDER_POOL_MODE` **unset** (set in `.env`, do not commit) |
+| `check_rpc_endpoints` (dedicated override) | HTTP **alchemy**, WS **drpc** | **PASS** — `chain_id` OK, `archive_ok`, `newHeads` OK |
+| A/B 50 routes | **alchemy** | `archive_ok`, `p95≈141ms`, `408/429/5xx=0`, `route_qsr=0` (bridge quote reverts dominate) |
+| A/B 50 routes | **drpc** HTTP | `archive_ok`, **`http_408=50`** — not equal-weight productive; use as **secondary/WS only** with health penalty |
+
+**Recommended `.env` (local only):** `BASE_RPC_PRIMARY` = Alchemy HTTP, `BASE_RPC_SECONDARY` = dRPC HTTP (same key path as `BASE_WSS`), `BASE_WSS` unchanged, `ARBY_REQUIRE_DEDICATED_RPC=1`, `ARBY_PROVIDER_POOL_MODE=weighted`. Public endpoints only with `ARBY_USE_PUBLIC_POOL=1` for diagnostics.
+
+**Session 2026-06-04 evidence (pipeline):**
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Unit tests | targeted M8/M9 + pool_quality | 102+ passed |
+| Bridge inventory | with_depth / active | **136 / 154** |
+| Bridge | pool_quality_histogram | QUARANTINED=128, DEPTH_OK=7 |
+| Route diagnostic (productive) | routes_probed / route_qsr | 11 / **0.18** |
+| Verified soak 6m | qsr / all_pass | **0.077 / false** |
+| RPC | publicnode depth | OK; dRPC free **408** under load |
+
+**Blocker**: dedicated sustained HTTP RPC + reduce toxic long-tail (128/154 quarantined) before QSR≥0.8.
+
+**Session 2026-06-02 evidence (historical):**
 
 | Layer | Metric | Value |
 |-------|--------|------:|
@@ -50,7 +74,7 @@
 4. Re-run route diagnostic on full 44 routes after RPC stable.
 5. **Do not** claim M9 PASS until `qsr≥0.8` with fresh artifact.
 
-`goal_status`: **BLOCKED** (`M9_CONFIG_AUDIT_PARTIAL` + `M8_2_CROSS_DEX_EXPANSION_MISSING`) | Curve indices: **REACHED** | Economics: **not validated** (`qsr < 0.8`)  
+`goal_status`: **BLOCKED** (`UNIFIED_PIPELINE_CODE_READY__RUNTIME_NOT_VALIDATED`) | Depth write: **partial** (136/154) | Economics: **not validated** (`qsr < 0.8` on latest soak)  
 `execution_enabled`: false | `kill_switch_active`: true
 
 ---

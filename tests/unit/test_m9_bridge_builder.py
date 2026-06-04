@@ -180,6 +180,7 @@ class TestBridgeBuilderIntegration:
             base_inv_path=str(base),
             output_path=str(out),
             curve_discovery_path=str(tmp_path / "no_curve_discovery.json"),
+            expansion_path=None,
         )
 
         assert out.exists()
@@ -307,6 +308,7 @@ class TestBridgeBuilderIntegration:
             base_inv_path=str(base),
             output_path=str(out),
             curve_discovery_path=str(tmp_path / "no_curve_discovery.json"),
+            expansion_path=None,
         )
 
         result = json.loads(out.read_text(encoding="utf-8"))
@@ -1095,6 +1097,7 @@ class TestConfigSeedContract:
             include_config_seed=include_seed,
             # isolate from real discovery artifact on disk
             curve_discovery_path=str(tmp_path / "nodisc.json"),
+            expansion_path=None,
         )
         result = json.loads(out.read_text(encoding="utf-8"))
         return metrics, result
@@ -1319,6 +1322,7 @@ class TestCurveDiscoveryContract:
             output_path=str(out),
             include_config_seed=include_seed,
             curve_discovery_path=disc_path,
+            expansion_path=None,
         )
         result = json.loads(out.read_text(encoding="utf-8"))
         return metrics, result
@@ -1417,3 +1421,52 @@ class TestCurveDiscoveryContract:
             assert r.get("metadata_seeded") is True, (
                 f"Seed route {r.get('pool_address')} must have metadata_seeded=True"
             )
+
+
+class TestBridgePreservesDepthAndQuality:
+    """Bridge must not drop effective_depth_usd from base inventory routes."""
+
+    def test_base_route_depth_preserved_in_output(self, tmp_path):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        pool = "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
+        base_inv = tmp_path / "base.json"
+        base_inv.write_text(
+            json.dumps({
+                "active_routes": [{
+                    "route_id": "base_depth",
+                    "pair_id": "USDC_WETH",
+                    "dex_id": "uniswap_v3",
+                    "adapter_type": "uniswap_v3",
+                    "fee": 500,
+                    "pool_address": pool,
+                    "factory_verified": True,
+                    "effective_depth_usd": 250.0,
+                    "depth_probe_ok": True,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        sniper = tmp_path / "sniper.json"
+        sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
+        anchor = tmp_path / "anchor.json"
+        anchor.write_text(json.dumps({"active_routes": []}), encoding="utf-8")
+        out = tmp_path / "bridge.json"
+        nodisc = tmp_path / "nodisc.json"
+
+        build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base_inv),
+            output_path=str(out),
+            curve_discovery_path=str(nodisc),
+            expansion_path=None,
+        )
+        result = json.loads(out.read_text(encoding="utf-8"))
+        kept = [
+            r for r in result["active_routes"]
+            if r.get("pool_address", "").lower() == pool.lower()
+        ]
+        assert len(kept) == 1
+        assert kept[0].get("effective_depth_usd") == 250.0
+        assert kept[0].get("pool_quality_state") is not None

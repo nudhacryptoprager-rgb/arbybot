@@ -329,7 +329,9 @@ class ProviderRouter:
         status codes are left to request/config diagnostics.
         """
         stats = self._stats.get(url)
-        if stats is not None and (status_code == 429 or status_code >= 500):
+        if stats is not None and (
+            status_code in (408, 429) or status_code >= 500
+        ):
             stats.record_http_error(status_code)
 
     def record_success(self, url: str) -> None:
