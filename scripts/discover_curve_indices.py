@@ -374,9 +374,17 @@ def main() -> None:
         help="Skip unknown coins in multi-coin pools (anchor symbols only)",
     )
     parser.add_argument(
+        "--admit-failed-probe",
+        action="store_true",
+        help=(
+            "Admit pools with QUOTE_REVERT_BOTH into the artifact (legacy; poisons QSR). "
+            "Default: failed probes are excluded from pools{} and counted in pools_failed."
+        ),
+    )
+    parser.add_argument(
         "--strict-probe",
         action="store_true",
-        help="Exit non-zero when any pool fails probe (default: write artifact, warn only)",
+        help="Exit non-zero when any pool fails classification or probe",
     )
     parser.add_argument(
         "--debug",
@@ -456,19 +464,20 @@ def main() -> None:
             token_decimals,
         )
         if pool_kind is None:
-            if args.strict_probe:
-                print(f"SKIP ({probe_status})")
-                failed.append(pool_addr)
-                if args.debug:
-                    failed_detail[pool_addr] = {
-                        "reason": probe_status,
-                        "coin_indices": entry["coin_indices"],
-                        "probe": probe_debug,
-                    }
+            print(f"SKIP ({probe_status})")
+            failed.append(pool_addr)
+            if args.debug:
+                failed_detail[pool_addr] = {
+                    "reason": probe_status,
+                    "coin_indices": entry["coin_indices"],
+                    "probe": probe_debug,
+                }
+            if args.admit_failed_probe:
+                pool_kind = "stable"
+                probe_status = probe_status or "QUOTE_REVERT_BOTH"
+                print(f"WARN ({probe_status}) admit indices (--admit-failed-probe)")
+            else:
                 continue
-            pool_kind = "stable"
-            probe_status = probe_status or "QUOTE_REVERT_BOTH"
-            print(f"WARN ({probe_status}) admit indices")
         entry["pool_kind"] = pool_kind
         entry["curve_variant"] = pool_kind
         entry["probe_status"] = probe_status

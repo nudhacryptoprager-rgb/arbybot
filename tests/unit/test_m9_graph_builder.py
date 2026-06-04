@@ -627,7 +627,7 @@ class TestPoolDepthFilter:
         }
         qfile = tmp_path / "quarantine.json"
         qfile.write_text(json.dumps(quarantine))
-        addresses = load_quarantined_pool_addresses(str(qfile))
+        addresses = load_quarantined_pool_addresses(str(qfile), hard_only=False)
         assert isinstance(addresses, frozenset)
         # Real address should be included
         assert "0x7e904aaf3439402eb21958fe090bd852d5e882cf" in addresses
@@ -640,3 +640,76 @@ class TestPoolDepthFilter:
         from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
         result = load_quarantined_pool_addresses(str(tmp_path / "nonexistent.json"))
         assert result == frozenset()
+
+    def test_productive_lane_skips_non_productive_dex(self, tmp_path):
+        """Productive lane must not admit dexes with enabled_for_productive=false."""
+        from m9.graph_arb.builder import build_graph_from_inventory, graph_edge_count
+
+        inv = {
+            "schema_version": "m9_bridge_inventory.1",
+            "active_routes": [
+                {
+                    "route_id": "r_v4",
+                    "pair_id": "USDC_WETH",
+                    "dex_id": "uniswap_v4",
+                    "adapter_type": "uniswap_v4",
+                    "fee": 500,
+                    "pool_address": "0x1111111111111111111111111111111111111111",
+                    "factory_verified": True,
+                },
+                {
+                    "route_id": "r_v3",
+                    "pair_id": "USDC_WETH",
+                    "dex_id": "uniswap_v3",
+                    "adapter_type": "uniswap_v3",
+                    "fee": 500,
+                    "pool_address": "0x2222222222222222222222222222222222222222",
+                    "factory_verified": True,
+                },
+            ],
+        }
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text(
+            """
+schema_version: m8_1.0
+chain: base
+dexes:
+  uniswap_v3:
+    adapter_type: uniswap_v3
+    factory: "0x33128a8fc17869897dce68ed026d694621f6fdfd"
+    quoter: "0x3d4e44eb1374240ce5f1b871ab261cd16335b76a"
+    fee_tiers: [500]
+    enabled: true
+  uniswap_v4:
+    adapter_type: uniswap_v4
+    factory: "0x498581ff718922c3f8e6a244956af099b2652b2b"
+    quoter: "0x0d5e0f971ed27fbff6c2837bf31316121532048d"
+    fee_tiers: [500]
+    enabled: true
+tokens:
+  USDC:
+    address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    decimals: 6
+  WETH:
+    address: "0x4200000000000000000000000000000000000006"
+    decimals: 18
+m9_dex_productivity:
+  uniswap_v3:
+    enabled_for_discovery: true
+    enabled_for_productive: true
+  uniswap_v4:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+"""
+        )
+        inv_path = tmp_path / "inv.json"
+        inv_path.write_text(json.dumps(inv))
+        adjacency = build_graph_from_inventory(
+            inventory_path=str(inv_path),
+            config_path=str(cfg),
+            lane="productive",
+        )
+        dex_ids = {e.dex_id for adj in adjacency.values() for el in adj.values() for e in el}
+        assert "uniswap_v3" in dex_ids
+        assert "uniswap_v4" not in dex_ids
+        assert graph_edge_count(adjacency) >= 2

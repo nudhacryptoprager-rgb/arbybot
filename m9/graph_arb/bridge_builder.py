@@ -20,6 +20,7 @@ Schema: m9_bridge_inventory.1
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter as _Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,6 +94,26 @@ _DEFAULT_BASE_INV = "data/tmp/m9_depth_enriched_inventory.json"
 _BRIDGE_OUTPUT = "data/runs/_rolling/m9_bridge_inventory_latest.json"
 _DEFAULT_CURVE_DISCOVERY = "data/runs/_rolling/m9_curve_discovery_latest.json"
 _DEFAULT_CROSS_DEX_EXPANSION = "data/runs/_rolling/m8_cross_dex_expansion_latest.json"
+
+
+def curve_temporarily_disabled() -> bool:
+    """When set, exclude all curve_stable routes from bridge output and M9 graph."""
+    return os.environ.get("ARBY_M9_DISABLE_CURVE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _without_curve_routes(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not curve_temporarily_disabled():
+        return routes
+    return [
+        r
+        for r in routes
+        if r.get("dex_id") != "curve_stable"
+        and r.get("adapter_type") != "curve_stable"
+    ]
 
 _SCHEMA_VERSION = "m9_bridge_inventory.1"
 
@@ -641,8 +662,14 @@ def build_bridge_inventory(
     # scripts/m9_curve_discovery.py; no config-seed flag required.
     # Deduplicates by pool_address against existing base_active.
     # ------------------------------------------------------------------
-    _disc_routes = _load_curve_discovery_routes(chain="base", discovery_path=curve_discovery_path)
-    _curve_discovery_artifact_loaded_count: int = len(_disc_routes)
+    if curve_temporarily_disabled():
+        _disc_routes = []
+        _curve_discovery_artifact_loaded_count = 0
+    else:
+        _disc_routes = _load_curve_discovery_routes(
+            chain="base", discovery_path=curve_discovery_path
+        )
+        _curve_discovery_artifact_loaded_count = len(_disc_routes)
     _base_active_addrs_disc = frozenset(
         r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
     )
@@ -660,7 +687,7 @@ def build_bridge_inventory(
     # Set include_config_seed=True only for smoke runs or explicit seeding.
     # ------------------------------------------------------------------
     _metadata_seeded_routes: List[Dict] = []
-    if include_config_seed:
+    if include_config_seed and not curve_temporarily_disabled():
         _static_curve = _build_static_curve_routes(chain="base")
         _base_active_addrs = frozenset(
             r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
@@ -1163,7 +1190,7 @@ def build_bridge_inventory(
         "bridge_source_metrics": bridge_source_metrics,
         "source_inventory": base_inv_path if base_inv else None,
         "total_candidates": len(base_active) + len(m8_new_routes),
-        "active_routes": base_active + m8_new_routes,
+        "active_routes": _without_curve_routes(base_active + m8_new_routes),
         "quarantined_routes": (
             (base_inv.get("quarantined_routes", []) if base_inv else [])
             + m8_quarantined_routes
@@ -1172,7 +1199,7 @@ def build_bridge_inventory(
         ),
         "pending_routes": m8_pending_routes,
         "summary": {
-            "active_count": len(base_active) + len(m8_new_routes),
+            "active_count": len(_without_curve_routes(base_active + m8_new_routes)),
             "quarantined_count": (
                 len(base_inv.get("quarantined_routes", [])) if base_inv else 0
             ),

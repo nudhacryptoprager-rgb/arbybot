@@ -408,7 +408,7 @@ def quote_cycle_dynamic_sync(
         if r.status in (STATUS_POSITIVE_GROSS, STATUS_NEGATIVE_GROSS)
     ]
     selected = max(quoteable, key=lambda r: r.gross_bps) if quoteable else results[0]
-    selected.dynamic_size_usd = selected.size_usd if quoteable else None
+    selected.dynamic_size_usd = selected.size_usd
     selected.size_candidates_usd = candidates
     selected.depth_curve = depth_curve
     selected.dynamic_size_source = "multi_size_quote" if quoteable else "multi_size_no_quoteable"
@@ -499,11 +499,13 @@ def schedule_cycle_quotes(
     """
     results: List[CycleQuoteResult] = []
     size_usd = sizes_usd[0] if sizes_usd else 1000.0
-    dynamic_limit = (
-        len(cycles)
-        if dynamic_sizes and dynamic_size_limit is None
-        else max(int(dynamic_size_limit or 0), 0)
-    )
+    if dynamic_sizes and dynamic_size_limit is None:
+        dynamic_limit = len(cycles)
+    elif dynamic_sizes and int(dynamic_size_limit or 0) <= 0:
+        # 0 (or negative) = apply multi-size ladder to every cycle in the batch.
+        dynamic_limit = len(cycles)
+    else:
+        dynamic_limit = max(int(dynamic_size_limit or 0), 0)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = []

@@ -29,11 +29,22 @@ _CURVE_POOL_INDICES_SCHEMA = "m9_curve_pool_indices.1"
 _CURVE_FACTORY_DISCOVERY_SCHEMA = "m9_curve_discovery.1"
 
 
+_QUOTE_OK_PROBE_PREFIXES = ("QUOTE_OK",)
+
+
+def _curve_probe_is_quotable(probe_status: Optional[str]) -> bool:
+    """Rolling discovery probe_status; None means YAML trust anchor (quotable)."""
+    if probe_status is None:
+        return True
+    return any(probe_status.startswith(p) for p in _QUOTE_OK_PROBE_PREFIXES)
+
+
 @dataclass(frozen=True)
 class _CurvePool:
     pool_address: str       # lowercase 0x + 40 hex
     pool_kind: str          # "stable" | "crypto"
     coin_indices: Dict[str, int]  # {TOKEN_SYM: index}
+    probe_status: Optional[str] = None  # from rolling artifact; None = config seed
 
 
 @dataclass(frozen=True)
@@ -85,6 +96,17 @@ class AdapterMetadata:
         idx_in = pool.coin_indices.get(token_in_sym)
         idx_out = pool.coin_indices.get(token_out_sym)
         return idx_in, idx_out
+
+    def curve_pool_quotable(
+        self,
+        pool_address: str,
+        chain: str = "base",
+    ) -> bool:
+        """False when rolling discovery marked the pool as structurally unquoteable."""
+        pool = self.curve_pools.get(chain, {}).get(pool_address.lower())
+        if pool is None:
+            return False
+        return _curve_probe_is_quotable(pool.probe_status)
 
     def curve_pool_kind(
         self,
@@ -175,11 +197,15 @@ def _merge_curve_factory_discovery_artifact(
             coin_indices = {str(sym): int(idx) for sym, idx in coin_raw.items()}
         except (ValueError, TypeError):
             continue
+        probe_status = str(pool.get("probe_status", "")) or None
+        if probe_status and not _curve_probe_is_quotable(probe_status):
+            continue
         pool_kind = str(pool.get("pool_kind", "stable"))
         chain_pools[pool_addr] = _CurvePool(
             pool_address=pool_addr,
             pool_kind=pool_kind,
             coin_indices=coin_indices,
+            probe_status=probe_status,
         )
         merged += 1
     if chain_pools:
@@ -225,11 +251,17 @@ def _merge_curve_pool_indices_artifact(
             coin_indices = {str(sym): int(idx) for sym, idx in coin_raw.items()}
         except (ValueError, TypeError):
             continue
+        probe_status = pool_data.get("probe_status")
+        if probe_status is not None:
+            probe_status = str(probe_status)
+            if not _curve_probe_is_quotable(probe_status):
+                continue
         pool_kind = str(pool_data.get("pool_kind", "stable"))
         chain_pools[str(pool_addr).lower()] = _CurvePool(
             pool_address=str(pool_addr).lower(),
             pool_kind=pool_kind,
             coin_indices=coin_indices,
+            probe_status=probe_status,
         )
         merged += 1
     if chain_pools:
@@ -311,10 +343,13 @@ def load_adapter_metadata(
                 log.warning("Skipping Curve pool %s: bad coin_indices: %s", pool_addr, exc)
                 continue
             pool_kind = str(pool_data.get("pool_kind", "stable"))
+            probe_raw = pool_data.get("probe_status")
+            probe_status = str(probe_raw) if probe_raw else None
             chain_pools[pool_addr.lower()] = _CurvePool(
                 pool_address=pool_addr.lower(),
                 pool_kind=pool_kind,
                 coin_indices=coin_indices,
+                probe_status=probe_status,
             )
         if chain_pools:
             meta.curve_pools[chain_name] = chain_pools

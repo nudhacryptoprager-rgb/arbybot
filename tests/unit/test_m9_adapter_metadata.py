@@ -608,6 +608,52 @@ class TestCheckCurvePoolsConfigured:
         )
         assert idx_in == 0 and idx_out == 1
 
+    def test_merge_curve_pool_indices_skips_failed_probe_status(self, tmp_path):
+        import json
+
+        from m9.graph_arb.adapter_metadata import load_adapter_metadata
+
+        yaml_path = tmp_path / "meta.yaml"
+        yaml_path.write_text(
+            "curve:\n  base:\n    pool_indices_artifact: rolling.json\n    pools: {}\n",
+            encoding="utf-8",
+        )
+        rolling = tmp_path / "rolling.json"
+        rolling.write_text(
+            json.dumps(
+                {
+                    "schema_version": "m9_curve_pool_indices.1",
+                    "chain": "base",
+                    "pools": {
+                        "0xaaaa000000000000000000000000000000000001": {
+                            "pool_kind": "stable",
+                            "probe_status": "QUOTE_OK_INT128",
+                            "coin_indices": {"USDC": 0, "WETH": 1},
+                        },
+                        "0xbbbb000000000000000000000000000000000002": {
+                            "pool_kind": "stable",
+                            "probe_status": "QUOTE_REVERT_BOTH",
+                            "coin_indices": {"USDC": 0, "USDbC": 1},
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        meta = load_adapter_metadata(
+            str(yaml_path),
+            curve_pool_indices_path=str(rolling),
+        )
+        assert meta.curve_pool_quotable(
+            "0xaaaa000000000000000000000000000000000001", chain="base"
+        )
+        assert not meta.curve_pool_quotable(
+            "0xbbbb000000000000000000000000000000000002", chain="base"
+        )
+        assert meta.curve_indices(
+            "0xbbbb000000000000000000000000000000000002", "USDC", "USDbC", chain="base"
+        ) == (None, None)
+
     def test_bridge_inventory_curve_pools_have_coin_indices_when_artifact_present(self):
         """Bridge curve pools must resolve via rolling artifact (not hardcoded in tests)."""
         import json

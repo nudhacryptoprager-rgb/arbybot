@@ -389,6 +389,10 @@ def probe_quote_raw_http(
             reject = "QUOTE_REVERT"
         elif "response too short" in err_str or "too short" in err_str.lower():
             reject = "QUOTE_DECODE"
+        elif "invalid v2 token direction" in err_str.lower() or "coin indices" in err_str.lower():
+            reject = "QUOTE_CONFIG_MISSING"
+        elif "zero reserves" in err_str.lower():
+            reject = "QUOTE_REVERT"
         else:
             reject = "QUOTE_RPC_ERROR"
         # Only trigger circuit-breaker for actual network-level failures.

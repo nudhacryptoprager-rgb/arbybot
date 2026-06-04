@@ -405,6 +405,7 @@ def verify_candidates_from_config(
     max_workers: int = 4,
     request_delay_s: float = 0.0,
     check_liquidity: bool = True,
+    max_candidates: int = 0,
 ) -> List[Dict[str, Any]]:
     """Verify all (dex, pair, fee_tier) candidates from config against on-chain factories.
 
@@ -541,6 +542,14 @@ def verify_candidates_from_config(
                             check_liquidity=check_liquidity,
                         )
                     )
+
+    if max_candidates > 0 and len(candidates) > max_candidates:
+        logger.info(
+            "pool_verifier: capping candidates %d → %d (--max-candidates)",
+            len(candidates),
+            max_candidates,
+        )
+        candidates = candidates[:max_candidates]
 
     logger.info(
         "pool_verifier: probing %d (dex, pair, fee) candidates "
@@ -848,6 +857,16 @@ def main(argv: "list[str] | None" = None) -> int:
         ),
     )
     parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=0,
+        help=(
+            "Cap factory probes to the first N (dex,pair,fee) candidates. "
+            "0 = no cap (full config cross-product). Use 400-800 for a fast "
+            "verified inventory bootstrap before a productive soak."
+        ),
+    )
+    parser.add_argument(
         "--no-liquidity-check",
         action="store_true",
         default=False,
@@ -932,6 +951,7 @@ def main(argv: "list[str] | None" = None) -> int:
             max_workers=args.max_workers,
             request_delay_s=request_delay_s,
             check_liquidity=check_liquidity,
+            max_candidates=int(args.max_candidates or 0),
         )
     except Exception as exc:
         log.error("Verification failed: %s", exc)

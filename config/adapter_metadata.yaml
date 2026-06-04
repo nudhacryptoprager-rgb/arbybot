@@ -57,6 +57,8 @@ curve:
       "0x69420f9e38a4e60a62224c489be4bf7a94402496": "MONEY"
       "0xeb466342c4d449bc9f53a865d5cb90586f405215": "axlUSDC"
       "0x59d9356e565ab3a36dd77763fc0d87feaf85508c": "USDS"
+      "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": "USDT"
+      "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8": "GYD"
 
     # Rolling artifact: scripts/discover_curve_indices.py (overwrite each run)
     pool_indices_artifact: "data/runs/_rolling/m9_curve_pool_indices_latest.json"

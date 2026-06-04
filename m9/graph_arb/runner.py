@@ -549,9 +549,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             log.info("scan_params: sizes_usd from config: %s", args.sizes_usd)
         elif list(args.sizes_usd) != _CLI_SIZES_DEFAULT:
             _sizes_usd_source = "cli_override"
-        if _sp.get("dynamic_size_max_cycles") and args.dynamic_size_max_cycles == _CLI_DYN_MAX_DEFAULT:
+        if "dynamic_size_max_cycles" in _sp and args.dynamic_size_max_cycles == _CLI_DYN_MAX_DEFAULT:
             args.dynamic_size_max_cycles = int(_sp["dynamic_size_max_cycles"])
-            log.info("scan_params: dynamic_size_max_cycles from config: %d", args.dynamic_size_max_cycles)
+            log.info(
+                "scan_params: dynamic_size_max_cycles from config: %d (0 = all cycles)",
+                args.dynamic_size_max_cycles,
+            )
+        if _sp.get("dynamic_sizes") and not getattr(args, "dynamic_sizes", False):
+            args.dynamic_sizes = True
+            log.info("scan_params: dynamic_sizes enabled from config")
         _cfg_cycle_lengths = _sp.get("cycle_lengths")
         if _cfg_cycle_lengths:
             try:
@@ -586,6 +592,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # routes confirmed on-chain via factory.getPool().
     _VERIFIED_INVENTORY = "data/tmp/m9_verified_inventory.json"
     _verified_inventory_exists: bool = os.path.exists(_VERIFIED_INVENTORY)
+    _use_bridge_inventory = os.environ.get("ARBY_M9_USE_BRIDGE_INVENTORY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     if getattr(args, "require_factory_verified", False) and args.inventory is None:
         if os.path.exists(_VERIFIED_INVENTORY):
             args.inventory = _VERIFIED_INVENTORY
@@ -601,6 +612,18 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _VERIFIED_INVENTORY, args.chain, args.config,
             )
             return EXIT_CONFIG_ERROR
+    elif (
+        getattr(args, "productive_lane", False)
+        and args.inventory is None
+        and not _use_bridge_inventory
+        and _verified_inventory_exists
+    ):
+        args.inventory = _VERIFIED_INVENTORY
+        log.info(
+            "productive-lane: auto-selected verified inventory %s "
+            "(set ARBY_M9_USE_BRIDGE_INVENTORY=1 for M8 bridge inventory)",
+            _VERIFIED_INVENTORY,
+        )
 
     # Guard: --no-prequote + --dynamic-sizes is an invalid combination for productive runs.
     # Without the prequote funnel every cycle in the batch hits the raw-HTTP quoter directly,

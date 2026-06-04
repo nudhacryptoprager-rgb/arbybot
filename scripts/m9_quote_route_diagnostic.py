@@ -51,6 +51,23 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--size-usd", type=float, default=100.0, help="Probe notional in USD")
     p.add_argument("--require-factory-verified", action="store_true")
+    p.add_argument(
+        "--lane",
+        choices=("discovery", "productive"),
+        default="productive",
+        help="Graph build lane (productive applies m9_dex_productivity + depth gates)",
+    )
+    p.add_argument(
+        "--no-provider-router",
+        action="store_true",
+        help="Use single RPC URL without 429 failover rotation",
+    )
+    p.add_argument(
+        "--rps-limit",
+        type=int,
+        default=None,
+        help="Set ARBY_RPC_RPS_LIMIT for this run (default: 2 when unset in env)",
+    )
     return p.parse_args()
 
 
@@ -89,6 +106,7 @@ def _select_edges(
     source: Optional[str],
     limit: int,
     require_factory_verified: bool,
+    lane: str,
 ) -> List[Any]:
     from m9.graph_arb.builder import build_graph_from_inventory
     from m9.graph_arb.models import GraphEdge
@@ -107,7 +125,7 @@ def _select_edges(
         inventory_path=inventory_path,
         config_path=config_path,
         require_factory_verified=require_factory_verified,
-        lane="discovery",
+        lane=lane,
     )
     seen_route: set = set()
     edges: List[GraphEdge] = []
@@ -140,7 +158,27 @@ def run_diagnostic(args: argparse.Namespace) -> Dict[str, Any]:
     from m9.graph_arb.quoter import _make_dex_route, _make_token_info
     from m9.graph_arb.raw_http_probe import probe_quote_raw_http
 
+    if args.rps_limit is not None:
+        os.environ["ARBY_RPC_RPS_LIMIT"] = str(args.rps_limit)
+    elif not os.environ.get("ARBY_RPC_RPS_LIMIT"):
+        os.environ["ARBY_RPC_RPS_LIMIT"] = "2"
+
     rpc_url, rpc_provider, rpc_diag = resolve_diagnostic_rpc(args.chain)
+    router = None
+    if not args.no_provider_router:
+        from m9.graph_arb.provider_router import ProviderRouter
+
+        router = ProviderRouter.from_env(
+            chain=args.chain,
+            failover_threshold=int(os.environ.get("ARBY_PROVIDER_FAILOVER_THRESHOLD", "3")),
+        )
+        rpc_url = router.get_url()
+        log.info(
+            "ProviderRouter active: secondary=%s extras=%s",
+            bool(router.secondary),
+            router.snapshot().get("extras_count", 0),
+        )
+
     edges = _select_edges(
         args.inventory,
         args.config,
@@ -148,6 +186,7 @@ def run_diagnostic(args: argparse.Namespace) -> Dict[str, Any]:
         source=args.source,
         limit=args.limit,
         require_factory_verified=args.require_factory_verified,
+        lane=args.lane,
     )
     log.info("Probing %d routes via %s", len(edges), rpc_url[:48])
 
@@ -161,7 +200,12 @@ def run_diagnostic(args: argparse.Namespace) -> Dict[str, Any]:
             amount_in = size_usd_to_amount_in(token_in, args.size_usd)
         except ValueError:
             amount_in = 10 ** min(token_in.decimals, 6)
-        result = probe_quote_raw_http(rpc_url, route, token_in, token_out, amount_in)
+        active_rpc = router.get_url() if router is not None else rpc_url
+        result = probe_quote_raw_http(active_rpc, route, token_in, token_out, amount_in)
+        if router is not None and not result.ok:
+            err = (result.raw_error or "").lower()
+            if "429" in err and result.reject_reason == "QUOTE_RPC_ERROR":
+                router.record_429(active_rpc)
         if result.ok:
             ok_count += 1
         rows.append(

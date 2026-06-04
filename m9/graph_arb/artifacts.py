@@ -1233,7 +1233,12 @@ def build_artifact(
     # Scheduler name
     if scheduler_name is not None:
         infra_telemetry["scheduler_name"] = scheduler_name
-    _dynamic_results = [qr for qr in cycle_results if qr.dynamic_size_usd is not None]
+    _dynamic_results = [
+        qr
+        for qr in cycle_results
+        if qr.dynamic_size_usd is not None
+        or (qr.size_candidates_usd and len(qr.size_candidates_usd) > 0)
+    ]
     infra_telemetry["dynamic_size_enabled"] = bool(
         any(qr.size_candidates_usd for qr in cycle_results)
     )

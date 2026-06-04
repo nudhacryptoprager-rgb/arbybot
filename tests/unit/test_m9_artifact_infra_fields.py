@@ -296,6 +296,42 @@ def test_schedule_cycle_quotes_dynamic_size_limit(monkeypatch):
     assert results[2].dynamic_size_usd is None
 
 
+def test_schedule_cycle_quotes_dynamic_size_limit_zero_means_all(monkeypatch):
+    """dynamic_size_limit<=0 must not disable dynamic sizing (config uses 0 = unlimited)."""
+    from unittest.mock import MagicMock
+    from m9.graph_arb.models import CycleQuoteResult
+    from m9.graph_arb import quoter
+
+    cycles = [MagicMock(), MagicMock()]
+
+    def _fake_dynamic(cycle_arg, sizes, *_args, **_kwargs):
+        return CycleQuoteResult(
+            cycle=cycle_arg,
+            size_usd=float(sizes[0]),
+            amount_in=1,
+            amount_out=1,
+            gross_bps=1.0,
+            status="NEGATIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.01,
+            dynamic_size_usd=float(sizes[0]),
+            size_candidates_usd=tuple(sizes),
+            dynamic_size_source="multi_size_quote",
+        )
+
+    monkeypatch.setattr(quoter, "quote_cycle_dynamic_sync", _fake_dynamic)
+    results = quoter.schedule_cycle_quotes(
+        cycles,
+        w3=None,
+        sizes_usd=(1.0, 5.0, 10.0),
+        max_workers=1,
+        dynamic_sizes=True,
+        dynamic_size_limit=0,
+    )
+    assert all(r.dynamic_size_usd is not None for r in results)
+
+
 # ---------------------------------------------------------------------------
 # Tests: rpc_provider identity fields in infra_telemetry
 # ---------------------------------------------------------------------------

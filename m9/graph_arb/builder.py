@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,6 +12,7 @@ from m8_1.stable_anchor.config_loader import load_config, M8_1Config
 from m8_1.stable_anchor.pairs import TokenInfo
 from m9.graph_arb.models import GraphEdge
 from m9.graph_arb.adapter_metadata import load_adapter_metadata, AdapterMetadata
+from m9.graph_arb.bridge_builder import curve_temporarily_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,24 @@ def _parse_pair_symbols(pair_id: str) -> "tuple[str, str]":
     if len(parts) != 2:
         raise ValueError(f"Cannot parse pair_id: {pair_id!r}")
     return parts[0], parts[1]
+
+
+def productive_dex_ids_from_config(config_path: str) -> "frozenset[str]":
+    """DEX ids allowed in productive lane (``m9_dex_productivity.enabled_for_productive``)."""
+    import yaml
+
+    with open(config_path, encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh) or {}
+    productivity = raw.get("m9_dex_productivity") or {}
+    dexes = raw.get("dexes") or {}
+    allowed: set[str] = set()
+    for dex_id, dex_cfg in dexes.items():
+        if not dex_cfg.get("enabled", True):
+            continue
+        prod = productivity.get(dex_id) or {}
+        if bool(prod.get("enabled_for_productive", False)):
+            allowed.add(dex_id)
+    return frozenset(allowed)
 
 
 def _is_valid_eth_address(addr: object) -> bool:
@@ -215,7 +235,15 @@ def build_graph_from_inventory(
     unverified_skipped = 0
     depth_skipped = 0
     curve_unindexed_skipped = 0
+    curve_unquotable_skipped = 0
+    curve_disabled_skipped = 0
+    invalid_token_addr_skipped = 0
+    unknown_token_skipped = 0
+    productivity_skipped = 0
     _productive_lane = (lane == "productive")
+    _productive_dexes = (
+        productive_dex_ids_from_config(config_path) if _productive_lane else frozenset()
+    )
 
     # Load per-pool adapter metadata (Curve coin indices, Balancer pool_id/vault_address).
     # Graceful: returns empty registry when file missing or malformed.
@@ -235,6 +263,16 @@ def build_graph_from_inventory(
         factory_verified_flag: bool = entry.get("factory_verified") is True
         pool_address = entry.get("pool_address", "0x0000000000000000000000000000000000000000")
         route_id = entry.get("route_id", "_")
+
+        if curve_temporarily_disabled() and (
+            dex_id == "curve_stable" or entry.get("adapter_type") == "curve_stable"
+        ):
+            curve_disabled_skipped += 1
+            continue
+
+        if _productive_lane and _productive_dexes and dex_id not in _productive_dexes:
+            productivity_skipped += 1
+            continue
 
         if exclude_factory_classes and factory_class in exclude_factory_classes:
             continue
@@ -359,6 +397,9 @@ def build_graph_from_inventory(
         t0 = token_map.get(sym0)
         t1 = token_map.get(sym1)
         if t0 is None or t1 is None:
+            if _productive_lane:
+                unknown_token_skipped += 1
+                continue
             logger.debug(
                 "Unknown token symbol in inventory edge",
                 extra={
@@ -383,6 +424,10 @@ def build_graph_from_inventory(
                     address=_ZERO_ETH_ADDRESS,
                     decimals=_decimals_for_symbol(sym1, cfg, entry.get("token1_decimals")),
                 )
+
+        if not _is_valid_eth_address(t0.address) or not _is_valid_eth_address(t1.address):
+            invalid_token_addr_skipped += 1
+            continue
 
         edge_key_fwd = f"{route_id}>{sym0}@{sym1}"
         edge_key_rev = f"{route_id}>{sym1}@{sym0}"
@@ -418,6 +463,10 @@ def build_graph_from_inventory(
                 _fwd_idx_in is None or _fwd_idx_out is None
             ):
                 curve_unindexed_skipped += 1
+            elif adapter_type == "curve_stable" and not _adapter_meta.curve_pool_quotable(
+                pool_address, chain=_meta_chain
+            ):
+                curve_unquotable_skipped += 1
             else:
                 fwd_edge = GraphEdge(
                     token_in_sym=sym0,
@@ -461,6 +510,10 @@ def build_graph_from_inventory(
                 _rev_idx_in is None or _rev_idx_out is None
             ):
                 curve_unindexed_skipped += 1
+            elif adapter_type == "curve_stable" and not _adapter_meta.curve_pool_quotable(
+                pool_address, chain=_meta_chain
+            ):
+                curve_unquotable_skipped += 1
             else:
                 rev_edge = GraphEdge(
                     token_in_sym=sym1,
@@ -504,6 +557,11 @@ def build_graph_from_inventory(
                 "unverified_skipped": unverified_skipped,
                 "depth_skipped": depth_skipped,
                 "curve_unindexed_skipped": curve_unindexed_skipped,
+                "curve_unquotable_skipped": curve_unquotable_skipped,
+                "curve_disabled_skipped": curve_disabled_skipped,
+                "invalid_token_addr_skipped": invalid_token_addr_skipped,
+                "unknown_token_skipped": unknown_token_skipped,
+                "productivity_skipped": productivity_skipped,
             }
         },
     )

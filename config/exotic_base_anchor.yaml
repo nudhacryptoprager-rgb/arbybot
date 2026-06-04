@@ -166,6 +166,19 @@ tokens:
   IMO:
     address: "0x5a7a2bf9ffae199f088b25837dcd7e115cf8e1bb"
     decimals: 18
+  # Curve / stable discovery — extend known_tokens so coin_indices classify more pools
+  USDT:
+    address: "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
+    decimals: 6
+  USDS:
+    address: "0x59d9356e565ab3a36dd77763fc0d87feaf85508c"
+    decimals: 18
+  axlUSDC:
+    address: "0xeb466342c4d449bc9f53a865d5cb90586f405215"
+    decimals: 6
+  GYD:
+    address: "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8"
+    decimals: 18
 
 # Minimal required sections (defaults used by config_loader.py)
 pairs: []
@@ -184,18 +197,18 @@ quote_gate:
   async_timeout_s: 10
   retry_backoff_s: 1.0
 
-sizes_usd: [1.0, 5.0, 10.0]
+sizes_usd: [1.0, 5.0, 10.0, 100.0, 250.0, 500.0]
 
 # Step 8 (GPT): lock scan_params in config — runner reads these as overrides
 # over CLI defaults when CLI was not explicitly changed.
-# Fix 6: dynamic_sizes is the canonical productive path — always enabled here.
+# Fix 6: dynamic_sizes is the canonical productive path — enabled via scan_params below.
 # Fix 7: sizes_usd here sets infra_telemetry.sizes_usd_source="config.scan_params".
 # Fix 8: always run with --require-factory-verified for production proof-runs.
 scan_params:
-  sizes_usd: [1.0, 5.0, 10.0]               # micro-depth ladder for thin M8 bridge pools
-  dynamic_sizes: true                        # canonical productive default (Fix 6)
-  dynamic_size_max_cycles: 3                 # conservative for free-tier RPC
-  cycle_lengths: [2, 3, 4]
+  sizes_usd: [1.0, 5.0, 10.0, 100.0, 250.0, 500.0]            # Session-17 ladder (stable CLMM/v3 quotes)
+  dynamic_sizes: true                         # runner enables --dynamic-sizes from YAML
+  dynamic_size_max_cycles: 0
+  cycle_lengths: [3, 4]                       # no 2-leg until bridge multi-venue proves route_qsr
 
 cost_model:
   default_profile: default
