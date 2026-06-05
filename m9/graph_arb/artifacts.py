@@ -1088,6 +1088,7 @@ def build_artifact(
     # to top-level so CI gates and dashboards can read them without nested traversal.
     _cycles_with_m8_pool: int = 0
     _positive_cycles_with_m8_pool: int = 0
+    _cross_mechanic_cycles: int = 0
     _m8_multi_venue_verified: Optional[int] = None
     _graph_edges_from_m8: Optional[int] = None
     _graph_ready_from_m8: Optional[int] = None
@@ -1095,6 +1096,7 @@ def build_artifact(
     if bridge_source_metrics is not None:
         _cycles_with_m8_pool = bridge_source_metrics.get("cycles_with_m8_pool") or 0
         _positive_cycles_with_m8_pool = bridge_source_metrics.get("positive_cycles_with_m8_pool") or 0
+        _cross_mechanic_cycles = bridge_source_metrics.get("cross_mechanic_cycles") or 0
         _m8_multi_venue_verified = bridge_source_metrics.get("m8_multi_venue_verified_count")
         _graph_edges_from_m8 = bridge_source_metrics.get("graph_edges_from_m8")
         _graph_ready_from_m8 = bridge_source_metrics.get("graph_ready_from_m8")
@@ -1161,6 +1163,7 @@ def build_artifact(
             "graph_edges_from_m8": _graph_edges_from_m8,
             "cycles_with_m8_pool": _cycles_with_m8_pool,
             "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,
+            "cross_mechanic_cycles": _cross_mechanic_cycles,
         },
         **(
             {
@@ -1172,6 +1175,7 @@ def build_artifact(
                         "bridge_discovery_cycles_found"
                     ),
                     "cycles_with_m8_pool": _cycles_with_m8_pool,
+                    "cross_mechanic_cycles": _cross_mechanic_cycles,
                     "graph_ready_from_m8": _graph_ready_from_m8,
                     "graph_ready_from_expansion": bridge_source_metrics.get(
                         "graph_ready_from_expansion"

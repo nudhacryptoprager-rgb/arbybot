@@ -280,6 +280,9 @@ def _load_cross_dex_expansion_routes(
         "pools_found_by_dex": summary.get("pools_found_by_dex") or {},
         "quoteable_by_dex": summary.get("quoteable_by_dex") or {},
         "admitted_by_dex": summary.get("admitted_by_dex") or {},
+        "routes_admitted_raw": summary.get(
+            "routes_admitted_raw", summary.get("routes_admitted_count", len(routes))
+        ),
     }
 
 
@@ -468,6 +471,7 @@ def build_bridge_inventory(
     expansion_path: Optional[str] = _DEFAULT_CROSS_DEX_EXPANSION,
     registry_path: Optional[str] = None,
     registry_ttl_seconds: Optional[float] = None,
+    include_expansion_duplicates_for_shadow: bool = False,
 ) -> Dict[str, Any]:
     """Build the M9 bridge inventory from M8/M8.1 sources + base depth inventory.
 
@@ -484,6 +488,9 @@ def build_bridge_inventory(
             (keeps unit tests side-effect free).
         registry_ttl_seconds: TTL for venue observations in the registry.
         expansion_path: M8.2 cross-DEX expansion artifact; None disables merge.
+        include_expansion_duplicates_for_shadow: When True, re-admit expansion routes
+            whose pool_address already exists in base/M8 (tagged shadow_dedupe_duplicate).
+            Diagnostic/shadow only — do not use for productive canonical bridge.
 
     Returns bridge_source_metrics dict.  Writes the output artifact to output_path.
     """
@@ -890,16 +897,39 @@ def build_bridge_inventory(
         }
         _expansion_raw_input = len(_expansion_routes)
         _expansion_admitted: List[Dict] = []
+        _expansion_deduped_pools: List[str] = []
         for _er in _expansion_routes:
             _ep = (_er.get("pool_address") or "").lower()
-            if not _ep or _ep in _expansion_existing:
+            if not _ep:
+                continue
+            if _ep in _expansion_existing:
+                _expansion_deduped_pools.append(_ep)
+                if include_expansion_duplicates_for_shadow:
+                    _dup = dict(_er)
+                    _dup["shadow_dedupe_duplicate"] = True
+                    _dup["include_expansion_duplicates_for_shadow"] = True
+                    _expansion_admitted.append(_dup)
                 continue
             _expansion_admitted.append(_er)
             _expansion_existing.add(_ep)
         m8_new_routes = m8_new_routes + _expansion_admitted
-        _expansion_routes = _expansion_admitted
+        _expansion_routes = [
+            r for r in _expansion_admitted if not r.get("shadow_dedupe_duplicate")
+        ]
         _expansion_meta["expansion_routes_raw_input"] = _expansion_raw_input
-        _expansion_meta["expansion_routes_after_dedupe"] = len(_expansion_admitted)
+        _expansion_meta["expansion_routes_after_dedupe"] = len(_expansion_routes)
+        _expansion_meta["expansion_routes_shadow_duplicates_included"] = len(
+            _expansion_admitted
+        ) - len(_expansion_routes)
+        _expansion_meta["expansion_deduped_existing_pool_count"] = len(
+            _expansion_deduped_pools
+        )
+        _expansion_meta["expansion_deduped_pool_samples"] = _expansion_deduped_pools[:8]
+        _raw_admitted = _expansion_meta.get("routes_admitted_raw")
+        if _raw_admitted is None:
+            _raw_admitted = _expansion_raw_input
+        _expansion_meta["routes_admitted_raw"] = _raw_admitted
+        _expansion_meta["routes_admitted_after_bridge_dedupe"] = len(_expansion_routes)
 
     # Unsupported M8 routes (truly unknown adapters) are quarantined.
     m8_quarantined_routes: List[Dict] = [
@@ -1139,6 +1169,21 @@ def build_bridge_inventory(
         "expansion_quoteable_by_dex": _expansion_meta.get("quoteable_by_dex", {}),
         "expansion_admitted_by_dex": _expansion_meta.get("admitted_by_dex", {}),
         "expansion_reject_histogram": _expansion_meta.get("reject_reason_histogram", {}),
+        "expansion_deduped_existing_pool_count": _expansion_meta.get(
+            "expansion_deduped_existing_pool_count", 0
+        ),
+        "expansion_deduped_pool_samples": _expansion_meta.get(
+            "expansion_deduped_pool_samples", []
+        ),
+        "expansion_routes_shadow_duplicates_included": _expansion_meta.get(
+            "expansion_routes_shadow_duplicates_included", 0
+        ),
+        "routes_admitted_raw": _expansion_meta.get("routes_admitted_raw"),
+        "routes_admitted_after_bridge_dedupe": _expansion_meta.get(
+            "routes_admitted_after_bridge_dedupe"
+        ),
+        "include_expansion_duplicates_for_shadow": include_expansion_duplicates_for_shadow,
+        "existence_blocker": "M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL",
     }
 
     # Curve rolling indices artifact coverage (bridge inventory curve_stable routes)

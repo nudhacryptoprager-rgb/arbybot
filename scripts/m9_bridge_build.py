@@ -94,6 +94,15 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="TTL for venue observations in the registry (default 48h).",
     )
+    p.add_argument(
+        "--include-expansion-duplicates-for-shadow",
+        action="store_true",
+        default=False,
+        help=(
+            "Shadow/diagnostic only: include M8.2 expansion routes even when pool "
+            "already exists in base inventory (tagged shadow_dedupe_duplicate)."
+        ),
+    )
     return p.parse_args()
 
 
@@ -124,6 +133,7 @@ def main() -> int:
         registry_path=(None if args.no_registry else args.registry),
         registry_ttl_seconds=args.registry_ttl_seconds,
         expansion_path=(None if args.no_expansion else args.expansion or None),
+        include_expansion_duplicates_for_shadow=args.include_expansion_duplicates_for_shadow,
     )
 
     log.info("Bridge funnel:")
@@ -135,6 +145,15 @@ def main() -> int:
     log.info("  depth_ok_count           : %d", metrics["depth_ok_count"])
     log.info("  graph_ready_from_m8      : %d", metrics["graph_ready_from_m8"])
     log.info("  graph_ready_from_expansion: %d", metrics.get("graph_ready_from_expansion", 0))
+    log.info(
+        "  expansion_deduped_existing_pool_count: %d",
+        metrics.get("expansion_deduped_existing_pool_count", 0),
+    )
+    if metrics.get("expansion_deduped_pool_samples"):
+        log.info(
+            "  expansion_deduped_pool_samples: %s",
+            metrics.get("expansion_deduped_pool_samples"),
+        )
     log.info("  expansion_multi_venue    : %d", metrics.get("expansion_multi_venue_count", 0))
     log.info("  graph_ready_total        : %d", metrics["graph_ready_total"])
     log.info("  registry_enabled         : %s", metrics.get("registry_enabled", False))

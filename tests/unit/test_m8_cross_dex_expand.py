@@ -9,6 +9,7 @@ import yaml
 from m8.discovery.cross_dex_expand import (
     SCHEMA_VERSION,
     _build_route,
+    _registry_pools_for_pair,
     collect_token_anchor_pairs,
     discovery_dexes_from_config,
     expand_cross_dex,
@@ -94,9 +95,15 @@ def test_expand_dry_run_multi_venue(tmp_path):
             }
         }
     }
+    cfg = _minimal_config()
+    cfg["dexes"]["aerodrome"] = {"adapter_type": "ve33", "enabled": True}
+    cfg["m9_dex_productivity"]["aerodrome"] = {
+        "enabled_for_discovery": True,
+        "enabled_for_productive": True,
+    }
     art = expand_cross_dex(
         chain="base",
-        config=_minimal_config(),
+        config=cfg,
         registry=registry,
         anchor_artifact=None,
         dry_run=True,
@@ -106,6 +113,179 @@ def test_expand_dry_run_multi_venue(tmp_path):
     assert art["summary"]["multi_venue_tokens"] == 1
     assert art["summary"]["routes_admitted_count"] >= 2
     assert all(r["source"] == "m8_cross_dex_expansion" for r in art["routes_admitted"])
+
+
+def test_registry_venues_outside_config_are_ignored():
+    registry = {
+        "tokens": {
+            "0xabc": {
+                "symbol": "FOO",
+                "anchors": ["USDC"],
+                "venues": {
+                    "u::0xpool1": {
+                        "dex": "uniswap_v3",
+                        "pool": "0xpool1",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                        "token0": "0xabc",
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    },
+                    "a::0xpool2": {
+                        "dex": "aerodrome",
+                        "pool": "0xpool2",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                        "token0": "0xabc",
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    },
+                },
+            }
+        }
+    }
+    art = expand_cross_dex(
+        chain="base",
+        config=_minimal_config(),
+        registry=registry,
+        anchor_artifact=None,
+        dry_run=True,
+    )
+
+    assert art["summary"]["dex_ids_checked"] == ["uniswap_v3", "curve_stable"]
+    assert art["summary"]["multi_venue_tokens"] == 0
+    assert art["summary"]["routes_admitted_count"] == 0
+    assert art["summary"]["pools_found_by_dex"] == {"uniswap_v3": 1}
+
+
+def test_cross_mechanic_scoring_clmm_vs_solidly():
+    # uniswap_v3 (clmm_ticks) + aerodrome (solidly_volatile_xyk) = 2 distinct
+    # pricing models => cross_mechanic, mirror_score=2.
+    registry = {
+        "tokens": {
+            "0xabc": {
+                "symbol": "FOO",
+                "anchors": ["USDC"],
+                "venues": {
+                    "u::0xpool1": {
+                        "dex": "uniswap_v3",
+                        "pool": "0xpool1",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                        "token0": "0xabc",
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    },
+                    "a::0xpool2": {
+                        "dex": "aerodrome",
+                        "pool": "0xpool2",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                        "token0": "0xabc",
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    },
+                },
+            }
+        }
+    }
+    cfg = _minimal_config()
+    cfg["dexes"]["aerodrome"] = {"adapter_type": "ve33", "enabled": True}
+    cfg["m9_dex_productivity"]["aerodrome"] = {
+        "enabled_for_discovery": True,
+        "enabled_for_productive": True,
+    }
+    art = expand_cross_dex(
+        chain="base",
+        config=cfg,
+        registry=registry,
+        anchor_artifact=None,
+        dry_run=True,
+    )
+    assert art["summary"]["cross_mechanic_tokens"] == 1
+    assert art["summary"]["same_mechanic_tokens"] == 0
+    assert art["summary"]["pricing_model_pairs"]
+    for r in art["routes_admitted"]:
+        assert r["cross_mechanic"] is True
+        assert r["mirror_score"] >= 2.0
+        assert len(r["mirror_pricing_models"]) >= 2
+
+
+def test_token_freshness_signal_from_registry():
+    import time
+
+    registry = {
+        "tokens": {
+            "0xabc": {
+                "symbol": "FOO",
+                "anchors": ["USDC"],
+                "first_seen_ts": time.time(),  # just observed => fresh
+                "venues": {
+                    "u::0xpool1": {
+                        "dex": "uniswap_v3",
+                        "pool": "0xpool1",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                        "token0": "0xabc",
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    },
+                    "a::0xpool2": {
+                        "dex": "aerodrome",
+                        "pool": "0xpool2",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                        "token0": "0xabc",
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    },
+                },
+            }
+        }
+    }
+    cfg = _minimal_config()
+    cfg["dexes"]["aerodrome"] = {"adapter_type": "ve33", "enabled": True}
+    cfg["m9_dex_productivity"]["aerodrome"] = {
+        "enabled_for_discovery": True,
+        "enabled_for_productive": True,
+    }
+    art = expand_cross_dex(
+        chain="base",
+        config=cfg,
+        registry=registry,
+        anchor_artifact=None,
+        dry_run=True,
+    )
+    assert art["summary"]["fresh_token_admitted"] == 1
+    assert any(r.get("token_is_fresh") for r in art["routes_admitted"])
+
+
+def test_registry_pools_for_pair_filters_dex_outside_config():
+    registry = {
+        "tokens": {
+            "0xabc": {
+                "symbol": "FOO",
+                "anchors": ["USDC"],
+                "venues": {
+                    "u::0xpool1": {
+                        "dex": "uniswap_v3",
+                        "pool": "0xpool1",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                    },
+                    "x::0xpool2": {
+                        "dex": "phantom_dex",
+                        "pool": "0xpool2",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                    },
+                },
+            }
+        }
+    }
+    pools = _registry_pools_for_pair(
+        registry,
+        "0xabc",
+        "FOO",
+        "USDC",
+        allowed_dex_ids={"uniswap_v3"},
+    )
+    assert len(pools) == 1
+    assert pools[0]["dex_id"] == "uniswap_v3"
 
 
 def test_discovery_dexes_respects_productivity_flags():

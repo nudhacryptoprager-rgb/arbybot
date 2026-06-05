@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -47,6 +48,7 @@ EXIT_OK = 0
 EXIT_CONFIG_ERROR = 1
 EXIT_NO_CYCLES = 2
 EXIT_ALL_QUOTES_FAILED = 3
+EXIT_BRIDGE_UNIVERSE_TOO_SMALL = 4
 
 
 def _iso_now() -> str:
@@ -720,6 +722,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # M8→M9 bridge provenance: if inventory is a bridge inventory, extract metrics
     _bridge_source_metrics: Optional[Dict[str, Any]] = None
     _m8_pool_addrs: "frozenset[str]" = frozenset()
+    _cross_mechanic_pool_addrs: "frozenset[str]" = frozenset()
     try:
         import json as _json_bridge
         with open(inventory_path, encoding="utf-8") as _inv_fh:
@@ -739,8 +742,16 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             for r in _inv_raw.get("active_routes", [])
             if r.get("source") == "m8_sniper" and r.get("pool_address")
         )
+        _cross_mechanic_pool_addrs = frozenset(
+            r.get("pool_address", "").lower()
+            for r in _inv_raw.get("active_routes", [])
+            if r.get("cross_mechanic") and r.get("pool_address")
+        )
         if _bridge_source_metrics is not None:
             _bridge_source_metrics["m8_pool_addrs_tracked"] = len(_m8_pool_addrs)
+            _bridge_source_metrics["cross_mechanic_pool_addrs_tracked"] = len(
+                _cross_mechanic_pool_addrs
+            )
         # Extend with M8-context pools (existing base routes for M8-tracked tokens).
         # These are base-inventory routes for non-anchor tokens that M8 sniped a new
         # pool for — confirming those tokens are active. Cycles that traverse any of
@@ -760,6 +771,40 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 )
     except Exception as _bsm_exc:
         log.debug("Bridge metrics extraction skipped: %s", _bsm_exc)
+
+    _inv_norm_gate = inventory_path.replace("\\", "/")
+    _art_norm_gate = getattr(args, "artifact_path", "").replace("\\", "/")
+    _is_bridge_shadow_gate = (
+        "m9_bridge_inventory" in _inv_norm_gate or "bridge_shadow" in _art_norm_gate
+    )
+    if _is_bridge_shadow_gate and not os.environ.get("ARBY_BRIDGE_SHADOW_SKIP_UNIVERSE_GATE"):
+        try:
+            with open(inventory_path, encoding="utf-8") as _gate_fh:
+                _gate_inv = json.load(_gate_fh)
+            _gate_active = [
+                r
+                for r in (_gate_inv.get("active_routes") or [])
+                if (r.get("status") or "active") == "active"
+            ]
+            _gate_tokens: set[str] = set()
+            for _gr in _gate_active:
+                for _gk in ("token0_addr", "token1_addr"):
+                    _ga = (_gr.get(_gk) or "").lower()
+                    if _ga:
+                        _gate_tokens.add(_ga)
+            if len(_gate_active) < 4 or len(_gate_tokens) < 3:
+                log.error(
+                    "BRIDGE_SHADOW_UNIVERSE_GATE: active_routes=%d unique_token_addrs=%d "
+                    "(need >=4 and >=3). Blocker=M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL. "
+                    "Refresh M8 sniper or use shadow inventory with "
+                    "--include-expansion-duplicates-for-shadow. "
+                    "Bypass: ARBY_BRIDGE_SHADOW_SKIP_UNIVERSE_GATE=1",
+                    len(_gate_active),
+                    len(_gate_tokens),
+                )
+                return EXIT_BRIDGE_UNIVERSE_TOO_SMALL
+        except Exception as _gate_exc:
+            log.warning("Bridge shadow universe gate skipped: %s", _gate_exc)
 
     # Build graph — productive lane applies hard quarantine only (soft tags kept).
     _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
@@ -1487,6 +1532,20 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         _bridge_source_metrics["cycles_with_m8_pool"] = _cycles_with_m8
         _bridge_source_metrics["positive_cycles_with_m8_pool"] = _positive_cycles_with_m8
+        if _cross_mechanic_pool_addrs:
+            _cross_mechanic_cycles = sum(
+                1
+                for qr in cycle_results
+                if any(
+                    e.pool_address.lower() in _cross_mechanic_pool_addrs
+                    for e in qr.cycle.edges
+                )
+            )
+            _bridge_source_metrics["cross_mechanic_cycles"] = _cross_mechanic_cycles
+            log.info(
+                "Cross-mechanic cycle participation: cross_mechanic_cycles=%d",
+                _cross_mechanic_cycles,
+            )
         if _is_bridge_inventory_run:
             _quoteable_statuses = frozenset({"POSITIVE_GROSS", "NEGATIVE_GROSS"})
             _bridge_source_metrics["bridge_cycles_quoteable"] = sum(
