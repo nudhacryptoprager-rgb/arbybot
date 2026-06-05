@@ -26,10 +26,8 @@ _DEX_ID_TO_ADAPTER: Dict[str, str] = {
     "maverick_v2": "maverick_v2",
 }
 
-# Adapters with no factory-resolve query path in discovery.pool_resolver yet.
-# These are NOT silently skipped: cross_dex_expand emits an explicit
-# ADAPTER_RESOLVE_PENDING reject so the mirror-coverage gap is visible per dex.
-_FACTORY_RESOLVE_PENDING_ADAPTERS = frozenset(
+# Specialized DEX mirror resolve uses rolling indices (mirror_index.py), not pool_resolver.
+_SPECIALIZED_MIRROR_ADAPTERS = frozenset(
     {"curve_stable", "balancer_stable", "maverick_v2"}
 )
 
@@ -162,23 +160,64 @@ def _registry_pools_for_pair(
     return pools
 
 
+def _token_address_from_config(config: Dict[str, Any], symbol: str) -> str:
+    for sym, info in (config.get("tokens") or {}).items():
+        if sym == symbol and isinstance(info, dict):
+            addr = info.get("address") or info.get("addr")
+            if addr:
+                return str(addr).lower()
+    return ""
+
+
 def _resolve_via_factory(
     chain: str,
     dex_id: str,
     exotic_symbol: str,
     anchor_symbol: str,
     *,
+    exotic_address: str = "",
+    anchor_address: str = "",
     dry_run: bool,
     resolver: Any,
+    mirror_index: Any = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     adapter = _DEX_ID_TO_ADAPTER.get(dex_id, "")
     if not adapter:
         return None, "UNSUPPORTED_DEX"
 
-    # Non-AMM / non-getPool mechanics (Curve, Balancer, Maverick) have no
-    # factory-resolve query path yet. Emit an explicit pending reason instead of
-    # a silent skip so cross-mechanic mirror gaps are measurable per dex_id.
-    if adapter in _FACTORY_RESOLVE_PENDING_ADAPTERS:
+    if adapter in _SPECIALIZED_MIRROR_ADAPTERS:
+        if dry_run:
+            return None, "SKIPPED_DRY_RUN"
+        if mirror_index is None:
+            from m8.discovery.mirror_index import MirrorIndex
+
+            mirror_index = MirrorIndex.load(chain)
+        exotic_addr = (exotic_address or "").lower()
+        anchor_addr = (anchor_address or "").lower()
+        if not anchor_addr and config:
+            anchor_addr = _token_address_from_config(config, anchor_symbol)
+        if adapter == "curve_stable":
+            return mirror_index.resolve_curve(
+                exotic_symbol,
+                anchor_symbol,
+                exotic_address=exotic_addr,
+                anchor_address=anchor_addr,
+            )
+        if adapter == "balancer_stable":
+            return mirror_index.resolve_balancer(
+                exotic_symbol,
+                anchor_symbol,
+                exotic_address=exotic_addr,
+                anchor_address=anchor_addr,
+            )
+        if adapter == "maverick_v2":
+            return mirror_index.resolve_maverick(
+                exotic_symbol,
+                anchor_symbol,
+                exotic_address=exotic_addr,
+                anchor_address=anchor_addr,
+            )
         return None, "ADAPTER_RESOLVE_PENDING"
 
     if dry_run:
@@ -306,6 +345,12 @@ def _build_route(
         # Token freshness signal (Phase 1c)
         "token_is_fresh": pool_entry.get("_token_is_fresh"),
         "token_is_known_registry": pool_entry.get("_token_is_known_registry"),
+        # Specialized mirror index fields
+        "pool_kind": pool_entry.get("pool_kind"),
+        "coin_indices": pool_entry.get("coin_indices"),
+        "pool_id": pool_entry.get("pool_id"),
+        "vault_address": pool_entry.get("vault_address"),
+        "resolve_source": pool_entry.get("resolve_source"),
     }
 
 
@@ -333,10 +378,13 @@ def expand_cross_dex(
         pairs = pairs[: max_pairs]
 
     from discovery.pool_resolver import get_pool_resolver
+    from m8.discovery.mirror_index import MirrorIndex, per_dex_expansion_breakdown
 
     resolver = get_pool_resolver(chain)
+    mirror_index = MirrorIndex.load(chain)
 
     reject_hist: Counter = Counter()
+    all_reject_rows: List[Dict[str, str]] = []
     pools_found_by_dex: Counter = Counter()
     quoteable_by_dex: Counter = Counter()
     token_results: List[Dict[str, Any]] = []
@@ -388,14 +436,19 @@ def expand_cross_dex(
                 dex_id,
                 pair["exotic_symbol"],
                 pair["anchor_symbol"],
+                exotic_address=pair.get("exotic_address", ""),
+                anchor_address=_token_address_from_config(config, pair["anchor_symbol"]),
                 dry_run=dry_run,
                 resolver=resolver,
+                mirror_index=mirror_index,
+                config=config,
             )
             if found:
                 pools_by_dex[dex_id] = found
                 pools_found_by_dex[dex_id] += 1
             else:
                 rejects.append({"dex_id": dex_id, "reason": reason})
+                all_reject_rows.append({"dex_id": dex_id, "reason": reason})
                 reject_hist[reason] += 1
 
         quoteable_dexes = [
@@ -481,6 +534,11 @@ def expand_cross_dex(
         "fresh_token_admitted": fresh_token_admitted,
         "fresh_token_window_s": _fresh_window_s,
         "dry_run": dry_run,
+        **per_dex_expansion_breakdown(
+            pools_found_by_dex=dict(pools_found_by_dex),
+            reject_rows=all_reject_rows,
+            routes_admitted=routes_admitted,
+        ),
     }
 
     return {

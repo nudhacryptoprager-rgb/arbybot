@@ -167,7 +167,10 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         build_reject_reason_histogram,
         honeypot_evidence_policy,
         merge_expansion_reject_histogram,
+        merge_per_dex_breakdown,
     )
+
+    per_dex = merge_per_dex_breakdown(candidates_out)
 
     payload = {
         "schema_version": "m8_hot_path_v1",
@@ -188,6 +191,7 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         },
         "reject_reason_histogram": build_reject_reason_histogram(candidates_out),
         "expansion_reject_histogram": merge_expansion_reject_histogram(candidates_out),
+        **per_dex,
         "honeypot_evidence": honeypot_evidence_policy(
             strict_requested=args.honeypot_strict_evidence
         ),

@@ -21,6 +21,26 @@ def build_reject_reason_histogram(candidates: List[Dict[str, Any]]) -> Dict[str,
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+def merge_per_dex_breakdown(candidates: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+    """Merge per-dex expansion metrics from hot-path mirror resolve rows."""
+    keys = (
+        "pending_by_dex",
+        "no_pool_by_dex",
+        "resolved_by_dex",
+        "quote_smoke_by_dex",
+    )
+    merged: Dict[str, Dict[str, int]] = {k: {} for k in keys}
+    for row in candidates:
+        summary = row.get("summary") or {}
+        for key in keys:
+            hist = summary.get(key) or {}
+            if not isinstance(hist, dict):
+                continue
+            for dex, count in hist.items():
+                merged[key][str(dex)] = merged[key].get(str(dex), 0) + int(count or 0)
+    return {k: dict(sorted(v.items())) for k, v in merged.items()}
+
+
 def merge_expansion_reject_histogram(candidates: List[Dict[str, Any]]) -> Dict[str, int]:
     """Aggregate M8.2 reject_reason_histogram from mirror resolve rows."""
     merged: Counter[str] = Counter()

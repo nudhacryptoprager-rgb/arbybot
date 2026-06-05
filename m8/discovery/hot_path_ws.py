@@ -238,7 +238,10 @@ class HotPathProcessor:
             build_reject_reason_histogram,
             honeypot_evidence_policy,
             merge_expansion_reject_histogram,
+            merge_per_dex_breakdown,
         )
+
+        per_dex = merge_per_dex_breakdown(self.candidates)
 
         acceptance = {
             "hot_path_cross_mechanic_candidates_gt_0": self.hot_path_cross_mechanic_candidates
@@ -268,6 +271,7 @@ class HotPathProcessor:
             "expansion_reject_histogram": merge_expansion_reject_histogram(
                 self.candidates
             ),
+            **per_dex,
             "honeypot_evidence": honeypot_evidence_policy(
                 strict_requested=self.honeypot_strict_evidence
             ),
