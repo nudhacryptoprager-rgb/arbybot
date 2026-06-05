@@ -94,38 +94,37 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    # Resolve RPC URL (same policy as pool_depth_probe)
-    _PUBLIC_FALLBACK_RPC = "https://mainnet.base.org"
-    _base_rpc_env = os.environ.get("BASE_RPC")
-    rpc_url: Optional[str] = _base_rpc_env or _PUBLIC_FALLBACK_RPC
+    from core.env import load_root_dotenv
+
+    load_root_dotenv()
+    rpc_url: Optional[str] = None
     try:
-        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+        from core.rpc_urls import apply_productive_rpc_env, is_public_rpc_url, resolve_productive_http_rpc
+
+        os.environ.update(apply_productive_rpc_env(args.chain))
+        rpc_url = resolve_productive_http_rpc(args.chain)
+        _resolved_is_public = is_public_rpc_url(rpc_url)
+    except RuntimeError:
+        from core.rpc_urls import is_public_rpc_url, resolve_rpc_http, _CHAIN_KEY_TO_ID
+
         chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
         rpc_url, _, _ = resolve_rpc_http(
             chain_id=chain_id, network=args.chain, env=dict(os.environ)
         )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Could not resolve RPC via core.rpc_urls: %s — using BASE_RPC env", exc)
+        _resolved_is_public = is_public_rpc_url(rpc_url)
     if not rpc_url:
-        log.error("No RPC URL available. Set BASE_RPC env var.")
+        log.error("No RPC URL available. Set BASE_RPC_PRIMARY or ALCHEMY_API_KEY.")
         return 1
 
-    # Guard: refuse to run depth probes against the public mainnet.base.org endpoint
-    # unless explicitly allowed. That endpoint is heavily rate-limited (429) and produces
-    # unreliable depth data — a silent fallback corrupts the enriched inventory.
-    _resolved_is_public = rpc_url.rstrip("/") == _PUBLIC_FALLBACK_RPC.rstrip("/")
     if _resolved_is_public and not args.allow_public_rpc:
         log.error(
-            "Refusing to enrich depth via public RPC %s (rate-limited, 429-prone). "
-            "Set BASE_RPC to a dedicated endpoint, or pass --allow-public-rpc to override.",
-            rpc_url,
+            "Refusing to enrich depth via public RPC (rate-limited). "
+            "Set BASE_RPC_PRIMARY / ALCHEMY_API_KEY, or pass --allow-public-rpc.",
         )
         return 1
     if _resolved_is_public:
         log.warning(
-            "Using public RPC %s for depth enrichment (--allow-public-rpc set); "
-            "expect 429 throttling and possibly incomplete depth data.",
-            rpc_url,
+            "Using public RPC for depth enrichment (--allow-public-rpc); expect throttling.",
         )
 
     inv_path = Path(args.inventory)

@@ -68,6 +68,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Set ARBY_RPC_RPS_LIMIT for this run (default: 2 when unset in env)",
     )
+    p.add_argument(
+        "--write-revert-quarantine",
+        action="store_true",
+        help="Append QUOTE_REVERT/QUOTE_CONFIG_MISSING pools to data/tmp/m9_revert_quarantine.json",
+    )
     return p.parse_args()
 
 
@@ -80,16 +85,25 @@ def resolve_diagnostic_rpc(
     Must pass ``chain_id`` + ``network`` — calling ``resolve_rpc_http("base")`` as a
     positional arg wrongly binds the string to ``chain_id`` and ignores ``BASE_RPC``.
     """
-    from core.rpc_urls import _CHAIN_KEY_TO_ID, resolve_rpc_http
+    from core.rpc_urls import _CHAIN_KEY_TO_ID, apply_productive_rpc_env, resolve_productive_http_rpc
 
     env_map = dict(env if env is not None else os.environ)
-    chain_key = chain.lower()
-    chain_id = _CHAIN_KEY_TO_ID.get(chain_key)
-    url, provider, diag = resolve_rpc_http(
-        chain_id=chain_id,
-        network=chain_key,
-        env=env_map,
-    )
+    try:
+        env_map = apply_productive_rpc_env(chain.lower(), env=env_map)
+        url = resolve_productive_http_rpc(chain.lower(), env=env_map)
+        provider = "alchemy"
+        diag = {"source": "productive_pool"}
+        return url, provider, diag
+    except RuntimeError:
+        from core.rpc_urls import resolve_rpc_http
+
+        chain_key = chain.lower()
+        chain_id = _CHAIN_KEY_TO_ID.get(chain_key)
+        url, provider, diag = resolve_rpc_http(
+            chain_id=chain_id,
+            network=chain_key,
+            env=env_map,
+        )
     if not url:
         raise RuntimeError(
             f"No RPC URL for chain={chain!r} (chain_id={chain_id}). "
@@ -279,6 +293,16 @@ def main() -> int:
                 row["reject_reason"],
                 row["raw_error"],
             )
+    if args.write_revert_quarantine:
+        from m9.graph_arb.route_quarantine import update_revert_quarantine_from_diagnostic
+
+        stats = update_revert_quarantine_from_diagnostic(str(out))
+        log.info(
+            "Revert quarantine updated: added=%d total=%d path=%s",
+            stats["added"],
+            stats["total"],
+            stats["output_path"],
+        )
     return 0 if report.get("routes_probed", 0) > 0 else 2
 
 

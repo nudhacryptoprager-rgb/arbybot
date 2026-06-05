@@ -498,16 +498,37 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     rpc_provider: str = "unknown"
     rpc_source: str = "unknown"
     rpc_public_fallback_used: bool = False
+    _use_productive_rpc = bool(
+        getattr(args, "productive_lane", False)
+        or getattr(args, "require_factory_verified", False)
+    )
     try:
-        from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
-        _chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
-        rpc_url, rpc_provider, rpc_diag = resolve_rpc_http(
-            chain_id=_chain_id,
-            network=args.chain,
-            env=dict(os.environ),
+        from core.rpc_urls import (
+            _CHAIN_KEY_TO_ID,
+            apply_productive_rpc_env,
+            classify_provider,
+            is_public_rpc_url,
+            resolve_rpc_http,
         )
-        rpc_source = rpc_diag.get("source", "unknown")
-        rpc_public_fallback_used = rpc_provider in ("public", "public_fallback")
+        if _use_productive_rpc:
+            try:
+                os.environ.update(apply_productive_rpc_env(args.chain))
+                rpc_url = os.environ.get(f"{args.chain.upper()}_RPC_PRIMARY")
+                if rpc_url and not is_public_rpc_url(rpc_url):
+                    rpc_provider = classify_provider(rpc_url)
+                    rpc_source = "productive_pool"
+                    rpc_public_fallback_used = False
+            except RuntimeError as _prod_rpc_exc:
+                log.warning("Productive RPC bootstrap skipped: %s", _prod_rpc_exc)
+        if not rpc_url or is_public_rpc_url(rpc_url):
+            _chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
+            rpc_url, rpc_provider, rpc_diag = resolve_rpc_http(
+                chain_id=_chain_id,
+                network=args.chain,
+                env=dict(os.environ),
+            )
+            rpc_source = rpc_diag.get("source", "unknown")
+            rpc_public_fallback_used = rpc_provider in ("public", "public_fallback")
         log.info(
             "RPC resolved: provider=%s source=%s public_fallback=%s",
             rpc_provider, rpc_source, rpc_public_fallback_used,
@@ -571,6 +592,17 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                     _cl_exc,
                     _cycle_lengths,
                 )
+        _env_cycle_lengths = os.environ.get("ARBY_M9_CYCLE_LENGTHS", "").strip()
+        if _env_cycle_lengths:
+            try:
+                _parsed_env = tuple(
+                    sorted({int(v.strip()) for v in _env_cycle_lengths.split(",") if v.strip()})
+                )
+                if _parsed_env:
+                    _cycle_lengths = _parsed_env
+                    log.info("ARBY_M9_CYCLE_LENGTHS override: %s", _cycle_lengths)
+            except ValueError:
+                log.warning("Invalid ARBY_M9_CYCLE_LENGTHS=%r", _env_cycle_lengths)
         _cost_model = _cfg_raw.get("cost_model") or None
         if _cost_model:
             _profile = (_cost_model.get("profiles") or {}).get(
@@ -659,6 +691,20 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     # Prefer merged shadow inventory if available
     inventory_path = best_inventory_path(preferred=args.inventory)
+    if "m9_verified_inventory" in inventory_path.replace("\\", "/"):
+        try:
+            from m9.graph_arb.inventory_depth import ensure_verified_depth_merged
+
+            _merge_stats = ensure_verified_depth_merged(inventory_path)
+            if _merge_stats:
+                log.info(
+                    "Verified inventory depth merge: merged=%d with_depth=%d/%d",
+                    _merge_stats.get("merged", 0),
+                    _merge_stats.get("with_depth_after", 0),
+                    _merge_stats.get("target", 0),
+                )
+        except Exception as _depth_merge_exc:
+            log.warning("Verified depth merge skipped: %s", _depth_merge_exc)
     log.info(
         "M9 graph-arb runner starting: chain=%s config=%s inventory=%s",
         args.chain, args.config, inventory_path,
@@ -773,6 +819,30 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             log.debug("No revert quarantine file found at %s — first run or cleared", _REVERT_QUARANTINE_PATH)
         except Exception as _rq_exc:
             log.warning("Failed to load revert quarantine: %s", _rq_exc)
+
+        if _lane == "productive":
+            _diag_path = "data/runs/_rolling/m9_quote_route_diagnostic_latest.json"
+            try:
+                import json as _json_diag
+                from m9.graph_arb.route_quarantine import resolve_diagnostic_quarantine_pools
+
+                with open(_diag_path, encoding="utf-8") as _dfh:
+                    _diag_data = _json_diag.load(_dfh)
+                _diag_pools = resolve_diagnostic_quarantine_pools(_diag_data)
+                if _diag_pools:
+                    _exclude_pool_addresses = (
+                        (_exclude_pool_addresses or frozenset()) | frozenset(_diag_pools)
+                    )
+                    log.info(
+                        "Diagnostic quarantine: excluding %d pool_addresses "
+                        "(QUOTE_REVERT/QUOTE_CONFIG_MISSING from %s)",
+                        len(_diag_pools),
+                        _diag_path,
+                    )
+            except FileNotFoundError:
+                log.debug("No route diagnostic artifact at %s", _diag_path)
+            except Exception as _dq_exc:
+                log.warning("Diagnostic quarantine load failed: %s", _dq_exc)
 
         try:
             _disc_adj = build_graph_from_inventory(
@@ -1113,7 +1183,17 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             from m9.graph_arb.cycle_scheduler import apply_sweep_budget
 
             _max_per_adapter = int(os.environ.get("ARBY_M9_MAX_CYCLES_PER_ADAPTER", "8"))
-            batch = apply_sweep_budget(batch, max_per_adapter=_max_per_adapter)
+            _length_caps = None
+            _length_raw = os.environ.get("ARBY_M9_MAX_CYCLES_PER_LENGTH", "").strip()
+            if _length_raw:
+                from m9.graph_arb.route_quarantine import parse_max_cycles_per_length_env
+
+                _length_caps = parse_max_cycles_per_length_env(_length_raw)
+            batch = apply_sweep_budget(
+                batch,
+                max_per_adapter=_max_per_adapter,
+                max_per_length=_length_caps,
+            )
             if not batch:
                 # Scheduler exhausted ready cycles; sleep briefly and retry
                 # rather than exiting early — respects the deadline contract.

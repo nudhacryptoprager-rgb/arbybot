@@ -9,29 +9,22 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
 
 
 def _dedicated_http_rpc() -> str:
     from core.env import load_root_dotenv
 
     load_root_dotenv()
-    from core.rpc_urls import _CHAIN_KEY_TO_ID, is_public_rpc_url, resolve_rpc_http
+    from core.rpc_urls import apply_productive_rpc_env, resolve_productive_http_rpc
 
-    url, _, _ = resolve_rpc_http(chain_id=_CHAIN_KEY_TO_ID["base"], network="base")
-    if not is_public_rpc_url(url):
-        return url
-    wss = (os.environ.get("BASE_WSS") or "").strip()
-    if wss.startswith("wss://"):
-        return "https://" + wss[len("wss://") :]
-    if wss.startswith("ws://"):
-        return "http://" + wss[len("ws://") :]
-    primary = (os.environ.get("BASE_RPC_PRIMARY") or "").strip()
-    if primary and not is_public_rpc_url(primary):
-        return primary
-    raise RuntimeError(
-        "No dedicated HTTP RPC: set BASE_RPC_PRIMARY or non-public BASE_RPC, "
-        "or BASE_WSS (dRPC wss→https)."
-    )
+    try:
+        return resolve_productive_http_rpc("base")
+    except RuntimeError:
+        pass
+    env = apply_productive_rpc_env("base")
+    return env["BASE_RPC_PRIMARY"]
 
 
 def main() -> int:
@@ -44,6 +37,9 @@ def main() -> int:
     env.setdefault("ARBY_RPC_RPS_LIMIT", "6")
 
     inv = _REPO / "data/runs/_rolling/m9_bridge_inventory_latest.json"
+    steps_pre = [
+        [sys.executable, str(_REPO / "scripts/m9_enrich_verified_depth.py"), "--verbose"],
+    ]
     steps = [
         [
             sys.executable,
@@ -84,7 +80,7 @@ def main() -> int:
             "productive",
         ],
     ]
-    for cmd in steps:
+    for cmd in steps_pre + steps:
         print("RUN:", " ".join(cmd[2:4]), flush=True)
         rc = subprocess.call(cmd, cwd=str(_REPO), env=env)
         if rc != 0:

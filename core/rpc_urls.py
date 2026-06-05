@@ -249,6 +249,46 @@ def iter_dedicated_http_providers(
     return out
 
 
+def apply_productive_rpc_env(
+    chain: str = "base",
+    *,
+    env: Optional[dict] = None,
+) -> dict:
+    """Return env dict with Alchemy primary, dRPC secondary, dedicated policy flags."""
+    import os
+
+    base = dict(env if env is not None else os.environ)
+    providers = iter_dedicated_http_providers(chain, env=base)
+    alchemy_url = ""
+    drpc_url = ""
+    for _label, url in providers:
+        prov = classify_provider(url)
+        if prov == "alchemy" and not alchemy_url:
+            alchemy_url = url
+        elif prov == "drpc" and not drpc_url:
+            drpc_url = url
+    if not alchemy_url:
+        raise RuntimeError(
+            "No Alchemy HTTP URL: set ALCHEMY_API_KEY or BASE_RPC_PRIMARY in .env"
+        )
+    prefix = chain.upper()
+    out = dict(base)
+    out[f"{prefix}_RPC_PRIMARY"] = alchemy_url
+    if drpc_url:
+        out[f"{prefix}_RPC_SECONDARY"] = drpc_url
+    out[f"{prefix}_RPC"] = alchemy_url
+    out["ARBY_REQUIRE_DEDICATED_RPC"] = "1"
+    out["ARBY_PROVIDER_POOL_MODE"] = "weighted"
+    out.setdefault("ARBY_USE_PUBLIC_POOL", "0")
+    return out
+
+
+def resolve_productive_http_rpc(chain: str = "base", *, env: Optional[dict] = None) -> str:
+    """Dedicated HTTP URL for depth/quote (Alchemy preferred)."""
+    env = apply_productive_rpc_env(chain, env=env)
+    return env[f"{chain.upper()}_RPC_PRIMARY"]
+
+
 def print_rpc_env_contract(chain: str = "base", *, env: Optional[dict] = None) -> None:
     """Print env presence / policy flags without secret values."""
     import os

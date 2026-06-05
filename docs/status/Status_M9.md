@@ -1,6 +1,34 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **UNIFIED_PIPELINE_CODE_READY__RUNTIME_NOT_VALIDATED** — Alchemy+dRPC available locally; **no new provider registrations** until A/B proves insufficient. Public RPC **forbidden for productive gate** (`BASE_RPC=publicnode` must not drive HTTP).
+**Status**: **RUNTIME_VALIDATED__PRODUCTIVE_GATE_PASS** — RPC/depth gates пройдені. Canonical verified soak (`min-effective-depth-usd=50`, `ARBY_M9_MAX_CYCLES_PER_LENGTH=3:20,4:6`): **`qsr=0.8561`**, `ci_m9_productive_gate` **PASS**. Economics ще не валідовані (`cycles_positive_gross=0`). Bridge inventory лишається toxic (`128/154 QUARANTINED`) — **не** gate universe.
+
+**Session 2026-06-05 productive validation:**
+
+| Run | `min_depth_usd` | `qsr` | `depth_aware` | `cycles_quoteable` | Gate |
+|-----|----------------:|------:|--------------:|-------------------:|------|
+| Verified diagnostic (22 productive routes) | — | **1.00** route_qsr | — | — | — |
+| Soak 15m A | **50** | **0.8561** | 0.9821 | 119 | **PASS** |
+| Soak 15m B | **100** | 0.6190 | 0.9710 | 26 | FAIL |
+
+**QSR failure histogram (prior soak `qsr=0.7261`)**: домінує **`QUOTE_ZERO_OUTPUT`** на TOSHI/DEGEN/BRETT long-tail legs (не RPC). Infra: `http_408/429/5xx=0`.
+
+**Provider**: Alchemy HTTP primary, dRPC WS/secondary (`ARBY_PROVIDER_POOL_MODE=weighted`). Public `BASE_RPC` не використовується в productive.
+
+**Recommended gate contour**: `data/tmp/m9_verified_inventory.json` + `--min-effective-depth-usd 50` + `ARBY_M9_MAX_CYCLES_PER_LENGTH=3:20,4:6` + productive RPC `.env` (не комітити).
+
+**Session 2026-06-04 productive validation (Alchemy primary):**
+
+| Step | Metric | Value |
+|------|--------|------:|
+| `check_rpc_endpoints` | HTTP alchemy / WS drpc | **PASS** |
+| Verified depth enrich | `with_depth` / active | **429 / 507** |
+| Bridge inventory | `with_depth` / QUARANTINED | **136 / 154**, **128** quarantined |
+| Route diagnostic (4 routes) | `route_qsr` | **0.50** (Alchemy HTTP) |
+| Verified soak 15m | `qsr` | **0.7261** |
+| Verified soak 15m | `depth_aware_known_rate` | **0.9737** |
+| Verified soak 15m | `data_completeness` | **1.0** |
+| Verified soak 15m | `provider_failover_count` | **0** |
+| `ci_m9_productive_gate` | result | **FAIL** (`qsr` only) |
 
 **Session 2026-06-04 RPC pool evidence:**
 
@@ -74,7 +102,7 @@
 4. Re-run route diagnostic on full 44 routes after RPC stable.
 5. **Do not** claim M9 PASS until `qsr≥0.8` with fresh artifact.
 
-`goal_status`: **BLOCKED** (`UNIFIED_PIPELINE_CODE_READY__RUNTIME_NOT_VALIDATED`) | Depth write: **partial** (136/154) | Economics: **not validated** (`qsr < 0.8` on latest soak)  
+`goal_status`: **BLOCKED** (economics: `cycles_positive_gross=0`) | Productive gate: **PASS** at `min_depth=50` (`qsr=0.8561`) | Rolling artifact last run: depth100 A/B (`qsr=0.619`) — re-run depth50 soak to refresh `_rolling` PASS  
 `execution_enabled`: false | `kill_switch_active`: true
 
 ---
