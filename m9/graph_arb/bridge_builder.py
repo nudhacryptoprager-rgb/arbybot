@@ -276,6 +276,10 @@ def _load_cross_dex_expansion_routes(
         "reject_reason_histogram": data.get("reject_reason_histogram") or {},
         "multi_venue_tokens": summary.get("multi_venue_tokens", 0),
         "tokens_in": summary.get("tokens_in", 0),
+        "dex_ids_checked": summary.get("dex_ids_checked") or [],
+        "pools_found_by_dex": summary.get("pools_found_by_dex") or {},
+        "quoteable_by_dex": summary.get("quoteable_by_dex") or {},
+        "admitted_by_dex": summary.get("admitted_by_dex") or {},
     }
 
 
@@ -884,6 +888,7 @@ def build_bridge_inventory(
             for r in m8_new_routes
             if r.get("pool_address")
         }
+        _expansion_raw_input = len(_expansion_routes)
         _expansion_admitted: List[Dict] = []
         for _er in _expansion_routes:
             _ep = (_er.get("pool_address") or "").lower()
@@ -893,6 +898,8 @@ def build_bridge_inventory(
             _expansion_existing.add(_ep)
         m8_new_routes = m8_new_routes + _expansion_admitted
         _expansion_routes = _expansion_admitted
+        _expansion_meta["expansion_routes_raw_input"] = _expansion_raw_input
+        _expansion_meta["expansion_routes_after_dedupe"] = len(_expansion_admitted)
 
     # Unsupported M8 routes (truly unknown adapters) are quarantined.
     m8_quarantined_routes: List[Dict] = [
@@ -1116,9 +1123,21 @@ def build_bridge_inventory(
         "curve_discovery_admitted_count": _curve_discovery_count,
         "curve_discovery_count": _curve_discovery_count,
         "graph_ready_from_expansion": len(_expansion_routes),
-        "expansion_routes_input": len(_expansion_routes),
+        "expansion_routes_raw_input": _expansion_meta.get(
+            "expansion_routes_raw_input", len(_expansion_routes)
+        ),
+        "expansion_routes_after_dedupe": _expansion_meta.get(
+            "expansion_routes_after_dedupe", len(_expansion_routes)
+        ),
+        "expansion_routes_input": _expansion_meta.get(
+            "expansion_routes_after_dedupe", len(_expansion_routes)
+        ),
         "expansion_multi_venue_count": _expansion_meta.get("multi_venue_tokens", 0),
         "expansion_tokens_in": _expansion_meta.get("tokens_in", 0),
+        "expansion_dex_ids_checked": _expansion_meta.get("dex_ids_checked", []),
+        "expansion_pools_found_by_dex": _expansion_meta.get("pools_found_by_dex", {}),
+        "expansion_quoteable_by_dex": _expansion_meta.get("quoteable_by_dex", {}),
+        "expansion_admitted_by_dex": _expansion_meta.get("admitted_by_dex", {}),
         "expansion_reject_histogram": _expansion_meta.get("reject_reason_histogram", {}),
     }
 

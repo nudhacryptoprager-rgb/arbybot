@@ -782,6 +782,8 @@ def _build_and_write_artifact(
             "stable": e.stable,
             "hooks": e.hooks,
             "block_number": e.block_number,
+            "source_event_block": e.block_number,
+            "pool_first_seen_block": e.block_number,
             "tx_hash": e.tx_hash,
             # Phase 2: per-event entry decision (None when engine not wired / not called)
             "phase2_decision": (
@@ -861,6 +863,8 @@ def _build_and_write_artifact(
                 "stable": e.stable,
                 "hooks": e.hooks,
                 "block_number": e.block_number,
+                "source_event_block": e.block_number,
+                "pool_first_seen_block": e.block_number,
                 "tx_hash": e.tx_hash,
             })
     recent_events_by_dex: Dict[str, List[Dict[str, Any]]] = {

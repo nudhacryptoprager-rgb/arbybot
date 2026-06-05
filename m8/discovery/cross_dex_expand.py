@@ -132,6 +132,9 @@ def _registry_pools_for_pair(
             "resolve_source": "registry_venue",
             "factory_verified": True,
             "quote_smoke": "skipped_registry",
+            "source_event_block": venue.get("source_event_block") or venue.get("block_number"),
+            "pool_first_seen_block": venue.get("pool_first_seen_block") or venue.get("block_number"),
+            "token_first_seen_ts": tok.get("first_seen_ts"),
         })
     return pools
 
@@ -224,8 +227,11 @@ def _build_route(
 ) -> Dict[str, Any]:
     t0s = pool_entry.get("token0_symbol") or pair["exotic_symbol"]
     t1s = pool_entry.get("token1_symbol") or pair["anchor_symbol"]
+    t0a = pool_entry.get("token0_addr", "")
+    t1a = pool_entry.get("token1_addr", "")
     if t0s > t1s:
         t0s, t1s = t1s, t0s
+        t0a, t1a = t1a, t0a
     dex_id = pool_entry["dex_id"]
     pool_addr = pool_entry["pool_address"]
     return {
@@ -235,8 +241,8 @@ def _build_route(
         "adapter_type": _DEX_ID_TO_ADAPTER.get(dex_id, "uniswap_v3"),
         "token0": t0s,
         "token1": t1s,
-        "token0_addr": pool_entry.get("token0_addr", ""),
-        "token1_addr": pool_entry.get("token1_addr", ""),
+        "token0_addr": t0a,
+        "token1_addr": t1a,
         "factory_address": pool_entry.get("factory_address", ""),
         "pool_address": pool_addr,
         "factory_verified": bool(pool_entry.get("factory_verified")),
@@ -250,6 +256,9 @@ def _build_route(
         "venues_quoteable": pool_entry.get("_venues_quoteable"),
         "expansion_productive_admit": productive,
         "reject_reason_histogram": pool_entry.get("reject_reason_histogram"),
+        "source_event_block": pool_entry.get("source_event_block"),
+        "pool_first_seen_block": pool_entry.get("pool_first_seen_block"),
+        "token_first_seen_ts": pool_entry.get("token_first_seen_ts"),
     }
 
 
@@ -280,6 +289,7 @@ def expand_cross_dex(
     quoteable_by_dex: Counter = Counter()
     token_results: List[Dict[str, Any]] = []
     routes_admitted: List[Dict[str, Any]] = []
+    admitted_by_dex: Counter = Counter()
     multi_venue_tokens = 0
 
     for pair in pairs:
@@ -339,6 +349,7 @@ def expand_cross_dex(
                 routes_admitted.append(
                     _build_route(pair, pool_entry, productive=productive)
                 )
+                admitted_by_dex[dex_id] += 1
         else:
             reject_hist["SINGLE_VENUE_ONLY"] += 1
 
@@ -356,6 +367,7 @@ def expand_cross_dex(
         "dex_ids_checked": dex_ids_checked,
         "pools_found_by_dex": dict(pools_found_by_dex),
         "quoteable_by_dex": dict(quoteable_by_dex),
+        "admitted_by_dex": dict(admitted_by_dex),
         "multi_venue_tokens": multi_venue_tokens,
         "venues_quoteable_ge2": multi_venue_tokens,
         "routes_admitted_count": len(routes_admitted),

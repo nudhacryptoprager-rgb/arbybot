@@ -140,8 +140,22 @@ def split_token_anchor(
     return exotic_addr.lower(), exotic_sym, anchor_sym
 
 
+def _provenance_from_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Pool-creation provenance from a sniper event (not token contract age)."""
+    block = event.get("block_number")
+    out: Dict[str, Any] = {
+        "source_event_block": block,
+        "pool_first_seen_block": block,
+    }
+    if event.get("token_first_seen_ts") is not None:
+        out["token_first_seen_ts"] = event["token_first_seen_ts"]
+    return out
+
+
 def _trim_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: event.get(k) for k in _EVENT_FIELDS}
+    row = {k: event.get(k) for k in _EVENT_FIELDS}
+    row.update(_provenance_from_event(event))
+    return row
 
 
 def update_registry(
@@ -191,10 +205,16 @@ def update_registry(
             venue = _trim_event(event)
             venue["first_seen_ts"] = now_ts
             venue["last_seen_ts"] = now_ts
+            if venue.get("pool_first_seen_block") is None:
+                venue["pool_first_seen_block"] = event.get("block_number")
+            if venue.get("source_event_block") is None:
+                venue["source_event_block"] = event.get("block_number")
             tok["venues"][venue_key] = venue
             new_venues += 1
         else:
             venue["last_seen_ts"] = now_ts
+            if venue.get("source_event_block") is None:
+                venue["source_event_block"] = event.get("block_number")
 
     pruned_venues, pruned_tokens = _prune(registry, now_ts, ttl_seconds)
 

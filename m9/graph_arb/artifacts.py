@@ -1162,6 +1162,31 @@ def build_artifact(
             "cycles_with_m8_pool": _cycles_with_m8_pool,
             "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,
         },
+        **(
+            {
+                "bridge_shadow": {
+                    "bridge_routes_in_m9": bridge_source_metrics.get("bridge_routes_in_m9"),
+                    "bridge_cycles_found": bridge_source_metrics.get("bridge_cycles_found"),
+                    "bridge_cycles_quoteable": bridge_source_metrics.get("bridge_cycles_quoteable"),
+                    "bridge_discovery_cycles_found": bridge_source_metrics.get(
+                        "bridge_discovery_cycles_found"
+                    ),
+                    "cycles_with_m8_pool": _cycles_with_m8_pool,
+                    "graph_ready_from_m8": _graph_ready_from_m8,
+                    "graph_ready_from_expansion": bridge_source_metrics.get(
+                        "graph_ready_from_expansion"
+                    ),
+                    "expansion_routes_raw_input": bridge_source_metrics.get(
+                        "expansion_routes_raw_input"
+                    ),
+                    "expansion_routes_after_dedupe": bridge_source_metrics.get(
+                        "expansion_routes_after_dedupe"
+                    ),
+                }
+            }
+            if bridge_source_metrics and bridge_source_metrics.get("bridge_shadow_run")
+            else {}
+        ),
         "scan_scope": scan_scope,
         "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation, _cost_profile_for_compute) for qr in top_cycles],
         "top_opportunities": [_build_top_opportunity(qr, _cost_profile_for_compute) for qr in top_cycles],

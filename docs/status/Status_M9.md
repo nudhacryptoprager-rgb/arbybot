@@ -1,14 +1,37 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **RUNTIME_VALIDATED__PRODUCTIVE_GATE_PASS** — RPC/depth gates пройдені. Canonical verified soak (`min-effective-depth-usd=50`, `ARBY_M9_MAX_CYCLES_PER_LENGTH=3:20,4:6`): **`qsr=0.8561`**, `ci_m9_productive_gate` **PASS**. Economics ще не валідовані (`cycles_positive_gross=0`). Bridge inventory лишається toxic (`128/154 QUARANTINED`) — **не** gate universe.
+**Status**: **RUNTIME_VALIDATED__PRODUCTIVE_GATE_PASS** (обережно) — canonical soak на **виправленому** M8.2/bridge contour: `qsr=0.8923`, `ci_m9_productive_gate` **PASS**. **Economics не доведена** (`cycles_positive_gross=0`). **2-leg**: shadow-only. **depth100** не acceptance.
 
-**Session 2026-06-05 productive validation:**
+**M8.2 symbol/address bug:** виправлено в `cross_dex_expand.py` (символ і `token0_addr/token1_addr` канонізуються разом). Попередні claims `graph_ready_from_expansion=8` **інвалідовані** (був неправильний mapping).
 
-| Run | `min_depth_usd` | `qsr` | `depth_aware` | `cycles_quoteable` | Gate |
-|-----|----------------:|------:|--------------:|-------------------:|------|
-| Verified diagnostic (22 productive routes) | — | **1.00** route_qsr | — | — | — |
-| Soak 15m A | **50** | **0.8561** | 0.9821 | 119 | **PASS** |
-| Soak 15m B | **100** | 0.6190 | 0.9710 | 26 | FAIL |
+**Expansion після fix:** `routes_admitted=2`, `multi_venue_tokens=1`; bridge dedupe: `expansion_routes_raw_input=2` → `expansion_routes_after_dedupe=0`; `graph_ready_from_expansion=0`, `graph_ready_total=9` — **не** claim «expansion працює» без `graph_ready_from_expansion > 0`.
+
+**Verified vs bridge (розділено):** canonical `m9_graph_latest.json` (`qsr≈0.89`, inventory=`m9_verified_inventory`) підтверджує **QSR contour**, не M8→M9 ingestion. Bridge-shadow: `data/tmp/m9_graph_bridge_shadow_latest.json` — `bridge_cycles_found=0`, `cycles_with_m8_pool=0`, `graph_edges_from_m8=2`, productive diagnostic **3 routes** (`route_qsr=0.33`). **Dynamic M8→M9 bridge ingestion не доведений.**
+
+**Canonical gate contour:** `verified inventory` + `--min-effective-depth-usd 50` + `ARBY_M9_MAX_CYCLES_PER_LENGTH=3:20,4:6` + productive RPC bootstrap. Bridge evidence: окремий shadow artifact, не перезапис `m9_graph_latest.json`.
+
+**Session 2026-06-05 post-fix M8→M9 refresh:**
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| M8 sniper 15m | candidates / status | **68** / ACTIVE (`--skip-self-test`; WS V4; HTTP `eth_getLogs` 400) |
+| M8.1 anchor | completed | yes |
+| M8.2 expansion | routes / multi-venue | **2** / **1** (`BASEAI_USDC`) |
+| Bridge rebuild | `graph_ready_total` / `from_expansion` / `from_m8` | **9** / **0** / **29** |
+| Verified diagnostic | route_qsr (productive admission) | **1.00** (22/22) |
+| Soak 15m depth50 (verified) | `qsr` / gate | **0.8923** / **PASS** |
+| Bridge-shadow 5m | `qsr` / cycles / M8 pools in cycles | **0.0** / **0** / **0** |
+| Bridge diagnostic (productive) | routes / `route_qsr` | **3** / **0.33** |
+| Prior soak (pre-regen bridge) | `qsr` | 0.8264 — **не** evidence для поточного bridge |
+
+**Provenance fields (additive):** sniper/registry/expansion routes несуть `source_event_block`, `pool_first_seen_block`, `token_first_seen_ts`; окремий probe `scripts/m8_token_contract_age_probe.py` → `data/tmp/m8_token_contract_age_latest.json` (pool events ≠ token contract age).
+
+**Session 2026-06-05 A/B depth (prior, pre-refresh):**
+
+| Run | `min_depth_usd` | `qsr` | Gate |
+|-----|----------------:|------:|------|
+| Soak A | **50** | 0.8561 | PASS |
+| Soak B | 100 | 0.6190 | FAIL |
 
 **QSR failure histogram (prior soak `qsr=0.7261`)**: домінує **`QUOTE_ZERO_OUTPUT`** на TOSHI/DEGEN/BRETT long-tail legs (не RPC). Infra: `http_408/429/5xx=0`.
 
@@ -102,7 +125,7 @@
 4. Re-run route diagnostic on full 44 routes after RPC stable.
 5. **Do not** claim M9 PASS until `qsr≥0.8` with fresh artifact.
 
-`goal_status`: **BLOCKED** (economics: `cycles_positive_gross=0`) | Productive gate: **PASS** at `min_depth=50` (`qsr=0.8561`) | Rolling artifact last run: depth100 A/B (`qsr=0.619`) — re-run depth50 soak to refresh `_rolling` PASS  
+`goal_status`: **BLOCKED** (economics: `cycles_positive_gross=0`) | Verified productive gate: **PASS** (`qsr=0.8923`) | M8→M9 bridge ingestion: **NOT PROVEN** (bridge-shadow `cycles_found=0`, `cycles_with_m8_pool=0`)  
 `execution_enabled`: false | `kill_switch_active`: true
 
 ---

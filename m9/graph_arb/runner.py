@@ -973,6 +973,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     log.info("Found %d cycles across %d tokens", len(cycles), topology.token_count)
 
+    _inv_norm = inventory_path.replace("\\", "/")
+    _art_norm = getattr(args, "artifact_path", "").replace("\\", "/")
+    _is_bridge_inventory_run = "m9_bridge_inventory" in _inv_norm or "bridge_shadow" in _art_norm
+    if _is_bridge_inventory_run and _bridge_source_metrics is not None:
+        _bridge_source_metrics["bridge_shadow_run"] = True
+        _bridge_source_metrics["bridge_routes_in_m9"] = topology.route_count
+        _bridge_source_metrics["bridge_cycles_found"] = len(cycles)
+        _bridge_source_metrics["bridge_discovery_cycles_found"] = _discovery_cycles_found
+
     if not cycles:
         artifact = build_artifact(
             chain=args.chain,
@@ -1478,10 +1487,22 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         _bridge_source_metrics["cycles_with_m8_pool"] = _cycles_with_m8
         _bridge_source_metrics["positive_cycles_with_m8_pool"] = _positive_cycles_with_m8
+        if _is_bridge_inventory_run:
+            _quoteable_statuses = frozenset({"POSITIVE_GROSS", "NEGATIVE_GROSS"})
+            _bridge_source_metrics["bridge_cycles_quoteable"] = sum(
+                1 for qr in cycle_results if qr.status in _quoteable_statuses
+            )
         log.info(
             "M8 pool cycle participation: cycles_with_m8=%d positive_with_m8=%d",
             _cycles_with_m8, _positive_cycles_with_m8,
         )
+        if _is_bridge_inventory_run:
+            log.info(
+                "Bridge shadow: routes_in_graph=%s cycles_found=%s cycles_quoteable=%s",
+                _bridge_source_metrics.get("bridge_routes_in_m9"),
+                _bridge_source_metrics.get("bridge_cycles_found"),
+                _bridge_source_metrics.get("bridge_cycles_quoteable"),
+            )
 
     # Build and write final artifact with full elapsed_s
     artifact = build_artifact(
