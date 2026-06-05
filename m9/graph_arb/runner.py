@@ -772,6 +772,16 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     except Exception as _bsm_exc:
         log.debug("Bridge metrics extraction skipped: %s", _bsm_exc)
 
+    _spread_lifetime_tracker = None
+    _use_spread_telemetry = (
+        "m9_bridge_inventory" in inventory_path.replace("\\", "/")
+        or "bridge_shadow" in getattr(args, "artifact_path", "").replace("\\", "/")
+    )
+    if _use_spread_telemetry:
+        from m9.graph_arb.spread_lifetime import SpreadLifetimeTracker
+
+        _spread_lifetime_tracker = SpreadLifetimeTracker(run_timestamp=run_timestamp)
+
     _inv_norm_gate = inventory_path.replace("\\", "/")
     _art_norm_gate = getattr(args, "artifact_path", "").replace("\\", "/")
     _is_bridge_shadow_gate = (
@@ -1028,6 +1038,16 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         _bridge_source_metrics["bridge_discovery_cycles_found"] = _discovery_cycles_found
 
     if not cycles:
+        _spread_early = (
+            _spread_lifetime_tracker.to_artifact_block()
+            if _spread_lifetime_tracker is not None
+            else None
+        )
+        if _spread_lifetime_tracker is not None:
+            try:
+                _spread_lifetime_tracker.write_sidecar()
+            except Exception as _sl_early_exc:
+                log.debug("Spread lifetime sidecar (no cycles): %s", _sl_early_exc)
         artifact = build_artifact(
             chain=args.chain,
             duration_minutes=args.duration_minutes,
@@ -1060,6 +1080,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
             cost_model=_cost_model,
+            spread_lifetime_block=_spread_early,
         )
         write_artifact(artifact, args.artifact_path)
         return EXIT_NO_CYCLES
@@ -1367,6 +1388,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         sweeps_completed += 1
         sweep_num += 1
 
+        if _spread_lifetime_tracker is not None and new_results:
+            _spread_lifetime_tracker.record_sweep(
+                sweep_number=sweeps_completed,
+                sweep_ts=time.time(),
+                results=new_results,
+                m8_pool_addrs=_m8_pool_addrs,
+                cross_mechanic_pool_addrs=_cross_mechanic_pool_addrs,
+            )
+
         # Step 6 (GPT): operator surface — log dynamic_size summary per sweep
         if getattr(args, "dynamic_sizes", False):
             _sweep_dyn = sum(1 for qr in new_results if qr.dynamic_size_usd is not None)
@@ -1411,6 +1441,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         elapsed_so_far = time.monotonic() - started_at
         _pt_snap = _get_provider_throttle_snapshot()
         _ws_snap = ws_monitor.snapshot() if ws_monitor is not None else None
+        _spread_block = (
+            _spread_lifetime_tracker.to_artifact_block()
+            if _spread_lifetime_tracker is not None
+            else None
+        )
         partial = build_artifact(
             chain=args.chain,
             duration_minutes=args.duration_minutes,
@@ -1423,6 +1458,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             inventory_path=inventory_path,
             config_path=args.config,
             sweeps_completed=sweeps_completed,
+            spread_lifetime_block=_spread_block,
             process_id=process_id,
             python_executable=sys.executable,
             venv_active=bool(os.environ.get("VIRTUAL_ENV")),
@@ -1563,6 +1599,23 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _bridge_source_metrics.get("bridge_cycles_quoteable"),
             )
 
+    if _spread_lifetime_tracker is not None:
+        try:
+            _spread_lifetime_tracker.write_sidecar()
+            log.info(
+                "Spread lifetime sidecar written (entries=%s median_s=%s)",
+                _spread_lifetime_tracker.build_summary().get("entry_count"),
+                _spread_lifetime_tracker.build_summary().get("median_lifetime_s"),
+            )
+        except Exception as _sl_exc:
+            log.warning("Spread lifetime sidecar write failed: %s", _sl_exc)
+
+    _spread_block_final = (
+        _spread_lifetime_tracker.to_artifact_block()
+        if _spread_lifetime_tracker is not None
+        else None
+    )
+
     # Build and write final artifact with full elapsed_s
     artifact = build_artifact(
         chain=args.chain,
@@ -1576,6 +1629,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         inventory_path=inventory_path,
         config_path=args.config,
         sweeps_completed=sweeps_completed,
+        spread_lifetime_block=_spread_block_final,
         process_id=process_id,
         python_executable=sys.executable,
         venv_active=bool(os.environ.get("VIRTUAL_ENV")),

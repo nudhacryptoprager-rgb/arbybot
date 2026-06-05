@@ -31,6 +31,8 @@ from typing import Optional
 __all__ = [
     "HoneypotVerdict",
     "check_token_honeypot",
+    "probe_transfer_tax_sell_side",
+    "positive_gross_counts_as_evidence",
     "KNOWN_SCAM_TOKENS",
     "KNOWN_LEGIT_TOKENS",
 ]
@@ -101,6 +103,48 @@ def check_token_honeypot(
     if addr in KNOWN_LEGIT_TOKENS:
         return HoneypotVerdict.PASS
     return HoneypotVerdict.UNKNOWN
+
+
+def probe_transfer_tax_sell_side(
+    token_addr: str,
+    chain: str = "base",  # noqa: ARG001
+    *,
+    rpc_url: Optional[str] = None,  # noqa: ARG001
+) -> HoneypotVerdict:
+    """Sell-side eth_call probe skeleton for transfer-tax / honeypot detection.
+
+  Phase 3b: wire to a minimal router/static-quoter eth_call when RPC is available.
+  Until then returns UNKNOWN (does not block pipeline; positive_gross evidence
+  still requires PASS or UNKNOWN, never FAIL).
+    """
+    addr = token_addr.lower().strip()
+    if addr in KNOWN_SCAM_TOKENS:
+        return HoneypotVerdict.FAIL
+    return HoneypotVerdict.UNKNOWN
+
+
+def positive_gross_counts_as_evidence(
+    token_addrs: list[str],
+    chain: str = "base",
+    *,
+    strict: bool = False,
+) -> bool:
+    """Return True if gross_bps>0 may be counted as existence evidence.
+
+    When *strict* is True (hot-path / profit stage), UNKNOWN honeypot/tax probe
+    does not count as evidence — only explicit PASS.
+    """
+    for addr in token_addrs:
+        if not addr:
+            continue
+        hp = check_token_honeypot(addr, chain)
+        tax = probe_transfer_tax_sell_side(addr, chain)
+        if hp == HoneypotVerdict.FAIL or tax == HoneypotVerdict.FAIL:
+            return False
+        if strict:
+            if hp != HoneypotVerdict.PASS or tax != HoneypotVerdict.PASS:
+                return False
+    return True
 
 
 def is_safe_for_pipeline(verdict: HoneypotVerdict) -> bool:

@@ -8,7 +8,7 @@
 
 **Verified vs bridge (розділено):** canonical `m9_graph_latest.json` (`qsr≈0.89`, inventory=`m9_verified_inventory`) підтверджує **QSR contour**, не M8→M9 ingestion. Bridge-shadow (fresh 2026-06-05): `data/tmp/m9_graph_bridge_shadow_latest.json` — `bridge_cycles_found=0`, `cycles_with_m8_pool=0`, `cross_mechanic_cycles=0`, `graph_edges_from_m8=2`; productive diagnostic **2 routes** (`route_qsr=0.50`). **Dynamic M8→M9 bridge ingestion не доведений.**
 
-**Cross-Mechanic Sniper Edge (гілка):** Phase 1 reviewed and guarded (`allowed_dex_ids`, cross-mechanic score). **Existence blocker (canonical):** `M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL` — bridge-shadow потребує свіжого M8 sniper + `cross_mechanic_tokens >= 2` + `bridge_routes_in_m9 >= 4` / `unique_tokens >= 3` перед soak; `graph_ready_from_expansion=0` коли expansion-дзеркала вже в base (dedupe).
+**Cross-Mechanic Sniper Edge (гілка):** Blocker `M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL`. Hot-path code/tests verified (`--live-ws`, `reject_reason_histogram`, `setup_quote_rpc`). Live WS dry-run: 0 mirror candidates (`REJECT_MIRROR_ROUTES_LT_2`). **15m live WS `--quote` required** before bridge-shadow. Strict profit evidence **blocked** until sell-side/tax probe wired (stub returns UNKNOWN). M9 bridge-shadow лише при `acceptance.ready_for_bridge_shadow=true`.
 
 **Canonical gate contour:** `verified inventory` + `--min-effective-depth-usd 50` + `ARBY_M9_MAX_CYCLES_PER_LENGTH=3:20,4:6` + productive RPC bootstrap. Bridge evidence: окремий shadow artifact, не перезапис `m9_graph_latest.json`.
 
@@ -25,6 +25,32 @@
 | Bridge-shadow 5m | `qsr` / cycles / M8 pools in cycles | **0.0** / **0** / **0** |
 | Bridge diagnostic (productive) | routes / `route_qsr` | **3** / **0.33** |
 | Prior soak (pre-regen bridge) | `qsr` | 0.8264 — **не** evidence для поточного bridge |
+
+**Session 2026-06-05 live WS hot-path (15m --quote):**
+
+| Metric | Value |
+|--------|------:|
+| Mode | **live_ws** + `--quote` (bootstrap) |
+| `hot_path_events_seen` | **38** |
+| `hot_path_mirrors_found` | **0** |
+| `event_to_mirror_ms_p50` | **65.26** |
+| `event_to_quote_ms_p50` | n/a (0 quoted; mirrors < 2) |
+| `reject_reason_histogram` | `REJECT_MIRROR_ROUTES_LT_2=38`, `REJECT_NOT_ANCHOR_PAIR=34` |
+| `expansion_reject_histogram` | `NO_POOL=348`, `ADAPTER_RESOLVE_PENDING=120`, `SINGLE_VENUE_ONLY=39` |
+| `honeypot_evidence` | probe **STUB**; strict profit evidence **not possible** |
+| Acceptance | **ready_for_bridge_shadow=false** |
+
+**Session 2026-06-05 live WS hot-path (5m dry-run):**
+
+| Metric | Value |
+|--------|------:|
+| Mode | **live_ws** (`--live-ws`, not batch) |
+| `hot_path_events_seen` | **9** |
+| `hot_path_mirrors_found` | **0** (all `REJECT_MIRROR_ROUTES_LT_2`) |
+| `hot_path_cross_mechanic_candidates` | **0** |
+| `registry_multi_venue_tokens` | **1** |
+| `event_to_mirror_ms_p50` | **1.1** |
+| Acceptance `ready_for_bridge_shadow` | **false** |
 
 **Session 2026-06-05 fresh M8 sniper + existence retry (20m sniper):**
 

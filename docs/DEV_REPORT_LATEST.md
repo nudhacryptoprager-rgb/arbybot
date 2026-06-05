@@ -20,6 +20,9 @@ docs_reread_confirmed: true
 
 | Artifact | run_timestamp / note | Key metrics |
 |----------|----------------------|-------------|
+| `m8_hot_path_latest.json` | live_ws 15m --quote | events=38, mirrors=0, expansion_reject: NO_POOL=348, ADAPTER_RESOLVE_PENDING=120, ready_for_bridge_shadow=false |
+| `m8_hot_path_latest.json` | live_ws 5m dry-run | events_seen=9, mirrors_found=0 |
+| `m8_hot_path_latest.json` (prior) | batch dry-run | cross_mechanic_candidates=0 |
 | `new_pool_sniper_latest.json` | 2026-06-05 20m sniper | candidates=101, m8_stale=false |
 | `m8_cross_dex_expansion_latest.json` | post-sniper | routes_admitted_raw=2, cross_mechanic_tokens=1, multi_venue=1 |
 | `m9_bridge_inventory_latest.json` | 2026-06-05 | graph_ready_total=6, from_expansion=0, expansion_deduped_existing_pool_count=2 |

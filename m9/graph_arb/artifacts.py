@@ -725,6 +725,7 @@ def build_artifact(
     # Step 4 (GPT session-14): Per-sweep active RPC netloc (sweep-number → masked label).
     # Filled by runner after each sweep; allows tracing which endpoint served each sweep.
     active_rpc_by_sweep: "Optional[Dict[int, str]]" = None,
+    spread_lifetime_block: "Optional[Dict[str, Any]]" = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -736,7 +737,27 @@ def build_artifact(
 
     # When dry-run skipped quoting, use explicit topology count
     cycles_found = cycles_found_topology if cycles_found_topology is not None else len(cycle_results)
-    cycles_positive_gross = sum(1 for qr in cycle_results if qr.gross_bps > 0)
+    def _counts_as_positive_evidence(qr: CycleQuoteResult) -> bool:
+        if qr.gross_bps <= 0:
+            return False
+        try:
+            from monitoring.sniper_honeypot import positive_gross_counts_as_evidence
+
+            anchors = frozenset({"USDC", "USDBC", "USDbC", "DAI", "WETH", "ETH"})
+            exotic_addrs = [
+                e.token_in_addr.lower()
+                for e in qr.cycle.edges
+                if e.token_in_sym.upper() not in anchors and e.token_in_addr
+            ] + [
+                e.token_out_addr.lower()
+                for e in qr.cycle.edges
+                if e.token_out_sym.upper() not in anchors and e.token_out_addr
+            ]
+            return positive_gross_counts_as_evidence(list(dict.fromkeys(exotic_addrs)))
+        except Exception:
+            return qr.gross_bps > 0
+
+    cycles_positive_gross = sum(1 for qr in cycle_results if _counts_as_positive_evidence(qr))
 
     # Extract cost profile once — used for router-sim eligibility, per-cycle summaries,
     # and the top-level estimated_cost_bps field.
@@ -1185,6 +1206,11 @@ def build_artifact(
                     ),
                     "expansion_routes_after_dedupe": bridge_source_metrics.get(
                         "expansion_routes_after_dedupe"
+                    ),
+                    "spread_lifetime": (spread_lifetime_block or {}).get("spread_lifetime"),
+                    "existence_blocker": bridge_source_metrics.get(
+                        "existence_blocker",
+                        "M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL",
                     ),
                 }
             }

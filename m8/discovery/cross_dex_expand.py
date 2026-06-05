@@ -317,6 +317,7 @@ def expand_cross_dex(
     anchor_artifact: Optional[Dict[str, Any]],
     dry_run: bool = False,
     max_pairs: Optional[int] = None,
+    exotic_address_filter: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run M8.2 expansion and return artifact dict (not written)."""
     dex_rows = discovery_dexes_from_config(config)
@@ -325,6 +326,9 @@ def expand_cross_dex(
     productive_dexes = {d["dex_id"] for d in dex_rows if d["enabled_for_productive"]}
 
     pairs = collect_token_anchor_pairs(registry, anchor_artifact)
+    if exotic_address_filter:
+        _eaf = exotic_address_filter.lower()
+        pairs = [p for p in pairs if (p.get("exotic_address") or "").lower() == _eaf]
     if max_pairs is not None:
         pairs = pairs[: max_pairs]
 
