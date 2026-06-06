@@ -128,8 +128,35 @@ def test_m8_dashboard_html_points_to_m8_api():
     assert html_path.name == "dashboard_m8.html"
     html = html_path.read_text(encoding="utf-8")
     assert "/api/m8/current" in html
-    for label in ("Spread $", "Spread bps", "Volume $", "Profit $", "Signal Funnel"):
+    assert "REFRESH_MS = 60000" in html
+    for label in (
+        "Spread $",
+        "Spread bps",
+        "Volume $",
+        "Profit $",
+        "Signal Funnel",
+        "RPC Lane",
+    ):
         assert label in html
+
+
+def test_m8_funnel_exposes_sniper_rpc_lane():
+    art = _artifact()
+    art["metrics"].update({
+        "sniper_rpc_provider": "drpc",
+        "sniper_rpc_secondary_provider": "alchemy",
+        "sniper_rpc_failover_count": 3,
+        "getlogs_400_count": 2,
+        "getlogs_429_count": 1,
+        "getlogs_chunk_size": 500,
+        "rpc_error_histogram": {"range_too_wide": 1},
+    })
+    payload = build_m8_current_payload(artifact=art, now_utc=NOW, file_age_s=3)
+    lane = payload["funnel"]["rpc_lane"]
+    assert lane["sniper_rpc_provider"] == "drpc"
+    assert lane["sniper_rpc_secondary_provider"] == "alchemy"
+    assert lane["sniper_rpc_failover_count"] == 3
+    assert lane["getlogs_chunk_size"] == 500
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,8 @@ from m9.graph_arb.builder import build_graph_from_inventory
 from m9.graph_arb.finder import find_cycles
 from m9.graph_arb.models import GraphCycle
 
+DEFAULT_CYCLE_LENGTH_CAPS: Dict[int, int] = {2: 8, 3: 12, 4: 6}
+
 
 def _routes_to_inventory(
     routes: List[Dict[str, Any]],
@@ -30,7 +32,8 @@ def _routes_to_inventory(
 def find_focused_cycles(
     routes: List[Dict[str, Any]],
     *,
-    cycle_lengths: Tuple[int, ...] = (2, 3),
+    cycle_lengths: Tuple[int, ...] = (2, 3, 4),
+    cycle_length_caps: Optional[Dict[int, int]] = None,
     chain: str = "base",
     config_path: str = "config/exotic_base_anchor.yaml",
 ) -> List[GraphCycle]:
@@ -47,7 +50,14 @@ def find_focused_cycles(
         require_factory_verified=False,
         lane="discovery",
     )
-    return find_cycles(adjacency, cycle_lengths=cycle_lengths, max_cycles=50)
+    caps = cycle_length_caps or DEFAULT_CYCLE_LENGTH_CAPS
+    all_cycles: List[GraphCycle] = []
+    for length in cycle_lengths:
+        cap = int(caps.get(length, 50))
+        all_cycles.extend(
+            find_cycles(adjacency, cycle_lengths=(length,), max_cycles=cap)
+        )
+    return all_cycles
 
 
 def _exotic_addrs_from_cycle(cycle: GraphCycle) -> List[str]:
@@ -66,7 +76,8 @@ def focused_quote_cycles(
     *,
     w3: Any,
     sizes_usd: Tuple[float, ...] = (10.0, 100.0),
-    cycle_lengths: Tuple[int, ...] = (2, 3),
+    cycle_lengths: Tuple[int, ...] = (2, 3, 4),
+    cycle_length_caps: Optional[Dict[int, int]] = None,
     quote_backend: str = "raw_http",
     rpc_url: Optional[str] = None,
     max_cycles: int = 20,
@@ -80,7 +91,10 @@ def focused_quote_cycles(
 
     t0 = time.perf_counter()
     cycles = find_focused_cycles(
-        routes, cycle_lengths=cycle_lengths, config_path=config_path
+        routes,
+        cycle_lengths=cycle_lengths,
+        cycle_length_caps=cycle_length_caps,
+        config_path=config_path,
     )
     cycles_2leg = [c for c in cycles if len(c.edges) == 2]
     ordered = cycles_2leg + [c for c in cycles if len(c.edges) != 2]

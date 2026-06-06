@@ -9,13 +9,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from discovery.new_pool_listener import FactoryConfig, NewPoolEvent, parse_raw_log
-from m8.discovery.hot_path_mirror import resolve_mirrors_for_token
+from m8.discovery.hot_path_mirror import (
+    candidate_tokens_from_event,
+    resolve_best_neighborhood_for_event,
+)
 from m8.discovery.pending_pair_registry import (
     DEFAULT_REGISTRY_PATH,
-    _ANCHOR_TOKENS,
     load_registry,
     save_registry,
-    split_token_anchor,
     update_registry,
 )
 
@@ -28,24 +29,6 @@ _ANCHOR_ADDR_TO_SYM: Dict[str, str] = {
     "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
     "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC",
 }
-
-
-def split_token_anchor_from_event(
-    event: Dict[str, Any],
-) -> Optional[Tuple[str, str, str]]:
-    """(exotic_addr, exotic_symbol, anchor_symbol) or None."""
-    split = split_token_anchor(event, _ANCHOR_TOKENS)
-    if split is not None:
-        return split
-    t0a = (event.get("token0") or "").lower()
-    t1a = (event.get("token1") or "").lower()
-    t0s = event.get("token0_symbol") or ""
-    t1s = event.get("token1_symbol") or ""
-    if t0a in _ANCHOR_ADDR_TO_SYM and t1a and t1a not in _ANCHOR_ADDR_TO_SYM:
-        return t1a, t1s or t1a[:10], _ANCHOR_ADDR_TO_SYM[t0a]
-    if t1a in _ANCHOR_ADDR_TO_SYM and t0a and t0a not in _ANCHOR_ADDR_TO_SYM:
-        return t0a, t0s or t0a[:10], _ANCHOR_ADDR_TO_SYM[t1a]
-    return None
 
 
 def enrich_event_dict(
@@ -124,43 +107,67 @@ class HotPathProcessor:
         event_ts = time.time()
         event_dict = enrich_event_dict(event, self.registry)
         update_registry(self.registry, [event_dict], now_ts=event_ts)
-        split = split_token_anchor_from_event(event_dict)
-        if split is None:
+        event_candidates = candidate_tokens_from_event(event_dict)
+        if not event_candidates:
             self._append_candidate(
                 event_dict,
-                reject_reason="REJECT_NOT_ANCHOR_PAIR",
+                reject_reason="REJECT_NO_CANDIDATE_TOKEN",
             )
             return
 
-        exotic_addr, exotic_sym, anchor_sym = split
         self.hot_path_events_seen += 1
 
         mirror_t0 = time.perf_counter()
-        mirror_row = resolve_mirrors_for_token(
+        mirror_row, resolve_reason = resolve_best_neighborhood_for_event(
+            event_dict,
             chain=self.chain,
             config=self.config,
             registry=self.registry,
-            exotic_address=exotic_addr,
-            exotic_symbol=exotic_sym,
-            anchor_symbol=anchor_sym,
             anchor_artifact=self.anchor_artifact,
             dry_run=self.dry_run,
         )
         event_to_mirror_ms = round((time.perf_counter() - mirror_t0) * 1000.0, 2)
         self._event_to_mirror_ms.append(event_to_mirror_ms)
 
+        if mirror_row is None:
+            self._append_candidate(
+                event_dict,
+                reject_reason=resolve_reason or "REJECT_NO_CANDIDATE_TOKEN",
+            )
+            return
+
         routes = mirror_row.get("routes_admitted") or []
         row = {
             **mirror_row,
             "event_id": event.event_id,
             "event_to_mirror_ms": event_to_mirror_ms,
+            "event_candidate_tokens": mirror_row.get("event_candidate_tokens")
+            or event_candidates,
+            "selected_focus_token": mirror_row.get("selected_focus_token"),
+            "selected_focus_reason": mirror_row.get("selected_focus_reason"),
             "dex": event.dex,
             "pool": event.pool,
             "block_number": event.block_number,
             "source": "live_ws",
         }
-        if len(routes) < 2:
-            row["reject_reason"] = "REJECT_MIRROR_ROUTES_LT_2"
+        subgraph_ready = bool(mirror_row.get("subgraph_ready"))
+        if not subgraph_ready:
+            if resolve_reason in (
+                "TOKEN_NOT_SEEN_ELSEWHERE",
+                "CONNECTOR_NOT_FOUND",
+                "SUBGRAPH_TOO_SMALL",
+            ):
+                row["reject_reason"] = resolve_reason
+            else:
+                hist = mirror_row.get("reject_reason_histogram") or {}
+                if hist.get("TOKEN_NOT_SEEN_ELSEWHERE"):
+                    row["reject_reason"] = "TOKEN_NOT_SEEN_ELSEWHERE"
+                elif hist.get("CONNECTOR_NOT_FOUND"):
+                    row["reject_reason"] = "CONNECTOR_NOT_FOUND"
+                elif hist.get("SUBGRAPH_TOO_SMALL"):
+                    row["reject_reason"] = "SUBGRAPH_TOO_SMALL"
+                else:
+                    row["reject_reason"] = "SUBGRAPH_TOO_SMALL"
             self.candidates.append(row)
             return
 
@@ -179,7 +186,8 @@ class HotPathProcessor:
                 w3=self.w3,
                 rpc_url=self.rpc_url,
                 quote_backend="raw_http",
-                cycle_lengths=(2, 3),
+                cycle_lengths=(2, 3, 4),
+                cycle_length_caps={2: 8, 3: 12, 4: 6},
                 config_path=self.config_path,
                 honeypot_strict_evidence=self.honeypot_strict_evidence,
             )
@@ -235,6 +243,7 @@ class HotPathProcessor:
             return s[len(s) // 2]
 
         from m8.discovery.hot_path_common import (
+            bridge_shadow_acceptance_from_candidates,
             build_reject_reason_histogram,
             honeypot_evidence_policy,
             merge_expansion_reject_histogram,
@@ -242,15 +251,13 @@ class HotPathProcessor:
         )
 
         per_dex = merge_per_dex_breakdown(self.candidates)
+        subgraph_acceptance = bridge_shadow_acceptance_from_candidates(self.candidates)
 
         acceptance = {
             "hot_path_cross_mechanic_candidates_gt_0": self.hot_path_cross_mechanic_candidates
             > 0,
             "registry_multi_venue_tokens_gte_2": self.registry_multi_venue_tokens() >= 2,
-            "ready_for_bridge_shadow": (
-                self.hot_path_cross_mechanic_candidates > 0
-                and self.registry_multi_venue_tokens() >= 2
-            ),
+            **subgraph_acceptance,
         }
         return {
             "schema_version": "m8_hot_path_live_ws_v1",
@@ -265,7 +272,11 @@ class HotPathProcessor:
             "registry_multi_venue_tokens": self.registry_multi_venue_tokens(),
             "event_to_mirror_ms_p50": _p50(self._event_to_mirror_ms),
             "event_to_quote_ms_p50": _p50(self._event_to_quote_ms),
-            "existence_blocker": "M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL",
+            "existence_blocker": (
+                "M8_2_TOKEN_NEIGHBORHOOD_EXPANSION_MISSING"
+                if not subgraph_acceptance.get("ready_for_bridge_shadow")
+                else None
+            ),
             "acceptance": acceptance,
             "reject_reason_histogram": build_reject_reason_histogram(self.candidates),
             "expansion_reject_histogram": merge_expansion_reject_histogram(

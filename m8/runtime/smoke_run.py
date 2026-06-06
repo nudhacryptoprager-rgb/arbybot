@@ -14,12 +14,13 @@ Feature flag
 ``ARBY_SNIPER_ENABLE=1`` must be set; otherwise the script exits immediately
 with a clear message (exit code 0 -- not an error, intentional gate).
 
-RPC URL resolution order
-------------------------
+RPC URL resolution order (sniper discovery lane)
+------------------------------------------------
 1. ``--rpc-url`` CLI argument
-2. ``BASE_RPC`` env var  (chain-specific, preferred)
-3. ``ARBY_BASE_RPC_URL`` env var
-4. Public fallback ``https://mainnet.base.org``
+2. ``BASE_SNIPER_RPC_PRIMARY`` (chain-scoped sniper lane)
+3. ``BASE_RPC_SECONDARY`` (often dRPC — preferred for bounded getLogs)
+4. Productive ``BASE_RPC_PRIMARY`` via ``resolve_rpc_http()``
+5. Failover: ``BASE_SNIPER_RPC_SECONDARY`` → ``BASE_RPC_PRIMARY``
 
 Offline mode (``--offline`` flag or ``ARBY_SNIPER_OFFLINE=1``)
 --------------------------------------------------------------
@@ -63,7 +64,13 @@ if str(_ROOT) not in sys.path:
 
 from core.env import env_flag_enabled, load_root_dotenv
 from core.logging import get_logger, setup_logging
-from core.rpc_urls import public_fallback_for, resolve_rpc_http, resolve_rpc_ws
+from core.rpc_urls import (
+    classify_provider,
+    public_fallback_for,
+    resolve_rpc_http,
+    resolve_rpc_ws,
+    resolve_sniper_rpc_lane,
+)
 from discovery.new_pool_listener import (
     FactoryConfig,
     NewPoolEvent,
@@ -102,8 +109,14 @@ logger = get_logger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_ARTIFACT_WRITE_INTERVAL_S: float = 30.0
-_MAX_BLOCKS_PER_CALL: int = 2000   # conservative RPC limit
+_ARTIFACT_WRITE_INTERVAL_S: float = 60.0  # aligned with M8 dashboard REFRESH_MS
+_MAX_BLOCKS_PER_CALL: int = 500    # bounded getLogs chunk (v4 factories 408 on 2k+)
+_MIN_GETLOGS_CHUNK_BLOCKS: int = 100
+_GETLOGS_TRANSIENT_RETRIES: int = 2
+_GETLOGS_RETRY_DELAY_S: float = 2.0
+_FAILOVER_GETLOGS_ERRORS = frozenset({
+    "400_range", "408", "429", "5xx", "timeout",
+})
 _MAX_RECENT_EVENTS_IN_ARTIFACT: int = 500  # increased from 20: 24h lookback finds ~500 pools; bridge builder needs full set
 _DEFAULT_CHAIN: str = "base"
 _DEFAULT_BLOCKS_BACK: int = 50
@@ -429,62 +442,67 @@ def _log_to_dict(raw: Any) -> Dict[str, Any]:
 # RPC helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_rpc_url(chain: str, override: Optional[str]) -> str:
-    """Return the RPC URL to use, in priority order.
-
-    1. CLI override (``--rpc-url``)
-    2. ``core.rpc_urls.resolve_rpc_http`` -- centralized M5/M7 resolver
-       (handles chain-scoped env vars, dRPC validation, Alchemy keys,
-       public fallbacks).
-    3. Legacy chain-prefixed env vars (kept for backward compat).
-    4. Public fallback.
-    """
-    if override:
-        return override
-
-    # 2) Use centralized resolver (M5/M7 RPC discipline).
-    chain_key = chain.lower()
-    chain_id_map = {"base": 8453, "arbitrum": 42161, "optimism": 10, "ethereum": 1}
-    chain_id = chain_id_map.get(chain_key)
-    try:
-        url, provider, diag = resolve_rpc_http(
-            chain_id=chain_id, network=chain_key, env=dict(os.environ)
-        )
-        if url:
-            logger.info(
-                "rpc_resolved_http",
-                extra={"context": {
-                    "chain": chain_key,
-                    "provider": provider,
-                    "source": diag.get("source"),
-                }},
-            )
-            return url
-    except Exception as exc:
-        logger.warning(
-            "resolve_rpc_http_failed",
-            extra={"context": {"chain": chain_key, "error": str(exc)[:120]}},
-        )
-
-    # 3) Legacy chain-prefixed env vars (backward compat).
-    chain_upper = chain.upper()
-    for env_var in (
-        f"{chain_upper}_RPC",
-        f"ARBY_{chain_upper}_RPC_URL",
-        "ARBY_RPC_URL",
-    ):
-        val = os.environ.get(env_var, "").strip()
-        if val:
-            return val
-
-    # 4) Public fallback.
-    fb = public_fallback_for(chain)
-    if fb:
-        return fb
-    raise RuntimeError(
-        f"No RPC URL available for chain={chain!r}. "
-        f"Set {chain_upper}_RPC env var or pass --rpc-url."
+def _chain_id_for(chain: str) -> Optional[int]:
+    return {"base": 8453, "arbitrum": 42161, "optimism": 10, "ethereum": 1}.get(
+        chain.lower()
     )
+
+
+def _build_sniper_rpc_lane(
+    chain: str,
+    override: Optional[str],
+    funnel: FunnelTracker,
+) -> "SniperRpcLane":
+    """Resolve sniper discovery lane and build a getLogs client with failover."""
+    chain_key = chain.lower()
+    chain_id = _chain_id_for(chain_key)
+    primary_url, primary_prov, secondary_url, secondary_prov, diag = resolve_sniper_rpc_lane(
+        chain_id=chain_id,
+        network=chain_key,
+        env=dict(os.environ),
+        override=override,
+    )
+    logger.info(
+        "rpc_resolved_sniper_http",
+        extra={"context": {
+            "chain": chain_key,
+            "primary_provider": primary_prov,
+            "secondary_provider": secondary_prov or "none",
+            "primary_source": diag.get("primary_source"),
+            "secondary_source": diag.get("secondary_source"),
+        }},
+    )
+    funnel.set_sniper_rpc_lane(
+        primary_provider=primary_prov,
+        secondary_provider=secondary_prov or "none",
+    )
+
+    from web3 import Web3
+
+    w3_primary = Web3(Web3.HTTPProvider(primary_url))
+    w3_secondary = (
+        Web3(Web3.HTTPProvider(secondary_url)) if secondary_url else None
+    )
+    return SniperRpcLane(
+        w3_primary=w3_primary,
+        w3_secondary=w3_secondary,
+        primary_provider=primary_prov,
+        secondary_provider=secondary_prov,
+        funnel=funnel,
+    )
+
+
+def _resolve_rpc_url(chain: str, override: Optional[str]) -> str:
+    """Return sniper-lane primary HTTP URL (backward-compatible helper)."""
+    chain_key = chain.lower()
+    chain_id = _chain_id_for(chain_key)
+    primary_url, _prov, _sec, _sec_prov, _diag = resolve_sniper_rpc_lane(
+        chain_id=chain_id,
+        network=chain_key,
+        env=dict(os.environ),
+        override=override,
+    )
+    return primary_url
 
 
 def _resolve_ws_url(chain: str, override: Optional[str]) -> Optional[str]:
@@ -531,47 +549,197 @@ def _get_block_number(w3: Any) -> Optional[int]:
         return None
 
 
-def _get_logs_safe(
+def _parse_block_num(val: Any) -> int:
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        return int(val, 16) if val.lower().startswith("0x") else int(val)
+    return int(val)
+
+
+def _getlogs_block_span(params: Dict[str, Any]) -> int:
+    from_b = _parse_block_num(params.get("fromBlock", 0))
+    to_b = _parse_block_num(params.get("toBlock", from_b))
+    return max(1, to_b - from_b + 1)
+
+
+def _classify_getlogs_error(err_str: str) -> str:
+    s = err_str.lower()
+    if "400" in s or any(
+        p in s for p in ("block range", "range exceeded", "range limit", "-32600")
+    ):
+        return "400_range"
+    if "429" in s or "too many requests" in s or "rate limit" in s:
+        return "429"
+    if "408" in s:
+        return "408"
+    if any(code in s for code in ("500", "502", "503", "504", "server error")):
+        return "5xx"
+    if "timeout" in s or "timed out" in s:
+        return "timeout"
+    return "other"
+
+
+def _single_get_logs(
     w3: Any,
     params: Dict[str, Any],
-    retries: int = 3,
-    retry_delay_s: float = 2.0,
-) -> tuple[List[Any], bool, str]:
-    """Call ``eth.get_logs(params)`` and return (logs, had_error, error_str).
-
-    Automatically retries on 408 (RPC timeout) errors up to *retries* times
-    with *retry_delay_s* sleep between attempts.  This avoids needing
-    ``--skip-self-test`` when the archive RPC is transiently slow.
-    """
-    last_err = ""
+    *,
+    retries: int = 1,
+    retry_delay_s: float = _GETLOGS_RETRY_DELAY_S,
+) -> tuple[List[Any], Optional[str]]:
+    """Single-provider eth_getLogs; returns (logs, error_str_or_none)."""
+    last_err: Optional[str] = None
     for attempt in range(1, retries + 1):
         try:
-            return list(w3.eth.get_logs(params)), False, ""
+            return list(w3.eth.get_logs(params)), None
         except Exception as exc:
             err_str = str(exc)
-            is_transient = "408" in err_str or "timeout" in err_str.lower()
-            if is_transient and attempt < retries:
+            err_type = _classify_getlogs_error(err_str)
+            if (
+                err_type in ("408", "429", "5xx", "timeout")
+                and attempt < retries
+            ):
                 logger.warning(
                     "eth_getLogs_transient_retry",
-                    extra={
-                        "context": {
-                            "attempt": attempt,
-                            "retries": retries,
-                            "error": err_str[:120],
-                        }
-                    },
+                    extra={"context": {
+                        "attempt": attempt,
+                        "retries": retries,
+                        "error_type": err_type,
+                        "error": err_str[:120],
+                    }},
                 )
-                import time as _time
-                _time.sleep(retry_delay_s)
+                time.sleep(retry_delay_s)
                 last_err = err_str
                 continue
-            last_err = err_str
-            break
-    logger.warning(
-        "eth_getLogs failed",
-        extra={"context": {"params": str(params)[:200], "error": last_err[:120]}},
-    )
-    return [], True, last_err
+            return [], err_str
+    return [], last_err or "eth_getLogs failed"
+
+
+@dataclass
+class SniperRpcLane:
+    """M8 sniper discovery HTTP lane with getLogs chunk-split + failover."""
+
+    w3_primary: Any
+    w3_secondary: Optional[Any]
+    primary_provider: str
+    secondary_provider: Optional[str]
+    funnel: FunnelTracker
+
+    @property
+    def w3(self) -> Any:
+        """Primary web3 handle (block number, checksum, enricher)."""
+        return self.w3_primary
+
+    def get_logs(self, params: Dict[str, Any]) -> tuple[List[Any], bool, str]:
+        logs, had_err, err = self._get_logs_lane(params, use_secondary=False)
+        if had_err:
+            logger.warning(
+                "eth_getLogs failed",
+                extra={"context": {
+                    "params": str(params)[:200],
+                    "error": err[:120],
+                }},
+            )
+        return logs, had_err, err
+
+    def _get_logs_lane(
+        self,
+        params: Dict[str, Any],
+        *,
+        use_secondary: bool,
+    ) -> tuple[List[Any], bool, str]:
+        w3 = self.w3_secondary if use_secondary else self.w3_primary
+        provider = (
+            self.secondary_provider if use_secondary else self.primary_provider
+        )
+        if w3 is None:
+            return [], True, "no secondary sniper RPC configured"
+
+        logs, err = _single_get_logs(
+            w3,
+            params,
+            retries=_GETLOGS_TRANSIENT_RETRIES,
+        )
+        if err is None:
+            self.funnel.set_getlogs_chunk_size(_getlogs_block_span(params))
+            return logs, False, ""
+
+        err_type = _classify_getlogs_error(err)
+        if err_type == "400_range":
+            self.funnel.inc_getlogs_400()
+        elif err_type == "429":
+            self.funnel.inc_getlogs_429()
+
+        if err_type not in _FAILOVER_GETLOGS_ERRORS:
+            return [], True, err
+
+        if not use_secondary and err_type == "400_range":
+            split_logs, split_err, split_str = self._split_range_get_logs(params)
+            if not split_err:
+                return split_logs, False, ""
+
+        if not use_secondary and self.w3_secondary is not None:
+            self.funnel.inc_sniper_rpc_failover()
+            logger.info(
+                "sniper_rpc_failover",
+                extra={"context": {
+                    "from_provider": self.primary_provider,
+                    "to_provider": self.secondary_provider,
+                    "error_type": err_type,
+                    "provider": provider,
+                }},
+            )
+            return self._get_logs_lane(params, use_secondary=True)
+
+        if use_secondary and err_type == "400_range":
+            split_logs, split_err, split_str = self._split_range_get_logs(
+                params, use_secondary=True
+            )
+            if not split_err:
+                return split_logs, False, ""
+            return [], True, split_str
+
+        return [], True, err
+
+    def _split_range_get_logs(
+        self,
+        params: Dict[str, Any],
+        *,
+        use_secondary: bool = False,
+    ) -> tuple[List[Any], bool, str]:
+        from_b = _parse_block_num(params.get("fromBlock", 0))
+        to_b = _parse_block_num(params.get("toBlock", from_b))
+        span = to_b - from_b + 1
+        if span <= _MIN_GETLOGS_CHUNK_BLOCKS:
+            return [], True, "block range split exhausted"
+
+        mid = from_b + span // 2 - 1
+        left = dict(params)
+        left["fromBlock"] = from_b
+        left["toBlock"] = mid
+        right = dict(params)
+        right["fromBlock"] = mid + 1
+        right["toBlock"] = to_b
+
+        left_logs, left_err, left_str = self._get_logs_lane(
+            left, use_secondary=use_secondary
+        )
+        if left_err:
+            return [], True, left_str
+        right_logs, right_err, right_str = self._get_logs_lane(
+            right, use_secondary=use_secondary
+        )
+        if right_err:
+            return [], True, right_str
+        return left_logs + right_logs, False, ""
+
+
+def _get_logs_safe(
+    rpc_lane: SniperRpcLane,
+    params: Dict[str, Any],
+) -> tuple[List[Any], bool, str]:
+    """Call sniper-lane ``eth_getLogs`` with chunk-split and provider failover."""
+    return rpc_lane.get_logs(params)
 
 
 # ---------------------------------------------------------------------------
@@ -579,7 +747,7 @@ def _get_logs_safe(
 # ---------------------------------------------------------------------------
 
 def _run_self_test(
-    w3: Any,
+    rpc_lane: SniperRpcLane,
     configs: List[FactoryConfig],
     chain: str,
 ) -> tuple[bool, Dict[str, Any]]:
@@ -603,6 +771,7 @@ def _run_self_test(
 
     all_pass = True
     results_by_dex: Dict[str, Any] = {}
+    w3 = rpc_lane.w3
     for cfg in testable:
         assert cfg.verification_from_block is not None
         assert cfg.verification_to_block is not None
@@ -614,7 +783,7 @@ def _run_self_test(
         if cfg.topic0:
             params["topics"] = [cfg.topic0]
 
-        logs, had_err, _ = _get_logs_safe(w3, params)
+        logs, had_err, _ = _get_logs_safe(rpc_lane, params)
         if had_err:
             logger.error(
                 "self_test rpc_error",
@@ -989,7 +1158,7 @@ def _run_offline_cycle(
 
 def _run_online_loop(
     *,
-    w3: Any,
+    rpc_lane: SniperRpcLane,
     configs: List[FactoryConfig],
     chain: str,
     funnel: FunnelTracker,
@@ -1029,7 +1198,7 @@ def _run_online_loop(
         cycle_start = time.monotonic()
         cycle_n += 1
 
-        current_block = _get_block_number(w3)
+        current_block = _get_block_number(rpc_lane.w3)
         if current_block is None:
             funnel.inc_rpc_error()
             logger.warning(
@@ -1062,9 +1231,9 @@ def _run_online_loop(
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def _poll_factory(cfg: FactoryConfig) -> tuple[FactoryConfig, list, bool, str, float]:
-            params = _build_filter_params(w3, cfg, from_block, to_block)
+            params = _build_filter_params(rpc_lane.w3, cfg, from_block, to_block)
             t_start = time.monotonic()
-            logs, had_err, err_str = _get_logs_safe(w3, params)
+            logs, had_err, err_str = _get_logs_safe(rpc_lane, params)
             return cfg, logs, had_err, err_str, (time.monotonic() - t_start) * 1000.0
 
         max_workers = min(len(configs), 4) or 1
@@ -1139,7 +1308,7 @@ def _run_online_loop(
                 source=source,
                 status=status,
                 reasons=reasons,
-                w3=w3,
+                w3=rpc_lane.w3,
                 phase2_event_decisions=decisions_snap,
                 arb_trace=list(arb_trace) if arb_trace is not None else None,
             )
@@ -1367,23 +1536,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ------------------------------------------------------------------
     # Online-only: build web3 + self-test
     # ------------------------------------------------------------------
+    rpc_lane: Optional[SniperRpcLane] = None
     w3: Any = None
     if not offline:
         try:
-            rpc_url = _resolve_rpc_url(args.chain, args.rpc_url)
+            rpc_lane = _build_sniper_rpc_lane(args.chain, args.rpc_url, funnel)
         except RuntimeError as exc:
             logger.error(str(exc))
             return 1
-
-        try:
-            from web3 import Web3
-            w3 = Web3(Web3.HTTPProvider(rpc_url))
         except Exception as exc:
             logger.error(
-                "web3_init_failed",
-                extra={"context": {"rpc_url": rpc_url, "error": str(exc)}},
+                "sniper_rpc_lane_init_failed",
+                extra={"context": {"error": str(exc)}},
             )
             return 1
+
+        w3 = rpc_lane.w3
+        rpc_url = _resolve_rpc_url(args.chain, args.rpc_url)
 
         # --------------------------------------------------------------
         # RPC preflight (Step 3) -- chain_id + archive depth + WS newHeads.
@@ -1430,7 +1599,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
 
         if not args.skip_self_test:
-            self_test_ok, self_test_results = _run_self_test(w3, configs, args.chain)
+            self_test_ok, self_test_results = _run_self_test(
+                rpc_lane, configs, args.chain
+            )
             if not self_test_ok:
                 logger.error("self_test_FAILED -- aborting run (use --skip-self-test to bypass)")
                 return 3
@@ -1501,6 +1672,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.prefer_ws and not offline:
         ws_url = _resolve_ws_url(args.chain, None)
         if ws_url:
+            ws_provider = classify_provider(ws_url)
+            http_fallback_provider = (
+                rpc_lane.primary_provider if rpc_lane is not None else "unknown"
+            )
+            funnel.set_prefer_ws_rpc_providers(
+                ws_provider=ws_provider,
+                http_fallback_provider=http_fallback_provider,
+            )
+            logger.info(
+                "prefer_ws_rpc_lane",
+                extra={"context": {
+                    "ws_provider": ws_provider,
+                    "http_fallback_provider": http_fallback_provider,
+                }},
+            )
             try:
                 from m8.runtime.ws_listener import WSPoolEventListener
                 ws_on_event = _make_ws_on_event_callback(
@@ -1554,8 +1740,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             for n in range(2, extra_cycles + 2):
                 _run_offline_cycle(funnel, configs, args.chain, cycle_n=n)
         else:
+            assert rpc_lane is not None
             _run_online_loop(
-                w3=w3,
+                rpc_lane=rpc_lane,
                 configs=configs,
                 chain=args.chain,
                 funnel=funnel,

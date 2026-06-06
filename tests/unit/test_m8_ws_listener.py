@@ -542,75 +542,72 @@ class TestAerodromeVe33WSCallback:
 # ---------------------------------------------------------------------------
 
 class TestGetLogsSafeRetry:
-    """Verify that _get_logs_safe retries on 408/timeout and succeeds on 2nd attempt.
-
-    Uses unittest.mock to simulate a web3 provider that fails with a 408 error
-    on the first call but succeeds on subsequent calls.
-    """
+    """Verify sniper-lane getLogs retries on 408/timeout via _single_get_logs."""
 
     def _make_w3_mock(self, side_effects):
-        """Return a minimal mock w3 whose eth.get_logs raises in sequence."""
         from unittest.mock import MagicMock
         w3 = MagicMock()
         w3.eth.get_logs.side_effect = side_effects
         return w3
 
+    def _make_lane(self, side_effects):
+        from monitoring.sniper_funnel import FunnelTracker
+        from m8.runtime.smoke_run import SniperRpcLane
+        return SniperRpcLane(
+            w3_primary=self._make_w3_mock(side_effects),
+            w3_secondary=None,
+            primary_provider="test",
+            secondary_provider=None,
+            funnel=FunnelTracker(),
+        )
+
     def test_succeeds_immediately_when_no_error(self):
-        """Zero failures → returns logs on first call without retry."""
         from m8.runtime.smoke_run import _get_logs_safe
-        w3 = self._make_w3_mock([["log1", "log2"]])
-        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        lane = self._make_lane([["log1", "log2"]])
+        logs, had_err, err_str = _get_logs_safe(lane, {})
         assert not had_err
         assert logs == ["log1", "log2"]
-        assert w3.eth.get_logs.call_count == 1
+        assert lane.w3_primary.eth.get_logs.call_count == 1
 
     def test_retries_on_408_and_succeeds(self):
-        """408 error on first call → retries → succeeds on second call."""
         from m8.runtime.smoke_run import _get_logs_safe
-        side_effects = [
+        lane = self._make_lane([
             Exception("408 Client Error: Request Timeout"),
             ["log1"],
-        ]
-        w3 = self._make_w3_mock(side_effects)
-        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        ])
+        logs, had_err, err_str = _get_logs_safe(lane, {})
         assert not had_err
         assert logs == ["log1"]
-        assert w3.eth.get_logs.call_count == 2
+        assert lane.w3_primary.eth.get_logs.call_count == 2
 
     def test_retries_on_timeout_keyword_and_succeeds(self):
-        """'timeout' in error message → treated as transient, retried."""
         from m8.runtime.smoke_run import _get_logs_safe
-        side_effects = [
+        lane = self._make_lane([
             Exception("ConnectionTimeout: read timed out"),
             ["logA"],
-        ]
-        w3 = self._make_w3_mock(side_effects)
-        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        ])
+        logs, had_err, err_str = _get_logs_safe(lane, {})
         assert not had_err
         assert logs == ["logA"]
-        assert w3.eth.get_logs.call_count == 2
+        assert lane.w3_primary.eth.get_logs.call_count == 2
 
     def test_non_transient_error_not_retried(self):
-        """Non-408/timeout error (e.g. 403) → returns error immediately, no retry."""
         from m8.runtime.smoke_run import _get_logs_safe
-        w3 = self._make_w3_mock([Exception("403 Forbidden"), ["should_not_reach"]])
-        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        lane = self._make_lane([Exception("403 Forbidden"), ["should_not_reach"]])
+        logs, had_err, err_str = _get_logs_safe(lane, {})
         assert had_err
         assert logs == []
         assert "403" in err_str
-        # Must not retry — only 1 call
-        assert w3.eth.get_logs.call_count == 1
+        assert lane.w3_primary.eth.get_logs.call_count == 1
 
     def test_exhausted_retries_returns_error(self):
-        """All retries fail with 408 → returns had_err=True after max retries."""
         from m8.runtime.smoke_run import _get_logs_safe
-        w3 = self._make_w3_mock([
-            Exception("408 Request Timeout"),
+        lane = self._make_lane([
             Exception("408 Request Timeout"),
             Exception("408 Request Timeout"),
         ])
-        logs, had_err, err_str = _get_logs_safe(w3, {}, retries=3, retry_delay_s=0)
+        logs, had_err, err_str = _get_logs_safe(lane, {})
         assert had_err
         assert logs == []
-        assert w3.eth.get_logs.call_count == 3
+        assert lane.w3_primary.eth.get_logs.call_count == 2
 

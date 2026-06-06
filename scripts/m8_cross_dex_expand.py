@@ -34,7 +34,13 @@ def main() -> int:
         default="data/runs/_rolling/m8_cross_dex_expansion_latest.json",
     )
     p.add_argument("--dry-run", action="store_true", help="Registry venues only; no factory RPC")
-    p.add_argument("--max-pairs", type=int, default=None, help="Cap token/anchor pairs (debug)")
+    p.add_argument(
+        "--expansion-mode",
+        choices=("pair_anchor", "token_neighborhood"),
+        default="token_neighborhood",
+        help="pair_anchor=legacy; token_neighborhood=per-token subgraph (default)",
+    )
+    p.add_argument("--max-pairs", type=int, default=None, help="Cap tokens/pairs (debug)")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -69,6 +75,7 @@ def main() -> int:
         anchor_artifact=anchor_artifact,
         dry_run=args.dry_run,
         max_pairs=args.max_pairs,
+        expansion_mode=args.expansion_mode,
     )
     artifact["config_path"] = str(config_path).replace("\\", "/")
     artifact["input_registry_path"] = args.input
@@ -81,11 +88,12 @@ def main() -> int:
 
     s = artifact["summary"]
     log.info(
-        "tokens_in=%d multi_venue=%d routes_admitted=%d dry_run=%s",
-        s["tokens_in"],
-        s["multi_venue_tokens"],
-        s["routes_admitted_count"],
-        s["dry_run"],
+        "mode=%s tokens_in=%d routes_admitted=%d subgraph_ready_tokens=%s dry_run=%s",
+        s.get("expansion_mode", "?"),
+        s.get("tokens_in", 0),
+        s.get("routes_admitted_count", 0),
+        s.get("subgraph_ready_tokens", s.get("multi_venue_tokens", "?")),
+        s.get("dry_run"),
     )
     return 0
 

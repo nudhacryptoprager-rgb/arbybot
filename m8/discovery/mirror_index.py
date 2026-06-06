@@ -311,6 +311,139 @@ class MirrorIndex:
             return None, "MAVERICK_INDEXED_BUT_NOT_QUOTEABLE"
         return None, "MAVERICK_INDEX_NO_MATCH"
 
+    def find_pools_containing_token(
+        self,
+        token_addr: str,
+        dex_ids: Optional[Set[str]] = None,
+        max_results_per_dex: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """Return pool entries where ``token_addr`` is a pool member (rolling indices)."""
+        token_addr = token_addr.lower()
+        per_dex: Dict[str, int] = {}
+        out: List[Dict[str, Any]] = []
+
+        def _cap(dex: str) -> bool:
+            if dex_ids is not None and dex not in dex_ids:
+                return False
+            return per_dex.get(dex, 0) < max_results_per_dex
+
+        def _add(dex: str, entry: Dict[str, Any]) -> None:
+            if not _cap(dex):
+                return
+            per_dex[dex] = per_dex.get(dex, 0) + 1
+            out.append(entry)
+
+        for ent in self.curve:
+            if not probe_is_quotable(ent.probe_status):
+                continue
+            if token_addr not in ent.coin_addresses:
+                continue
+            idx_to_sym = {int(v): k for k, v in ent.coin_indices.items()}
+            focus_sym = ""
+            for i, addr in enumerate(ent.coin_addresses):
+                if addr == token_addr:
+                    focus_sym = idx_to_sym.get(i, "")
+                    break
+            for i, addr in enumerate(ent.coin_addresses):
+                if addr == token_addr:
+                    continue
+                conn_sym = idx_to_sym.get(i, addr[:8])
+                fsym = focus_sym or "T"
+                if fsym <= conn_sym:
+                    t0s, t1s, t0a, t1a = fsym, conn_sym, token_addr, addr
+                else:
+                    t0s, t1s, t0a, t1a = conn_sym, fsym, addr, token_addr
+                _add(
+                    "curve_stable",
+                    {
+                        "dex_id": "curve_stable",
+                        "pool_address": ent.pool_address,
+                        "token0_symbol": t0s,
+                        "token1_symbol": t1s,
+                        "token0_addr": t0a,
+                        "token1_addr": t1a,
+                        "pool_kind": ent.pool_kind,
+                        "coin_indices": dict(ent.coin_indices),
+                        "quote_smoke": ent.quote_smoke_status,
+                        "quote_smoke_status": ent.quote_smoke_status,
+                        "resolve_source": "curve_rolling_index",
+                        "factory_verified": True,
+                        "expansion_route_kind": "token_presence",
+                        "connector_token": conn_sym,
+                        "connector_addr": addr,
+                    },
+                )
+
+        for ent in self.balancer:
+            if not probe_is_quotable(ent.probe_status):
+                continue
+            if token_addr not in ent.assets:
+                continue
+            for addr in ent.assets:
+                if addr == token_addr:
+                    continue
+                conn_sym = addr[:8]
+                fsym = "T"
+                if fsym <= conn_sym:
+                    t0s, t1s, t0a, t1a = fsym, conn_sym, token_addr, addr
+                else:
+                    t0s, t1s, t0a, t1a = conn_sym, fsym, addr, token_addr
+                _add(
+                    "balancer_vault",
+                    {
+                        "dex_id": "balancer_vault",
+                        "pool_address": ent.pool_address,
+                        "pool_id": ent.pool_id,
+                        "vault_address": ent.vault_address,
+                        "pool_kind": ent.pool_kind,
+                        "token0_symbol": t0s,
+                        "token1_symbol": t1s,
+                        "token0_addr": t0a,
+                        "token1_addr": t1a,
+                        "quote_smoke": ent.probe_status or "INDEXED",
+                        "quote_smoke_status": ent.probe_status or "INDEXED",
+                        "resolve_source": "balancer_pool_index",
+                        "factory_verified": True,
+                        "expansion_route_kind": "token_presence",
+                        "connector_token": conn_sym,
+                        "connector_addr": addr,
+                    },
+                )
+
+        for ent in self.maverick:
+            if token_addr not in (ent.token_a, ent.token_b):
+                continue
+            if not probe_is_quotable(ent.probe_status):
+                continue
+            other = ent.token_b if token_addr == ent.token_a else ent.token_a
+            conn_sym = other[:8]
+            fsym = "T"
+            if fsym <= conn_sym:
+                t0s, t1s, t0a, t1a = fsym, conn_sym, token_addr, other
+            else:
+                t0s, t1s, t0a, t1a = conn_sym, fsym, other, token_addr
+            _add(
+                "maverick_v2",
+                {
+                    "dex_id": "maverick_v2",
+                    "pool_address": ent.pool_address,
+                    "token_a": ent.token_a,
+                    "token0_symbol": t0s,
+                    "token1_symbol": t1s,
+                    "token0_addr": t0a,
+                    "token1_addr": t1a,
+                    "quote_smoke": ent.probe_status or "QUOTE_OK",
+                    "quote_smoke_status": ent.probe_status or "QUOTE_OK",
+                    "resolve_source": "maverick_pool_index",
+                    "factory_verified": True,
+                    "expansion_route_kind": "token_presence",
+                    "connector_token": conn_sym,
+                    "connector_addr": other,
+                },
+            )
+
+        return out
+
 
 def _curve_entry_from_raw(pool: Dict[str, Any]) -> Optional[_CurveMirrorEntry]:
     pool_addr = str(pool.get("pool_address", "")).lower()

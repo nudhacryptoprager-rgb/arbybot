@@ -2,6 +2,7 @@ import unittest
 from core.rpc_urls import (
     build_alchemy_http_url, build_alchemy_ws_url, public_fallback_for,
     classify_provider, validate_drpc_url, resolve_rpc_http, resolve_rpc_ws,
+    resolve_sniper_rpc_lane,
     iter_dedicated_http_providers, is_public_rpc_url,
 )
 
@@ -156,6 +157,21 @@ class TestChainScopedEnvResolution(unittest.TestCase):
         self.assertGreaterEqual(len(providers), 2)
         self.assertEqual(providers[0][0], "alchemy")
         self.assertFalse(is_public_rpc_url(providers[0][1]))
+
+
+class TestResolveSniperRpcLaneEnv(unittest.TestCase):
+    def test_sniper_secondary_env_used(self):
+        env = {
+            "BASE_SNIPER_RPC_PRIMARY": "https://lb.drpc.live/base/pri",
+            "BASE_SNIPER_RPC_SECONDARY": "https://base-mainnet.g.alchemy.com/v2/k",
+            "BASE_RPC_PRIMARY": "https://base-mainnet.g.alchemy.com/v2/k",
+        }
+        pri, pri_p, sec, sec_p, diag = resolve_sniper_rpc_lane(
+            chain_id=8453, network="base", env=env
+        )
+        self.assertEqual(pri_p, "drpc")
+        self.assertEqual(sec_p, "alchemy")
+        self.assertEqual(diag["secondary_source"], "BASE_SNIPER_RPC_SECONDARY")
 
 
 class TestProviderProvenanceAdditive(unittest.TestCase):

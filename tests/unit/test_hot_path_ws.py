@@ -1,7 +1,7 @@
 """Live WS hot-path helpers."""
 from __future__ import annotations
 
-from m8.discovery.hot_path_ws import split_token_anchor_from_event
+from m8.discovery.hot_path_mirror import split_token_anchor_from_event
 
 
 def test_split_token_anchor_by_address_usdc_pair():

@@ -1132,6 +1132,23 @@ def _build_m8_funnel(metrics: dict) -> dict:
             _safe_int(metrics.get("arb_candidates_total")) >= 1
             and _safe_int(metrics.get("phase2_expected_pnl_non_null_count")) >= 1
         ),
+        # Sniper discovery RPC lane (M8 getLogs — separate from M9 quote PRIMARY)
+        "rpc_lane": {
+            "sniper_rpc_provider": metrics.get("sniper_rpc_provider") or "unknown",
+            "sniper_rpc_secondary_provider": (
+                metrics.get("sniper_rpc_secondary_provider") or "none"
+            ),
+            "sniper_rpc_failover_count": _safe_int(
+                metrics.get("sniper_rpc_failover_count")
+            ),
+            "getlogs_400_count": _safe_int(metrics.get("getlogs_400_count")),
+            "getlogs_429_count": _safe_int(metrics.get("getlogs_429_count")),
+            "getlogs_chunk_size": _safe_int(metrics.get("getlogs_chunk_size")),
+            "ws_provider": metrics.get("ws_provider") or "none",
+            "http_fallback_provider": metrics.get("http_fallback_provider") or "unknown",
+            "listener_mode": metrics.get("listener_mode") or "http_only",
+            "rpc_error_histogram": metrics.get("rpc_error_histogram") or {},
+        },
     }
 
 

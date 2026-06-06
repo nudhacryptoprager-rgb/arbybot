@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -42,6 +42,7 @@
   <h1>ARBY M8 New Pool</h1>
   <span id="status-badge" class="badge badge-yellow">status: loading</span>
   <span id="real-badge" class="badge badge-yellow">realizable: ?</span>
+  <span id="refresh-cadence" class="muted" style="font-size:11px">refresh: 60s</span>
   <span id="last-refresh">-</span>
 </header>
 <main>
@@ -55,6 +56,10 @@
       <dl class="kv" id="summary-kv"><dt class="muted">Loading</dt><dd>-</dd></dl>
     </section>
   </div>
+  <section class="panel">
+    <h2>RPC Lane (sniper getLogs)</h2>
+    <dl class="kv" id="rpc-lane-kv"><dt class="muted">Loading</dt><dd>-</dd></dl>
+  </section>
 
   <section class="panel">
     <h2>Opportunities / New Pool Signals</h2>
@@ -98,7 +103,7 @@
 </main>
 
 <script>
-const REFRESH_MS = 10000;
+const REFRESH_MS = 60000;
 
 function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -162,6 +167,29 @@ async function load() {
       not_realizable: esc(sum.not_realizable ?? 0),
       economics_available: esc(sum.economics_available),
       listener_only: esc(sum.listener_only),
+      rpc_calls: esc((data.funnel || {}).rpc_calls_made ?? '-'),
+      rpc_errors: esc((data.funnel || {}).rpc_errors ?? '-'),
+      cycles: esc((data.funnel || {}).cycles_completed ?? '-'),
+      elapsed_s: esc((data.funnel || {}).elapsed_s ?? '-'),
+      candidates: esc((data.metrics || {}).snipe_candidates_total ?? '-'),
+    });
+
+    const lane = (data.funnel || {}).rpc_lane || {};
+    kv(document.getElementById('rpc-lane-kv'), {
+      primary: `<code>${esc(lane.sniper_rpc_provider || 'unknown')}</code>`,
+      secondary: `<code>${esc(lane.sniper_rpc_secondary_provider || 'none')}</code>`,
+      failover_count: esc(lane.sniper_rpc_failover_count ?? 0),
+      getlogs_400: esc(lane.getlogs_400_count ?? 0),
+      getlogs_429: esc(lane.getlogs_429_count ?? 0),
+      chunk_blocks: esc(lane.getlogs_chunk_size ?? '-'),
+      listener_mode: esc(lane.listener_mode || '-'),
+      ws_provider: esc(lane.ws_provider || '-'),
+      http_fallback: esc(lane.http_fallback_provider || '-'),
+      error_histogram: esc(
+        Object.entries(lane.rpc_error_histogram || {})
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || 'none'
+      ),
     });
 
     const rows = data.opportunity_rows || [];

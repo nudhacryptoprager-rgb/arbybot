@@ -160,6 +160,397 @@ def _registry_pools_for_pair(
     return pools
 
 
+def _registry_pools_for_token(
+    registry: Optional[Dict[str, Any]],
+    token_address: str,
+    allowed_dex_ids: Optional[Set[str]] = None,
+) -> List[Dict[str, Any]]:
+    """All registry venues where ``token_address`` is token0 or token1."""
+    if not registry:
+        return []
+    tok = (registry.get("tokens") or {}).get(token_address.lower())
+    if not tok:
+        return []
+    focus_sym = str(tok.get("symbol") or "")
+    pools: List[Dict[str, Any]] = []
+    for venue in (tok.get("venues") or {}).values():
+        dex = venue.get("dex", "")
+        if allowed_dex_ids is not None and dex not in allowed_dex_ids:
+            continue
+        t0a = (venue.get("token0") or "").lower()
+        t1a = (venue.get("token1") or "").lower()
+        t0s = venue.get("token0_symbol", "")
+        t1s = venue.get("token1_symbol", "")
+        if token_address.lower() not in (t0a, t1a):
+            continue
+        if t0a == token_address.lower():
+            connector_sym, connector_addr = t1s, t1a
+        else:
+            connector_sym, connector_addr = t0s, t0a
+        pools.append({
+            "dex_id": dex,
+            "pool_address": (venue.get("pool") or "").lower(),
+            "factory_address": venue.get("factory", ""),
+            "token0_symbol": t0s,
+            "token1_symbol": t1s,
+            "token0_addr": t0a,
+            "token1_addr": t1a,
+            "fee": venue.get("fee"),
+            "tick_spacing": venue.get("tick_spacing"),
+            "hooks": venue.get("hooks"),
+            "resolve_source": "registry_venue",
+            "factory_verified": True,
+            "quote_smoke": "skipped_registry",
+            "expansion_route_kind": "token_presence",
+            "connector_token": connector_sym,
+            "connector_addr": connector_addr,
+            "focus_token_symbol": focus_sym,
+            "focus_token_address": token_address.lower(),
+            "source_event_block": venue.get("source_event_block") or venue.get("block_number"),
+            "pool_first_seen_block": venue.get("pool_first_seen_block") or venue.get("block_number"),
+            "token_first_seen_ts": tok.get("first_seen_ts"),
+        })
+    return pools
+
+
+def _registry_pools_connector_to_anchor(
+    registry: Optional[Dict[str, Any]],
+    connector_sym: str,
+    connector_addr: str,
+    anchor_sym: str,
+    allowed_dex_ids: Optional[Set[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Registry venues for connector→anchor (search by address or symbol)."""
+    if connector_addr:
+        pools = _registry_pools_for_pair(
+            registry,
+            connector_addr,
+            connector_sym,
+            anchor_sym,
+            allowed_dex_ids,
+        )
+        if pools:
+            return pools
+    if not registry:
+        return []
+    for addr, tok in (registry.get("tokens") or {}).items():
+        if str(tok.get("symbol") or "") != connector_sym:
+            continue
+        pools = _registry_pools_for_pair(
+            registry, addr, connector_sym, anchor_sym, allowed_dex_ids
+        )
+        if pools:
+            return pools
+    return []
+
+
+def _route_dedupe_key(pool_entry: Dict[str, Any]) -> Tuple[str, str, str, str]:
+    return (
+        str(pool_entry.get("dex_id", "")),
+        str(pool_entry.get("pool_address", "")).lower(),
+        str(pool_entry.get("token0_addr", "")).lower(),
+        str(pool_entry.get("token1_addr", "")).lower(),
+    )
+
+
+def _anchor_symbols_from_config(config: Dict[str, Any]) -> Set[str]:
+    from m8.discovery.pending_pair_registry import _ANCHOR_TOKENS
+
+    anchors = set(_ANCHOR_TOKENS)
+    for sym in (config.get("tokens") or {}):
+        if sym in _ANCHOR_TOKENS:
+            anchors.add(sym)
+    return anchors
+
+
+def evaluate_subgraph_readiness(
+    *,
+    token_seen_on_dexes: int,
+    connector_tokens: int,
+    active_routes: int,
+    unique_tokens: int,
+) -> Dict[str, Any]:
+    """M9 shadow acceptance gate for token-neighborhood mini-subgraphs."""
+    return {
+        "token_seen_on_dexes": token_seen_on_dexes,
+        "connector_token_count": connector_tokens,
+        "unique_tokens": unique_tokens,
+        "active_routes": active_routes,
+        "token_seen_on_dexes_gte_2": token_seen_on_dexes >= 2,
+        "connector_tokens_gte_1": connector_tokens >= 1,
+        "active_routes_gte_4": active_routes >= 4,
+        "unique_tokens_gte_3": unique_tokens >= 3,
+        "subgraph_ready": (
+            token_seen_on_dexes >= 2
+            and connector_tokens >= 1
+            and active_routes >= 4
+            and unique_tokens >= 3
+        ),
+    }
+
+
+def expand_token_neighborhood(
+    *,
+    chain: str,
+    config: Dict[str, Any],
+    registry: Optional[Dict[str, Any]],
+    exotic_address: str,
+    exotic_symbol: str = "",
+    dry_run: bool = False,
+    dex_rows: Optional[List[Dict[str, Any]]] = None,
+    allowed_dex_ids: Optional[Set[str]] = None,
+    productive_dexes: Optional[Set[str]] = None,
+    resolver: Any = None,
+    mirror_index: Any = None,
+) -> Dict[str, Any]:
+    """Token-global neighborhood expansion (3/4-leg subgraph discovery)."""
+    from discovery.pool_resolver import get_pool_resolver
+    from m8.discovery.mirror_index import MirrorIndex
+
+    exotic_address = exotic_address.lower()
+    dex_rows = dex_rows or discovery_dexes_from_config(config)
+    allowed_dex_ids = allowed_dex_ids or {d["dex_id"] for d in dex_rows}
+    productive_dexes = productive_dexes or {
+        d["dex_id"] for d in dex_rows if d["enabled_for_productive"]
+    }
+    resolver = resolver or get_pool_resolver(chain)
+    mirror_index = mirror_index or MirrorIndex.load(chain)
+    anchor_syms = _anchor_symbols_from_config(config)
+
+    reg_tok = ((registry or {}).get("tokens") or {}).get(exotic_address) or {}
+    focus_sym = exotic_symbol or str(reg_tok.get("symbol") or exotic_address[:8])
+
+    reject_hist: Counter = Counter()
+    all_reject_rows: List[Dict[str, str]] = []
+
+    # Hop 1: all pools containing focus token T
+    t_pools: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+    for p in _registry_pools_for_token(registry, exotic_address, allowed_dex_ids):
+        t_pools[_route_dedupe_key(p)] = p
+    for p in mirror_index.find_pools_containing_token(
+        exotic_address, allowed_dex_ids, max_results_per_dex=4
+    ):
+        p.setdefault("focus_token_symbol", focus_sym)
+        p.setdefault("focus_token_address", exotic_address)
+        t_pools[_route_dedupe_key(p)] = p
+
+    token_seen_on_dexes = len({p["dex_id"] for p in t_pools.values()})
+    if token_seen_on_dexes < 2:
+        reject_hist["TOKEN_NOT_SEEN_ELSEWHERE"] += 1
+
+    connectors: Dict[str, Dict[str, str]] = {}
+    for p in t_pools.values():
+        conn_sym = str(p.get("connector_token") or "")
+        conn_addr = str(p.get("connector_addr") or "").lower()
+        if not conn_sym and not conn_addr:
+            t0s, t1s = p.get("token0_symbol", ""), p.get("token1_symbol", "")
+            t0a, t1a = p.get("token0_addr", ""), p.get("token1_addr", "")
+            if t0a == exotic_address:
+                conn_sym, conn_addr = t1s, t1a
+            else:
+                conn_sym, conn_addr = t0s, t0a
+        if conn_sym in anchor_syms:
+            continue
+        if conn_sym or conn_addr:
+            connectors[conn_sym or conn_addr[:10]] = {
+                "symbol": conn_sym,
+                "address": conn_addr,
+            }
+
+    if not connectors:
+        reject_hist["CONNECTOR_NOT_FOUND"] += 1
+
+    same_pair_routes: List[Dict[str, Any]] = []
+    token_presence_routes: List[Dict[str, Any]] = []
+    connector_routes: List[Dict[str, Any]] = []
+    seen_routes: Set[Tuple[str, str, str, str]] = set()
+
+    def _admit_pool(
+        pool_entry: Dict[str, Any],
+        *,
+        pair_sym_a: str,
+        pair_sym_b: str,
+        route_kind: str,
+    ) -> None:
+        key = _route_dedupe_key(pool_entry)
+        if key in seen_routes:
+            return
+        seen_routes.add(key)
+        entry = {**pool_entry, "expansion_route_kind": route_kind}
+        productive = pool_entry.get("dex_id") in productive_dexes
+        pair = {
+            "exotic_symbol": pair_sym_a,
+            "anchor_symbol": pair_sym_b,
+            "exotic_address": exotic_address,
+            "focus_token_address": exotic_address,
+            "focus_token_symbol": focus_sym,
+        }
+        route = _build_route(pair, entry, productive=productive)
+        if route_kind == "same_pair_mirror":
+            same_pair_routes.append(route)
+        elif route_kind == "connector_hop":
+            connector_routes.append(route)
+        else:
+            token_presence_routes.append(route)
+
+    # Classify T pools
+    for p in t_pools.values():
+        conn_sym = str(p.get("connector_token") or p.get("token1_symbol", ""))
+        if p.get("token0_addr", "").lower() == exotic_address:
+            conn_sym = str(p.get("token1_symbol") or p.get("connector_token") or "")
+        elif p.get("token1_addr", "").lower() == exotic_address:
+            conn_sym = str(p.get("token0_symbol") or p.get("connector_token") or "")
+        kind = (
+            "same_pair_mirror"
+            if conn_sym in anchor_syms
+            else "token_presence"
+        )
+        _admit_pool(
+            p,
+            pair_sym_a=focus_sym,
+            pair_sym_b=conn_sym,
+            route_kind=kind,
+        )
+
+    # Hop 2: connector -> anchor pools (+ T-connector on other DEXes)
+    for conn in connectors.values():
+        conn_sym = conn.get("symbol") or ""
+        conn_addr = conn.get("address") or ""
+        if not conn_sym:
+            continue
+
+        # T-connector on other DEXes (factory / index)
+        for dex in dex_rows:
+            dex_id = dex["dex_id"]
+            if any(
+                p.get("dex_id") == dex_id
+                and (
+                    p.get("connector_token") == conn_sym
+                    or conn_sym in (p.get("token0_symbol"), p.get("token1_symbol"))
+                )
+                for p in t_pools.values()
+            ):
+                continue
+            found, reason = _resolve_via_factory(
+                chain,
+                dex_id,
+                focus_sym,
+                conn_sym,
+                exotic_address=exotic_address,
+                anchor_address=conn_addr,
+                dry_run=dry_run,
+                resolver=resolver,
+                mirror_index=mirror_index,
+                config=config,
+            )
+            if found:
+                found["connector_token"] = conn_sym
+                found["connector_addr"] = conn_addr
+                found["focus_token_symbol"] = focus_sym
+                found["focus_token_address"] = exotic_address
+                _admit_pool(
+                    found,
+                    pair_sym_a=focus_sym,
+                    pair_sym_b=conn_sym,
+                    route_kind="token_presence",
+                )
+            else:
+                all_reject_rows.append({"dex_id": dex_id, "reason": reason})
+                reject_hist[reason] += 1
+
+        # connector-anchor bridges
+        for anchor_sym in sorted(anchor_syms):
+            if conn_sym == anchor_sym:
+                continue
+            hop_found = False
+            for p in _registry_pools_connector_to_anchor(
+                registry,
+                conn_sym,
+                conn_addr,
+                anchor_sym,
+                allowed_dex_ids,
+            ):
+                hop_found = True
+                p["expansion_route_kind"] = "connector_hop"
+                _admit_pool(
+                    p,
+                    pair_sym_a=conn_sym,
+                    pair_sym_b=anchor_sym,
+                    route_kind="connector_hop",
+                )
+            for dex in dex_rows:
+                dex_id = dex["dex_id"]
+                if hop_found:
+                    break
+                found, reason = _resolve_via_factory(
+                    chain,
+                    dex_id,
+                    conn_sym,
+                    anchor_sym,
+                    exotic_address=conn_addr,
+                    anchor_address=_token_address_from_config(config, anchor_sym),
+                    dry_run=dry_run,
+                    resolver=resolver,
+                    mirror_index=mirror_index,
+                    config=config,
+                )
+                if found:
+                    hop_found = True
+                    found["expansion_route_kind"] = "connector_hop"
+                    _admit_pool(
+                        found,
+                        pair_sym_a=conn_sym,
+                        pair_sym_b=anchor_sym,
+                        route_kind="connector_hop",
+                    )
+                elif reason not in ("NO_POOL", "SKIPPED_DRY_RUN"):
+                    all_reject_rows.append({"dex_id": dex_id, "reason": reason})
+                    if reason.endswith("NOT_QUOTEABLE"):
+                        reject_hist["CONNECTOR_POOL_NOT_QUOTEABLE"] += 1
+                    else:
+                        reject_hist[reason] += 1
+            if not hop_found and conn_sym not in anchor_syms:
+                reject_hist["CONNECTOR_POOL_NOT_QUOTEABLE"] += 1
+
+    routes_admitted = same_pair_routes + token_presence_routes + connector_routes
+    unique_token_syms = {
+        focus_sym,
+        *[r.get("token0", "") for r in routes_admitted],
+        *[r.get("token1", "") for r in routes_admitted],
+    }
+    unique_token_syms.discard("")
+
+    subgraph = evaluate_subgraph_readiness(
+        token_seen_on_dexes=token_seen_on_dexes,
+        connector_tokens=len(connectors),
+        active_routes=len(routes_admitted),
+        unique_tokens=len(unique_token_syms),
+    )
+    if not subgraph["subgraph_ready"]:
+        reject_hist["SUBGRAPH_TOO_SMALL"] += 1
+
+    quoteable_dexes = {r["dex_id"] for r in routes_admitted}
+    _models = sorted({_pricing_model_for_dex(d) for d in quoteable_dexes})
+    _distinct_models = [m for m in _models if m and m != "unknown"]
+    cross_mechanic = len(_distinct_models) >= 2
+
+    return {
+        "focus_token_address": exotic_address,
+        "focus_token_symbol": focus_sym,
+        "same_pair_routes": same_pair_routes,
+        "token_presence_routes": token_presence_routes,
+        "connector_routes": connector_routes,
+        "connector_tokens": sorted(connectors.keys()),
+        "routes_admitted": routes_admitted,
+        "reject_reason_histogram": dict(reject_hist),
+        "all_reject_rows": all_reject_rows,
+        "token_seen_on_dexes": token_seen_on_dexes,
+        "subgraph": subgraph,
+        "cross_mechanic": cross_mechanic,
+        "venues_quoteable": len(quoteable_dexes),
+    }
+
+
 def _token_address_from_config(config: Dict[str, Any], symbol: str) -> str:
     for sym, info in (config.get("tokens") or {}).items():
         if sym == symbol and isinstance(info, dict):
@@ -351,6 +742,126 @@ def _build_route(
         "pool_id": pool_entry.get("pool_id"),
         "vault_address": pool_entry.get("vault_address"),
         "resolve_source": pool_entry.get("resolve_source"),
+        # Token-neighborhood expansion
+        "expansion_route_kind": pool_entry.get("expansion_route_kind"),
+        "connector_token": pool_entry.get("connector_token"),
+        "focus_token_address": pool_entry.get("focus_token_address")
+        or pair.get("focus_token_address")
+        or pair.get("exotic_address"),
+        "focus_token_symbol": pool_entry.get("focus_token_symbol")
+        or pair.get("focus_token_symbol")
+        or pair.get("exotic_symbol"),
+    }
+
+
+def _expand_batch_token_neighborhood(
+    *,
+    chain: str,
+    config: Dict[str, Any],
+    registry: Optional[Dict[str, Any]],
+    dry_run: bool,
+    dex_rows: List[Dict[str, Any]],
+    allowed_dex_ids: Set[str],
+    productive_dexes: Set[str],
+    max_tokens: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Batch rolling expansion: token-neighborhood per registry token."""
+    from discovery.pool_resolver import get_pool_resolver
+    from m8.discovery.mirror_index import MirrorIndex, per_dex_expansion_breakdown
+
+    resolver = get_pool_resolver(chain)
+    mirror_index = MirrorIndex.load(chain)
+    reg_tokens = (registry or {}).get("tokens") or {}
+    token_addrs = list(reg_tokens.keys())
+    if max_tokens is not None:
+        token_addrs = token_addrs[:max_tokens]
+
+    reject_hist: Counter = Counter()
+    all_reject_rows: List[Dict[str, str]] = []
+    routes_admitted: List[Dict[str, Any]] = []
+    same_pair_routes: List[Dict[str, Any]] = []
+    token_presence_routes: List[Dict[str, Any]] = []
+    connector_routes: List[Dict[str, Any]] = []
+    connector_tokens_all: Set[str] = set()
+    subgraph_ready_count = 0
+    seen_route_keys: Set[Tuple[str, str, str, str]] = set()
+
+    for addr in token_addrs:
+        sym = str((reg_tokens.get(addr) or {}).get("symbol") or "")
+        nh = expand_token_neighborhood(
+            chain=chain,
+            config=config,
+            registry=registry,
+            exotic_address=addr,
+            exotic_symbol=sym,
+            dry_run=dry_run,
+            dex_rows=dex_rows,
+            allowed_dex_ids=allowed_dex_ids,
+            productive_dexes=productive_dexes,
+            resolver=resolver,
+            mirror_index=mirror_index,
+        )
+        for k, v in (nh.get("reject_reason_histogram") or {}).items():
+            reject_hist[k] += int(v or 0)
+        all_reject_rows.extend(nh.get("all_reject_rows") or [])
+        connector_tokens_all.update(nh.get("connector_tokens") or [])
+        if nh.get("subgraph", {}).get("subgraph_ready"):
+            subgraph_ready_count += 1
+        for bucket, dest in (
+            ("same_pair_routes", same_pair_routes),
+            ("token_presence_routes", token_presence_routes),
+            ("connector_routes", connector_routes),
+        ):
+            for route in nh.get(bucket) or []:
+                key = (
+                    route.get("dex_id", ""),
+                    route.get("pool_address", "").lower(),
+                    route.get("token0_addr", "").lower(),
+                    route.get("token1_addr", "").lower(),
+                )
+                if key in seen_route_keys:
+                    continue
+                seen_route_keys.add(key)
+                dest.append(route)
+                routes_admitted.append(route)
+
+    pools_found_by_dex: Counter = Counter(r["dex_id"] for r in routes_admitted)
+    summary = {
+        "expansion_mode": "token_neighborhood_batch",
+        "tokens_in": len(token_addrs),
+        "pairs_in": 0,
+        "subgraph_ready_tokens": subgraph_ready_count,
+        "dexes_checked": len(allowed_dex_ids),
+        "dex_ids_checked": sorted(allowed_dex_ids),
+        "pools_found_by_dex": dict(pools_found_by_dex),
+        "routes_admitted_count": len(routes_admitted),
+        "routes_admitted_raw": len(routes_admitted),
+        "same_pair_routes_count": len(same_pair_routes),
+        "token_presence_routes_count": len(token_presence_routes),
+        "connector_routes_count": len(connector_routes),
+        "connector_tokens": sorted(connector_tokens_all),
+        "connector_token_count": len(connector_tokens_all),
+        "dry_run": dry_run,
+        **per_dex_expansion_breakdown(
+            pools_found_by_dex=dict(pools_found_by_dex),
+            reject_rows=all_reject_rows,
+            routes_admitted=routes_admitted,
+        ),
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at_utc": _iso_now(),
+        "chain": chain,
+        "config_path": None,
+        "input_registry_path": None,
+        "summary": summary,
+        "reject_reason_histogram": dict(reject_hist),
+        "same_pair_routes": same_pair_routes,
+        "token_presence_routes": token_presence_routes,
+        "connector_routes": connector_routes,
+        "connector_tokens": sorted(connector_tokens_all),
+        "tokens": [],
+        "routes_admitted": routes_admitted,
     }
 
 
@@ -363,12 +874,104 @@ def expand_cross_dex(
     dry_run: bool = False,
     max_pairs: Optional[int] = None,
     exotic_address_filter: Optional[str] = None,
+    expansion_mode: str = "pair_anchor",
 ) -> Dict[str, Any]:
     """Run M8.2 expansion and return artifact dict (not written)."""
     dex_rows = discovery_dexes_from_config(config)
     dex_ids_checked = [d["dex_id"] for d in dex_rows]
     allowed_dex_ids = set(dex_ids_checked)
     productive_dexes = {d["dex_id"] for d in dex_rows if d["enabled_for_productive"]}
+
+    if expansion_mode == "token_neighborhood" and not exotic_address_filter:
+        return _expand_batch_token_neighborhood(
+            chain=chain,
+            config=config,
+            registry=registry,
+            dry_run=dry_run,
+            dex_rows=dex_rows,
+            allowed_dex_ids=allowed_dex_ids,
+            productive_dexes=productive_dexes,
+            max_tokens=max_pairs,
+        )
+
+    if expansion_mode == "token_neighborhood" and exotic_address_filter:
+        from discovery.pool_resolver import get_pool_resolver
+        from m8.discovery.mirror_index import MirrorIndex, per_dex_expansion_breakdown
+
+        resolver = get_pool_resolver(chain)
+        mirror_index = MirrorIndex.load(chain)
+        reg_tok = ((registry or {}).get("tokens") or {}).get(
+            exotic_address_filter.lower(), {}
+        )
+        nh = expand_token_neighborhood(
+            chain=chain,
+            config=config,
+            registry=registry,
+            exotic_address=exotic_address_filter,
+            exotic_symbol=str(reg_tok.get("symbol") or ""),
+            dry_run=dry_run,
+            dex_rows=dex_rows,
+            allowed_dex_ids=allowed_dex_ids,
+            productive_dexes=productive_dexes,
+            resolver=resolver,
+            mirror_index=mirror_index,
+        )
+        routes_admitted = nh["routes_admitted"]
+        try:
+            from m9.graph_arb.pool_quality import annotate_routes_pool_quality
+
+            annotate_routes_pool_quality(routes_admitted)
+        except Exception:
+            pass
+        pools_found_by_dex: Counter = Counter(
+            r["dex_id"] for r in routes_admitted
+        )
+        summary = {
+            "expansion_mode": "token_neighborhood",
+            "tokens_in": 1,
+            "pairs_in": 0,
+            "dexes_checked": len(dex_ids_checked),
+            "dex_ids_checked": dex_ids_checked,
+            "pools_found_by_dex": dict(pools_found_by_dex),
+            "routes_admitted_count": len(routes_admitted),
+            "routes_admitted_raw": len(routes_admitted),
+            "same_pair_routes_count": len(nh["same_pair_routes"]),
+            "token_presence_routes_count": len(nh["token_presence_routes"]),
+            "connector_routes_count": len(nh["connector_routes"]),
+            "connector_tokens": nh["connector_tokens"],
+            "token_seen_on_dexes": nh["token_seen_on_dexes"],
+            "unique_tokens": nh["subgraph"]["unique_tokens"],
+            "subgraph_ready": nh["subgraph"]["subgraph_ready"],
+            "cross_mechanic_tokens": 1 if nh["cross_mechanic"] else 0,
+            "venues_quoteable": nh["venues_quoteable"],
+            "dry_run": dry_run,
+            **nh["subgraph"],
+            **per_dex_expansion_breakdown(
+                pools_found_by_dex=dict(pools_found_by_dex),
+                reject_rows=nh["all_reject_rows"],
+                routes_admitted=routes_admitted,
+            ),
+        }
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at_utc": _iso_now(),
+            "chain": chain,
+            "config_path": None,
+            "input_registry_path": None,
+            "summary": summary,
+            "reject_reason_histogram": nh["reject_reason_histogram"],
+            "same_pair_routes": nh["same_pair_routes"],
+            "token_presence_routes": nh["token_presence_routes"],
+            "connector_routes": nh["connector_routes"],
+            "connector_tokens": nh["connector_tokens"],
+            "tokens": [{
+                "exotic_address": nh["focus_token_address"],
+                "exotic_symbol": nh["focus_token_symbol"],
+                "venues_quoteable": nh["venues_quoteable"],
+                "subgraph": nh["subgraph"],
+            }],
+            "routes_admitted": routes_admitted,
+        }
 
     pairs = collect_token_anchor_pairs(registry, anchor_artifact)
     if exotic_address_filter:
@@ -513,6 +1116,7 @@ def expand_cross_dex(
         pass
 
     summary = {
+        "expansion_mode": "pair_anchor",
         "tokens_in": len(pairs),
         "pairs_in": len(pairs),
         "dexes_checked": len(dex_ids_checked),

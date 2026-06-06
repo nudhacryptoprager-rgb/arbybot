@@ -269,6 +269,15 @@ class FunnelTracker:
         #   arb       = reference_source not NONE (MIRROR_POOL / ANCHOR_RATIO / TRIANGULAR_ROUTE)
         self._discovery_candidates_total: int = 0
         self._arb_candidates_total: int = 0
+        # Sniper discovery RPC lane (M8 getLogs — separate from M9 quote PRIMARY)
+        self._sniper_rpc_provider: str = "unknown"
+        self._sniper_rpc_secondary_provider: str = "none"
+        self._sniper_rpc_failover_count: int = 0
+        self._getlogs_400_count: int = 0
+        self._getlogs_429_count: int = 0
+        self._getlogs_chunk_size: int = 0
+        self._ws_provider: str = "none"
+        self._http_fallback_provider: str = "unknown"
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -380,6 +389,44 @@ class FunnelTracker:
         """Increment HTTP fallback poll counter (used in --prefer-ws mode)."""
         with self._lock:
             self._http_fallback_polls += 1
+
+    def set_sniper_rpc_lane(
+        self,
+        *,
+        primary_provider: str,
+        secondary_provider: str = "none",
+    ) -> None:
+        """Record sniper discovery HTTP lane providers for artifact export."""
+        with self._lock:
+            self._sniper_rpc_provider = primary_provider
+            self._sniper_rpc_secondary_provider = secondary_provider
+
+    def set_prefer_ws_rpc_providers(
+        self,
+        *,
+        ws_provider: str,
+        http_fallback_provider: str,
+    ) -> None:
+        """Record WS + HTTP fallback providers when ``--prefer-ws`` is active."""
+        with self._lock:
+            self._ws_provider = ws_provider
+            self._http_fallback_provider = http_fallback_provider
+
+    def inc_sniper_rpc_failover(self) -> None:
+        with self._lock:
+            self._sniper_rpc_failover_count += 1
+
+    def inc_getlogs_400(self) -> None:
+        with self._lock:
+            self._getlogs_400_count += 1
+
+    def inc_getlogs_429(self) -> None:
+        with self._lock:
+            self._getlogs_429_count += 1
+
+    def set_getlogs_chunk_size(self, chunk_blocks: int) -> None:
+        with self._lock:
+            self._getlogs_chunk_size = max(0, int(chunk_blocks))
 
     def set_self_test_results(self, results: Dict[str, Any]) -> None:
         """Store self-test archive probe results for inclusion in snapshot/artifact.
@@ -510,6 +557,15 @@ class FunnelTracker:
                 # Discovery vs arb split
                 "discovery_candidates_total": self._discovery_candidates_total,
                 "arb_candidates_total": self._arb_candidates_total,
+                # Sniper discovery RPC lane (additive — separate from M9 quote PRIMARY)
+                "sniper_rpc_provider": self._sniper_rpc_provider,
+                "sniper_rpc_secondary_provider": self._sniper_rpc_secondary_provider,
+                "sniper_rpc_failover_count": self._sniper_rpc_failover_count,
+                "getlogs_400_count": self._getlogs_400_count,
+                "getlogs_429_count": self._getlogs_429_count,
+                "getlogs_chunk_size": self._getlogs_chunk_size,
+                "ws_provider": self._ws_provider,
+                "http_fallback_provider": self._http_fallback_provider,
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

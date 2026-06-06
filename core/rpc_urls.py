@@ -465,6 +465,143 @@ def _normalize_network_from_chain(chain_id: Optional[int], network: Optional[str
     return None
 
 
+def _env_rpc_url(env: dict, key: str) -> Optional[str]:
+    val = (env.get(key) or "").strip()
+    return val or None
+
+
+def _validated_http_url(
+    url: Optional[str],
+    net: Optional[str],
+    diagnostics: dict,
+) -> tuple[Optional[str], Optional[str]]:
+    """Return (url, provider) when *url* passes dRPC chain validation."""
+    if not url:
+        return None, None
+    if net:
+        drpc_ok, drpc_err = validate_drpc_url(url, net)
+        if not drpc_ok:
+            diagnostics.setdefault("skipped_urls", []).append(
+                {"url": url[:80], "reason": drpc_err}
+            )
+            return None, None
+    return url, classify_provider(url)
+
+
+def resolve_sniper_rpc_lane(
+    chain_id: Optional[int] = None,
+    network: Optional[str] = None,
+    env: Optional[dict] = None,
+    override: Optional[str] = None,
+):
+    """Resolve HTTP endpoints for M8 sniper discovery (eth_getLogs lane).
+
+    Primary priority (discovery lane, separate from M9 quote PRIMARY):
+        1. CLI override (``--rpc-url``)
+        2. ``{CHAIN}_SNIPER_RPC_PRIMARY``
+        3. ``{CHAIN}_RPC_SECONDARY`` (often dRPC — better for bounded getLogs)
+        4. ``resolve_rpc_http()`` productive PRIMARY
+
+    Secondary priority (getLogs failover target):
+        1. ``{CHAIN}_SNIPER_RPC_SECONDARY``
+        2. ``{CHAIN}_RPC_PRIMARY`` (when distinct from primary)
+        3. ``{CHAIN}_RPC_SECONDARY`` (when distinct from primary)
+
+    Returns
+    -------
+    (primary_url, primary_provider, secondary_url_or_none, secondary_provider_or_none, diagnostics)
+    """
+    env = env or {}
+    diagnostics: dict = {}
+    net = _normalize_network_from_chain(chain_id, env.get("NETWORK") or network)
+    prefix = (net or "base").upper()
+
+    primary_url: Optional[str] = None
+    primary_provider: Optional[str] = None
+    primary_source: Optional[str] = None
+
+    if override and override.strip():
+        primary_url, primary_provider = _validated_http_url(
+            override.strip(), net, diagnostics
+        )
+        primary_source = "cli_override"
+    elif net:
+        sniper_pri_var = f"{prefix}_SNIPER_RPC_PRIMARY"
+        primary_url, primary_provider = _validated_http_url(
+            _env_rpc_url(env, sniper_pri_var), net, diagnostics
+        )
+        if primary_url:
+            primary_source = sniper_pri_var
+
+    if not primary_url and net:
+        sec_var = f"{prefix}_RPC_SECONDARY"
+        primary_url, primary_provider = _validated_http_url(
+            _env_rpc_url(env, sec_var), net, diagnostics
+        )
+        if primary_url:
+            primary_source = sec_var
+
+    if not primary_url:
+        url, prov, prod_diag = resolve_rpc_http(
+            chain_id=chain_id, network=net, env=env
+        )
+        diagnostics["productive_resolve"] = prod_diag
+        if url:
+            primary_url, primary_provider = url, prov
+            primary_source = prod_diag.get("source", "productive_primary")
+
+    if not primary_url:
+        fb = public_fallback_for(net)
+        if fb:
+            primary_url, primary_provider = fb, classify_provider(fb)
+            primary_source = "public_fallback"
+
+    if not primary_url or not primary_provider:
+        raise RuntimeError(
+            f"No sniper RPC URL for network={net!r}. "
+            f"Set {prefix}_SNIPER_RPC_PRIMARY, {prefix}_RPC_SECONDARY, "
+            f"or pass --rpc-url."
+        )
+
+    secondary_url: Optional[str] = None
+    secondary_provider: Optional[str] = None
+    secondary_source: Optional[str] = None
+
+    if net:
+        sniper_sec_var = f"{prefix}_SNIPER_RPC_SECONDARY"
+        secondary_url, secondary_provider = _validated_http_url(
+            _env_rpc_url(env, sniper_sec_var), net, diagnostics
+        )
+        if secondary_url == primary_url:
+            secondary_url, secondary_provider = None, None
+        elif secondary_url:
+            secondary_source = sniper_sec_var
+
+    if not secondary_url and net:
+        pri_var = f"{prefix}_RPC_PRIMARY"
+        secondary_url, secondary_provider = _validated_http_url(
+            _env_rpc_url(env, pri_var), net, diagnostics
+        )
+        if secondary_url == primary_url:
+            secondary_url, secondary_provider = None, None
+        elif secondary_url:
+            secondary_source = pri_var
+
+    if not secondary_url and net:
+        sec_var = f"{prefix}_RPC_SECONDARY"
+        secondary_url, secondary_provider = _validated_http_url(
+            _env_rpc_url(env, sec_var), net, diagnostics
+        )
+        if secondary_url == primary_url:
+            secondary_url, secondary_provider = None, None
+        elif secondary_url:
+            secondary_source = sec_var
+
+    diagnostics["primary_source"] = primary_source
+    diagnostics["secondary_source"] = secondary_source
+    return primary_url, primary_provider, secondary_url, secondary_provider, diagnostics
+
+
 def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = None, env: Optional[dict] = None):
     """Resolve an HTTP RPC URL from environment or Alchemy API key.
 

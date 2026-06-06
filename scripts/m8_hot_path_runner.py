@@ -101,10 +101,10 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         row["event_to_mirror_ms"] = etm
         row["source"] = "batch_recent_events"
         routes = row.get("routes_admitted") or []
-        if len(routes) >= 2:
+        if row.get("subgraph_ready"):
             mirrors_found += 1
         else:
-            row["reject_reason"] = row.get("reject_reason") or "REJECT_MIRROR_ROUTES_LT_2"
+            row["reject_reason"] = row.get("reject_reason") or "SUBGRAPH_TOO_SMALL"
         if row.get("cross_mechanic"):
             cross_mechanic_count += 1
         else:
@@ -122,7 +122,7 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
 
         for c in candidates_out:
             routes = c.get("routes_admitted") or []
-            if len(routes) < 2:
+            if not c.get("subgraph_ready"):
                 continue
             import time
 
@@ -132,7 +132,8 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
                 w3=w3,
                 rpc_url=rpc_url,
                 quote_backend="raw_http",
-                cycle_lengths=(2, 3),
+                cycle_lengths=(2, 3, 4),
+                cycle_length_caps={2: 8, 3: 12, 4: 6},
                 config_path=args.config,
                 honeypot_strict_evidence=args.honeypot_strict_evidence,
             )
@@ -164,6 +165,7 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         )
 
     from m8.discovery.hot_path_common import (
+        bridge_shadow_acceptance_from_candidates,
         build_reject_reason_histogram,
         honeypot_evidence_policy,
         merge_expansion_reject_histogram,
@@ -171,6 +173,7 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
     )
 
     per_dex = merge_per_dex_breakdown(candidates_out)
+    subgraph_acceptance = bridge_shadow_acceptance_from_candidates(candidates_out)
 
     payload = {
         "schema_version": "m8_hot_path_v1",
@@ -183,11 +186,15 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         "registry_multi_venue_tokens": multi_venue,
         "event_to_mirror_ms_p50": _p50(event_to_mirror_ms),
         "event_to_quote_ms_p50": _p50(event_to_quote_ms),
-        "existence_blocker": "M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL",
+        "existence_blocker": (
+            "M8_2_TOKEN_NEIGHBORHOOD_EXPANSION_MISSING"
+            if not subgraph_acceptance.get("ready_for_bridge_shadow")
+            else None
+        ),
         "acceptance": {
             "hot_path_cross_mechanic_candidates_gt_0": cross_mechanic_count > 0,
             "registry_multi_venue_tokens_gte_2": multi_venue >= 2,
-            "ready_for_bridge_shadow": cross_mechanic_count > 0 and multi_venue >= 2,
+            **subgraph_acceptance,
         },
         "reject_reason_histogram": build_reject_reason_histogram(candidates_out),
         "expansion_reject_histogram": merge_expansion_reject_histogram(candidates_out),

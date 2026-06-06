@@ -21,6 +21,46 @@ def build_reject_reason_histogram(candidates: List[Dict[str, Any]]) -> Dict[str,
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+def bridge_shadow_acceptance_from_candidates(
+    candidates: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Derive M9 bridge-shadow acceptance from best token-neighborhood subgraph."""
+    best_summary: Dict[str, Any] = {}
+    best_routes = -1
+    for row in candidates:
+        summary = row.get("summary") or {}
+        n = int(summary.get("routes_admitted_count") or row.get("routes_admitted_count") or 0)
+        if n > best_routes:
+            best_routes = n
+            best_summary = summary
+    token_seen = int(best_summary.get("token_seen_on_dexes", 0))
+    connectors = int(
+        best_summary.get("connector_token_count")
+        or len(best_summary.get("connector_tokens") or [])
+        or 0
+    )
+    routes = int(best_summary.get("routes_admitted_count", best_routes))
+    unique = int(best_summary.get("unique_tokens", 0))
+    ready = bool(
+        token_seen >= 2
+        and connectors >= 1
+        and routes >= 4
+        and unique >= 3
+    )
+    return {
+        "token_seen_on_dexes_gte_2": token_seen >= 2,
+        "connector_tokens_gte_1": connectors >= 1,
+        "active_routes_gte_4": routes >= 4,
+        "unique_tokens_gte_3": unique >= 3,
+        "subgraph_ready": ready,
+        "ready_for_bridge_shadow": ready,
+        "token_seen_on_dexes": token_seen,
+        "connector_tokens": connectors,
+        "active_routes": routes,
+        "unique_tokens": unique,
+    }
+
+
 def merge_per_dex_breakdown(candidates: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
     """Merge per-dex expansion metrics from hot-path mirror resolve rows."""
     keys = (
