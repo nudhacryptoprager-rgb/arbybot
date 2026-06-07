@@ -289,6 +289,96 @@ def evaluate_subgraph_readiness(
     }
 
 
+def _merge_external_hints(
+    t_pools: Dict[Tuple[str, str, str, str], Dict[str, Any]],
+    *,
+    chain: str,
+    exotic_address: str,
+    focus_sym: str,
+    external_hints_artifact: Optional[Dict[str, Any]],
+    allowed_dex_ids: Set[str],
+    dry_run: bool,
+    hint_metrics: Dict[str, Any],
+) -> None:
+    """Merge external hints after registry/MirrorIndex; verify on-chain unless dry_run."""
+    if not external_hints_artifact:
+        return
+    from m8.discovery.pool_hints import (
+        BRIDGE_ELIGIBLE_HINT_STATUSES,
+        HINT_DEX_UNSUPPORTED,
+        HINT_ONLY,
+        HINT_STALE,
+        hint_to_pool_entry,
+        hints_for_token,
+        verify_hint_onchain,
+    )
+
+    token_hints = hints_for_token(external_hints_artifact, exotic_address)
+    if token_hints:
+        hint_metrics["hint_tokens_matched"] = int(
+            hint_metrics.get("hint_tokens_matched", 0)
+        ) + 1
+    hint_metrics["hint_pools_seen"] = int(hint_metrics.get("hint_pools_seen", 0)) + len(
+        token_hints
+    )
+    existing_dexes = {p["dex_id"] for p in t_pools.values()}
+    for hint in token_hints:
+        if hint.dex_id not in allowed_dex_ids:
+            hint.hint_status = HINT_DEX_UNSUPPORTED
+            continue
+        if dry_run:
+            verified = hint
+            verified.hint_status = HINT_ONLY
+        elif hint.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES and hint.verify_method:
+            verified = hint
+        else:
+            verified = verify_hint_onchain(
+                hint, chain=chain, allowed_dex_ids=allowed_dex_ids
+            )
+        if verified.hint_status in (HINT_ONLY, HINT_STALE, HINT_DEX_UNSUPPORTED):
+            hint_metrics["hint_rejected"] = int(hint_metrics.get("hint_rejected", 0)) + 1
+            continue
+        if verified.hint_status not in BRIDGE_ELIGIBLE_HINT_STATUSES:
+            continue
+        if verified.dex_id in existing_dexes:
+            hint_metrics["hint_duplicate_dex"] = int(
+                hint_metrics.get("hint_duplicate_dex", 0)
+            ) + 1
+            continue
+        conn_sym = ""
+        if verified.token0_addr == exotic_address.lower():
+            conn_sym = (verified.raw or {}).get("token1_symbol", "")
+        else:
+            conn_sym = (verified.raw or {}).get("token0_symbol", "")
+        entry = hint_to_pool_entry(
+            verified,
+            focus_token=exotic_address,
+            focus_symbol=focus_sym,
+            connector_symbol=conn_sym,
+        )
+        entry["factory_verified"] = True
+        entry["hint_status"] = verified.hint_status
+        t_pools[_route_dedupe_key(entry)] = entry
+        existing_dexes.add(verified.dex_id)
+        hint_metrics["eligible_hint_routes"] = int(
+            hint_metrics.get("eligible_hint_routes", 0)
+        ) + 1
+        hint_metrics["verified_second_pool_count"] = int(
+            hint_metrics.get("verified_second_pool_count", 0)
+        ) + 1
+        hint_metrics["second_pool_hints_found"] = int(
+            hint_metrics.get("second_pool_hints_found", 0)
+        ) + 1
+        dex_hist = dict(hint_metrics.get("hint_dex_counts") or {})
+        dex_hist[verified.dex_id] = int(dex_hist.get(verified.dex_id, 0)) + 1
+        hint_metrics["hint_dex_counts"] = dex_hist
+        status_hist = dict(hint_metrics.get("hint_status_counts") or {})
+        status_hist[verified.hint_status] = int(
+            status_hist.get(verified.hint_status, 0)
+        ) + 1
+        hint_metrics["hint_status_counts"] = status_hist
+
+
 def expand_token_neighborhood(
     *,
     chain: str,
@@ -302,6 +392,7 @@ def expand_token_neighborhood(
     productive_dexes: Optional[Set[str]] = None,
     resolver: Any = None,
     mirror_index: Any = None,
+    external_hints_artifact: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Token-global neighborhood expansion (3/4-leg subgraph discovery)."""
     from discovery.pool_resolver import get_pool_resolver
@@ -322,8 +413,19 @@ def expand_token_neighborhood(
 
     reject_hist: Counter = Counter()
     all_reject_rows: List[Dict[str, str]] = []
+    hint_metrics: Dict[str, Any] = {
+        "hint_tokens_checked": 1 if external_hints_artifact else 0,
+        "hint_pools_seen": 0,
+        "hint_to_verified_pool_rate": 0.0,
+        "second_pool_hints_found": 0,
+        "verified_second_pool_count": 0,
+        "hint_source_latency_s": (external_hints_artifact or {}).get("metrics", {}).get(
+            "hint_source_latency_s", {}
+        ),
+    }
 
     # Hop 1: all pools containing focus token T
+    # Merge order: registry → MirrorIndex → external hints → on-chain verify
     t_pools: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
     for p in _registry_pools_for_token(registry, exotic_address, allowed_dex_ids):
         t_pools[_route_dedupe_key(p)] = p
@@ -333,6 +435,20 @@ def expand_token_neighborhood(
         p.setdefault("focus_token_symbol", focus_sym)
         p.setdefault("focus_token_address", exotic_address)
         t_pools[_route_dedupe_key(p)] = p
+    _merge_external_hints(
+        t_pools,
+        chain=chain,
+        exotic_address=exotic_address,
+        focus_sym=focus_sym,
+        external_hints_artifact=external_hints_artifact,
+        allowed_dex_ids=allowed_dex_ids,
+        dry_run=dry_run,
+        hint_metrics=hint_metrics,
+    )
+    seen_hints = int(hint_metrics.get("hint_pools_seen", 0))
+    verified_hints = int(hint_metrics.get("verified_second_pool_count", 0))
+    if seen_hints:
+        hint_metrics["hint_to_verified_pool_rate"] = round(verified_hints / seen_hints, 4)
 
     token_seen_on_dexes = len({p["dex_id"] for p in t_pools.values()})
     if token_seen_on_dexes < 2:
@@ -548,6 +664,7 @@ def expand_token_neighborhood(
         "subgraph": subgraph,
         "cross_mechanic": cross_mechanic,
         "venues_quoteable": len(quoteable_dexes),
+        "hint_metrics": hint_metrics,
     }
 
 
@@ -751,6 +868,9 @@ def _build_route(
         "focus_token_symbol": pool_entry.get("focus_token_symbol")
         or pair.get("focus_token_symbol")
         or pair.get("exotic_symbol"),
+        # External hint provenance (M8.2 hint layer)
+        "hint_status": pool_entry.get("hint_status"),
+        "hint_source": pool_entry.get("hint_source"),
     }
 
 
@@ -764,6 +884,7 @@ def _expand_batch_token_neighborhood(
     allowed_dex_ids: Set[str],
     productive_dexes: Set[str],
     max_tokens: Optional[int] = None,
+    external_hints_artifact: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Batch rolling expansion: token-neighborhood per registry token."""
     from discovery.pool_resolver import get_pool_resolver
@@ -785,6 +906,27 @@ def _expand_batch_token_neighborhood(
     connector_tokens_all: Set[str] = set()
     subgraph_ready_count = 0
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
+    from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
+
+    batch_hint_metrics: Dict[str, Any] = {
+        "hint_tokens_checked": 0,
+        "hint_pools_seen": 0,
+        "hint_tokens_matched": 0,
+        "eligible_hint_routes": 0,
+        "second_pool_hints_found": 0,
+        "verified_second_pool_count": 0,
+        "hint_to_verified_pool_rate": 0.0,
+        "hint_status_counts": {},
+        "hint_dex_counts": {},
+        "hint_source_latency_s": (external_hints_artifact or {}).get("metrics", {}).get(
+            "hint_source_latency_s", {}
+        ),
+        **artifact_hint_summary(external_hints_artifact),
+    }
+    if external_hints_artifact:
+        batch_hint_metrics["hint_registry_overlap_tokens"] = sum(
+            1 for addr in token_addrs if hints_for_token(external_hints_artifact, addr)
+        )
 
     for addr in token_addrs:
         sym = str((reg_tokens.get(addr) or {}).get("symbol") or "")
@@ -800,6 +942,22 @@ def _expand_batch_token_neighborhood(
             productive_dexes=productive_dexes,
             resolver=resolver,
             mirror_index=mirror_index,
+            external_hints_artifact=external_hints_artifact,
+        )
+        hm = nh.get("hint_metrics") or {}
+        batch_hint_metrics["hint_tokens_checked"] += int(hm.get("hint_tokens_checked", 0))
+        batch_hint_metrics["hint_pools_seen"] += int(hm.get("hint_pools_seen", 0))
+        batch_hint_metrics["second_pool_hints_found"] += int(
+            hm.get("second_pool_hints_found", 0)
+        )
+        batch_hint_metrics["verified_second_pool_count"] += int(
+            hm.get("verified_second_pool_count", 0)
+        )
+        batch_hint_metrics["hint_tokens_matched"] += int(
+            hm.get("hint_tokens_matched", 0)
+        )
+        batch_hint_metrics["eligible_hint_routes"] += int(
+            hm.get("eligible_hint_routes", 0)
         )
         for k, v in (nh.get("reject_reason_histogram") or {}).items():
             reject_hist[k] += int(v or 0)
@@ -825,6 +983,12 @@ def _expand_batch_token_neighborhood(
                 dest.append(route)
                 routes_admitted.append(route)
 
+    if batch_hint_metrics["hint_pools_seen"]:
+        batch_hint_metrics["hint_to_verified_pool_rate"] = round(
+            batch_hint_metrics["verified_second_pool_count"]
+            / batch_hint_metrics["hint_pools_seen"],
+            4,
+        )
     pools_found_by_dex: Counter = Counter(r["dex_id"] for r in routes_admitted)
     summary = {
         "expansion_mode": "token_neighborhood_batch",
@@ -842,6 +1006,8 @@ def _expand_batch_token_neighborhood(
         "connector_tokens": sorted(connector_tokens_all),
         "connector_token_count": len(connector_tokens_all),
         "dry_run": dry_run,
+        "external_hints_enabled": external_hints_artifact is not None,
+        **batch_hint_metrics,
         **per_dex_expansion_breakdown(
             pools_found_by_dex=dict(pools_found_by_dex),
             reject_rows=all_reject_rows,
@@ -875,6 +1041,7 @@ def expand_cross_dex(
     max_pairs: Optional[int] = None,
     exotic_address_filter: Optional[str] = None,
     expansion_mode: str = "pair_anchor",
+    external_hints_artifact: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run M8.2 expansion and return artifact dict (not written)."""
     dex_rows = discovery_dexes_from_config(config)
@@ -892,6 +1059,7 @@ def expand_cross_dex(
             allowed_dex_ids=allowed_dex_ids,
             productive_dexes=productive_dexes,
             max_tokens=max_pairs,
+            external_hints_artifact=external_hints_artifact,
         )
 
     if expansion_mode == "token_neighborhood" and exotic_address_filter:
@@ -915,6 +1083,7 @@ def expand_cross_dex(
             productive_dexes=productive_dexes,
             resolver=resolver,
             mirror_index=mirror_index,
+            external_hints_artifact=external_hints_artifact,
         )
         routes_admitted = nh["routes_admitted"]
         try:

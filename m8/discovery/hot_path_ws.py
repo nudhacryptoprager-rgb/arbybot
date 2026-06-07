@@ -32,6 +32,54 @@ from m8.discovery.token_watchlist import (
 
 logger = logging.getLogger(__name__)
 
+_WS_STALE_EVENT_S = 900.0  # 15 min without WS log events => degraded health
+
+
+def ws_listener_stats_dict(stats: Any) -> Dict[str, Any]:
+    """Export WSListenerStats for hot-path rolling artifact."""
+    return {
+        "disconnects": int(getattr(stats, "disconnects", 0) or 0),
+        "reconnect_attempts": int(getattr(stats, "reconnect_attempts", 0) or 0),
+        "last_event_seen_ts": getattr(stats, "last_event_seen_ts", None),
+        "last_disconnect_ts": getattr(stats, "last_disconnect_ts", None),
+        "log_events_emitted": int(getattr(stats, "log_events_emitted", 0) or 0),
+        "messages_received": int(getattr(stats, "messages_received", 0) or 0),
+        "subscriptions_succeeded": int(
+            getattr(stats, "subscriptions_succeeded", 0) or 0
+        ),
+        "events_by_dex": dict(getattr(stats, "events_by_dex", {}) or {}),
+    }
+
+
+def compute_ws_health_status(
+    *,
+    stats: Any,
+    run_started_ts: float,
+    now_ts: float,
+    hot_path_events_seen: int,
+) -> str:
+    """Classify WS listener health for soak acceptance."""
+    last_evt = getattr(stats, "last_event_seen_ts", None)
+    disconnects = int(getattr(stats, "disconnects", 0) or 0)
+    reconnects = int(getattr(stats, "reconnect_attempts", 0) or 0)
+    ws_logs = int(getattr(stats, "log_events_emitted", 0) or 0)
+
+    if hot_path_events_seen > 0 or ws_logs > 0:
+        if last_evt is not None and (now_ts - float(last_evt)) > _WS_STALE_EVENT_S:
+            return "DEGRADED_STALE_EVENTS"
+        if disconnects > 0 and reconnects > 0:
+            return "OK_RECONNECTED"
+        return "OK"
+
+    elapsed = now_ts - run_started_ts
+    if disconnects > 0 and elapsed > 300 and ws_logs == 0:
+        return "DEAD_NO_EVENTS_AFTER_DISCONNECT"
+    if elapsed > _WS_STALE_EVENT_S and ws_logs == 0:
+        return "DEAD_NO_WS_EVENTS"
+    if disconnects > 0:
+        return "DEGRADED_DISCONNECTED"
+    return "WARMUP"
+
 
 def enrich_event_dict(
     event: NewPoolEvent,
@@ -468,22 +516,54 @@ def run_live_ws_session(
     )
     thread = threading.Thread(target=listener.run, daemon=True, name="hot-path-ws")
     thread.start()
+    run_started_ts = time.time()
+    run_started_utc = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     logger.info(
         "Live WS hot-path started: duration_minutes=%.1f factories=%d",
         duration_minutes,
         len(configs),
     )
     deadline = time.monotonic() + duration_minutes * 60.0
+    last_health_log = 0.0
     try:
         while time.monotonic() < deadline:
-            time.sleep(1.0)
+            time.sleep(5.0)
+            now_ts = time.time()
+            health = compute_ws_health_status(
+                stats=listener.stats,
+                run_started_ts=run_started_ts,
+                now_ts=now_ts,
+                hot_path_events_seen=processor.hot_path_events_seen,
+            )
+            if health.startswith("DEAD_") and now_ts - last_health_log > 60.0:
+                logger.error(
+                    "ws_health_fail_fast signal: %s disconnects=%d reconnects=%d "
+                    "ws_logs=%d hot_path_events=%d",
+                    health,
+                    listener.stats.disconnects,
+                    listener.stats.reconnect_attempts,
+                    listener.stats.log_events_emitted,
+                    processor.hot_path_events_seen,
+                )
+                last_health_log = now_ts
     except KeyboardInterrupt:
         logger.info("Live WS hot-path interrupted")
     finally:
         listener.stop()
         thread.join(timeout=5.0)
 
+    duration_fulfilled = time.monotonic() >= deadline
     out = processor.finalize()
     if rpc_provider:
         out["quote_rpc_provider"] = rpc_provider
+    out["run_started_at_utc"] = run_started_utc
+    out["duration_minutes_target"] = duration_minutes
+    out["duration_fulfilled"] = duration_fulfilled
+    out["ws_listener"] = ws_listener_stats_dict(listener.stats)
+    out["ws_health_status"] = compute_ws_health_status(
+        stats=listener.stats,
+        run_started_ts=run_started_ts,
+        now_ts=time.time(),
+        hot_path_events_seen=processor.hot_path_events_seen,
+    )
     return out

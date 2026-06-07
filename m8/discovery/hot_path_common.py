@@ -145,16 +145,19 @@ def honeypot_evidence_policy(*, strict_requested: bool) -> Dict[str, Any]:
 def setup_quote_rpc(chain: str) -> tuple[Any, str, str]:
     """Resolve productive HTTP RPC and return (w3, url, provider_label)."""
     from core.env import load_root_dotenv
-    from core.rpc_urls import apply_productive_rpc_env, resolve_rpc_http
+    from core.rpc_urls import apply_productive_rpc_env, classify_provider, resolve_productive_http_rpc
     from web3 import Web3
 
     load_root_dotenv()
     try:
-        apply_productive_rpc_env(chain)
+        env = apply_productive_rpc_env(chain)
     except RuntimeError:
-        pass
-    rpc_url, provider, _diag = resolve_rpc_http(network=chain)
+        import os
+
+        env = os.environ
+    rpc_url = resolve_productive_http_rpc(chain, env=env)
     if not rpc_url:
         raise RuntimeError(f"No HTTP RPC for chain={chain}")
+    provider = classify_provider(rpc_url)
     w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
     return w3, rpc_url, str(provider or "unknown")

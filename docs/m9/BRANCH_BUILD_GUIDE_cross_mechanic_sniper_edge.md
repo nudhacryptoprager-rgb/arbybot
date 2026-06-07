@@ -167,7 +167,7 @@ R&D, не production foundation.
 | V2/V3/CLMM | `find_recent_pools_containing_token(T, from_block, to_block)` за indexed `token0/token1` | pair factory logs |
 | v4 | нормалізувати pool identity/currencies; перший v4 pool = watch-list seed | окремий layout |
 | Curve/Balancer/Maverick | adapter-specific token containment resolver | не `getPool(A,B)` |
-| DexScreener/subgraph | hint only | кожен пул on-chain verify обов'язково |
+| DexScreener/GeckoTerminal/The Graph | hint only (`m8_external_pool_hints_latest.json`) | on-chain verify обов'язково; **не** в M9 напряму |
 | Pending/preconf | ранній сигнал | R&D; без стабільного sequencer access не production |
 
 **Обмеження (не ігнорувати):**
@@ -198,6 +198,52 @@ Hard policy:
 
 Метрики роздільно: `spread_lifetime_by_token_class`,
 `spread_lifetime_by_mechanic_pair` у `m8_hot_path_latest.json`.
+
+## 0i) External pool hints (Фаза 1.6 — hint-only, 2026-06-07)
+
+**Blocker (recall):** `M8_2_SECOND_VENUE_RECALL_LOW` — sniper бачить тисячі подій, але
+`transitions_1_to_2=0` / `TOKEN_NOT_SEEN_ELSEWHERE` без другого on-chain пулу в вікні.
+
+**Рішення:** DexScreener + GeckoTerminal + The Graph як **hint-layer** для M8.2
+token-first second-venue discovery. Hints **не** потрапляють у M9 напряму.
+
+| Компонент | Шлях | Роль |
+|-----------|------|------|
+| Схема | `m8/discovery/pool_hints.py` | `PoolHint`, статуси, on-chain verify |
+| DexScreener | `m8/discovery/dexscreener_hints.py` | token → pairs |
+| GeckoTerminal | `m8/discovery/geckoterminal_hints.py` | token→pools + new_pools |
+| The Graph | `discovery/graph_client.py` + `m8/discovery/graph_hints.py` | token pool queries |
+| Refresh CLI | `scripts/m8_external_pool_hint_refresh.py` | watchlist → rolling artifact |
+| Rolling artifact | `data/runs/_rolling/m8_external_pool_hints_latest.json` | єдиний canonical hints JSON |
+| M8.2 merge | `cross_dex_expand.py --external-hints` | registry → MirrorIndex → hints → verify |
+| M9 gate | `bridge_builder.py` | відкидає `hint_status=HINT_ONLY` |
+
+**Статуси hint:** `HINT_ONLY` → `HINT_STALE` / `HINT_DEX_UNSUPPORTED` →
+`HINT_POOLID_VERIFIED` (V4 poolId) / `HINT_FACTORY_VERIFIED` (factory getPool) /
+`HINT_ONCHAIN_VERIFIED` (bytecode/Curve/Maverick) → `QUOTE_SMOKE_OK` →
+`BRIDGE_SHADOW_READY`.
+
+**Verify modes (`--verify-mode`):** `none` | `light` (bytecode only) |
+`specialized` (default) — V4 via StateView poolId; V2/V3 via factory; Balancer
+`getPoolTokens`; Curve `coins`; Maverick `tokenA/tokenB`.
+
+**Blocker (was):** `V4_POOL_ID_SPECIALIZED_VERIFY_MISSING` — v4 poolId ≠ contract
+address; `eth_getCode` давав false `verified=0`. Fixed in `hint_verifier.py`.
+
+**Примітка:** `subgraph_ready` у M8.2 = локальна mini-graph готовність (≥2 venues,
+connectors, routes), **не** інтеграція з The Graph API.
+
+**Команди:**
+```powershell
+py -3.11 scripts/m8_external_pool_hint_refresh.py --chain base --sources dexscreener,geckoterminal,thegraph --watchlist data/tmp/m8_token_watchlist_latest.json
+py -3.11 scripts/m8_cross_dex_expand.py --expansion-mode token_neighborhood --external-hints data/runs/_rolling/m8_external_pool_hints_latest.json
+```
+
+Runtime acceptance: `verified_second_pool_count > 0` на full watchlist regen; expansion
+має `hint_tokens_matched`, `eligible_hint_routes`, `hint_registry_overlap_tokens`;
+`subgraph_ready_tokens > 0` перед M9 shadow. Hot-path quote: `setup_quote_rpc →
+resolve_productive_http_rpc` (не public). Blocker після V4 fix:
+`M8_2_HINT_TO_EXPANSION_MATCHING_OR_CROSSDEX_LOW` (same-DEX v4 hints ≠ cross-DEX).
 
 ## 1) Що ВЖЕ зроблено в цій гілці (Фаза 1 — DONE)
 

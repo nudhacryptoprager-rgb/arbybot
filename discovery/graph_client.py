@@ -291,6 +291,136 @@ def _query_aerodrome_pools(
     return results
 
 
+def _query_pools_for_token(
+    chain: str,
+    protocol: str,
+    token_address: str,
+    max_pools: int = 20,
+) -> List[GraphPool]:
+    """Query subgraph for pools containing *token_address* (M8.2 hint layer)."""
+    url = _get_graph_url(chain, protocol)
+    if not url:
+        return []
+    addr = token_address.lower()
+    if protocol == "uniswap_v3":
+        query = """
+        {
+          pools(
+            first: %d,
+            orderBy: totalValueLockedUSD,
+            orderDirection: desc,
+            where: {
+              or: [
+                { token0: "%s" },
+                { token1: "%s" }
+              ]
+            }
+          ) {
+            id
+            token0 { id symbol decimals }
+            token1 { id symbol decimals }
+            feeTier
+            totalValueLockedUSD
+            volumeUSD
+          }
+        }
+        """ % (max_pools, addr, addr)
+    elif protocol == "aerodrome":
+        query = """
+        {
+          pools(
+            first: %d,
+            orderBy: totalValueLockedUSD,
+            orderDirection: desc,
+            where: {
+              or: [
+                { token0: "%s" },
+                { token1: "%s" }
+              ]
+            }
+          ) {
+            id
+            token0 { id symbol decimals }
+            token1 { id symbol decimals }
+            isStable
+            totalValueLockedUSD
+            volumeUSD
+          }
+        }
+        """ % (max_pools, addr, addr)
+    else:
+        return []
+
+    data = _graphql_query(url, query)
+    if not data or "pools" not in data:
+        return []
+
+    results: List[GraphPool] = []
+    for p in data["pools"]:
+        try:
+            t0_addr = p["token0"]["id"].lower()
+            t1_addr = p["token1"]["id"].lower()
+            t0_sym = p["token0"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t0_addr, "")
+            t1_sym = p["token1"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t1_addr, "")
+            fee_tier = int(p.get("feeTier", 3000)) if protocol == "uniswap_v3" else (
+                1 if p.get("isStable", False) else 0
+            )
+            results.append(
+                GraphPool(
+                    chain=chain,
+                    protocol=protocol,
+                    pool_address=p["id"],
+                    token0_address=t0_addr,
+                    token0_symbol=t0_sym,
+                    token0_decimals=int(p["token0"].get("decimals", 18)),
+                    token1_address=t1_addr,
+                    token1_symbol=t1_sym,
+                    token1_decimals=int(p["token1"].get("decimals", 18)),
+                    fee_tier=fee_tier,
+                    tvl_usd=float(p.get("totalValueLockedUSD", 0) or 0),
+                    volume_usd_24h=float(p.get("volumeUSD", 0) or 0),
+                )
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            logger.debug("Skipping malformed token pool: %s", e)
+            continue
+    return results
+
+
+def query_pools_by_token(
+    chain: str,
+    token_address: str,
+    *,
+    max_pools: int = 20,
+    protocols: Optional[List[str]] = None,
+) -> List[GraphPool]:
+    """Discover pools for a specific token via The Graph (hint-only)."""
+    available = _SUBGRAPH_IDS.get(chain, {}) or _HOSTED_FALLBACKS.get(chain, {})
+    if not available:
+        return []
+    query_protocols = protocols or list(available.keys())
+    all_pools: List[GraphPool] = []
+    for proto in query_protocols:
+        if proto in ("uniswap_v3", "aerodrome"):
+            all_pools.extend(
+                _query_pools_for_token(chain, proto, token_address, max_pools=max_pools)
+            )
+    seen: set = set()
+    deduped: List[GraphPool] = []
+    for pool in sorted(all_pools, key=lambda p: p.tvl_usd, reverse=True):
+        addr = pool.pool_address.lower()
+        if addr not in seen:
+            seen.add(addr)
+            deduped.append(pool)
+    logger.info(
+        "Graph token pools: %d for %s on %s",
+        len(deduped),
+        token_address[:10],
+        chain,
+    )
+    return deduped
+
+
 def discover_graph_pools(
     chain: str,
     min_tvl_usd: float = 10_000,

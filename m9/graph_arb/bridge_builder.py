@@ -270,7 +270,12 @@ def _load_cross_dex_expansion_routes(
                 return empty
         except Exception:
             pass
-    routes = list(data.get("routes_admitted") or [])
+    from m8.discovery.pool_hints import route_bridge_eligible
+
+    routes = [
+        r for r in (data.get("routes_admitted") or []) if route_bridge_eligible(r)
+    ]
+    _hint_only_dropped = len(data.get("routes_admitted") or []) - len(routes)
     summary = data.get("summary") or {}
     return routes, {
         "reject_reason_histogram": data.get("reject_reason_histogram") or {},
@@ -283,6 +288,7 @@ def _load_cross_dex_expansion_routes(
         "routes_admitted_raw": summary.get(
             "routes_admitted_raw", summary.get("routes_admitted_count", len(routes))
         ),
+        "expansion_hint_only_dropped": _hint_only_dropped,
     }
 
 

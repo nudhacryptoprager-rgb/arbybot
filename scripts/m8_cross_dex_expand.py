@@ -41,6 +41,11 @@ def main() -> int:
         help="pair_anchor=legacy; token_neighborhood=per-token subgraph (default)",
     )
     p.add_argument("--max-pairs", type=int, default=None, help="Cap tokens/pairs (debug)")
+    p.add_argument(
+        "--external-hints",
+        default=None,
+        help="Rolling M8.2 external pool hints JSON (hint-only; verified in expansion)",
+    )
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -68,6 +73,16 @@ def main() -> int:
         with open(args.anchor, encoding="utf-8") as fh:
             anchor_artifact = json.load(fh)
 
+    external_hints = None
+    if args.external_hints:
+        hints_path = Path(args.external_hints)
+        if hints_path.exists():
+            with open(hints_path, encoding="utf-8") as fh:
+                external_hints = json.load(fh)
+            log.info("Loaded external hints: %s", args.external_hints)
+        else:
+            log.warning("External hints not found: %s", args.external_hints)
+
     artifact = expand_cross_dex(
         chain=args.chain,
         config=config,
@@ -76,6 +91,7 @@ def main() -> int:
         dry_run=args.dry_run,
         max_pairs=args.max_pairs,
         expansion_mode=args.expansion_mode,
+        external_hints_artifact=external_hints,
     )
     artifact["config_path"] = str(config_path).replace("\\", "/")
     artifact["input_registry_path"] = args.input
