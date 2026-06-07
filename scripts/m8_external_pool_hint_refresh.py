@@ -24,6 +24,7 @@ _SOURCE_FETCHERS = {
     "dexscreener": "m8.discovery.dexscreener_hints",
     "geckoterminal": "m8.discovery.geckoterminal_hints",
     "thegraph": "m8.discovery.graph_hints",
+    "thegraph_token_api": "m8.discovery.thegraph_token_api_hints",
 }
 
 
@@ -41,8 +42,8 @@ def main() -> int:
     p.add_argument("--chain", default="base")
     p.add_argument(
         "--sources",
-        default="dexscreener,geckoterminal,thegraph",
-        help="Comma-separated: dexscreener,geckoterminal,thegraph",
+        default="dexscreener,geckoterminal,thegraph,thegraph_token_api",
+        help="Comma-separated: dexscreener,geckoterminal,thegraph,thegraph_token_api",
     )
     p.add_argument(
         "--watchlist",
@@ -53,7 +54,7 @@ def main() -> int:
         default="data/runs/_rolling/m8_external_pool_hints_latest.json",
     )
     p.add_argument("--max-tokens", type=int, default=None)
-    p.add_argument("--sleep-ms", type=int, default=250, help="Pause between token API calls")
+    p.add_argument("--sleep-ms", type=int, default=120, help="Pause between token API calls")
     p.add_argument(
         "--verify-mode",
         choices=("none", "light", "specialized"),
@@ -64,6 +65,17 @@ def main() -> int:
         "--verify-onchain",
         action="store_true",
         help="Deprecated alias for --verify-mode specialized",
+    )
+    p.add_argument(
+        "--new-pools-backfill",
+        action="store_true",
+        help="GeckoTerminal networks/new_pools filtered to watchlist tokens",
+    )
+    p.add_argument(
+        "--new-pools-pages",
+        type=int,
+        default=3,
+        help="Pages of GeckoTerminal new_pools when --new-pools-backfill",
     )
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
@@ -82,6 +94,7 @@ def main() -> int:
         PoolHint,
         TimedSource,
         build_artifact,
+        dedupe_hints,
         verify_hint_onchain,
         write_hints_artifact,
     )
@@ -109,10 +122,42 @@ def main() -> int:
             if args.max_tokens is not None:
                 tokens = tokens[: args.max_tokens]
 
+    if not tokens:
+        log.error("No tokens in watchlist or registry")
+        return 1
+
+    log.info("Refreshing hints for %d watchlist tokens", len(tokens))
+
     timer = TimedSource()
     all_hints: list[PoolHint] = []
     second_pool_hints = 0
     verification_metrics = empty_verification_metrics()
+    source_pool_counts: dict[str, int] = {}
+
+    if args.new_pools_backfill:
+        from m8.discovery.geckoterminal_hints import fetch_new_pools_backfill
+
+        t0 = time.monotonic()
+        backfill = fetch_new_pools_backfill(
+            set(tokens),
+            network=args.chain,
+            chain=args.chain,
+            max_pages=args.new_pools_pages,
+        )
+        timer.latency_s["geckoterminal_new_pools"] = round(time.monotonic() - t0, 4)
+        log.info("new_pools_backfill pools=%d", len(backfill))
+        for h in backfill:
+            if verify_mode != "none":
+                h = verify_hint_onchain(
+                    h,
+                    chain=args.chain,
+                    verify_mode=verify_mode,
+                    metrics=verification_metrics,
+                )
+            all_hints.append(h)
+            source_pool_counts["geckoterminal_new_pools"] = (
+                int(source_pool_counts.get("geckoterminal_new_pools", 0)) + 1
+            )
 
     for i, token in enumerate(tokens):
         token = token.lower()
@@ -142,33 +187,43 @@ def main() -> int:
                         metrics=verification_metrics,
                     )
                 all_hints.append(h)
+                source_pool_counts[source] = int(source_pool_counts.get(source, 0)) + 1
                 if venue_count < 2 and h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
                     second_pool_hints += 1
         if args.sleep_ms and i + 1 < len(tokens):
             time.sleep(args.sleep_ms / 1000.0)
 
+    deduped = dedupe_hints(all_hints)
+    second_venue_hist: dict[str, int] = {}
+    for h in deduped:
+        if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
+            second_venue_hist[h.source] = int(second_venue_hist.get(h.source, 0)) + 1
+
     metrics = {
         "hint_tokens_checked": len(tokens),
         "second_pool_hints_found": second_pool_hints,
         "hint_source_latency_s": timer.latency_s,
+        "hint_source_pool_counts": source_pool_counts,
+        "second_venue_source": second_venue_hist,
         "verify_mode": verify_mode,
+        "new_pools_backfill": bool(args.new_pools_backfill),
         **verification_metrics,
     }
     artifact = build_artifact(
         chain=args.chain,
-        sources=sources,
+        sources=sources + (["geckoterminal_new_pools"] if args.new_pools_backfill else []),
         hints=all_hints,
         metrics=metrics,
     )
     write_hints_artifact(artifact, args.output)
     m = artifact["metrics"]
     log.info(
-        "Written %s tokens=%d pools=%d verified=%d v4_verified=%s reject=%s",
+        "Written %s tokens=%d pools=%d verified=%d tcr=%s reject=%s",
         args.output,
         m.get("hint_tokens_checked", 0),
         m.get("hint_pools_seen", 0),
         m.get("verified_second_pool_count", 0),
-        m.get("v4_poolid_verified", 0),
+        m.get("transition_candidate_rate"),
         m.get("verification_reject_histogram", {}),
     )
     return 0

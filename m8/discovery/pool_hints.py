@@ -63,6 +63,9 @@ _DEXSCREENER_DEX_MAP: Dict[str, str] = {
     "sushiswap": "sushiswap_v2",
     "pancakeswap": "pancakeswap_v3",
     "baseswap": "baseswap_v2",
+    "curve": "curve_stable",
+    "balancer": "balancer_vault",
+    "maverick": "maverick_v2",
 }
 
 _GECKO_DEX_MAP: Dict[str, str] = {
@@ -78,6 +81,17 @@ _GECKO_DEX_MAP: Dict[str, str] = {
 _GRAPH_PROTOCOL_MAP: Dict[str, str] = {
     "uniswap_v3": "uniswap_v3",
     "aerodrome": "aerodrome",
+}
+
+_GRAPH_TOKEN_API_MAP: Dict[str, str] = {
+    "uniswap_v2": "uniswap_v2",
+    "uniswap_v3": "uniswap_v3",
+    "uniswap_v4": "uniswap_v4",
+    "curvefi": "curve_stable",
+    "curve": "curve_stable",
+    "balancer": "balancer_vault",
+    "aerodrome": "aerodrome",
+    "maverick": "maverick_v2",
 }
 
 
@@ -171,6 +185,8 @@ def normalize_dex_id(source: str, raw_dex_id: str) -> Optional[str]:
         return _GECKO_DEX_MAP.get(key) or key.replace("-base", "").replace("-", "_")
     if source == "thegraph":
         return _GRAPH_PROTOCOL_MAP.get(key) or key
+    if source == "thegraph_token_api":
+        return _GRAPH_TOKEN_API_MAP.get(key) or key
     return key.replace("-", "_")
 
 
@@ -460,6 +476,8 @@ def _empty_metrics() -> Dict[str, Any]:
         "second_pool_hints_found": 0,
         "verified_second_pool_count": 0,
         "hint_source_latency_s": {},
+        "second_venue_source": {},
+        "transition_candidate_rate": 0.0,
         **empty_verification_metrics(),
     }
 
@@ -500,6 +518,9 @@ def build_artifact(
         )
     if deduped:
         m["hint_to_verified_pool_rate"] = round(verified / len(deduped), 4)
+    tokens_checked = int(m.get("hint_tokens_checked") or 0)
+    if tokens_checked:
+        m["transition_candidate_rate"] = round(verified / tokens_checked, 4)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at_utc": _iso_now(),

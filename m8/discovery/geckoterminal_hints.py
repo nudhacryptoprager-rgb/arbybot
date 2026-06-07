@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from m8.discovery.clanker_source import GECKOTERMINAL_BASE_URL
 from m8.discovery.pool_hints import PoolHint, normalize_dex_id, normalize_pool_identity
@@ -141,6 +141,47 @@ def _safe_int(v: Any) -> Optional[int]:
         return int(v)
     except (TypeError, ValueError):
         return None
+
+
+def fetch_new_pools_backfill(
+    watchlist_tokens: Set[str],
+    *,
+    network: str = "base",
+    chain: str = "base",
+    max_pages: int = 3,
+    timeout_s: float = _DEFAULT_TIMEOUT_S,
+) -> List[PoolHint]:
+    """GeckoTerminal ``networks/{network}/new_pools`` filtered to watchlist tokens."""
+    if not watchlist_tokens:
+        return []
+    normalized = {t.lower() for t in watchlist_tokens if t.startswith("0x")}
+    hints: List[PoolHint] = []
+    seen_pools: Set[str] = set()
+    for page in range(1, max_pages + 1):
+        batch = fetch_new_pool_hints(
+            network=network,
+            chain=chain,
+            page=page,
+            timeout_s=timeout_s,
+        )
+        for hint in batch:
+            ident = hint.pool_id or hint.pool_address
+            if not ident or ident in seen_pools:
+                continue
+            t0, t1 = hint.token0_addr, hint.token1_addr
+            focus = ""
+            if t0 in normalized:
+                focus = t0
+            elif t1 in normalized:
+                focus = t1
+            else:
+                continue
+            hint.focus_token = focus
+            hint.raw = dict(hint.raw or {})
+            hint.raw["backfill_mode"] = "new_pools"
+            hints.append(hint)
+            seen_pools.add(ident)
+    return hints
 
 
 def _safe_float(v: Any) -> Optional[float]:

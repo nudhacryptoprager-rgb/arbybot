@@ -989,6 +989,13 @@ def _expand_batch_token_neighborhood(
             / batch_hint_metrics["hint_pools_seen"],
             4,
         )
+    if token_addrs:
+        batch_hint_metrics["transition_candidate_rate"] = round(
+            subgraph_ready_count / len(token_addrs), 4
+        )
+    batch_hint_metrics["second_venue_source"] = dict(
+        (external_hints_artifact or {}).get("metrics", {}).get("second_venue_source") or {}
+    )
     pools_found_by_dex: Counter = Counter(r["dex_id"] for r in routes_admitted)
     summary = {
         "expansion_mode": "token_neighborhood_batch",

@@ -88,10 +88,17 @@ def _pair_to_hint(
             created_at = None
     liq_usd = _safe_float(liq.get("usd"))
     vol_h24 = _safe_float(vol.get("h24"))
+    txns = pair.get("txns") or {}
+    txns_h24 = txns.get("h24") if isinstance(txns, dict) else {}
+    txn_count = 0
+    if isinstance(txns_h24, dict):
+        txn_count = int(txns_h24.get("buys") or 0) + int(txns_h24.get("sells") or 0)
     confidence = 0.55
     if liq_usd and liq_usd > 1000:
         confidence += 0.1
     if vol_h24 and vol_h24 > 100:
+        confidence += 0.05
+    if txn_count >= 10:
         confidence += 0.05
     return PoolHint(
         source="dexscreener",
@@ -104,7 +111,7 @@ def _pair_to_hint(
         liquidity_usd=liq_usd,
         volume_24h=vol_h24,
         confidence=min(1.0, confidence),
-        raw={"dexId": raw_dex, "pair": pair},
+        raw={"dexId": raw_dex, "pair": pair, "txns_h24": txn_count},
         focus_token=focus_token,
     )
 

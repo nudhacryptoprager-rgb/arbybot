@@ -47,6 +47,8 @@ def _empty_watchlist() -> Dict[str, Any]:
             "cross_mechanic_transition_count": 0,
             "transitions_1_to_2": 0,
             "no_second_pool_in_window": 0,
+            "second_venue_source": {},
+            "verified_second_pool_hints": 0,
         },
     }
 
@@ -192,6 +194,7 @@ def _record_second_pool(
     dex_adapter: Dict[str, str],
     now_ts: float,
     metrics: Dict[str, Any],
+    source: str = "ws",
 ) -> bool:
     """Record second venue; return True on fresh 1→2 transition."""
     dex = str(event_dict.get("dex") or event_dict.get("dex_id") or "")
@@ -236,6 +239,9 @@ def _record_second_pool(
         ) + 1
 
     metrics["transitions_1_to_2"] = int(metrics.get("transitions_1_to_2") or 0) + 1
+    hist = dict(metrics.get("second_venue_source") or {})
+    hist[source] = int(hist.get(source, 0)) + 1
+    metrics["second_venue_source"] = hist
     return True
 
 
@@ -254,6 +260,8 @@ def run_active_second_pool_scan(
     head_block: Optional[int] = None,
     now_ts: Optional[float] = None,
     max_lookback_blocks: int = DEFAULT_MAX_LOOKBACK_BLOCKS,
+    external_hints_artifact: Optional[Dict[str, Any]] = None,
+    verify_mode: str = "specialized",
 ) -> Dict[str, Any]:
     """Active scan: factory logs + mirror indices; update registry + watch-list."""
     from m8.discovery.cross_dex_expand import discovery_dexes_from_config
@@ -317,14 +325,39 @@ def run_active_second_pool_scan(
 
     transition = False
     for ev_dict in registry_events:
+        resolve_src = str(ev_dict.get("resolve_source") or "")
+        src = "getLogs_backfill" if "mirror" not in resolve_src.lower() else "registry"
+        if resolve_src.startswith("external_hint:"):
+            src = resolve_src.split(":", 1)[-1]
+        elif resolve_src.startswith("mirror"):
+            src = "registry"
         if _record_second_pool(
             entry,
             event_dict=ev_dict,
             dex_adapter=dex_adapter,
             now_ts=now_ts,
             metrics=metrics,
+            source=src,
         ):
             transition = True
+
+    if not transition and external_hints_artifact:
+        from m8.discovery.second_venue_discovery import apply_verified_hints_for_token
+
+        if apply_verified_hints_for_token(
+            token_address=token_address,
+            entry=entry,
+            hints_artifact=external_hints_artifact,
+            chain=chain,
+            dex_adapter=dex_adapter,
+            metrics=metrics,
+            verify_mode=verify_mode,
+            allowed_dex_ids=allowed,
+        ):
+            transition = True
+            metrics["verified_second_pool_hints"] = int(
+                metrics.get("verified_second_pool_hints") or 0
+            ) + 1
 
     entry["last_scan_ts"] = now_ts
     advance_backoff(entry)
@@ -355,6 +388,8 @@ def metrics_summary(watchlist: Dict[str, Any]) -> Dict[str, Any]:
         1 for t in tokens.values() if not t.get("second_pool_verified")
     )
 
+    transitions = int(metrics.get("transitions_1_to_2") or 0)
+    watch_n = len(tokens)
     out = {
         "time_to_second_pool_s_p50": _p50(t2s_sorted),
         "time_to_second_pool_s_count": len(t2s),
@@ -365,8 +400,15 @@ def metrics_summary(watchlist: Dict[str, Any]) -> Dict[str, Any]:
         "cross_mechanic_transition_count": int(
             metrics.get("cross_mechanic_transition_count") or 0
         ),
-        "transitions_1_to_2": int(metrics.get("transitions_1_to_2") or 0),
-        "watchlist_tokens": len(tokens),
+        "transitions_1_to_2": transitions,
+        "second_venue_source": dict(metrics.get("second_venue_source") or {}),
+        "verified_second_pool_hints": int(metrics.get("verified_second_pool_hints") or 0),
+        "transition_candidate_rate": round(
+            sum(1 for t in tokens.values() if t.get("second_pool_verified")) / watch_n, 4
+        )
+        if watch_n
+        else 0.0,
+        "watchlist_tokens": watch_n,
         "watchlist_pending_second_pool": watching,
     }
     if watching > 0 and not t2s:

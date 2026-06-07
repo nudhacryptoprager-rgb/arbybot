@@ -78,6 +78,7 @@ def resolve_mirrors_for_token(
     exotic_symbol: str = "",
     anchor_symbol: Optional[str] = None,
     anchor_artifact: Optional[Dict[str, Any]] = None,
+    external_hints_artifact: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Run M8.2 token-neighborhood expansion for one focus token (anchor optional)."""
@@ -90,6 +91,7 @@ def resolve_mirrors_for_token(
         dry_run=dry_run,
         exotic_address_filter=exotic_address,
         expansion_mode="token_neighborhood",
+        external_hints_artifact=external_hints_artifact,
     )
     latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     summary = art.get("summary") or {}
@@ -130,6 +132,7 @@ def resolve_best_neighborhood_for_event(
     config: Dict[str, Any],
     registry: Optional[Dict[str, Any]],
     anchor_artifact: Optional[Dict[str, Any]] = None,
+    external_hints_artifact: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """Try token-neighborhood for each non-anchor event token; return best subgraph."""
@@ -154,6 +157,7 @@ def resolve_best_neighborhood_for_event(
             exotic_symbol=cand["symbol"],
             anchor_symbol=anchor_sym,
             anchor_artifact=anchor_artifact,
+            external_hints_artifact=external_hints_artifact,
             dry_run=dry_run,
         )
         score = subgraph_candidate_score(row)

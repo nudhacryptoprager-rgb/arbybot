@@ -20,6 +20,8 @@ from m8.discovery.pending_pair_registry import (
     save_registry,
     update_registry,
 )
+from m8.discovery.pool_hints import DEFAULT_HINTS_PATH, load_hints_artifact
+from m8.discovery.second_venue_discovery import recall_rates
 from m8.discovery.token_watchlist import (
     DEFAULT_WATCHLIST_PATH,
     load_watchlist,
@@ -126,6 +128,8 @@ class HotPathProcessor:
         honeypot_strict_evidence: bool = False,
         active_scan: bool = True,
         watchlist_path: str = DEFAULT_WATCHLIST_PATH,
+        external_hints_path: str = DEFAULT_HINTS_PATH,
+        verify_mode: str = "specialized",
     ) -> None:
         self.chain = chain
         self.config = config
@@ -137,6 +141,8 @@ class HotPathProcessor:
         self.active_scan = active_scan and not dry_run
         self.watchlist_path = watchlist_path
         self.watchlist = load_watchlist(watchlist_path)
+        self.external_hints_artifact = load_hints_artifact(external_hints_path)
+        self.verify_mode = verify_mode
         self.w3 = w3
         self.rpc_url = rpc_url
         self.config_path = config_path
@@ -218,6 +224,8 @@ class HotPathProcessor:
                     w3=self.w3,
                     watchlist=self.watchlist,
                     now_ts=event_ts,
+                    external_hints_artifact=self.external_hints_artifact,
+                    verify_mode=self.verify_mode,
                 )
                 scan_rows.append(scan_result)
                 if scan_result.get("transition_1_to_2"):
@@ -241,6 +249,7 @@ class HotPathProcessor:
             config=self.config,
             registry=self.registry,
             anchor_artifact=self.anchor_artifact,
+            external_hints_artifact=self.external_hints_artifact,
             dry_run=self.dry_run,
         )
         event_to_mirror_ms = round((time.perf_counter() - mirror_t0) * 1000.0, 2)
@@ -397,6 +406,12 @@ class HotPathProcessor:
         per_dex = merge_per_dex_breakdown(self.candidates)
         subgraph_acceptance = bridge_shadow_acceptance_from_candidates(self.candidates)
         spread_hists = build_spread_lifetime_histograms(self.candidates)
+        phase_15 = metrics_summary(self.watchlist)
+        recall = recall_rates(
+            metrics=self.watchlist.get("metrics") or {},
+            watchlist_tokens=int(phase_15.get("watchlist_tokens") or 0),
+            events_seen=self.hot_path_events_seen,
+        )
 
         acceptance = {
             "hot_path_cross_mechanic_candidates_gt_0": self.hot_path_cross_mechanic_candidates
@@ -417,7 +432,11 @@ class HotPathProcessor:
             "registry_multi_venue_tokens": self.registry_multi_venue_tokens(),
             "active_scan_runs": self._active_scan_runs,
             "transition_triggers_1_to_2": self._transition_triggers,
-            "phase_1_5": metrics_summary(self.watchlist),
+            "phase_1_5": phase_15,
+            "transition_candidate_rate": recall["transition_candidate_rate"],
+            "crossdex_transition_rate": recall["crossdex_transition_rate"],
+            "second_venue_source": phase_15.get("second_venue_source") or {},
+            "external_hints_enabled": bool(self.external_hints_artifact.get("hints")),
             "watchlist_path": self.watchlist_path,
             "token_class_histogram": build_token_class_histogram(self.candidates),
             **spread_hists,
@@ -454,6 +473,7 @@ def run_live_ws_session(
     honeypot_strict_evidence: bool = False,
     active_scan: bool = True,
     watchlist_path: str = DEFAULT_WATCHLIST_PATH,
+    external_hints_path: str = DEFAULT_HINTS_PATH,
 ) -> Dict[str, Any]:
     """Subscribe to factory logs via WS and run hot-path per candidate event."""
     import os
@@ -507,6 +527,7 @@ def run_live_ws_session(
         honeypot_strict_evidence=honeypot_strict_evidence,
         active_scan=active_scan,
         watchlist_path=watchlist_path,
+        external_hints_path=external_hints_path,
     )
 
     listener = WSPoolEventListener(

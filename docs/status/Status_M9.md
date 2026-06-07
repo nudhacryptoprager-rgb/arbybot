@@ -8,9 +8,9 @@
 
 **Verified vs bridge (розділено):** canonical `m9_graph_latest.json` (`qsr≈0.89`, inventory=`m9_verified_inventory`) підтверджує **QSR contour**, не M8→M9 ingestion. Bridge-shadow (fresh 2026-06-05): `data/tmp/m9_graph_bridge_shadow_latest.json` — `bridge_cycles_found=0`, `cycles_with_m8_pool=0`, `cross_mechanic_cycles=0`, `graph_edges_from_m8=2`; productive diagnostic **2 routes** (`route_qsr=0.50`). **Dynamic M8→M9 bridge ingestion не доведений.**
 
-**Cross-Mechanic Sniper Edge (гілка):** Hot-path token-neighborhood **code path implemented** (`candidate_tokens_from_event`, non-anchor `T-X` events, `selected_focus_token`); **full M8 event token-first runtime acceptance pending** (`ready_for_bridge_shadow` still false on last smoke). Batch rolling default `--expansion-mode token_neighborhood`. **Primary blocker (recall):** `M8_2_SECOND_VENUE_RECALL_LOW` — `transitions_1_to_2=0`, `TOKEN_NOT_SEEN_ELSEWHERE`; expansion blocker `M8_2_TOKEN_NEIGHBORHOOD_EXPANSION_MISSING` лишається до `subgraph_ready` + verified second pool. M9 shadow лише після `acceptance.ready_for_bridge_shadow=true` + `ARBY_M9_CYCLE_LENGTHS=2,3,4`.
+**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (bridge-shadow lane)** — `data/tmp/m8_hot_path_latest.json`: `duration_fulfilled=true`, `ws_health_status=OK_RECONNECTED`, `quote_rpc_provider=alchemy`, `hot_path_events_seen=314`, `transition_triggers_1_to_2=10`, `hot_path_mirrors_found=1`, `hot_path_cross_mechanic_candidates=1`, `external_hints_enabled=true`, `crossdex_transition_rate=0.0318`, `second_venue_source={dexscreener:10}`, `acceptance.ready_for_bridge_shadow=true`. **120m run** лишається `PARTIAL_INFRA_ONLY` (0 transitions). Batch expansion `connector_routes_count=0` — наступний кодовий фокус: `T-C + C-anchor` synthesis, не більше same-DEX V4 hints. Economics **не** доведена.
 
-**External pool hints (Фаза 1.6):** `external_pool_hints_status: PARTIAL_CODE_PRESENT_WIRED`. **`V4_POOL_ID_SPECIALIZED_VERIFY_MISSING` знято** (code+smoke: `verified_second_pool_count=46` на 25 tokens). **Поточний blocker:** `M8_2_HINT_TO_EXPANSION_MATCHING_OR_CROSSDEX_LOW` — expansion потребує `focus_token` matching + cross-DEX second venue (не другий v4 pool). Hot-path quote RPC fix: `setup_quote_rpc → resolve_productive_http_rpc` (обов'язково перед 120m). **Runtime acceptance pending** — full watchlist regen + 120m після provider-smoke.
+**External pool hints (Фаза 1.6):** `external_pool_hints_status: RUNTIME_VALIDATED` — pre-3h regen: `438 tokens`, `681 pools`, `262 verified`, `tcr=0.5982`. DexScreener/GeckoTerminal/`thegraph_token_api` + `new_pools_backfill` (5 pages). Hot-path застосовує hints → `10` transitions via `dexscreener`. **M9 bridge-shadow 30m** (post-acceptance): `data/tmp/m9_graph_bridge_shadow_latest.json` — `cycles_found=5952`, `cycles_quoteable=0`, `cycles_positive_gross=0`, `gate_acceptance=false` — **не** profit/M9 PASS.
 
 **Напрямок гілки (узгоджено 2026-06-06, уточнено тімлідом) — активний пошук 2-го пулу, не пасивне очікування:** sniper-кандидати на момент launch майже завжди на ОДНОМУ дексі (Base ≈575 v4 launch/год). `multi_venue_tokens=0` — НЕ баг: до появи другого on-chain пулу edge не існує (без pending/preconf не передбачити неіснуючий пул). **Мета:** після першого pool event → watch-list (`m8_pending_pairs.json`) → **активний** `T-*` scan по всіх enabled DEX (factory logs / adapter resolvers), не чекати batch M8.2. Тригер входу: `token_seen_on_dexes: 1→2` + `cross_mechanic=true` → focused quote (`2,3,4` legs, incl. `T-C+C-anchor`) + honeypot → **`spread_lifetime` + `time_to_second_pool_s` (Фази 2/1.5)** як гейти перед production-shadow. Production-shadow лише якщо `second_pool_verified=true`, `quoteable_routes>=2`, `honeypot_pass=true`, `spread_lifetime` не порожній. Pending/preconf — R&D, не production foundation. Повний бриф: `docs/m9/BRANCH_BUILD_GUIDE_cross_mechanic_sniper_edge.md` (0b–0g, Фаза 1.5). Config-баг: `sushiswap_v3` topic0 дубльований у `config/new_pool_factories.yaml` → лейн глухий.
 
@@ -75,6 +75,17 @@
 | Bridge-shadow (shadow inv) | `cycles_found` / `cycles_with_m8_pool` / `cross_mechanic_cycles` | **0** / **0** / **0** (3 tokens, 4 edges post-filter) |
 
 **Existence-lane:** **BLOCKED** — `M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL`. Після свіжого sniper `registry_multi_venue` лишається **1** → Phase 4 decision: batch mirror-resolve недостатній без hot-path (див. `BRANCH_BUILD_GUIDE` Фаза 4).
+
+**Session 2026-06-07 3h hot-path + M9 bridge-shadow (M8.2 acceptance):**
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Hints regen | tokens / pools / verified / tcr | **438** / **681** / **262** / **0.5982** |
+| Expansion | routes / `subgraph_ready_tokens` / `connector_routes` | **839** / **3** / **0** |
+| 3h hot-path | events / transitions / mirrors / cross_mech | **314** / **10** / **1** / **1** |
+| 3h infra | `duration_fulfilled` / `ws_health` / provider | **true** / **OK_RECONNECTED** / **alchemy** |
+| 3h acceptance | `ready_for_bridge_shadow` / `crossdex_transition_rate` | **true** / **0.0318** |
+| M9 shadow 30m | `cycles_found` / `cycles_quoteable` / `positive_gross` / gate | **5952** / **0** / **0** / **false** |
 
 **Session 2026-06-05 Cross-Mechanic brief (10-step pipeline, same day):**
 
