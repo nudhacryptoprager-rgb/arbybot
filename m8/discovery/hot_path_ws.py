@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from discovery.new_pool_listener import FactoryConfig, NewPoolEvent, parse_raw_log
+from m8.discovery.anchor_registry import build_anchor_maps, symbol_for_address
 from m8.discovery.hot_path_mirror import (
     candidate_tokens_from_event,
     resolve_best_neighborhood_for_event,
@@ -19,30 +20,34 @@ from m8.discovery.pending_pair_registry import (
     save_registry,
     update_registry,
 )
+from m8.discovery.token_watchlist import (
+    DEFAULT_WATCHLIST_PATH,
+    load_watchlist,
+    metrics_summary,
+    run_active_second_pool_scan,
+    save_watchlist,
+    scan_due,
+    upsert_watch_entry_from_event,
+)
 
 logger = logging.getLogger(__name__)
-
-# Base mainnet anchor addresses (lowercase) -> symbol
-_ANCHOR_ADDR_TO_SYM: Dict[str, str] = {
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
-    "0x4200000000000000000000000000000000000006": "WETH",
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
-    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC",
-}
 
 
 def enrich_event_dict(
     event: NewPoolEvent,
     registry: Optional[Dict[str, Any]],
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """NewPoolEvent -> dict with symbols for anchor split + registry update."""
     d = event.to_dict()
     reg_tokens = (registry or {}).get("tokens") or {}
+    addr_to_sym, _ = build_anchor_maps(config or {})
 
     def _sym(addr: str) -> str:
         low = addr.lower()
-        if low in _ANCHOR_ADDR_TO_SYM:
-            return _ANCHOR_ADDR_TO_SYM[low]
+        cfg_sym = symbol_for_address(low, addr_to_sym)
+        if cfg_sym:
+            return cfg_sym
         tok = reg_tokens.get(low) or {}
         return str(tok.get("symbol") or "")
 
@@ -71,6 +76,8 @@ class HotPathProcessor:
         config_path: str = "config/exotic_base_anchor.yaml",
         persist_registry: bool = True,
         honeypot_strict_evidence: bool = False,
+        active_scan: bool = True,
+        watchlist_path: str = DEFAULT_WATCHLIST_PATH,
     ) -> None:
         self.chain = chain
         self.config = config
@@ -79,6 +86,9 @@ class HotPathProcessor:
         self.registry_path = registry_path
         self.dry_run = dry_run
         self.run_quote = run_quote and not dry_run
+        self.active_scan = active_scan and not dry_run
+        self.watchlist_path = watchlist_path
+        self.watchlist = load_watchlist(watchlist_path)
         self.w3 = w3
         self.rpc_url = rpc_url
         self.config_path = config_path
@@ -91,7 +101,23 @@ class HotPathProcessor:
         self.hot_path_cross_mechanic_candidates = 0
         self._event_to_mirror_ms: List[float] = []
         self._event_to_quote_ms: List[float] = []
+        self._active_scan_runs = 0
+        self._transition_triggers = 0
         self.candidates: List[Dict[str, Any]] = []
+
+    def _ensure_scan_w3(self) -> bool:
+        if self.w3 is not None:
+            return True
+        if not self.active_scan and not self.run_quote:
+            return False
+        try:
+            from m8.discovery.hot_path_common import setup_quote_rpc
+
+            self.w3, self.rpc_url, _ = setup_quote_rpc(self.chain)
+            return True
+        except Exception as exc:
+            logger.warning("hot_path RPC setup failed: %s", exc)
+            return False
 
     def handle_raw_log(self, cfg: FactoryConfig, raw_log: Any) -> None:
         event = parse_raw_log(raw_log, cfg)
@@ -105,10 +131,10 @@ class HotPathProcessor:
 
     def _process_parsed_event(self, event: NewPoolEvent) -> None:
         event_ts = time.time()
-        event_dict = enrich_event_dict(event, self.registry)
-        update_registry(self.registry, [event_dict], now_ts=event_ts)
-        event_candidates = candidate_tokens_from_event(event_dict)
+        event_dict = enrich_event_dict(event, self.registry, self.config)
+        event_candidates = candidate_tokens_from_event(event_dict, self.config)
         if not event_candidates:
+            update_registry(self.registry, [event_dict], now_ts=event_ts)
             self._append_candidate(
                 event_dict,
                 reject_reason="REJECT_NO_CANDIDATE_TOKEN",
@@ -116,6 +142,49 @@ class HotPathProcessor:
             return
 
         self.hot_path_events_seen += 1
+
+        transition_triggered = False
+        scan_rows: List[Dict[str, Any]] = []
+        if self.active_scan:
+            for cand in event_candidates:
+                entry = upsert_watch_entry_from_event(
+                    self.watchlist,
+                    event_dict,
+                    exotic_address=cand["address"],
+                    exotic_symbol=cand.get("symbol") or "",
+                    now_ts=event_ts,
+                    config=self.config,
+                    registry=self.registry,
+                )
+                if not scan_due(entry, event_ts):
+                    continue
+                if not self._ensure_scan_w3():
+                    continue
+                self._active_scan_runs += 1
+                scan_result = run_active_second_pool_scan(
+                    token_address=cand["address"],
+                    entry=entry,
+                    chain=self.chain,
+                    config=self.config,
+                    registry=self.registry,
+                    w3=self.w3,
+                    watchlist=self.watchlist,
+                    now_ts=event_ts,
+                )
+                scan_rows.append(scan_result)
+                if scan_result.get("transition_1_to_2"):
+                    self._transition_triggers += 1
+                    transition_triggered = True
+
+        focus_cand = event_candidates[0]
+        from m8.discovery.token_classify import prior_venue_stats
+
+        prior_pools, prior_dexes = prior_venue_stats(
+            self.registry, focus_cand["address"]
+        )
+        update_registry(self.registry, [event_dict], now_ts=event_ts)
+
+        from m8.discovery.token_classify import annotate_hot_path_row
 
         mirror_t0 = time.perf_counter()
         mirror_row, resolve_reason = resolve_best_neighborhood_for_event(
@@ -149,7 +218,26 @@ class HotPathProcessor:
             "pool": event.pool,
             "block_number": event.block_number,
             "source": "live_ws",
+            "active_scan_ran": bool(scan_rows),
+            "active_scan_results": scan_rows,
+            "transition_1_to_2": transition_triggered,
         }
+        focus_addr = str(
+            row.get("selected_focus_token")
+            or row.get("exotic_address")
+            or focus_cand["address"]
+        )
+        annotate_hot_path_row(
+            row,
+            config=self.config,
+            registry=self.registry,
+            focus_token=focus_addr,
+            focus_symbol=str(row.get("exotic_symbol") or focus_cand.get("symbol") or ""),
+            now_ts=event_ts,
+            event_block=event.block_number,
+            prior_pool_count=prior_pools,
+            prior_dex_count=prior_dexes,
+        )
         subgraph_ready = bool(mirror_row.get("subgraph_ready"))
         if not subgraph_ready:
             if resolve_reason in (
@@ -235,6 +323,10 @@ class HotPathProcessor:
                 save_registry(self.registry, self.registry_path)
             except Exception as exc:
                 logger.warning("registry save failed: %s", exc)
+        try:
+            save_watchlist(self.watchlist, self.watchlist_path)
+        except Exception as exc:
+            logger.warning("watchlist save failed: %s", exc)
 
         def _p50(vals: List[float]) -> Optional[float]:
             if not vals:
@@ -249,9 +341,14 @@ class HotPathProcessor:
             merge_expansion_reject_histogram,
             merge_per_dex_breakdown,
         )
+        from m8.discovery.token_classify import (
+            build_spread_lifetime_histograms,
+            build_token_class_histogram,
+        )
 
         per_dex = merge_per_dex_breakdown(self.candidates)
         subgraph_acceptance = bridge_shadow_acceptance_from_candidates(self.candidates)
+        spread_hists = build_spread_lifetime_histograms(self.candidates)
 
         acceptance = {
             "hot_path_cross_mechanic_candidates_gt_0": self.hot_path_cross_mechanic_candidates
@@ -270,6 +367,12 @@ class HotPathProcessor:
             "hot_path_mirrors_found": self.hot_path_mirrors_found,
             "hot_path_cross_mechanic_candidates": self.hot_path_cross_mechanic_candidates,
             "registry_multi_venue_tokens": self.registry_multi_venue_tokens(),
+            "active_scan_runs": self._active_scan_runs,
+            "transition_triggers_1_to_2": self._transition_triggers,
+            "phase_1_5": metrics_summary(self.watchlist),
+            "watchlist_path": self.watchlist_path,
+            "token_class_histogram": build_token_class_histogram(self.candidates),
+            **spread_hists,
             "event_to_mirror_ms_p50": _p50(self._event_to_mirror_ms),
             "event_to_quote_ms_p50": _p50(self._event_to_quote_ms),
             "existence_blocker": (
@@ -301,6 +404,8 @@ def run_live_ws_session(
     run_quote: bool = False,
     config_path: str = "config/exotic_base_anchor.yaml",
     honeypot_strict_evidence: bool = False,
+    active_scan: bool = True,
+    watchlist_path: str = DEFAULT_WATCHLIST_PATH,
 ) -> Dict[str, Any]:
     """Subscribe to factory logs via WS and run hot-path per candidate event."""
     import os
@@ -352,6 +457,8 @@ def run_live_ws_session(
         rpc_url=rpc_url,
         config_path=config_path,
         honeypot_strict_evidence=honeypot_strict_evidence,
+        active_scan=active_scan,
+        watchlist_path=watchlist_path,
     )
 
     listener = WSPoolEventListener(

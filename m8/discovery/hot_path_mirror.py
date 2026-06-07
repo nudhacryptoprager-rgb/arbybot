@@ -4,46 +4,42 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from m8.discovery.anchor_registry import (
+    is_anchor_address,
+    is_anchor_symbol,
+    quote_anchor_maps,
+    symbol_for_address,
+)
 from m8.discovery.cross_dex_expand import expand_cross_dex
 from m8.discovery.pending_pair_registry import _ANCHOR_TOKENS, split_token_anchor
-
-# Base mainnet anchor addresses (lowercase) -> symbol
-_ANCHOR_ADDR_TO_SYM: Dict[str, str] = {
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
-    "0x4200000000000000000000000000000000000006": "WETH",
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
-    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC",
-}
-
-
-def _is_anchor_address(addr: str) -> bool:
-    return (addr or "").lower() in _ANCHOR_ADDR_TO_SYM
-
-
-def _is_anchor_symbol(sym: str) -> bool:
-    return sym in _ANCHOR_TOKENS or sym in ("USDBC", "USDbC", "ETH")
 
 
 def split_token_anchor_from_event(
     event: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str, str]]:
     """(exotic_addr, exotic_symbol, anchor_symbol) when one side is anchor."""
     split = split_token_anchor(event, _ANCHOR_TOKENS)
     if split is not None:
         return split
+    quote_addr, _ = quote_anchor_maps(config or {})
     t0a = (event.get("token0") or "").lower()
     t1a = (event.get("token1") or "").lower()
     t0s = event.get("token0_symbol") or ""
     t1s = event.get("token1_symbol") or ""
-    if t0a in _ANCHOR_ADDR_TO_SYM and t1a and t1a not in _ANCHOR_ADDR_TO_SYM:
-        return t1a, t1s or t1a[:10], _ANCHOR_ADDR_TO_SYM[t0a]
-    if t1a in _ANCHOR_ADDR_TO_SYM and t0a and t0a not in _ANCHOR_ADDR_TO_SYM:
-        return t0a, t0s or t0a[:10], _ANCHOR_ADDR_TO_SYM[t1a]
+    if is_anchor_address(t0a, quote_addr) and t1a and not is_anchor_address(t1a, quote_addr):
+        return t1a, t1s or t1a[:10], symbol_for_address(t0a, quote_addr) or t0s
+    if is_anchor_address(t1a, quote_addr) and t0a and not is_anchor_address(t0a, quote_addr):
+        return t0a, t0s or t0a[:10], symbol_for_address(t1a, quote_addr) or t1s
     return None
 
 
-def candidate_tokens_from_event(event: Dict[str, Any]) -> List[Dict[str, str]]:
+def candidate_tokens_from_event(
+    event: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, str]]:
     """Non-anchor token(s) from a pool event — focus candidates for neighborhood."""
+    quote_addr, quote_syms = quote_anchor_maps(config or {})
     seen: set[str] = set()
     out: List[Dict[str, str]] = []
     for addr_key, sym_key in (
@@ -54,7 +50,7 @@ def candidate_tokens_from_event(event: Dict[str, Any]) -> List[Dict[str, str]]:
         sym = str(event.get(sym_key) or "")
         if not addr.startswith("0x") or len(addr) != 42:
             continue
-        if _is_anchor_address(addr) or _is_anchor_symbol(sym):
+        if is_anchor_address(addr, quote_addr) or is_anchor_symbol(sym, quote_syms):
             continue
         if addr in seen:
             continue
@@ -137,11 +133,11 @@ def resolve_best_neighborhood_for_event(
     dry_run: bool = False,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """Try token-neighborhood for each non-anchor event token; return best subgraph."""
-    candidates = candidate_tokens_from_event(event)
+    candidates = candidate_tokens_from_event(event, config)
     if not candidates:
         return None, "REJECT_NO_CANDIDATE_TOKEN"
 
-    split = split_token_anchor_from_event(event)
+    split = split_token_anchor_from_event(event, config)
     anchor_sym = split[2] if split else None
 
     best_row: Optional[Dict[str, Any]] = None

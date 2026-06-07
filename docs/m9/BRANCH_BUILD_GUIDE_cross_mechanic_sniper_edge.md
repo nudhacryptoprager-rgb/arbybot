@@ -43,7 +43,8 @@ M9 — валідатор existence, не головний актор.
      (секунди–хвилини) — це наше реальне вікно. Великі боти консервативні до
      свіжих токенів (rug-ризик), а cross-mechanic пари (CLMM↔Curve↔ve33)
      покриті меншою кількістю ботів, ніж CLMM↔CLMM.
-- **Тривалість цього вікна = невідома → міряти Фазою 2** (`spread_lifetime`).
+- **Тривалість цього вікна = невідома → міряти Фазою 2** (`spread_lifetime`) +
+  **Фазою 1.5** (`time_to_second_pool_s`).
   Медіана `lifetime_s` у секундах → ніша зайнята MEV, відступаємо; у хвилинах →
   batch-вхід достатній. Це робить Фазу 2 не "nice-to-have", а тим, що емпірично
   доводить, чи long-tail вікно взагалі існує для нас.
@@ -52,6 +53,151 @@ M9 — валідатор existence, не головний актор.
 НЕ провал, а доказ, що ми міряємо у неправильній точці часу (момент 0 замість
 переходу 1→2). Фаза 2/3 мають працювати на токенах, які вже отримали другу
 venue, а не на свіжих single-DEX launch-токенах.
+
+## 0c) Чому sniper бачить пули "переважно на uniswap_v4" (об'єктивна причина)
+
+Перевірено `config/new_pool_factories.yaml`: WS-лісенер підписаний на **9 фабрик
+паралельно**, НЕ лише v4. Тобто домінування v4 — НЕ звуження пошуку в коді, а
+структурна властивість ринку Base.
+
+Сконфігуровані фабрики й їхні механіки:
+
+| DEX | adapter_type | Механіка | Статус |
+|-----|--------------|----------|--------|
+| uniswap_v3 | uniswap_v3 | CLMM (ticks) | execution-ready |
+| aerodrome_slipstream | aerodrome_slipstream | CLMM (ticks) | execution-ready |
+| aerodrome | ve33 | ve(3,3) volatile+stable | execution-ready |
+| pancakeswap_v3 | uniswap_v3 | CLMM | execution-ready |
+| uniswap_v4 | uniswap_v4 | CLMM (singleton) | `discovery_only` |
+| uniswap_v2 | uniswap_v2 | XYK | `discovery_only`, experimental |
+| sushiswap_v2 | uniswap_v2 | XYK | `discovery_only` |
+| baseswap_v2 | uniswap_v2 | XYK | `discovery_only` |
+| sushiswap_v3 | uniswap_v3 | CLMM | `discovery_only`, experimental |
+
+Заміряна launch-частота (verification-нотатки конфігу, з живого ланцюга):
+- uniswap_v4 ≈ **575 подій/год** (дешевий singleton `Initialize`, без деплою
+  per-pool контракту → масовий memecoin-launch саме тут);
+- uniswap_v2 ≈ 22 події/год;
+- решта (v3-форки, ve33) — одиничні події у вузьких діапазонах.
+
+**Висновок:** на момент launch токен майже завжди на ОДНОМУ дексі (v4). ve33 /
+Curve / Balancer-stable пули створюються пізніше і рідше (рішення проєкту:
+gauge/bribe, peg, weighted-pool), а не на момент launch. Це підтверджує 0b: на
+момент 0 другої механіки немає → cross-mechanic edge = 0.
+
+**Окремий баг конфігу (не блокер фокусу, полагодити окремо):** у блоці
+`sushiswap_v3` (`config/new_pool_factories.yaml`) `topic0` заданий ДВІЧІ —
+правильний v3 `0x783cca1c...`, потім перезаписаний v2-шним `0x0d3648bd...`. YAML
+бере останнє → sushiswav_v3 слухає неправильний topic0 і де-факто нічого не
+ловить. Виправити на v3 topic0; на домінування v4 це не впливає (sushiswap_v3
+дає одиниці подій навіть з правильним topic0).
+
+## 0d) Механіка появи пулів CLMM↔stable↔ve33 (рушії лагу)
+
+Пули на різних механіках з'являються ПОСЛІДОВНО, з різними рушіями — це і
+створює вікно:
+
+- **Фаза A (T=0, launch):** один CLMM-пул (на Base — v4), проти WETH.
+  Cross-mechanic edge = 0. Максимальний launch-MEV (sniping в мс) → НЕ йдемо.
+- **Фаза B (T+хвилини…години):** друге CLMM-дзеркало (uni_v3 /
+  aerodrome_slipstream / pancake_v3). Це CLMM↔CLMM — найконкурентніша ніша,
+  спред живе секунди, класичні боти чистять швидко → НЕ цільова.
+- **Фаза C (T+години…дні):** механіка-відмінний пул — наш edge:
+  - ve(3,3) на Aerodrome (рушій: emissions/bribes через gauge-голосування);
+  - Curve stable (рушій: токен став peg/LST-подібним, StableSwap-крива);
+  - Balancer weighted/stable (рушій: 80/20 LBP чи weighted-pool).
+  Між механіками ціна вирівнюється повільніше (різні криві потребують адаптера
+  під обидві математики; менше ботів мають готові ve33/Curve/Balancer адаптери
+  поряд з CLMM; свіжа ліквідність асиметрична → спред структурний).
+
+## 0e) Production-конвеєр "пошук 2 пулів" (тригер 1→2, не момент 0)
+
+Зсув з event-driven (момент 0) на state-transition-driven (перехід 1→2 venue).
+Усі будівельні блоки вже існують — бракує лише тригера й телеметрії, це інкремент:
+
+1. **Watch-list + активний scan, не пасивне очікування.** Sniper (9 фабрик)
+   пише новий токен у pending-реєстр (`m8_pending_pairs.json`) з
+   `token_seen_on_dexes=1`, `first_seen_ts`. Одразу після першого pool event —
+   **fast token-neighborhood scan** по всіх enabled DEX (див. 0g), а не чекати
+   batch M8.2. Арб-рішень на момент 0 не приймаємо.
+2. **Детектор переходу 1→2.** Сигнал входу = `token_seen_on_dexes: 1→2` І
+   `cross_mechanic=true`. M8.2 (`cross_dex_expand`) уже рахує `cross_mechanic` /
+   `mirror_score` — викликати ЙОГО на тригер переходу, а не batch-ом по всьому
+   реєстру (= quick-win orchestrator-інтеграції з розділу нижче).
+3. **Квотинг + existence.** M9 quote двох ніг → `gross_bps`; обов'язковий
+   honeypot/sell-side probe (Фаза 3b), бо long-tail = високий rug-ризик.
+4. **Вимір вікна (Фаза 2 — ГЕЙТ перед production).** `spread_lifetime` після
+   появи другого пулу. Без цієї цифри production-вхід заборонений.
+5. **Production-вхід** лише після того, як Фаза 2 покаже медіану `lifetime_s` у
+   безпечному діапазоні. Real execution off до окремого unlock.
+
+## 0f) Чи встигнемо зайти за секунди (рівні MEV)
+
+- **Рівень 1 — atomic same-block MEV (мс):** sandwich/backrun усередині ОДНОГО
+  пулу на чужих свопах. Апаратно не встигаємо й не треба — він НЕ закриває
+  cross-mechanic спред між ДВОМА пулами. Інша гра.
+- **Рівень 2 — cross-DEX арб-боти (1-2 блоки, 2-4 c на Base):** реально
+  закривають спред між пулами. CLMM↔CLMM (Фаза B) — швидко, програємо, НЕ йдемо.
+  CLMM↔ve33/Curve/Balancer (Фаза C) на свіжому токені — гіпотеза: повільніше
+  (менше крос-механіка адаптерів + свіжий токен ще не в allowlist великих ботів).
+
+**Пряма відповідь:** якщо cross-mechanic вікно живе секунди-хвилини (а не мс), то
+звичайного RPC + швидкого квотингу ДОСТАТНЬО, co-located інфраструктура не
+потрібна. Мілісекундна гонка стосується launch-sniping і CLMM↔CLMM, куди свідомо
+не лізем. **АЛЕ це гіпотеза до виміру:** `spread_lifetime` Фази 2 дає факт —
+медіана <~1-2 c → відступаємо; десятки секунд–хвилини → batch-вхід встигає.
+
+## 0g) Активний пошук другого пулу (узгоджено тімлідом 2026-06-06)
+
+**Ключове уточнення:** "знайти 2 пули відразу" ≠ передбачити неіснуючий пул.
+Без pending/preconfirm lane ми бачимо тільки вже створене on-chain. До появи
+другого on-chain пулу edge не існує.
+
+**Мета:** не чекати пасивно другий пул, а після першого pool event ставити токен
+у watch-list і **активно** шукати `T-*` по всіх supported DEX через recent
+factory logs / adapter-specific resolvers. Pending/preconf detection — окремий
+R&D, не production foundation.
+
+Реалістичні варіанти виявлення другого пулу:
+
+| Сценарій | Механізм | Примітка |
+|----------|----------|----------|
+| Same tx / same block-window | обидва пули в одному tx або сусідніх блоках | ловимо обидва одразу з логів |
+| Після першого пулу | fast token-neighborhood scan по factory logs / registry | раніше, ніж batch M8.2 |
+| V2/V3/CLMM | `find_recent_pools_containing_token(T, from_block, to_block)` за indexed `token0/token1` | pair factory logs |
+| v4 | нормалізувати pool identity/currencies; перший v4 pool = watch-list seed | окремий layout |
+| Curve/Balancer/Maverick | adapter-specific token containment resolver | не `getPool(A,B)` |
+| DexScreener/subgraph | hint only | кожен пул on-chain verify обов'язково |
+| Pending/preconf | ранній сигнал | R&D; без стабільного sequencer access не production |
+
+**Обмеження (не ігнорувати):**
+- Шукати тільки `T-anchor` → пропустимо `T-C + C-anchor` (3-leg/4-leg).
+- Шукати всі `T-*` без RPC budget → QSR знову впаде; backoff обов'язковий.
+- Honeypot/tax gate до будь-якого positive claim.
+- Поки немає `time_to_second_pool_s` — не знаємо, чи edge живе секунди, хвилини
+  чи години (доповнює `spread_lifetime` Фази 2).
+
+**Production-shadow гейт (усі умови):** `second_pool_verified=true` AND
+`quoteable_routes>=2` AND `honeypot_pass=true` AND `spread_lifetime` не порожній.
+
+## 0h) Known-token pools vs fresh long-tail (узгоджено тімлідом 2026-06-07)
+
+Незалежний review: **новий CLMM-пул відомого токена — не наша гра** (latency/MEV,
+мілісекунди–1 блок, telemetry only). **Known-token cross-mechanic** — secondary
+shadow lane, не заміна fresh long-tail.
+
+Класифікація (`m8/discovery/token_classify.py`, config-driven):
+- `token_class`: `fresh_long_tail` | `known_major` | `known_midtail` |
+  `unknown_unclassified`.
+- `mechanic_pair`: `same_mechanic` | `cross_mechanic` | `unknown_mechanic`.
+
+Hard policy:
+- `known_major + same_mechanic` → telemetry/control, не bridge-shadow.
+- `known_major + cross_mechanic` → shadow lane з окремими метриками.
+- `fresh_long_tail` + (`cross_mechanic` OR `connector_tokens>=1`) → primary shadow.
+
+Метрики роздільно: `spread_lifetime_by_token_class`,
+`spread_lifetime_by_mechanic_pair` у `m8_hot_path_latest.json`.
 
 ## 1) Що ВЖЕ зроблено в цій гілці (Фаза 1 — DONE)
 
@@ -100,6 +246,51 @@ Acceptance Фази 1: PASS (`py -3.11 -m pytest tests/unit/test_m8_cross_dex_ex
 > Виконувати строго в порядку фаз. Не вмикати real execution. Канонічний
 > `data/runs/_rolling/m9_graph_latest.json` (verified, qsr≈0.89) НЕ перезаписувати —
 > existence-робота йде лише в `data/tmp/*shadow*`.
+
+### Фаза 1.5 — Активний пошук другого пулу (ПЕРЕД Фазою 2)
+
+Мета: прискорити перехід `1→2 venue` — не чекати batch, тригерити scan одразу
+після першого pool event (див. 0g).
+
+1.5a. **Hot-path після першого pool event:** `token T → recent factory-log scan`
+     across all enabled DEX (`m8/discovery/hot_path_ws.py` / `hot_path_mirror.py`).
+
+1.5b. **V2/V3/CLMM:** `find_recent_pools_containing_token(T, from_block, to_block)`
+     за indexed `token0/token1` у factory logs
+     (новий хелпер у `m8/discovery/` або розширення `cross_dex_expand.py`).
+
+1.5c. **v4:** нормалізувати pool identity/currencies; перший v4 pool = watch-list seed.
+
+1.5d. **Curve/Balancer/Maverick:** adapter-specific token containment resolver
+     (не pair-only `getPool`); reuse mirror index + `scripts/m8_discover_*_pools.py`.
+
+1.5e. **Rolling watch-list artifact** (розширити `m8_pending_pairs.json` або
+     `data/tmp/m8_token_watchlist_latest.json`): `token`, `first_pool`, `first_dex`,
+     `first_block`, `seen_on_dexes`, `mechanics_seen`, `scan_backoff_stage`.
+
+1.5f. **Transition detector:** при `seen_on_dexes: 1→2` одразу focused quote
+     (не чекати orchestrator cycle).
+
+1.5g. **Focused quote:** cycle lengths `2,3,4` через connector tokens (`T-C + C-anchor`).
+
+1.5h. **Метрики (additive):** `time_to_second_pool_s`, `same_tx_second_pool_count`,
+     `same_block_second_pool_count`, `cross_mechanic_transition_count`.
+
+1.5i. **RPC budget:** короткий fast scan після launch, потім backoff
+     `30s → 2m → 10m → 1h`.
+
+Acceptance Фази 1.5: після live sniper/hot-path soak видно
+`time_to_second_pool_s` (хоча б p50) і `cross_mechanic_transition_count >= 0`
+(або явний `NO_SECOND_POOL_IN_WINDOW` з причиною). Додатково:
+`token_class_histogram`, роздільні `spread_lifetime_by_*` (не змішувати класи).
+
+### Фаза 1.5b — Token class shadow lanes (DONE in code)
+- `m8/discovery/token_classify.py`: `token_class`, `mechanic_pair`,
+  `production_lane`, `bridge_shadow_lane_eligible`.
+- Hot-path artifact: `token_class_histogram`, `spread_lifetime_by_token_class`,
+  `spread_lifetime_by_mechanic_pair`.
+- Bridge-shadow acceptance: лише `cross_mechanic` OR `fresh_long_tail` з
+  `connector_tokens>=1`; `known_major+same_mechanic` = telemetry only.
 
 ### Фаза 2 — Телеметрія часу життя спреду (визначає Фазу 4 + відповідає на MEV-лаг)
 Мета: дати дані для рішення batch vs streaming БЕЗ припущень І емпірично
@@ -164,9 +355,12 @@ rug/honeypot ризик; `QUOTE_ZERO_OUTPUT` часто = honeypot, не пор�
 - НЕ комітити архітектуру streaming до цього рішення.
 
 ### Quick win (незалежно від фаз)
-Додати `scripts/m8_cross_dex_expand.py` у цикл
-`scripts/m9_rolling_orchestrator.py` — зараз expansion поза orchestrator, через
-що `graph_ready_from_expansion` тихо падає. Справжній баг конвеєра.
+- Додати `scripts/m8_cross_dex_expand.py` у цикл
+  `scripts/m9_rolling_orchestrator.py` — зараз expansion поза orchestrator, через
+  що `graph_ready_from_expansion` тихо падає. Справжній баг конвеєра.
+- Виправити дубльований `topic0` у `sushiswap_v3` (`config/new_pool_factories.yaml`):
+  лишити лише v3 `0x783cca1c...`, прибрати помилковий v2 `0x0d3648bd...` (див. 0c).
+  Зараз цей лейн де-факто глухий.
 
 ## 3) Гейти і політика гілки
 - Канонічний `m9_graph_latest.json` НЕ чіпати.
@@ -181,3 +375,26 @@ rug/honeypot ризик; `QUOTE_ZERO_OUTPUT` часто = honeypot, не пор�
   latency-вичищене поле.
 - НЕ будуємо streaming наосліп — спершу виміряти вікно (Фаза 2).
 - НЕ вмикаємо token-age як hard-reject — поки лише annotation.
+- НЕ будуємо production на pending/preconf lane без стабільного sequencer access.
+- НЕ трактуємо DexScreener/subgraph як truth — лише hint, on-chain verify обов'язковий.
+- НЕ пасивно чекаємо batch M8.2 для другого пулу — активний scan (Фаза 1.5).
+- НЕ йдемо в known-token CLMM launch edge — telemetry/control only (0h).
+- НЕ змішуємо `spread_lifetime` fresh long-tail і known-token pools.
+
+## 5) Команди runtime-перевірки (canonical для гілки)
+
+Після doc/code змін:
+
+```powershell
+py -3.11 scripts/check_repo_safety.py
+
+py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/sniper_smoke_run.py --chain base --duration-minutes 120 --skip-self-test --skip-preflight --blocks-back 43200
+
+py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m8_cross_dex_expand.py --expansion-mode token_neighborhood
+
+py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m8_hot_path_runner.py --live-ws --duration-minutes 30 --quote
+```
+
+Очікувані rolling-артефакти для review: `data/runs/_rolling/new_pool_sniper_latest.json`,
+`data/runs/_rolling/m8_pending_pairs.json`, `data/tmp/m8_hot_path_latest.json`,
+`data/runs/_rolling/m8_cross_dex_expansion_latest.json` (runtime-only, не комітити).

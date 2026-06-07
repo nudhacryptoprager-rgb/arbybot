@@ -153,7 +153,7 @@ def test_non_anchor_event_t_aero_resolves_via_neighborhood():
         "token0_symbol": "LONG",
         "token1_symbol": "AERO",
     }
-    cands = candidate_tokens_from_event(event)
+    cands = candidate_tokens_from_event(event, cfg)
     assert len(cands) == 2
     row, reason = resolve_best_neighborhood_for_event(
         event,

@@ -219,9 +219,6 @@ factories:
     topic0: "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
     topic0_verified: true
     log_layout: v3_pool_created
-    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
-    topic0_verified: true
-    log_layout: v2_pair_created
     experimental: true
     discovery_only: true  # experimental lane; requires downstream filters before execution
     # Verified 2026-05-14 via drpc (3 events in blocks 45990779-45990879).

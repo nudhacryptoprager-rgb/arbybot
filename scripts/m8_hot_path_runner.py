@@ -49,6 +49,16 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Require honeypot/tax PASS for positive gross (stub probe blocks profit claims)",
     )
+    p.add_argument(
+        "--no-active-scan",
+        action="store_true",
+        help="Disable Phase 1.5 active second-pool factory scan",
+    )
+    p.add_argument(
+        "--watchlist-path",
+        default="data/tmp/m8_token_watchlist_latest.json",
+        help="Rolling watch-list artifact (runtime-only)",
+    )
     return p.parse_args()
 
 
@@ -100,6 +110,24 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         event_to_mirror_ms.append(etm)
         row["event_to_mirror_ms"] = etm
         row["source"] = "batch_recent_events"
+        from m8.discovery.token_classify import annotate_hot_path_row, prior_venue_stats
+
+        focus_addr = str(row.get("selected_focus_token") or row.get("exotic_address") or "")
+        if not focus_addr:
+            t0 = (ev.get("token0") or "").lower()
+            t1 = (ev.get("token1") or "").lower()
+            focus_addr = t0 if t0 else t1
+        pp, pd = prior_venue_stats(registry, focus_addr)
+        annotate_hot_path_row(
+            row,
+            config=config,
+            registry=registry,
+            focus_token=focus_addr,
+            focus_symbol=str(row.get("exotic_symbol") or ""),
+            event_block=int(ev.get("block_number") or 0),
+            prior_pool_count=pp,
+            prior_dex_count=pd,
+        )
         routes = row.get("routes_admitted") or []
         if row.get("subgraph_ready"):
             mirrors_found += 1
@@ -171,9 +199,14 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         merge_expansion_reject_histogram,
         merge_per_dex_breakdown,
     )
+    from m8.discovery.token_classify import (
+        build_spread_lifetime_histograms,
+        build_token_class_histogram,
+    )
 
     per_dex = merge_per_dex_breakdown(candidates_out)
     subgraph_acceptance = bridge_shadow_acceptance_from_candidates(candidates_out)
+    spread_hists = build_spread_lifetime_histograms(candidates_out)
 
     payload = {
         "schema_version": "m8_hot_path_v1",
@@ -202,6 +235,8 @@ def _run_batch(args: argparse.Namespace, config: dict, log: logging.Logger) -> d
         "honeypot_evidence": honeypot_evidence_policy(
             strict_requested=args.honeypot_strict_evidence
         ),
+        "token_class_histogram": build_token_class_histogram(candidates_out),
+        **spread_hists,
         "candidates": candidates_out,
     }
     if rpc_provider:
@@ -232,6 +267,8 @@ def main() -> int:
             run_quote=args.quote,
             config_path=args.config,
             honeypot_strict_evidence=args.honeypot_strict_evidence,
+            active_scan=not args.no_active_scan,
+            watchlist_path=args.watchlist_path,
         )
     else:
         payload = _run_batch(args, config, log)

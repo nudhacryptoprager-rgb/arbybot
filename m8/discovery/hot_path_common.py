@@ -24,15 +24,31 @@ def build_reject_reason_histogram(candidates: List[Dict[str, Any]]) -> Dict[str,
 def bridge_shadow_acceptance_from_candidates(
     candidates: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Derive M9 bridge-shadow acceptance from best token-neighborhood subgraph."""
+    """Derive M9 bridge-shadow acceptance from best eligible token-neighborhood subgraph."""
+    from m8.discovery.token_classify import bridge_shadow_lane_eligible
+
     best_summary: Dict[str, Any] = {}
+    best_row: Dict[str, Any] = {}
     best_routes = -1
     for row in candidates:
+        if row.get("bridge_shadow_lane_eligible") is False:
+            continue
         summary = row.get("summary") or {}
         n = int(summary.get("routes_admitted_count") or row.get("routes_admitted_count") or 0)
         if n > best_routes:
             best_routes = n
             best_summary = summary
+            best_row = row
+
+    if best_routes < 0:
+        for row in candidates:
+            summary = row.get("summary") or {}
+            n = int(summary.get("routes_admitted_count") or row.get("routes_admitted_count") or 0)
+            if n > best_routes:
+                best_routes = n
+                best_summary = summary
+                best_row = row
+
     token_seen = int(best_summary.get("token_seen_on_dexes", 0))
     connectors = int(
         best_summary.get("connector_token_count")
@@ -41,23 +57,36 @@ def bridge_shadow_acceptance_from_candidates(
     )
     routes = int(best_summary.get("routes_admitted_count", best_routes))
     unique = int(best_summary.get("unique_tokens", 0))
-    ready = bool(
+    token_class = str(best_row.get("token_class") or "")
+    mechanic_pair = str(best_row.get("mechanic_pair") or "")
+    cross = bool(best_row.get("cross_mechanic"))
+    lane_eligible = bridge_shadow_lane_eligible(
+        token_class=token_class or "unknown_unclassified",
+        mechanic_pair=mechanic_pair or "unknown_mechanic",
+        connector_tokens=connectors,
+        cross_mechanic=cross,
+    )
+    topology_ready = bool(
         token_seen >= 2
         and connectors >= 1
         and routes >= 4
         and unique >= 3
     )
+    ready = topology_ready and lane_eligible
     return {
         "token_seen_on_dexes_gte_2": token_seen >= 2,
         "connector_tokens_gte_1": connectors >= 1,
         "active_routes_gte_4": routes >= 4,
         "unique_tokens_gte_3": unique >= 3,
-        "subgraph_ready": ready,
+        "subgraph_ready": topology_ready,
+        "bridge_shadow_lane_eligible": lane_eligible,
         "ready_for_bridge_shadow": ready,
         "token_seen_on_dexes": token_seen,
         "connector_tokens": connectors,
         "active_routes": routes,
         "unique_tokens": unique,
+        "best_token_class": token_class or None,
+        "best_mechanic_pair": mechanic_pair or None,
     }
 
 
