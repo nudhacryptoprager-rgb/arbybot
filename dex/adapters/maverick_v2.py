@@ -58,8 +58,14 @@ _MAVERICK_V2_GAS_ESTIMATE = 150_000
 # ABI selectors (verified by keccak256 of function signature)
 # ---------------------------------------------------------------------------
 
-# calculateSwap(address,uint128,bool,bool,uint256) → 0x2764cd0b
+# PoolInformation.calculateSwap(address,uint128,bool,bool,uint256) -> 0x2764cd0b
 _SELECTOR_CALCULATE_SWAP: bytes = bytes.fromhex("2764cd0b")
+
+# MaverickV2Quoter.calculateSwap(address,uint128,bool,bool,int32) -> 0x49b59311
+_SELECTOR_QUOTER_CALCULATE_SWAP: bytes = bytes.fromhex("49b59311")
+
+#: Maverick V2 Quoter on Base (official static quote contract)
+MAVERICK_V2_QUOTER_ADDRESS: str = "0xb40afdb85a07f37ae217e7d6462e609900dd8d7a"
 
 # tokenA() → 0x0fc63d10
 _SELECTOR_TOKEN_A: bytes = bytes.fromhex("0fc63d10")
@@ -125,13 +131,10 @@ def _encode_calculate_swap(
 
 
 def _decode_calculate_swap(hex_result: str) -> tuple[int, int]:
-    """Decode the response of ``PoolInformation.calculateSwap``.
-
-    Returns tuple (return_amount, end_sqrt_price) both as uint256.
-
-    The return_amount is the output token amount when exactOutput=False.
-    """
+    """Decode PoolInformation.calculateSwap (2 return words)."""
     raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if not raw:
+        raise ValueError("calculateSwap response too short: 0 hex chars, expected >= 128")
     if len(raw) < 128:
         raise ValueError(
             f"calculateSwap response too short: {len(raw)} hex chars, expected >= 128"
@@ -139,6 +142,50 @@ def _decode_calculate_swap(hex_result: str) -> tuple[int, int]:
     return_amount = int(raw[:64], 16)
     end_sqrt_price = int(raw[64:128], 16)
     return return_amount, end_sqrt_price
+
+
+def _encode_quoter_calculate_swap(
+    pool_address: str,
+    amount_in: int,
+    token_a_in: bool,
+    *,
+    exact_output: bool = False,
+    tick_limit: int = 0,
+) -> str:
+    """Encode MaverickV2Quoter.calculateSwap(pool, amount, tokenAIn, exactOutput, tickLimit)."""
+    addr_bytes = int(pool_address, 16).to_bytes(32, "big")
+    amount_bytes = amount_in.to_bytes(32, "big")
+    token_a_in_bytes = (1 if token_a_in else 0).to_bytes(32, "big")
+    exact_output_bytes = (1 if exact_output else 0).to_bytes(32, "big")
+    tick = int(tick_limit)
+    if tick < 0:
+        tick_bytes = (tick + 2**256).to_bytes(32, "big")
+    else:
+        tick_bytes = tick.to_bytes(32, "big")
+    calldata = (
+        _SELECTOR_QUOTER_CALCULATE_SWAP
+        + addr_bytes
+        + amount_bytes
+        + token_a_in_bytes
+        + exact_output_bytes
+        + tick_bytes
+    )
+    return "0x" + calldata.hex()
+
+
+def _decode_quoter_calculate_swap(hex_result: str) -> tuple[int, int, int]:
+    """Decode MaverickV2Quoter.calculateSwap -> (amountIn, amountOut, gasEstimate)."""
+    raw = hex_result[2:] if hex_result.startswith("0x") else hex_result
+    if not raw:
+        raise ValueError("quoter calculateSwap response too short: 0 hex chars")
+    if len(raw) < 192:
+        raise ValueError(
+            f"quoter calculateSwap response too short: {len(raw)} hex chars, expected >= 192"
+        )
+    amount_in = int(raw[:64], 16)
+    amount_out = int(raw[64:128], 16)
+    gas_estimate = int(raw[128:192], 16)
+    return amount_in, amount_out, gas_estimate
 
 
 # ---------------------------------------------------------------------------

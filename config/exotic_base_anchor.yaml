@@ -260,11 +260,11 @@ m9_dex_productivity:
   balancer_vault:
     enabled_for_discovery: true
     enabled_for_productive: false
-    reason_if_disabled: "No M9 route_qsr proof on Balancer legs in latest diagnostic"
+    reason_if_disabled: "Distinct-pricing quote lane not validated (quote-smoke 0 quoteable)"
   maverick_v2:
     enabled_for_discovery: true
     enabled_for_productive: false
-    reason_if_disabled: "Sparse configured pools; not in latest route_qsr pass set"
+    reason_if_disabled: "Distinct-pricing quote lane not validated (quote-smoke 0 quoteable)"
   pancakeswap_v3:
     enabled_for_discovery: true
     enabled_for_productive: true

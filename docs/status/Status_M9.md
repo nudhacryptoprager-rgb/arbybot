@@ -8,7 +8,7 @@
 
 **Verified vs bridge (розділено):** canonical `m9_graph_latest.json` (`qsr≈0.89`, inventory=`m9_verified_inventory`) підтверджує **QSR contour**, не M8→M9 ingestion. Bridge-shadow (fresh 2026-06-05): `data/tmp/m9_graph_bridge_shadow_latest.json` — `bridge_cycles_found=0`, `cycles_with_m8_pool=0`, `cross_mechanic_cycles=0`, `graph_edges_from_m8=2`; productive diagnostic **2 routes** (`route_qsr=0.50`). **Dynamic M8→M9 bridge ingestion не доведений.**
 
-**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (bridge-shadow lane)** — `data/tmp/m8_hot_path_latest.json`: `duration_fulfilled=true`, `ws_health_status=OK_RECONNECTED`, `quote_rpc_provider=alchemy`, `hot_path_events_seen=314`, `transition_triggers_1_to_2=10`, `hot_path_mirrors_found=1`, `hot_path_cross_mechanic_candidates=1`, `external_hints_enabled=true`, `crossdex_transition_rate=0.0318`, `second_venue_source={dexscreener:10}`, `acceptance.ready_for_bridge_shadow=true`. **120m run** лишається `PARTIAL_INFRA_ONLY` (0 transitions). Batch expansion `connector_routes_count=0` — наступний кодовий фокус: `T-C + C-anchor` synthesis, не більше same-DEX V4 hints. Economics **не** доведена.
+**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (topology lane)** — `data/tmp/m8_hot_path_latest.json`: `transition_triggers_1_to_2=10`. **Hard gate (code):** `DISTINCT_PRICING_BALANCER_MAVERICK_LANES_NOT_READY` — per-lane acceptance: `curve_lane_ready`, `balancer_lane_ready`, `maverick_lane_ready` окремо; Curve-only **не** задовольняє `distinct_pricing_all_lanes_ready`. **Поточний стан:** Curve partial ready (`curve_stable=26`); Balancer/Maverick discovery+quote lanes **not runtime-validated** (`balancer=0`, `maverick=0`). Economics claim заборонений до `cycles_quoteable_with_distinct_pricing_pool > 0`. Batch expansion `connector_routes_count=0` лишається blocker для `T-C + C-anchor`.
 
 **External pool hints (Фаза 1.6):** `external_pool_hints_status: RUNTIME_VALIDATED` — pre-3h regen: `438 tokens`, `681 pools`, `262 verified`, `tcr=0.5982`. DexScreener/GeckoTerminal/`thegraph_token_api` + `new_pools_backfill` (5 pages). Hot-path застосовує hints → `10` transitions via `dexscreener`. **M9 bridge-shadow 30m** (post-acceptance): `data/tmp/m9_graph_bridge_shadow_latest.json` — `cycles_found=5952`, `cycles_quoteable=0`, `cycles_positive_gross=0`, `gate_acceptance=false` — **не** profit/M9 PASS.
 
@@ -75,6 +75,29 @@
 | Bridge-shadow (shadow inv) | `cycles_found` / `cycles_with_m8_pool` / `cross_mechanic_cycles` | **0** / **0** / **0** (3 tokens, 4 edges post-filter) |
 
 **Existence-lane:** **BLOCKED** — `M8_2_FRESH_MULTI_VENUE_UNIVERSE_TOO_SMALL`. Після свіжого sniper `registry_multi_venue` лишається **1** → Phase 4 decision: batch mirror-resolve недостатній без hot-path (див. `BRANCH_BUILD_GUIDE` Фаза 4).
+
+**Session 2026-06-08 distinct-pricing quote RCA (Balancer/Maverick/Curve):**
+
+**Status: BLOCKED** — distinct-pricing **coverage + quote smoke improved**; Balancer/Maverick quote lanes **runtime-validated**; Curve lane **restored in shadow** but **quote not ready** (`curve_quoteable_routes=0`, indices partial **5/32**). `connector_routes_count=0`. **No M9 economics claim.** **Do not run M9 shadow** until `curve_routes_ready>0` **and** `balancer_quoteable_routes + maverick_quoteable_routes > 0` (B/M gate met; Curve gate **not** met).
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Balancer index | verified / quote-smoke OK | **29** / **18** (`balancer_queries` via Base `0x300Ab…`; web3 ABI encode) |
+| Maverick index | verified / quote-smoke OK | **97** / **75** (`maverick_quoter` `0x49b59311`; fix: quoter≠pool_info) |
+| Curve discovery | admitted pools | **50** → **32** in shadow bridge |
+| Curve indices | `QUOTE_OK_INT128` pools | **5** / 32 (27 failed/skip on public RPC) |
+| Expansion batch | routes admitted | **1169** (`connector_routes_count=0`) |
+| Shadow bridge | active balancer / maverick / curve | **94** / **149** / **32** |
+| Quote lane (shadow) | balancer / maverick / curve quoteable | **79** / **90** / **0** |
+| Debug artifacts | balancer / maverick quote debug | present (`m9_balancer_quote_debug_latest.json`, `m9_maverick_quote_debug_latest.json`) |
+| Productive admission | balancer/maverick `enabled_for_productive` | **false** until productive gate + Curve quote ready |
+
+**Session 2026-06-07 distinct-pricing lane refresh (superseded partial):**
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Curve discovery | admitted pools | **6** (artifact) → **26** in bridge (prior run) |
+| Distinct-pricing lane | curve-only `distinct_pricing_lane_ready=true` | **invalid** per-lane gate |
 
 **Session 2026-06-07 3h hot-path + M9 bridge-shadow (M8.2 acceptance):**
 

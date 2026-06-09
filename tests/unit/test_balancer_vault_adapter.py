@@ -73,6 +73,22 @@ class TestEncodeQueryBatchSwap:
         # Actual ABI layout: >=4 + 224 (static head) + swaps + assets = several hundred bytes
         assert len(data) >= 4 + 224, f"Expected >={4+224} bytes, got {len(data)}"
 
+    def test_multi_asset_pool_uses_correct_indices(self):
+        assets = [
+            "0x" + "11" * 20,
+            TOKEN_IN,
+            TOKEN_OUT,
+        ]
+        data = _encode_query_batch_swap(
+            pool_id=POOL_ID,
+            token_in_addr=TOKEN_IN,
+            token_out_addr=TOKEN_OUT,
+            amount_in=AMOUNT_IN,
+            all_assets=assets,
+        )
+        assert data[:4] == _SELECTOR_QUERY_BATCH_SWAP
+        assert len(data) > 4 + 224
+
     def test_returns_bytes(self):
         data = _encode_query_batch_swap(
             pool_id=POOL_ID,

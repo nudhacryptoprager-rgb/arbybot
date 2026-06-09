@@ -60,6 +60,40 @@ _SELECTOR_QUERY_BATCH_SWAP = bytes.fromhex("f84d066e")
 # SwapKind: 0 = GIVEN_IN
 _SWAP_KIND_GIVEN_IN = 0
 
+_QUERY_BATCH_SWAP_ABI = [
+    {
+        "name": "queryBatchSwap",
+        "type": "function",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "kind", "type": "uint8"},
+            {
+                "name": "swaps",
+                "type": "tuple[]",
+                "components": [
+                    {"name": "poolId", "type": "bytes32"},
+                    {"name": "assetInIndex", "type": "uint256"},
+                    {"name": "assetOutIndex", "type": "uint256"},
+                    {"name": "amount", "type": "uint256"},
+                    {"name": "userData", "type": "bytes"},
+                ],
+            },
+            {"name": "assets", "type": "address[]"},
+            {
+                "name": "funds",
+                "type": "tuple",
+                "components": [
+                    {"name": "sender", "type": "address"},
+                    {"name": "fromInternalBalance", "type": "bool"},
+                    {"name": "recipient", "type": "address"},
+                    {"name": "toInternalBalance", "type": "bool"},
+                ],
+            },
+        ],
+        "outputs": [{"name": "", "type": "int256[]"}],
+    }
+]
+
 
 def _encode_query_batch_swap(
     pool_id: str,
@@ -68,100 +102,56 @@ def _encode_query_batch_swap(
     amount_in: int,
     sender: str = "0x" + "0" * 40,
     recipient: str = "0x" + "0" * 40,
+    *,
+    all_assets: Optional[List[str]] = None,
 ) -> bytes:
-    """Encode a single-hop ``queryBatchSwap`` call for a Balancer pool.
+    """Encode a single-hop ``queryBatchSwap`` call for a Balancer pool."""
+    from web3 import Web3
 
-    This encodes the minimal ABI for a 1-pool, 2-token GIVEN_IN swap.
+    token_in_addr = token_in_addr.lower()
+    token_out_addr = token_out_addr.lower()
+    if all_assets is None:
+        all_assets = [token_in_addr, token_out_addr]
+    else:
+        all_assets = [a.lower() for a in all_assets]
+    try:
+        asset_in_index = all_assets.index(token_in_addr)
+        asset_out_index = all_assets.index(token_out_addr)
+    except ValueError as exc:
+        raise ValueError(
+            f"token pair not in all_assets: {token_in_addr} -> {token_out_addr}"
+        ) from exc
 
-    ABI encoding layout (all uint256 aligned):
-    - selector (4 bytes)
-    - kind (uint8 as uint256)
-    - offset to swaps array (uint256)
-    - offset to assets array (uint256)
-    - funds struct inline (4 × uint256)
-    - swaps array: length + 1 element (5 × uint256 + bytes offset + bytes length)
-    - assets array: length + 2 addresses
-    """
-    zero_addr = "0x" + "0" * 40
-
-    # Canonicalize addresses (lowercase, 20-byte)
-    pool_id_bytes = bytes.fromhex(pool_id.replace("0x", ""))[:32]  # pool_id is bytes32
-    token_in_int = int(token_in_addr, 16)
-    token_out_int = int(token_out_addr, 16)
-    sender_int = int(sender, 16)
-    recipient_int = int(recipient, 16)
-
-    # Build static head (kind + 2 offsets + funds)
-    kind_enc = _SWAP_KIND_GIVEN_IN.to_bytes(32, "big")
-
-    # The ABI for queryBatchSwap has:
-    #   arg[0]: kind (uint8)
-    #   arg[1]: swaps[] (dynamic)
-    #   arg[2]: assets[] (dynamic)
-    #   arg[3]: funds (FundManagement struct — 4 slots)
-    #
-    # Static head layout (slot positions, 0-based 32-byte words):
-    #   0: kind
-    #   1: offset to swaps[] data (relative to arg[0] start)
-    #   2: offset to assets[] data
-    #   3-6: funds (sender, fromInternalBalance, recipient, toInternalBalance)
-    #
-    # swaps[] data starts at byte offset = 7 * 32 = 224 (from arg start)
-    # assets[] data starts after swaps[] (dynamic, computed below)
-
-    # 1 swap × 5 uint256 + 1 dynamic bytes (empty, offset + len = 2 uint256)
-    # swap element layout: poolId(bytes32), assetInIndex(uint256), assetOutIndex(uint256),
-    #                      amount(uint256), userData_offset(uint256) [relative to element start]
-    #                      userData_length(uint256), userData_bytes (none)
-    # Total per swap = 6 uint256 = 192 bytes
-    # swaps[] ABI block = length(1 uint256) + 1 element (192 bytes) = 224 bytes
-
-    # Offsets (relative to start of data section, i.e., after selector)
-    # static portion: kind(32) + offset_swaps(32) + offset_assets(32) + funds(4×32) = 7 × 32 = 224
-    swaps_offset = 7 * 32   # 224 bytes
-    # swaps block: length(32) + 1 element × 6 slots(192) = 224 bytes
-    assets_offset = swaps_offset + 32 + 6 * 32  # 224 + 224 = 448
-
-    # Funds struct
-    from_internal = 0
-    to_internal = 0
-
-    # Static head (7 × 32 bytes)
-    head = (
-        kind_enc
-        + swaps_offset.to_bytes(32, "big")
-        + assets_offset.to_bytes(32, "big")
-        + sender_int.to_bytes(32, "big")
-        + from_internal.to_bytes(32, "big")
-        + recipient_int.to_bytes(32, "big")
-        + to_internal.to_bytes(32, "big")
+    pool_id_bytes = bytes.fromhex(pool_id.replace("0x", ""))[:32]
+    w3 = Web3()
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(BALANCER_VAULT_ADDRESS),
+        abi=_QUERY_BATCH_SWAP_ABI,
     )
-
-    # Swaps array: length=1, then one BatchSwapStep
-    # BatchSwapStep: {bytes32 poolId, uint256 assetInIndex, uint256 assetOutIndex,
-    #                 uint256 amount, bytes userData}
-    # For ABI encoding of struct with bytes (dynamic), we inline the bytes offset
-    # relative to the start of the struct encoding.
-    # userData is empty → offset points 5*32=160 bytes into struct, length=0
-    userData_offset_in_struct = 5 * 32  # 5 preceding uint256 fields
-    swap_step = (
-        pool_id_bytes  # bytes32 poolId (already 32 bytes)
-        + (0).to_bytes(32, "big")  # assetInIndex = 0
-        + (1).to_bytes(32, "big")  # assetOutIndex = 1
-        + amount_in.to_bytes(32, "big")  # amount
-        + userData_offset_in_struct.to_bytes(32, "big")  # userData offset (relative to struct start)
-        + (0).to_bytes(32, "big")  # userData length = 0
+    hex_data = contract.encode_abi(
+        "queryBatchSwap",
+        args=[
+            _SWAP_KIND_GIVEN_IN,
+            [
+                (
+                    pool_id_bytes,
+                    asset_in_index,
+                    asset_out_index,
+                    amount_in,
+                    b"",
+                )
+            ],
+            [Web3.to_checksum_address(a) for a in all_assets],
+            (
+                Web3.to_checksum_address(sender.lower()),
+                False,
+                Web3.to_checksum_address(recipient.lower()),
+                False,
+            ),
+        ],
     )
-    swaps_block = (1).to_bytes(32, "big") + swap_step  # length=1 + element
-
-    # Assets array: 2 elements [token_in, token_out]
-    assets_block = (
-        (2).to_bytes(32, "big")
-        + token_in_int.to_bytes(32, "big")
-        + token_out_int.to_bytes(32, "big")
-    )
-
-    return _SELECTOR_QUERY_BATCH_SWAP + head + swaps_block + assets_block
+    raw = hex_data[2:] if hex_data.startswith("0x") else hex_data
+    return bytes.fromhex(raw)
 
 
 def _decode_query_batch_swap(hex_result: str) -> Tuple[int, int]:

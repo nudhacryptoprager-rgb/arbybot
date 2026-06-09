@@ -996,7 +996,57 @@ def _expand_batch_token_neighborhood(
     batch_hint_metrics["second_venue_source"] = dict(
         (external_hints_artifact or {}).get("metrics", {}).get("second_venue_source") or {}
     )
+    from m8.discovery.specialized_index_merge import (
+        merge_specialized_index_batch,
+        secondary_watchlist_tokens,
+    )
+
+    secondary_tokens = secondary_watchlist_tokens(
+        external_hints_artifact=external_hints_artifact,
+        mirror_index=mirror_index,
+    )
+    batch_hint_metrics["specialized_index_secondary_tokens"] = len(secondary_tokens)
+    batch_hint_metrics["specialized_index_route_counts"] = merge_specialized_index_batch(
+        mirror_index=mirror_index,
+        token_addrs=token_addrs,
+        reg_tokens=reg_tokens,
+        allowed_dex_ids=allowed_dex_ids,
+        productive_dexes=productive_dexes,
+        secondary_tokens=secondary_tokens,
+        seen_route_keys=seen_route_keys,
+        routes_admitted=routes_admitted,
+        token_presence_routes=token_presence_routes,
+    )
+    from m8.discovery.specialized_index_merge import merge_connector_routes_from_presence
+
+    batch_hint_metrics["specialized_connector_routes_added"] = (
+        merge_connector_routes_from_presence(
+            chain=chain,
+            config=config,
+            mirror_index=mirror_index,
+            resolver=resolver,
+            dex_rows=dex_rows,
+            allowed_dex_ids=allowed_dex_ids,
+            productive_dexes=productive_dexes,
+            token_presence_routes=token_presence_routes,
+            seen_route_keys=seen_route_keys,
+            routes_admitted=routes_admitted,
+            connector_routes=connector_routes,
+            dry_run=dry_run,
+        )
+    )
     pools_found_by_dex: Counter = Counter(r["dex_id"] for r in routes_admitted)
+    from m8.discovery.distinct_pricing_lane import (
+        build_per_adapter_lane_report,
+        evaluate_distinct_pricing_lane,
+    )
+
+    per_adapter_lane_report = build_per_adapter_lane_report(
+        routes_admitted=routes_admitted,
+        reject_rows=all_reject_rows,
+        pools_found_by_dex=dict(pools_found_by_dex),
+    )
+    distinct_lane = evaluate_distinct_pricing_lane(routes_admitted)
     summary = {
         "expansion_mode": "token_neighborhood_batch",
         "tokens_in": len(token_addrs),
@@ -1020,6 +1070,8 @@ def _expand_batch_token_neighborhood(
             reject_rows=all_reject_rows,
             routes_admitted=routes_admitted,
         ),
+        "per_adapter_lane_report": per_adapter_lane_report,
+        **distinct_lane,
     }
     return {
         "schema_version": SCHEMA_VERSION,

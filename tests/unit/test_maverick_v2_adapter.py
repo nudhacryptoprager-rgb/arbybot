@@ -27,6 +27,18 @@ _TOKEN_IN = "0x" + "1" * 40
 _TOKEN_OUT = "0x" + "2" * 40
 
 
+class TestQuoterEncode:
+    def test_quoter_selector_prefix(self):
+        from dex.adapters.maverick_v2 import (
+            _SELECTOR_QUOTER_CALCULATE_SWAP,
+            _encode_quoter_calculate_swap,
+        )
+
+        data = _encode_quoter_calculate_swap(_POOL_ADDR, 10_000, True, tick_limit=0)
+        assert data.startswith("0x")
+        assert bytes.fromhex(data[2:10]) == _SELECTOR_QUOTER_CALCULATE_SWAP
+
+
 class TestMaverickV2AdapterConstants:
     """Verify module-level constants are sane."""
 

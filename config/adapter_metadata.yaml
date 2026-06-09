@@ -185,8 +185,19 @@ balancer:
   # Canonical Balancer V2 Vault — same address on all EVM chains where Balancer V2 is deployed.
   # This is a trust anchor: do not change without on-chain verification.
   vault_address: "0xba12222222228d8ba445958a75a0704d566bf2c8"
+  graphql_url: "https://api-v3.balancer.fi/graphql"
+  graphql_user_agent: "arby-m8-indexer/1.0"
+  protocol_version_filter: [2]
+  graphql_first: 80
+  min_liquidity_usd: 500
+  quote_smoke_sender: "0x000000000000000000000000000000000000dEaD"
+  quote_smoke_recipient: "0x000000000000000000000000000000000000dEaD"
+  quote_debug_artifact: "data/tmp/m9_balancer_quote_debug_latest.json"
+  queries_address: "0xe39b5e3b6d74016b2f6a9673d7493b6df549d5"
 
   base:
+    # BalancerQueries on Base (differs from Ethereum mainnet deployment).
+    queries_address: "0x300ab2038eac391f26d9f895dc61f8f66a548833"
     pools:
       # -----------------------------------------------------------------------
       # Balancer pools on Base
@@ -267,7 +278,16 @@ balancer:
 maverick:
   base:
     pool_info_address: "0x67b70f73bee50ab48f0e8d75b94d4f6dced6ad72"  # PoolInformation
+    quoter_address: "0xb40afdb85a07f37ae217e7d6462e609900dd8d7a"      # MaverickV2Quoter
     factory_address: "0x0a7e848aca42d879ef06507fca0e7b33a0a63c1e"   # Factory
+    lookup_pair_end_index: 32
+    lookup_max_focus_tokens: 60
+    lookup_max_pairs: 150
+    pool_created_event: "PoolCreated(address,uint8,uint256,uint256,uint256,uint256,int32,address,address,uint8,address)"
+    factory_pagination_page_size: 50
+    factory_pagination_max_pools: 200
+    quote_debug_artifact: "data/tmp/m9_maverick_quote_debug_latest.json"
+    log_lookback_blocks: 50000
 
     pools:
       # -----------------------------------------------------------------------

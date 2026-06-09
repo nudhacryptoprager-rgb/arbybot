@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 log = logging.getLogger(__name__)
 
-QUOTE_OK_PREFIXES = ("QUOTE_OK",)
+QUOTE_OK_PREFIXES = ("QUOTE_OK", "MAVERICK_FACTORY_VERIFIED")
 
 DEFAULT_CURVE_DISCOVERY = Path("data/runs/_rolling/m9_curve_discovery_latest.json")
 DEFAULT_CURVE_INDICES = Path("data/runs/_rolling/m9_curve_pool_indices_latest.json")
@@ -50,6 +50,7 @@ class _BalancerMirrorEntry:
     pool_kind: str
     assets: Tuple[str, ...]
     probe_status: Optional[str]
+    quote_smoke_status: Optional[str] = None
 
 
 @dataclass
@@ -58,6 +59,7 @@ class _MaverickMirrorEntry:
     token_a: str
     token_b: str
     probe_status: Optional[str]
+    quote_smoke_status: Optional[str] = None
 
 
 @dataclass
@@ -400,8 +402,8 @@ class MirrorIndex:
                         "token1_symbol": t1s,
                         "token0_addr": t0a,
                         "token1_addr": t1a,
-                        "quote_smoke": ent.probe_status or "INDEXED",
-                        "quote_smoke_status": ent.probe_status or "INDEXED",
+                        "quote_smoke": ent.quote_smoke_status or ent.probe_status or "INDEXED",
+                        "quote_smoke_status": ent.quote_smoke_status or ent.probe_status or "INDEXED",
                         "resolve_source": "balancer_pool_index",
                         "factory_verified": True,
                         "expansion_route_kind": "token_presence",
@@ -432,8 +434,8 @@ class MirrorIndex:
                     "token1_symbol": t1s,
                     "token0_addr": t0a,
                     "token1_addr": t1a,
-                    "quote_smoke": ent.probe_status or "QUOTE_OK",
-                    "quote_smoke_status": ent.probe_status or "QUOTE_OK",
+                    "quote_smoke": ent.quote_smoke_status or ent.probe_status or "QUOTE_OK",
+                    "quote_smoke_status": ent.quote_smoke_status or ent.probe_status or "QUOTE_OK",
                     "resolve_source": "maverick_pool_index",
                     "factory_verified": True,
                     "expansion_route_kind": "token_presence",
@@ -487,13 +489,16 @@ def _balancer_entry_from_raw(
         return None
     pool_addr = str(pool.get("pool_address") or pool_id[:42]).lower()
     vault = str(pool.get("vault_address") or vault_default).lower()
+    probe = str(pool.get("probe_status")) if pool.get("probe_status") else None
+    qss = pool.get("quote_smoke_status")
     return _BalancerMirrorEntry(
         pool_id=pool_id,
         pool_address=pool_addr,
         vault_address=vault,
         pool_kind=str(pool.get("pool_kind", "stable")),
         assets=assets,
-        probe_status=str(pool.get("probe_status")) if pool.get("probe_status") else None,
+        probe_status=probe,
+        quote_smoke_status=str(qss) if qss is not None else probe,
     )
 
 
@@ -504,11 +509,14 @@ def _maverick_entry_from_raw(pool: Dict[str, Any]) -> Optional[_MaverickMirrorEn
     if not pool_addr or not token_a or not token_b:
         return None
     probe = pool.get("probe_status")
+    qss = pool.get("quote_smoke_status")
+    probe_str = str(probe) if probe is not None else None
     return _MaverickMirrorEntry(
         pool_address=pool_addr,
         token_a=token_a,
         token_b=token_b,
-        probe_status=str(probe) if probe is not None else None,
+        probe_status=probe_str,
+        quote_smoke_status=str(qss) if qss is not None else probe_str,
     )
 
 

@@ -1256,6 +1256,17 @@ def build_bridge_inventory(
     # ------------------------------------------------------------------
     final_active = _without_curve_routes(base_active + m8_new_routes)
     try:
+        from m8.discovery.distinct_pricing_lane import evaluate_distinct_pricing_lane
+
+        _distinct_lane = evaluate_distinct_pricing_lane(final_active)
+        bridge_source_metrics.update(_distinct_lane)
+        if not _distinct_lane.get("distinct_pricing_lane_ready"):
+            bridge_source_metrics["distinct_pricing_blocker"] = (
+                _distinct_lane.get("existence_blocker")
+            )
+    except Exception as _dpl_exc:
+        bridge_source_metrics["distinct_pricing_lane_error"] = str(_dpl_exc)[:200]
+    try:
         from m9.graph_arb.pool_quality import (
             annotate_routes_pool_quality,
             productive_admission_histogram,

@@ -72,15 +72,17 @@ def bridge_shadow_acceptance_from_candidates(
         and routes >= 4
         and unique >= 3
     )
-    ready = topology_ready and lane_eligible
-    return {
+    routes_list = list(best_row.get("routes_admitted") or [])
+    from m8.discovery.distinct_pricing_lane import merge_distinct_pricing_into_acceptance
+
+    base = {
         "token_seen_on_dexes_gte_2": token_seen >= 2,
         "connector_tokens_gte_1": connectors >= 1,
         "active_routes_gte_4": routes >= 4,
         "unique_tokens_gte_3": unique >= 3,
         "subgraph_ready": topology_ready,
         "bridge_shadow_lane_eligible": lane_eligible,
-        "ready_for_bridge_shadow": ready,
+        "ready_for_bridge_shadow": topology_ready and lane_eligible,
         "token_seen_on_dexes": token_seen,
         "connector_tokens": connectors,
         "active_routes": routes,
@@ -88,6 +90,7 @@ def bridge_shadow_acceptance_from_candidates(
         "best_token_class": token_class or None,
         "best_mechanic_pair": mechanic_pair or None,
     }
+    return merge_distinct_pricing_into_acceptance(base, routes=routes_list)
 
 
 def merge_per_dex_breakdown(candidates: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
