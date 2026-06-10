@@ -31,7 +31,11 @@ def balancer_reason_for_code(code: str) -> Optional[str]:
     return entry[1] if entry else None
 
 
-def classify_balancer_revert(err: str) -> Tuple[str, Dict[str, Any]]:
+def classify_balancer_revert(
+    err: str,
+    *,
+    has_metadata: bool = False,
+) -> Tuple[str, Dict[str, Any]]:
     """Return (reject_reason, detail) for a Balancer quote failure."""
     code = extract_balancer_code(err)
     if code and code in _BALANCER_CODES:
@@ -41,6 +45,14 @@ def classify_balancer_revert(err: str) -> Tuple[str, Dict[str, Any]]:
         return "BALANCER_QUOTE_REVERT", {"balancer_code": code, "balancer_reason": "unknown_balancer_code"}
     if "token pair not in all_assets" in (err or "").lower():
         return "QUOTE_CONFIG_MISSING__BALANCER_ASSETS", {"balancer_reason": "token_pair_not_in_assets"}
+    if "balancer_metadata_incomplete" in (err or "").lower() or (
+        "missing pool_id or balancer_assets" in (err or "").lower()
+    ):
+        return "BALANCER_METADATA_INCOMPLETE", {"balancer_reason": "metadata_incomplete"}
+    if has_metadata:
+        return "BALANCER_UNKNOWN_REVERT_WITH_METADATA", {
+            "balancer_reason": "revert_with_complete_metadata",
+        }
     return "QUOTE_REVERT", {}
 
 
@@ -114,17 +126,19 @@ def classify_maverick_revert(err: str) -> Tuple[str, Dict[str, Any]]:
         return "MAVERICK_ADAPTER_ENCODE_ERROR", {"maverick_reason": "encode_error"}
     if "execution reverted" in low or "revert" in low:
         return "MAVERICK_QUOTE_REVERT", {"maverick_reason": "execution_reverted"}
-    return "QUOTE_REVERT", {}
+    return "MAVERICK_QUOTE_REVERT", {"maverick_reason": "unclassified_maverick_failure"}
 
 
 def classify_quote_failure(
     adapter_type: str,
     err: str,
+    *,
+    has_balancer_metadata: bool = False,
 ) -> Tuple[str, Dict[str, Any]]:
     """Map raw exception text to a specific reject_reason + detail dict."""
     at = (adapter_type or "").lower()
     if at.startswith("balancer"):
-        return classify_balancer_revert(err)
+        return classify_balancer_revert(err, has_metadata=has_balancer_metadata)
     if at == "maverick_v2":
         return classify_maverick_revert(err)
     if "execution reverted" in (err or "").lower() or "revert" in (err or "").lower():
@@ -155,6 +169,8 @@ HARD_QUOTE_REJECTS = frozenset(
         "BALANCER_INSUFFICIENT_BALANCE",
         "BALANCER_POOL_NOT_REGISTERED",
         "BALANCER_QUOTE_REVERT",
+        "BALANCER_METADATA_INCOMPLETE",
+        "BALANCER_UNKNOWN_REVERT_WITH_METADATA",
         "MAVERICK_NO_LIQUIDITY",
         "MAVERICK_BAD_DIRECTION",
         "MAVERICK_BAD_POOL_CONFIG",

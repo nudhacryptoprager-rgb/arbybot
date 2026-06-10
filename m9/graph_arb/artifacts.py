@@ -108,6 +108,7 @@ def _build_cycle_summary(
     qr: "CycleQuoteResult",
     m8_pool_addrs: "Optional[frozenset[str]]" = None,
     cost_profile: "Optional[Dict[str, Any]]" = None,
+    route_meta_by_pool: "Optional[Dict[str, Dict[str, Any]]]" = None,
 ) -> Dict[str, Any]:
     cycle = qr.cycle
     # Per-cycle cost estimate (when cost_profile is available)
@@ -139,12 +140,14 @@ def _build_cycle_summary(
         "cycle_origin": _compute_cycle_origin(cycle, m8_pool_addrs),
         "estimated_cost_bps": _est_cost_cycle,
         "cost_adjusted_net_bps": _cost_adj_net_cycle,
+        "legs": _build_per_leg_rca(qr, route_meta_by_pool),
     }
 
 
 def _build_top_opportunity(
     qr: CycleQuoteResult,
     cost_profile: "Optional[Dict[str, Any]]" = None,
+    route_meta_by_pool: "Optional[Dict[str, Dict[str, Any]]]" = None,
 ) -> Dict[str, Any]:
     """Build one operator-facing opportunity row from a CycleQuoteResult.
 
@@ -243,23 +246,48 @@ def _build_top_opportunity(
         "fee_drag_bps": fee_drag_bps,
         "pre_fee_gross_bps": pre_fee_gross_bps,
         "loss_reason": loss_reason,
-        "legs": _build_per_leg_rca(qr),
+        "legs": _build_per_leg_rca(qr, route_meta_by_pool),
     }
 
 
-def _build_per_leg_rca(qr: CycleQuoteResult) -> List[Dict[str, Any]]:
+def _build_per_leg_rca(
+    qr: CycleQuoteResult,
+    route_meta_by_pool: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Build per-leg RCA list: normalized in/out amounts, implied price, pool, dex, fee."""
     cycle = qr.cycle
     result: List[Dict[str, Any]] = []
     for i, edge in enumerate(cycle.edges):
+        pool_lc = str(edge.pool_address or "").lower()
+        inv_row = (route_meta_by_pool or {}).get(pool_lc) or {}
         leg_data: Dict[str, Any] = {
             "leg_idx": i,
             "token_in": edge.token_in_sym,
             "token_out": edge.token_out_sym,
             "pool_address": edge.pool_address,
             "dex_id": edge.dex_id,
+            "adapter_type": edge.adapter_type,
             "fee_bps": round(edge.fee_bps, 4),
             "factory_verified": edge.factory_verified,
+            "effective_depth_usd": edge.effective_depth_usd or inv_row.get(
+                "effective_depth_usd"
+            ),
+            "productive_quote_status": inv_row.get("productive_quote_status"),
+            "balancer_assets_present": bool(
+                edge.balancer_assets or inv_row.get("balancer_assets")
+            ),
+            "pool_id": edge.pool_id or inv_row.get("pool_id"),
+            "token_in_addr": edge.token_in_addr,
+            "token_out_addr": edge.token_out_addr,
+            "pool_lane_probe_amount": (
+                edge.maverick_pool_lane_probe_amount
+                or inv_row.get("maverick_pool_lane_probe_amount")
+            ),
+            "token_a_in_probe": (
+                edge.maverick_token_a_in_probe
+                if edge.maverick_token_a_in_probe is not None
+                else inv_row.get("maverick_token_a_in_probe")
+            ),
         }
         # Per-leg quote result (ok, reject_reason, raw amounts)
         leg_result = (qr.leg_results or [])[i] if i < len(qr.leg_results or []) else None
@@ -718,6 +746,7 @@ def build_artifact(
     revert_quarantine_skipped: int = 0,
     # M8→M9 bridge provenance block (bridge_builder.build_bridge_inventory output)
     bridge_source_metrics: Optional[Dict[str, Any]] = None,
+    route_meta_by_pool: Optional[Dict[str, Dict[str, Any]]] = None,
     # M8 pool address set for cycle origin annotation in top_cycles (step 9 RCA)
     m8_pool_addrs_for_annotation: "Optional[frozenset[str]]" = None,
     # Cost model from config (cost_model.profiles.default); enables estimated_cost_bps
@@ -1282,8 +1311,19 @@ def build_artifact(
             else {}
         ),
         "scan_scope": scan_scope,
-        "top_cycles": [_build_cycle_summary(qr, m8_pool_addrs_for_annotation, _cost_profile_for_compute) for qr in top_cycles],
-        "top_opportunities": [_build_top_opportunity(qr, _cost_profile_for_compute) for qr in top_cycles],
+        "top_cycles": [
+            _build_cycle_summary(
+                qr,
+                m8_pool_addrs_for_annotation,
+                _cost_profile_for_compute,
+                route_meta_by_pool,
+            )
+            for qr in top_cycles
+        ],
+        "top_opportunities": [
+            _build_top_opportunity(qr, _cost_profile_for_compute, route_meta_by_pool)
+            for qr in top_cycles
+        ],
         "toxic_pool_families": _toxic_pool_families,
         "pool_scorecards": _pool_scorecards,
         "pool_quarantine_recommendations": _pool_quarantine_recommendations,

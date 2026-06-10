@@ -433,6 +433,9 @@ def quote_smoke_maverick(
                             "token_in": token_in,
                             "token_a_in": token_a_in,
                             "amount_in": amount,
+                            "maverick_pool_lane_probe_amount": amount,
+                            "maverick_min_quoteable_amount_raw": amount,
+                            "maverick_max_quoteable_amount_raw": 10**15,
                             "calldata_hash": hashlib.sha256(calldata.encode()).hexdigest()[:16],
                         }
                         if debug_rows is not None:

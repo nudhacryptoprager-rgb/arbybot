@@ -25,7 +25,8 @@ def test_build_cycle_rca_breaks_down_zero_quoteable():
         "cycles_by_length": {"2": 100, "3": 200, "4": 124},
         "m8_participation": {"cross_mechanic_cycles": 0},
     }
-    rca = build_cycle_rca(artifact)
+    rca = build_cycle_rca(artifact, source_artifact="data/tmp/test_shadow.json")
+    assert rca["source_graph_fingerprint"]["cycles_found"] == 424
     assert rca["summary"]["cycles_found"] == 424
     assert rca["summary"]["cycles_quoteable"] == 0
     assert rca["summary"]["cycles_found_vs_quoteable_gap"] == 424

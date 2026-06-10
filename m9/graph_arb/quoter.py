@@ -163,6 +163,10 @@ def _probe_leg(
     """
     # Cache read (only when we have a stable pool address to key on)
     cache_key: Optional[_EdgeKey] = None
+    if edge is not None:
+        from m9.graph_arb.productive_distinct_quote import cap_leg_amount_in_for_edge
+
+        amount_in = cap_leg_amount_in_for_edge(edge, amount_in)
     if use_cache and edge is not None and edge.pool_address:
         cache_key = _edge_cache_key(edge, amount_in)
         cached = edge_quote_cache.get(cache_key)
@@ -212,6 +216,12 @@ def _make_dex_route(edge: GraphEdge) -> DexRoute:
         vault_address=edge.vault_address,
         pool_kind=edge.pool_kind,
         balancer_assets=list(edge.balancer_assets) if edge.balancer_assets else None,
+        balancer_balances=list(edge.balancer_balances) if edge.balancer_balances else None,
+        maverick_pool_lane_probe_amount=edge.maverick_pool_lane_probe_amount,
+        maverick_min_quoteable_amount_raw=edge.maverick_min_quoteable_amount_raw,
+        maverick_max_quoteable_amount_raw=edge.maverick_max_quoteable_amount_raw,
+        maverick_token_a_in_probe=edge.maverick_token_a_in_probe,
+        maverick_pool_lane_token_in=edge.maverick_pool_lane_token_in,
     )
 
 
@@ -244,6 +254,10 @@ def quote_cycle_sync(
             leg_results=[],
             elapsed_s=0.0,
         )
+
+    from m9.graph_arb.per_dex_sizing import productive_cycle_size_usd_cap
+
+    size_usd = productive_cycle_size_usd_cap(cycle, size_usd, token_price_usd)
 
     # Convert size_usd to amount_in for start token (address-first price/decimals)
     start_edge = cycle.edges[0]

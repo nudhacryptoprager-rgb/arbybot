@@ -273,22 +273,26 @@ def probe_quote_raw_http(
 
             _vault = route.vault_address or BALANCER_VAULT_ADDRESS
             _pool_id = route.pool_id
-            if not _pool_id:
+            _bal_assets = getattr(route, "balancer_assets", None)
+            if not _pool_id or not _bal_assets:
                 return QuoteResult(
                     route_id=route_id,
                     size_usd=0.0,
                     amount_in=amount_in,
                     amount_out=0,
                     ok=False,
-                    reject_reason="QUOTE_CONFIG_MISSING__BALANCER_POOL_ID",
+                    reject_reason="BALANCER_METADATA_INCOMPLETE",
                     gas_estimate=None,
-                    raw_error="route.pool_id is None; add to config/adapter_metadata.yaml",
+                    raw_error=(
+                        "missing pool_id or balancer_assets; "
+                        f"pool_id={_pool_id!r} assets={bool(_bal_assets)}"
+                    ),
                 )
 
             def _bal_call(to: str, data: str) -> str:
                 return _eth_call_raw(rpc_url, to, data, client)
 
-            _bal_assets = getattr(route, "balancer_assets", None)
+            _bal_balances = getattr(route, "balancer_balances", None)
             amount_out, _bal_debug = quote_balancer_productive(
                 _bal_call,
                 pool_id=_pool_id,
@@ -297,6 +301,7 @@ def probe_quote_raw_http(
                 amount_in=amount_in,
                 vault=_vault,
                 all_assets=_bal_assets,
+                balances=_bal_balances,
                 rpc_url=rpc_url,
             )
             gas_est = None
@@ -334,12 +339,35 @@ def probe_quote_raw_http(
                         f"Maverick V2 tokenA() lookup failed for pool {pool_lc}: {_ta_exc}"
                     ) from _ta_exc
 
-            if route.token_in_index is not None:
+            _probe_tin = getattr(route, "maverick_pool_lane_token_in", None)
+            _probe_tai = getattr(route, "maverick_token_a_in_probe", None)
+            _min_raw = getattr(route, "maverick_min_quoteable_amount_raw", None)
+            _pool_lane_probe = getattr(route, "maverick_pool_lane_probe_amount", None)
+            if _probe_tin and str(_probe_tin).lower() != token_in_lc:
+                _probe_tai = None
+                _min_raw = None
+                _pool_lane_probe = None
+            if (
+                _probe_tin
+                and _probe_tai is not None
+                and str(_probe_tin).lower() == token_in_lc
+            ):
+                token_a_in = bool(_probe_tai)
+            elif route.token_in_index is not None:
                 token_a_in = bool(route.token_in_index)
             elif _token_a_addr:
                 token_a_in = token_in_lc == _token_a_addr
             else:
                 token_a_in = True
+
+            from m9.graph_arb.productive_distinct_quote import maverick_cycle_amount_in
+
+            _effective_in = maverick_cycle_amount_in(
+                amount_in,
+                pool_lane_probe_amount=_pool_lane_probe,
+                min_quoteable=_min_raw,
+                max_quoteable=getattr(route, "maverick_max_quoteable_amount_raw", None),
+            )
 
             def _mv_call(to: str, data: str) -> str:
                 return _eth_call_raw(rpc_url, to, data, client)
@@ -347,11 +375,12 @@ def probe_quote_raw_http(
             amount_out, gas_est, _mv_debug = quote_maverick_productive(
                 _mv_call,
                 pool_address=pool_lc,
-                amount_in=amount_in,
+                amount_in=_effective_in,
                 token_a_in=token_a_in,
                 chain="base",
                 token_in=token_in_lc,
                 token_a=_token_a_addr,
+                pool_lane_probe_amount=_pool_lane_probe,
             )
             quote_target = _mv_debug.get("quote_target")
             quote_selector = _mv_debug.get("quote_selector")
@@ -413,7 +442,15 @@ def probe_quote_raw_http(
         err_str = str(exc)
         from m9.graph_arb.quote_reject_classify import classify_quote_failure
 
-        reject, _detail = classify_quote_failure(route.adapter_type, err_str)
+        _bal_meta = bool(
+            getattr(route, "pool_id", None)
+            and getattr(route, "balancer_assets", None)
+        )
+        reject, _detail = classify_quote_failure(
+            route.adapter_type,
+            err_str,
+            has_balancer_metadata=_bal_meta,
+        )
         if reject == "QUOTE_RPC_ERROR" and "MAVERICK_ZERO_OUT" in err_str:
             reject = "QUOTE_ZERO_OUTPUT"
         elif reject == "QUOTE_RPC_ERROR" and (

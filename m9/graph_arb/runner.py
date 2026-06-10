@@ -851,6 +851,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     # M8→M9 bridge provenance: if inventory is a bridge inventory, extract metrics
     _bridge_source_metrics: Optional[Dict[str, Any]] = None
+    _route_meta_by_pool: Dict[str, Dict[str, Any]] = {}
     _m8_pool_addrs: "frozenset[str]" = frozenset()
     _m8_direct_pool_addrs: "frozenset[str]" = frozenset()
     _m8_derived_pool_addrs: "frozenset[str]" = frozenset()
@@ -859,6 +860,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         import json as _json_bridge
         with open(inventory_path, encoding="utf-8") as _inv_fh:
             _inv_raw = _json_bridge.load(_inv_fh)
+        from m9.graph_arb.cycle_lane_prefilter import build_route_metadata_from_routes
+
+        _route_meta_by_pool = build_route_metadata_from_routes(
+            _inv_raw.get("active_routes") or []
+        )
         _bsm = _inv_raw.get("bridge_source_metrics")
         if isinstance(_bsm, dict):
             _bridge_source_metrics = _bsm
@@ -1193,6 +1199,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
+            route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
         )
         write_artifact(artifact, artifact_path)
@@ -1247,6 +1254,25 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # -----------------------------------------------------------------------------
     topology = analyze_topology(adjacency, cycles)
     ranked = rank_cycles(cycles)
+    if _lane == "productive" and _route_meta_by_pool:
+        from m9.graph_arb.cycle_lane_prefilter import (
+            cycle_productive_readiness_score,
+            prioritize_productive_ready_cycles,
+        )
+
+        ranked = prioritize_productive_ready_cycles(ranked, _route_meta_by_pool)
+        _all_ready = sum(
+            1
+            for c in ranked
+            if cycle_productive_readiness_score(c, _route_meta_by_pool)[0]
+            == len(c.edges)
+            and len(c.edges) > 0
+        )
+        log.info(
+            "Cycle productive prefilter: all-leg-ready=%d / %d topology_cycles",
+            _all_ready,
+            len(ranked),
+        )
 
     log.info("Found %d cycles across %d tokens", len(cycles), topology.token_count)
 
@@ -1279,6 +1305,24 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         if _bridge_source_metrics is not None:
             _bridge_source_metrics["expected_cross_mechanic_cycles"] = _expected_cm_cycles
             _bridge_source_metrics["cross_mechanic_pool_addrs_tracked"] = len(_cm_pools)
+        _min_topology_cycles = int(os.environ.get("ARBY_M9_MIN_TOPOLOGY_CYCLES", "250"))
+        if len(cycles) < _min_topology_cycles:
+            log.error(
+                "BRIDGE_SHADOW_BREADTH_GATE: topology_cycles=%d < %d "
+                "(need broader graph before duration>=5m shadow). "
+                "Bypass: ARBY_BRIDGE_SHADOW_SKIP_CYCLE_GATE=1",
+                len(cycles),
+                _min_topology_cycles,
+            )
+            if _bridge_source_metrics is not None:
+                _bridge_source_metrics["existence_blocker"] = (
+                    "BRIDGE_SHADOW_TOPOLOGY_TOO_NARROW"
+                )
+                _bridge_source_metrics["topology_cycles_found"] = len(cycles)
+                _bridge_source_metrics["topology_cycles_min_required"] = (
+                    _min_topology_cycles
+                )
+            return EXIT_BRIDGE_SHADOW_CYCLE_GATE
         if not _cm_pools or _expected_cm_cycles == 0:
             log.error(
                 "BRIDGE_SHADOW_CYCLE_GATE: cross_mechanic_pools=%d expected_cycles=%d "
@@ -1335,6 +1379,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
+            route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
             spread_lifetime_block=_spread_early,
         )
@@ -1376,6 +1421,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
+            route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
         )
         write_artifact(artifact, artifact_path)
@@ -1754,6 +1800,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             bridge_source_metrics=_bridge_source_metrics,
+            route_meta_by_pool=_route_meta_by_pool or None,
             m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
             cost_model=_cost_model,
             active_rpc_by_sweep=dict(_active_rpc_by_sweep),
@@ -1961,6 +2008,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         depth_quarantine_skipped=len(_exclude_pool_addresses) if _exclude_pool_addresses else 0,
         revert_quarantine_skipped=_revert_quarantine_skipped,
         bridge_source_metrics=_bridge_source_metrics,
+        route_meta_by_pool=_route_meta_by_pool or None,
         m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
         cost_model=_cost_model,
         active_rpc_by_sweep=dict(_active_rpc_by_sweep),

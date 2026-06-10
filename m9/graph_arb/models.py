@@ -36,7 +36,13 @@ class GraphEdge:
     freshness_window: bool = False        # True when M8 sniped pool is within _FRESH_WINDOW_SECONDS
     effective_depth_usd: Optional[float] = None  # measured on-chain depth (pool_depth_probe)
     balancer_assets: Optional[tuple] = None  # Balancer: full pool asset list for queryBatchSwap
+    balancer_balances: Optional[tuple] = None  # Balancer: vault balances aligned to assets
     token_a_address: Optional[str] = None  # Maverick: pool tokenA for direction flag
+    maverick_pool_lane_probe_amount: Optional[int] = None
+    maverick_min_quoteable_amount_raw: Optional[int] = None
+    maverick_max_quoteable_amount_raw: Optional[int] = None
+    maverick_token_a_in_probe: Optional[bool] = None
+    maverick_pool_lane_token_in: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):
@@ -84,7 +90,13 @@ class GraphEdge:
             freshness_window=self.freshness_window,
             effective_depth_usd=self.effective_depth_usd,
             balancer_assets=self.balancer_assets,
+            balancer_balances=self.balancer_balances,
             token_a_address=self.token_a_address,
+            maverick_pool_lane_probe_amount=self.maverick_pool_lane_probe_amount,
+            maverick_min_quoteable_amount_raw=self.maverick_min_quoteable_amount_raw,
+            maverick_max_quoteable_amount_raw=self.maverick_max_quoteable_amount_raw,
+            maverick_token_a_in_probe=self.maverick_token_a_in_probe,
+            maverick_pool_lane_token_in=self.maverick_pool_lane_token_in,
         )
 
 

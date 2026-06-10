@@ -9,7 +9,9 @@ from dex.adapters.maverick_v2 import _SELECTOR_QUOTER_CALCULATE_SWAP
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
 from m9.graph_arb.productive_distinct_quote import (
+    balancer_cap_amount_in,
     balancer_index_row_tokens,
+    maverick_cycle_amount_in,
     quote_balancer_productive,
     quote_maverick_productive,
 )
@@ -46,6 +48,26 @@ def _maverick_quoter_ok_hex(amount_in: int, amount_out: int, gas: int = 50_000) 
 
 
 class TestProductiveDistinctQuote:
+    def test_maverick_cycle_amount_in_prefers_min_quoteable_over_huge_probe(self):
+        assert maverick_cycle_amount_in(
+            10**18,
+            pool_lane_probe_amount=10**15,
+            min_quoteable=10_000,
+            max_quoteable=10**15,
+        ) == 10_000
+
+    def test_balancer_cap_amount_in_respects_vault_balance(self):
+        assets = [_TOKEN_A, _TOKEN_B]
+        balances = [10**20, 10**12]
+        capped = balancer_cap_amount_in(
+            10**22,
+            _TOKEN_A,
+            assets=assets,
+            balances=balances,
+            max_in_ratio=0.02,
+        )
+        assert capped == int(10**20 * 0.02)
+
     def test_balancer_index_row_tokens_from_assets(self):
         row = {
             "assets": [_TOKEN_A, _TOKEN_B],
@@ -183,6 +205,7 @@ class TestProductiveDistinctQuote:
             curve_coin0_sym="",
             pool_id=_POOL_ID,
             vault_address="0xba12222222228d8ba445958a75a0704d566bf2c8",
+            balancer_assets=[_TOKEN_A, _TOKEN_B],
         )
         with patch(
             "m9.graph_arb.productive_distinct_quote._contract_has_code",

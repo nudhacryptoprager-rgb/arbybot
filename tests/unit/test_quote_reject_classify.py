@@ -50,6 +50,21 @@ def test_maverick_json_payload_quoter_revert():
     assert detail["quote_contour"] == "maverick_quoter"
 
 
+def test_balancer_metadata_incomplete():
+    reason, detail = classify_balancer_revert("BALANCER_METADATA_INCOMPLETE missing pool_id")
+    assert reason == "BALANCER_METADATA_INCOMPLETE"
+    assert detail["balancer_reason"] == "metadata_incomplete"
+
+
+def test_balancer_unknown_revert_with_metadata():
+    reason, detail = classify_balancer_revert(
+        "execution reverted",
+        has_metadata=True,
+    )
+    assert reason == "BALANCER_UNKNOWN_REVERT_WITH_METADATA"
+    assert detail["balancer_reason"] == "revert_with_complete_metadata"
+
+
 def test_maverick_json_payload_pool_direct_empty():
     payload = (
         '{"quote_contour":"pool_direct","status":"MAVERICK_QUOTE_REVERT",'

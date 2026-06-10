@@ -254,30 +254,72 @@ def _route_productive_key(route: Dict[str, Any]) -> str:
     return f"{dex}:{pool.lower()}"
 
 
-def quoteable_by_dex(
-    routes: Iterable[Dict[str, Any]],
-    *,
-    field: str = "quote_smoke_status",
-) -> Dict[str, int]:
-    """Per-dex quoteable route counts from discovery or productive status fields."""
-    counts: Counter[str] = Counter()
-    for route in routes:
-        dex = str(route.get("dex_id") or "unknown")
-        status = route.get(field) or route.get("quote_smoke")
-        if _status_quoteable(status):
-            counts[dex] += 1
-    return dict(counts)
+def _productive_keys_for_route(route: Dict[str, Any]) -> List[str]:
+    """Lookup keys for productive diagnostic maps (address + pool_id variants)."""
+    dex = str(route.get("dex_id") or "")
+    keys: List[str] = []
+    for field in ("pool_address", "pool_id"):
+        val = str(route.get(field) or "").strip().lower()
+        if val:
+            keys.append(f"{dex}:{val}")
+    return keys
 
 
-def stamp_productive_quote_status_from_artifacts(
+def enrich_balancer_routes_from_index(
     routes: List[Dict[str, Any]],
     *,
+    chain: str = "base",
     repo_root: Optional[Path] = None,
 ) -> Dict[str, int]:
-    """Stamp ``productive_quote_status`` from rolling diagnostic / curve indices."""
+    """Fill Balancer ``pool_id``, ``balancer_assets``, ``balances`` from rolling index."""
     root = repo_root or Path(__file__).resolve().parents[2]
-    stamped = 0
+    index_path = root / "data/runs/_rolling/m8_balancer_pool_index_latest.json"
+    if not index_path.exists():
+        return {"balancer_metadata_enriched": 0}
+    try:
+        index_doc = json.loads(index_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"balancer_metadata_enriched": 0}
 
+    by_addr: Dict[str, Dict[str, Any]] = {}
+    by_pool_id: Dict[str, Dict[str, Any]] = {}
+    for row in index_doc.get("pools") or []:
+        if not isinstance(row, dict):
+            continue
+        addr = str(row.get("pool_address") or "").lower()
+        pid = str(row.get("pool_id") or "").lower()
+        if addr:
+            by_addr[addr] = row
+        if pid:
+            by_pool_id[pid] = row
+
+    enriched = 0
+    for route in routes:
+        lane = _lane_for_route(route)
+        if lane != "balancer":
+            continue
+        addr = str(route.get("pool_address") or "").lower()
+        pid = str(route.get("pool_id") or "").lower()
+        row = by_addr.get(addr) or by_pool_id.get(pid) or by_pool_id.get(addr)
+        if not row:
+            continue
+        if not route.get("pool_id") and row.get("pool_id"):
+            route["pool_id"] = str(row["pool_id"]).lower()
+        assets = row.get("assets") or row.get("tokens_list")
+        if assets and not route.get("balancer_assets"):
+            route["balancer_assets"] = [str(a).lower() for a in assets]
+        balances = row.get("balances")
+        if balances is not None and route.get("balancer_balances") is None:
+            route["balancer_balances"] = list(balances)
+        if row.get("token_a") and not route.get("token_a"):
+            route["token_a"] = str(row["token_a"]).lower()
+        enriched += 1
+    return {"balancer_metadata_enriched": enriched}
+
+
+def _load_productive_counts_from_diagnostics(
+    root: Path,
+) -> Dict[str, str]:
     productive_counts: Dict[str, str] = {}
     for diag_name in (
         "m9_productive_quote_diagnostic_latest.json",
@@ -298,6 +340,114 @@ def stamp_productive_quote_status_from_artifacts(
             )
         except (json.JSONDecodeError, OSError):
             continue
+
+    for diag_name, dex_id in (
+        ("m9_balancer_pool_lane_rca_latest.json", "balancer_vault"),
+        ("m9_maverick_pool_lane_rca_latest.json", "maverick_v2"),
+    ):
+        diag_path = root / "data/tmp" / diag_name
+        if not diag_path.exists():
+            continue
+        try:
+            doc = json.loads(diag_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for row in doc.get("sample_pools") or []:
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("quote_smoke_status") or row.get("probe_status") or "")
+            if not status:
+                continue
+            pool = str(
+                row.get("pool_address") or row.get("pool_id") or ""
+            ).lower()
+            if pool:
+                productive_counts[f"{dex_id}:{pool}"] = status
+    return productive_counts
+
+
+def quoteable_by_dex(
+    routes: Iterable[Dict[str, Any]],
+    *,
+    field: str = "quote_smoke_status",
+) -> Dict[str, int]:
+    """Per-dex quoteable route counts from discovery or productive status fields."""
+    counts: Counter[str] = Counter()
+    for route in routes:
+        dex = str(route.get("dex_id") or "unknown")
+        status = route.get(field) or route.get("quote_smoke")
+        if _status_quoteable(status):
+            counts[dex] += 1
+    return dict(counts)
+
+
+def stamp_maverick_quote_amounts_from_debug(
+    routes: List[Dict[str, Any]],
+    *,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, int]:
+    """Stamp per-pool Maverick probe amounts from quote_debug artifact."""
+    from m9.graph_arb.productive_distinct_quote import MAVERICK_POOL_LANE_PROBE_LADDER
+
+    root = repo_root or Path(__file__).resolve().parents[2]
+    debug_path = root / "data/tmp/m9_maverick_quote_debug_latest.json"
+    if not debug_path.exists():
+        return {"maverick_quote_amounts_stamped": 0}
+    try:
+        rows = json.loads(debug_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"maverick_quote_amounts_stamped": 0}
+    if not isinstance(rows, list):
+        return {"maverick_quote_amounts_stamped": 0}
+
+    by_pool_token: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    ladder_max = max(MAVERICK_POOL_LANE_PROBE_LADDER)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "") != "QUOTE_OK_MAVERICK":
+            continue
+        pool = str(row.get("pool_address") or "").lower()
+        token_in = str(row.get("token_in") or "").lower()
+        amount = row.get("amount_in")
+        if not pool or not token_in or amount is None:
+            continue
+        amt = int(amount)
+        pool_map = by_pool_token.setdefault(pool, {})
+        prev = pool_map.get(token_in)
+        if prev and amt >= int(prev.get("maverick_min_quoteable_amount_raw") or amt):
+            continue
+        pool_map[token_in] = {
+            "maverick_pool_lane_probe_amount": amt,
+            "maverick_min_quoteable_amount_raw": amt,
+            "maverick_max_quoteable_amount_raw": ladder_max,
+            "maverick_token_a_in_probe": row.get("token_a_in"),
+            "maverick_pool_lane_token_in": token_in,
+        }
+
+    stamped = 0
+    for route in routes:
+        if _lane_for_route(route) != "maverick":
+            continue
+        pool = str(route.get("pool_address") or "").lower()
+        probes = by_pool_token.get(pool)
+        if not probes:
+            continue
+        route["maverick_probe_by_token_in"] = probes
+        stamped += 1
+    return {"maverick_quote_amounts_stamped": stamped}
+
+
+def stamp_productive_quote_status_from_artifacts(
+    routes: List[Dict[str, Any]],
+    *,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, int]:
+    """Stamp ``productive_quote_status`` from rolling diagnostic / curve indices."""
+    root = repo_root or Path(__file__).resolve().parents[2]
+    stamped = 0
+
+    productive_counts = _load_productive_counts_from_diagnostics(root)
 
     curve_by_pool: Dict[str, str] = {}
     curve_path = root / "data/runs/_rolling/m9_curve_pool_indices_latest.json"
@@ -326,10 +476,15 @@ def stamp_productive_quote_status_from_artifacts(
             continue
         if lane not in ("balancer", "maverick"):
             continue
-        key = _route_productive_key(route)
-        status = productive_counts.get(key)
+        status = None
+        for key in _productive_keys_for_route(route):
+            status = productive_counts.get(key)
+            if status:
+                break
         if status:
             route["productive_quote_status"] = status
+            if _status_quoteable(status) and not route.get("quote_smoke_status"):
+                route["quote_smoke_status"] = status
             stamped += 1
 
     return {"productive_status_stamped": stamped}

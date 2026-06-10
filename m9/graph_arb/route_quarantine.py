@@ -130,6 +130,79 @@ def load_hard_quarantine_pool_addresses(
     return frozenset(pools)
 
 
+def merge_paused_from_balancer_pool_lane(
+    pool_lane_path: str = "data/tmp/m9_balancer_pool_lane_rca_latest.json",
+    *,
+    output_path: str = _REVERT_QUARANTINE_PATH,
+) -> Dict[str, Any]:
+    """Promote BAL#402 / paused pools from Balancer pool-lane RCA into hard quarantine."""
+    path = Path(pool_lane_path)
+    if not path.exists():
+        return {"added": 0, "total": 0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"added": 0, "total": 0}
+
+    new_entries: List[Dict[str, Any]] = []
+    for row in data.get("sample_pools") or []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("quote_smoke_status") or row.get("probe_status") or "").upper()
+        if "PAUSED" not in status and "BAL#402" not in status:
+            continue
+        pool = str(row.get("pool_address") or "").strip()
+        if not pool:
+            continue
+        new_entries.append(
+            {
+                "pool_address": pool,
+                "adapter_type": "balancer_stable",
+                "reject_reason": "BALANCER_PAUSED",
+                "quarantine_reason": "BALANCER_402_PERMANENT",
+                "source": "balancer_pool_lane_rca",
+            }
+        )
+
+    existing: Dict[str, Any] = {"routes": []}
+    out = Path(output_path)
+    if out.exists():
+        try:
+            existing = json.loads(out.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {"routes": []}
+
+    seen = {
+        (e.get("pool_address") or "").lower()
+        for e in existing.get("routes") or []
+        if e.get("pool_address")
+    }
+    merged = list(existing.get("routes") or [])
+    added = 0
+    for entry in new_entries:
+        pool = entry["pool_address"].lower()
+        if pool in seen:
+            continue
+        seen.add(pool)
+        merged.append(entry)
+        added += 1
+
+    if added:
+        payload = {
+            "schema_version": "m9_revert_quarantine.2",
+            "updated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+            "source_pool_lane": str(path),
+            "routes": merged,
+            "summary": {"total": len(merged), "added_from_pool_lane": added},
+        }
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = str(out) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        os.replace(tmp, str(out))
+    return {"added": added, "total": len(merged), "output_path": str(out)}
+
+
 def merge_paused_pools_from_lane_rca(
     rca_path: str = "data/tmp/m9_quote_lane_rca_latest.json",
     *,

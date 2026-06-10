@@ -44,6 +44,46 @@ def _fee_bps_from_edge(adapter_type: str, fee: int, tick_spacing: Optional[int])
         return fee / 100.0 if fee else 30.0
 
 
+def _maverick_probe_fields_for_token_in(
+    entry: dict,
+    token_in_addr: str,
+) -> tuple[Optional[int], Optional[int], Optional[int], Optional[bool], Optional[str]]:
+    """Direction-specific Maverick pool-lane probe metadata for one hop."""
+    tin = str(token_in_addr or "").lower()
+    by_tin = entry.get("maverick_probe_by_token_in")
+    if isinstance(by_tin, dict) and tin in by_tin:
+        row = by_tin[tin] or {}
+        amt = row.get("maverick_pool_lane_probe_amount") or row.get("probe_amount")
+        return (
+            int(amt) if amt is not None else None,
+            int(row["maverick_min_quoteable_amount_raw"])
+            if row.get("maverick_min_quoteable_amount_raw") is not None
+            else None,
+            int(row["maverick_max_quoteable_amount_raw"])
+            if row.get("maverick_max_quoteable_amount_raw") is not None
+            else None,
+            row.get("maverick_token_a_in_probe")
+            if row.get("maverick_token_a_in_probe") is not None
+            else row.get("token_a_in"),
+            tin,
+        )
+    probe_amt = entry.get("maverick_pool_lane_probe_amount")
+    probe_tin = str(entry.get("maverick_pool_lane_token_in") or "").lower() or None
+    if probe_amt is not None and (not probe_tin or probe_tin == tin):
+        return (
+            int(probe_amt),
+            int(entry["maverick_min_quoteable_amount_raw"])
+            if entry.get("maverick_min_quoteable_amount_raw") is not None
+            else None,
+            int(entry["maverick_max_quoteable_amount_raw"])
+            if entry.get("maverick_max_quoteable_amount_raw") is not None
+            else None,
+            entry.get("maverick_token_a_in_probe"),
+            probe_tin or tin,
+        )
+    return None, None, None, None, None
+
+
 def _parse_pair_symbols(pair_id: str) -> "tuple[str, str]":
     """Split canonical pair_id (alphabetical) into (sym0, sym1)."""
     parts = pair_id.split("_")
@@ -314,6 +354,7 @@ def build_graph_from_inventory(
     productivity_skipped = 0
     admission_skipped = 0
     unknown_price_skipped = 0
+    metadata_incomplete_skipped = 0
     _productive_lane = (lane == "productive")
     _price_map = token_prices_usd or {}
     _productive_dexes = (
@@ -477,8 +518,8 @@ def build_graph_from_inventory(
         _vault_address: Optional[str] = None
         _pool_kind: Optional[str] = None
         _balancer_assets: Optional[tuple] = None
+        _balancer_balances: Optional[tuple] = None
         _maverick_token_a: Optional[str] = None
-
         if adapter_type == "curve_stable":
             # Variant ("stable"/"crypto") drives the get_dy ABI selector in the
             # quoter. Read it from the rolling indices artifact; default to
@@ -508,6 +549,9 @@ def build_graph_from_inventory(
                 _entry_assets = entry.get("balancer_assets")
                 if _entry_assets:
                     _balancer_assets = tuple(str(a).lower() for a in _entry_assets)
+                _entry_balances = entry.get("balancer_balances") or entry.get("balances")
+                if _entry_balances is not None:
+                    _balancer_balances = tuple(int(b) for b in _entry_balances)
                 elif pool_address:
                     try:
                         from m8.discovery.mirror_index import MirrorIndex
@@ -524,6 +568,11 @@ def build_graph_from_inventory(
             ).lower()
             if _ta.startswith("0x") and len(_ta) == 42:
                 _maverick_token_a = _ta
+
+        if _productive_lane and adapter_type in ("balancer_stable", "balancer_weighted"):
+            if not _pool_id or not _balancer_assets:
+                metadata_incomplete_skipped += 1
+                continue
 
         # Curve index lookup happens per-direction (fwd / rev), computed below.
 
@@ -617,6 +666,7 @@ def build_graph_from_inventory(
                 if resolve_token_price_usd(t0.address, sym0, _price_map) is None:
                     unknown_price_skipped += 1
                 else:
+                    _mav_fwd = _maverick_probe_fields_for_token_in(entry, t0.address)
                     fwd_edge = GraphEdge(
                         token_in_sym=sym0,
                         token_out_sym=sym1,
@@ -644,11 +694,18 @@ def build_graph_from_inventory(
                         freshness_window=_freshness_window,
                         effective_depth_usd=_effective_depth_usd,
                         balancer_assets=_balancer_assets,
+                        balancer_balances=_balancer_balances,
                         token_a_address=_maverick_token_a,
+                        maverick_pool_lane_probe_amount=_mav_fwd[0],
+                        maverick_min_quoteable_amount_raw=_mav_fwd[1],
+                        maverick_max_quoteable_amount_raw=_mav_fwd[2],
+                        maverick_token_a_in_probe=_mav_fwd[3],
+                        maverick_pool_lane_token_in=_mav_fwd[4],
                     )
                     adjacency[sym0][sym1].append(fwd_edge)
                     built_count += 1
             else:
+                _mav_fwd = _maverick_probe_fields_for_token_in(entry, t0.address)
                 fwd_edge = GraphEdge(
                     token_in_sym=sym0,
                     token_out_sym=sym1,
@@ -676,7 +733,13 @@ def build_graph_from_inventory(
                     freshness_window=_freshness_window,
                     effective_depth_usd=_effective_depth_usd,
                     balancer_assets=_balancer_assets,
+                    balancer_balances=_balancer_balances,
                     token_a_address=_maverick_token_a,
+                    maverick_pool_lane_probe_amount=_mav_fwd[0],
+                    maverick_min_quoteable_amount_raw=_mav_fwd[1],
+                    maverick_max_quoteable_amount_raw=_mav_fwd[2],
+                    maverick_token_a_in_probe=_mav_fwd[3],
+                    maverick_pool_lane_token_in=_mav_fwd[4],
                 )
                 adjacency[sym0][sym1].append(fwd_edge)
                 built_count += 1
@@ -705,6 +768,7 @@ def build_graph_from_inventory(
                 if resolve_token_price_usd(t1.address, sym1, _price_map) is None:
                     unknown_price_skipped += 1
                 else:
+                    _mav_rev = _maverick_probe_fields_for_token_in(entry, t1.address)
                     rev_edge = GraphEdge(
                         token_in_sym=sym1,
                         token_out_sym=sym0,
@@ -732,11 +796,18 @@ def build_graph_from_inventory(
                         freshness_window=_freshness_window,
                         effective_depth_usd=_effective_depth_usd,
                         balancer_assets=_balancer_assets,
+                        balancer_balances=_balancer_balances,
                         token_a_address=_maverick_token_a,
+                        maverick_pool_lane_probe_amount=_mav_rev[0],
+                        maverick_min_quoteable_amount_raw=_mav_rev[1],
+                        maverick_max_quoteable_amount_raw=_mav_rev[2],
+                        maverick_token_a_in_probe=_mav_rev[3],
+                        maverick_pool_lane_token_in=_mav_rev[4],
                     )
                     adjacency[sym1][sym0].append(rev_edge)
                     built_count += 1
             else:
+                _mav_rev = _maverick_probe_fields_for_token_in(entry, t1.address)
                 rev_edge = GraphEdge(
                     token_in_sym=sym1,
                     token_out_sym=sym0,
@@ -764,7 +835,13 @@ def build_graph_from_inventory(
                     freshness_window=_freshness_window,
                     effective_depth_usd=_effective_depth_usd,
                     balancer_assets=_balancer_assets,
+                    balancer_balances=_balancer_balances,
                     token_a_address=_maverick_token_a,
+                    maverick_pool_lane_probe_amount=_mav_rev[0],
+                    maverick_min_quoteable_amount_raw=_mav_rev[1],
+                    maverick_max_quoteable_amount_raw=_mav_rev[2],
+                    maverick_token_a_in_probe=_mav_rev[3],
+                    maverick_pool_lane_token_in=_mav_rev[4],
                 )
                 adjacency[sym1][sym0].append(rev_edge)
                 built_count += 1
@@ -789,6 +866,7 @@ def build_graph_from_inventory(
                 "productivity_skipped": productivity_skipped,
                 "admission_skipped": admission_skipped,
                 "unknown_price_skipped": unknown_price_skipped,
+                "metadata_incomplete_skipped": metadata_incomplete_skipped,
             }
         },
     )

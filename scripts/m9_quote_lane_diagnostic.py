@@ -250,11 +250,45 @@ def _top_route_failures(
     return rows[:limit]
 
 
+def graph_fingerprint(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    """Stable identity for graph artifact ↔ RCA sync checks."""
+    return {
+        "run_timestamp": artifact.get("run_timestamp"),
+        "cycles_found": int(artifact.get("cycles_found") or 0),
+        "cycles_quoteable": int(artifact.get("cycles_quoteable") or 0),
+        "qsr_liveness": artifact.get("qsr_liveness"),
+        "qsr_econ": artifact.get("qsr_econ"),
+    }
+
+
+def check_rca_graph_consistency(
+    rca: Dict[str, Any],
+    artifact: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Compare RCA summary to source graph; surface stale RCA drift."""
+    graph_fp = graph_fingerprint(artifact)
+    rca_fp = dict(rca.get("source_graph_fingerprint") or {})
+    mismatches: List[str] = []
+    for key in ("run_timestamp", "cycles_found", "cycles_quoteable"):
+        if rca_fp.get(key) != graph_fp.get(key):
+            mismatches.append(key)
+    return {
+        "graph_fingerprint": graph_fp,
+        "rca_fingerprint": rca_fp,
+        "consistent": not mismatches,
+        "mismatched_fields": mismatches,
+    }
+
+
 def build_cycle_rca(
     artifact: Dict[str, Any],
     inventory: Optional[Dict[str, Any]] = None,
+    *,
+    source_artifact: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Break down cycles_quoteable=0 from a bridge-shadow graph artifact."""
+    from m9.graph_arb.cycle_lane_prefilter import build_route_metadata_from_routes
+
     cycles_found = int(artifact.get("cycles_found") or 0)
     cycles_quoteable = int(artifact.get("cycles_quoteable") or 0)
     cycle_reject = dict(artifact.get("cycle_reject_histogram") or {})
@@ -288,7 +322,14 @@ def build_cycle_rca(
         artifact.get("cycles_by_adapter_family") or {}
     )
 
+    route_meta = (
+        build_route_metadata_from_routes(inventory.get("active_routes") or [])
+        if inventory
+        else {}
+    )
+
     top_cycles = artifact.get("top_cycles") or []
+    cycle_kill_explanations: List[Dict[str, Any]] = []
     sample_failures: List[Dict[str, Any]] = []
     for qr in top_cycles[:20]:
         if not isinstance(qr, dict):
@@ -297,30 +338,55 @@ def build_cycle_rca(
         if status in ("POSITIVE_GROSS", "NEGATIVE_GROSS"):
             continue
         legs = []
+        kill_leg: Optional[Dict[str, Any]] = None
         for idx, leg in enumerate(qr.get("legs") or []):
             if not isinstance(leg, dict):
                 continue
+            pool = str(leg.get("pool_address") or "").lower()
+            row = route_meta.get(pool) or {}
+            leg_row = {
+                "leg_index": idx,
+                "route_id": leg.get("route_id"),
+                "reject_reason": leg.get("reject_reason"),
+                "dex_id": leg.get("dex_id"),
+                "pool_address": pool or leg.get("pool_address"),
+                "amount_in": leg.get("raw_amount_in"),
+                "effective_depth_usd": leg.get("effective_depth_usd") or row.get(
+                    "effective_depth_usd"
+                ),
+                "productive_quote_status": row.get("productive_quote_status"),
+                "balancer_assets_present": bool(row.get("balancer_assets")),
+                "pool_id": row.get("pool_id"),
+                "cycle_amount_in": leg.get("raw_amount_in"),
+                "pool_lane_probe_amount": row.get("maverick_pool_lane_probe_amount"),
+                "token_a_in_probe": row.get("maverick_token_a_in_probe"),
+                "token_in": leg.get("token_in_addr"),
+                "token_out": leg.get("token_out_addr"),
+            }
             if leg.get("ok"):
                 continue
-            legs.append(
+            legs.append(leg_row)
+            if kill_leg is None:
+                kill_leg = leg_row
+        failure = {
+            "cycle_id": qr.get("cycle_id"),
+            "cycle_length": qr.get("length") or _cycle_length_from_id(
+                str(qr.get("cycle_id") or "")
+            ),
+            "status": status,
+            "reject_reason": qr.get("reject_reason"),
+            "failed_legs": legs,
+            "kill_leg": kill_leg,
+        }
+        sample_failures.append(failure)
+        if kill_leg and len(cycle_kill_explanations) < 15:
+            cycle_kill_explanations.append(
                 {
-                    "leg_index": idx,
-                    "route_id": leg.get("route_id"),
-                    "reject_reason": leg.get("reject_reason"),
-                    "dex_id": leg.get("dex_id"),
+                    "cycle_id": qr.get("cycle_id"),
+                    "status": status,
+                    "kill_leg": kill_leg,
                 }
             )
-        sample_failures.append(
-            {
-                "cycle_id": qr.get("cycle_id"),
-                "cycle_length": qr.get("length") or _cycle_length_from_id(
-                    str(qr.get("cycle_id") or "")
-                ),
-                "status": status,
-                "reject_reason": qr.get("reject_reason"),
-                "failed_legs": legs,
-            }
-        )
 
     m8_part = artifact.get("m8_participation") or {}
     bridge_shadow = artifact.get("bridge_shadow") or {}
@@ -389,9 +455,11 @@ def build_cycle_rca(
         artifact, "maverick", primary_reason="QUOTE_REVERT"
     ) or _top_route_failures(edge_hist, route_hist, "maverick")
 
+    fp = graph_fingerprint(artifact)
     return {
-        "schema_version": "m9_quote_lane_rca.2",
-        "source_artifact": str(_DEFAULT_SHADOW),
+        "schema_version": "m9_quote_lane_rca.3",
+        "source_artifact": source_artifact or str(_DEFAULT_SHADOW),
+        "source_graph_fingerprint": fp,
         "summary": {
             "cycles_found": cycles_found,
             "cycles_quoteable": cycles_quoteable,
@@ -410,6 +478,12 @@ def build_cycle_rca(
         "route_error_histogram": route_level,
         "edge_error_histogram_top": edge_hist[:25],
         "sample_cycle_failures": sample_failures,
+        "cycle_kill_leg_explanations": cycle_kill_explanations,
+        "stamped_routes_in_inventory": sum(
+            1
+            for r in (inventory or {}).get("active_routes") or []
+            if r.get("productive_quote_status")
+        ),
         "balancer_top_revert_routes": balancer_rca,
         "maverick_top_revert_routes": maverick_rca,
         "maverick_top_rpc_error_routes": maverick_rca,
@@ -507,11 +581,29 @@ def _run_cycle_rca(args: argparse.Namespace) -> int:
     inventory = (
         json.loads(inv_path.read_text(encoding="utf-8")) if inv_path.exists() else None
     )
-    payload = build_cycle_rca(artifact, inventory=inventory)
-    payload["source_artifact"] = str(art_path)
+    payload = build_cycle_rca(
+        artifact, inventory=inventory, source_artifact=str(art_path)
+    )
     out_path = Path(args.output or _DEFAULT_OUT)
+    if out_path.exists():
+        try:
+            prior = json.loads(out_path.read_text(encoding="utf-8"))
+            payload["prior_rca_consistency"] = check_rca_graph_consistency(
+                prior, artifact
+            )
+        except (json.JSONDecodeError, OSError):
+            payload["prior_rca_consistency"] = {"consistent": None}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if getattr(args, "strict_consistency", False):
+        prior = payload.get("prior_rca_consistency") or {}
+        if prior.get("consistent") is False:
+            print(
+                "ERROR: stale RCA vs graph:",
+                prior.get("mismatched_fields"),
+                file=sys.stderr,
+            )
+            return 1
     print(json.dumps(payload["summary"], indent=2))
     print(json.dumps(payload["by_adapter_family_leg_errors"], indent=2))
     print(json.dumps(payload["by_reject_reason"], indent=2))
@@ -533,6 +625,11 @@ def main() -> int:
     ap.add_argument("--output", default=None)
     ap.add_argument("--artifact", default=None, help="Bridge shadow graph artifact for cycle-rca")
     ap.add_argument("--inventory", default=None, help="Bridge inventory for cross-mechanic RCA")
+    ap.add_argument(
+        "--strict-consistency",
+        action="store_true",
+        help="Fail if prior RCA fingerprint mismatches source graph artifact",
+    )
     ap.add_argument("--max-pools", type=int, default=5)
     args = ap.parse_args()
 

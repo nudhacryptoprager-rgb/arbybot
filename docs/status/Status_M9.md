@@ -1,19 +1,16 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **BLOCKED** — lane RCA + Maverick direction/contour fixes landed; pool-lane gates **PASS** (`productive_maverick_quoteable=37/43`, `productive_balancer_quoteable=18/18`). Fresh 10m foreground shadow (`run_timestamp=2026-06-10T18:33:29Z`, `runner_outcome=COMPLETED`, `duration_fulfilled=true`): **`cycles_quoteable=0`**, `qsr_liveness=0.0`, `qsr_econ=0.0`, `phantom=0`. Dominant blockers shifted again: **`OVERSIZED_VS_DEPTH=71`**, **`QUOTE_REVERT` (Balancer legs, 33)**, `CYCLE_QUOTE_FAILED=33`. Maverick leg-revert dominance **not reproduced** on shrunk productive graph (67 M8 edges, 14 topology cycles). P0 partial progress retained: USDC decimals OK, Balancer paused largely reduced. **Admission side-effect:** productive graph narrowed vs prior shadow (`cycles_found` 328→104). No production/profit claim. Use **foreground** `py -3.11 -u ...` only for evidence.
+**Status**: **BLOCKED** — blocker **`CYCLE_LANE_SIZING_AND_LIQUIDITY_MISMATCH`**; sub-blocker **`MAVERICK_NO_LIQUIDITY_DOMINANT`**. Cycle economics **not yet measurable** (`cycles_quoteable=0`). Best shadow evidence (`run_timestamp=2026-06-10T19:34:57Z`): topology **36**, sweeps **136**, `MAVERICK_NO_LIQUIDITY=68` (was 140). P1 patch landed: direction-only `maverick_probe_by_token_in` stamp, `maverick_cycle_amount_in` prefers **min** probe, `cap_leg_amount_in_for_edge`, `productive_cycle_size_usd_cap` (**$0.05** micro for distinct legs без depth). Post-patch shadow blocked at **0 topology cycles** — phantom/revert/diagnostic quarantine feedback (6+6+6 pools) + narrower graph; needs quarantine reset before next diagnostic run. No production/profit claim.
 
-**Session 2026-06-10 lane RCA + Maverick/Balancer fixes (10m foreground):**
+**Session 2026-06-10 cycle-lane sync (pool-lane PASS vs cycle-lane FAIL):**
 
-| Metric | Post-P0 shadow | Lane-fix shadow |
-|--------|----------------|-----------------|
-| Pool-lane Maverick `quoteable/verified` | — | **73/94** |
-| Productive Maverick `quote_ok/samples` | — | **37/43** |
-| Productive Balancer `quote_ok/samples` | — | **18/18** |
-| `cycles_found` (sweeps) | 328 | **104** |
-| `cycles_quoteable` | 0 | **0** |
-| `qsr_liveness` | 0.388 | **0.0** |
-| Top cycle rejects | `MAVERICK_QUOTE_REVERT` | **`OVERSIZED_VS_DEPTH`**, Balancer `QUOTE_REVERT` |
-| `phantom` | 0 | **0** |
+| Metric | Pool-lane | Cycle-lane (10m shadow) |
+|--------|-----------|-------------------------|
+| Maverick quoteable/verified | **73/94** | topology cycles **12** |
+| Balancer quoteable/verified | **18/29** | `cycles_quoteable` **0** |
+| Bridge `productive_status_stamped` | **227** | `routes_in_graph` **45** |
+| Balancer metadata enriched | **94** | dominant reject **`QUOTE_REVERT`** / `OVERSIZED_VS_DEPTH` |
+| `phantom` | — | **0** |
 
 **docs_reread_confirmed:** true
 

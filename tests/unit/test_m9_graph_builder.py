@@ -906,3 +906,65 @@ m9_dex_productivity:
     dec_in = e.token_in_decimals
     dec_out = e.token_out_decimals
     assert 6 in (dec_in, dec_out), f"expected USDbC decimals=6, got in={dec_in} out={dec_out}"
+
+
+def test_productive_graph_admits_stamped_balancer_without_depth(tmp_path):
+    """QUOTE_OK_PRODUCTIVE Balancer routes must not drop for missing effective_depth_usd."""
+    from m9.graph_arb.builder import build_graph_from_inventory
+
+    weth = "0x4200000000000000000000000000000000000006"
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    pool = "0x" + "b" * 40
+    pool_id = "0x" + "ab" * 32
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        f"""chain: base
+dexes:
+  balancer_vault:
+    adapter_type: balancer_stable
+    quoter: "0xba12222222228d8ba445958a75a0704d566bf2c8"
+    enabled: true
+tokens:
+  WETH:
+    address: "{weth}"
+    decimals: 18
+  USDC:
+    address: "{usdc}"
+    decimals: 6
+m9_dex_productivity:
+  balancer_vault:
+    enabled_for_productive: true
+"""
+    )
+    inv = {
+        "active_routes": [
+            {
+                "route_id": "balancer_vault:weth-usdc@0",
+                "pair_id": "USDC_WETH",
+                "dex_id": "balancer_vault",
+                "adapter_type": "balancer_stable",
+                "token0": "USDC",
+                "token1": "WETH",
+                "token0_addr": usdc,
+                "token1_addr": weth,
+                "pool_address": pool,
+                "pool_id": pool_id,
+                "vault_address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+                "balancer_assets": [usdc, weth],
+                "factory_verified": True,
+                "productive_quote_status": "QUOTE_OK_PRODUCTIVE",
+            }
+        ]
+    }
+    inv_path = tmp_path / "inv.json"
+    inv_path.write_text(json.dumps(inv))
+    prices = {usdc.lower(): 1.0, weth.lower(): 3000.0, "USDC": 1.0, "WETH": 3000.0}
+    adjacency = build_graph_from_inventory(
+        inventory_path=str(inv_path),
+        config_path=str(cfg),
+        lane="productive",
+        require_factory_verified=True,
+        token_prices_usd=prices,
+    )
+    edges = sum(len(v) for d in adjacency.values() for v in d.values())
+    assert edges >= 2, "expected bidirectional Balancer edges without effective_depth_usd"

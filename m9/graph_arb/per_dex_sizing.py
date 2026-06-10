@@ -19,15 +19,15 @@ DEPTH_FRACTION_BY_FAMILY: Dict[str, float] = {
     FAMILY_V3_FORK: 0.18,
     FAMILY_V4_POOL_MANAGER: 0.10,
     FAMILY_CURVE_STABLE: 0.15,
-    FAMILY_BALANCER_VAULT: 0.05,
-    FAMILY_MAVERICK_V2: 0.04,
+    FAMILY_BALANCER_VAULT: 0.02,
+    FAMILY_MAVERICK_V2: 0.02,
     "aerodrome_ve33_volatile": 0.12,
     "aerodrome_ve33_stable": 0.10,
     "aerodrome_slipstream_cl": 0.15,
 }
 
 _DEFAULT_DEPTH_FRACTION: float = 0.15
-_MIN_PROBE_USD: float = 0.25
+_MIN_PROBE_USD: float = 0.02
 _GLOBAL_MICRO_LADDER: Tuple[float, ...] = (0.25, 0.5, 1.0, 5.0, 10.0)
 
 
@@ -73,6 +73,32 @@ def cap_sizes_to_depth_per_family(
         return kept
     probe = max(cap, _MIN_PROBE_USD)
     return (round(probe, 6),)
+
+
+_PRODUCTIVE_DISTINCT_MICRO_CAP_USD: float = 0.05
+
+
+def productive_cycle_size_usd_cap(
+    cycle: Any,
+    size_usd: float,
+    token_price_usd: Optional[Dict[str, float]] = None,
+) -> float:
+    """Cap cycle USD notional when distinct-pricing legs lack measured depth."""
+    _ = token_price_usd
+    depth = getattr(cycle, "min_effective_depth_usd", None)
+    if isinstance(depth, (int, float)) and not isinstance(depth, bool) and float(depth) > 0:
+        return float(size_usd)
+    edges = getattr(cycle, "edges", ()) or ()
+    for edge in edges:
+        fam = route_family(
+            {
+                "dex_id": getattr(edge, "dex_id", None),
+                "adapter_type": getattr(edge, "adapter_type", None),
+            }
+        )
+        if fam in (FAMILY_MAVERICK_V2, FAMILY_BALANCER_VAULT, FAMILY_CURVE_STABLE):
+            return min(float(size_usd), _PRODUCTIVE_DISTINCT_MICRO_CAP_USD)
+    return float(size_usd)
 
 
 def micro_ladder_for_family(family: str) -> Tuple[float, ...]:

@@ -1433,11 +1433,17 @@ def build_bridge_inventory(
         bridge_source_metrics.update(_curve_adm)
     try:
         from m8.discovery.distinct_pricing_lane import (
+            enrich_balancer_routes_from_index,
             evaluate_distinct_pricing_lane,
             quoteable_by_dex,
+            stamp_maverick_quote_amounts_from_debug,
             stamp_productive_quote_status_from_artifacts,
         )
 
+        bridge_source_metrics.update(enrich_balancer_routes_from_index(final_active))
+        bridge_source_metrics.update(
+            stamp_maverick_quote_amounts_from_debug(final_active)
+        )
         bridge_source_metrics.update(
             stamp_productive_quote_status_from_artifacts(final_active)
         )
@@ -1541,10 +1547,21 @@ def build_bridge_inventory(
         bridge_source_metrics["m8_provenance_error"] = str(_prov_exc)[:200]
 
     # ------------------------------------------------------------------
-    # Hard quarantine: drop paused / permanent-fail pools before write
+    # Hard quarantine: promote BAL#402 from pool-lane RCA, then drop paused pools
     # ------------------------------------------------------------------
     try:
-        from m9.graph_arb.route_quarantine import load_hard_quarantine_pool_addresses
+        from m9.graph_arb.route_quarantine import (
+            load_hard_quarantine_pool_addresses,
+            merge_paused_from_balancer_pool_lane,
+            merge_paused_pools_from_lane_rca,
+        )
+
+        _rca_merge = merge_paused_pools_from_lane_rca()
+        if _rca_merge.get("added"):
+            bridge_source_metrics["paused_pools_from_cycle_rca"] = _rca_merge["added"]
+        _pool_lane_merge = merge_paused_from_balancer_pool_lane()
+        if _pool_lane_merge.get("added"):
+            bridge_source_metrics["paused_pools_from_pool_lane"] = _pool_lane_merge["added"]
 
         _hard_q = load_hard_quarantine_pool_addresses()
         if _hard_q:

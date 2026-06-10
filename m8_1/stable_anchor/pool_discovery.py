@@ -38,6 +38,12 @@ class DexRoute:
     pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
     curve_coin1_sym: Optional[str] = None  # Curve: symbol of coin at index 1
     balancer_assets: Optional[List[str]] = None  # Balancer: full pool asset list for queryBatchSwap
+    balancer_balances: Optional[List[int]] = None  # Balancer: vault balances aligned to assets
+    maverick_pool_lane_probe_amount: Optional[int] = None
+    maverick_min_quoteable_amount_raw: Optional[int] = None
+    maverick_max_quoteable_amount_raw: Optional[int] = None
+    maverick_token_a_in_probe: Optional[bool] = None
+    maverick_pool_lane_token_in: Optional[str] = None
 
     def __post_init__(self) -> None:
         pass
