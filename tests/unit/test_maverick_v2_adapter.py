@@ -13,6 +13,7 @@ Verified contracts:
 from __future__ import annotations
 
 import pytest
+from unittest.mock import MagicMock
 
 from dex.adapters.maverick_v2 import (
     MaverickV2Adapter,
@@ -68,6 +69,34 @@ class TestMaverickV2AdapterInit:
     def test_supports_fee_tiers_false(self):
         adapter = MaverickV2Adapter(provider=None)
         assert adapter.supports_fee_tiers() is False
+
+
+class TestMaverickV2AdapterProductiveQuote:
+    def test_enabled_quote_uses_quoter_path(self):
+        from dex.adapters.maverick_v2 import _SELECTOR_QUOTER_CALCULATE_SWAP
+
+        amount_out = 8_000_000
+        raw = (
+            (10_000).to_bytes(32, "big")
+            + amount_out.to_bytes(32, "big")
+            + (50_000).to_bytes(32, "big")
+        )
+        provider = MagicMock()
+        provider.eth.call.return_value = "0x" + raw.hex()
+        adapter = MaverickV2Adapter(provider=provider, enabled=True)
+        result = adapter.get_quote(
+            pool_address=_POOL_ADDR,
+            token_in=_TOKEN_IN,
+            token_out=_TOKEN_OUT,
+            amount_in=10_000,
+            token_a_address=_TOKEN_IN,
+        )
+        assert result["amount_out"] == amount_out
+        assert result["quote_contour"] == "maverick_quoter"
+        call_to = provider.eth.call.call_args[0][0]["to"].lower()
+        assert call_to == "0xb40afdb85a07f37ae217e7d6462e609900dd8d7a"
+        sent = provider.eth.call.call_args[0][0]["data"]
+        assert bytes.fromhex(sent[2:10]) == _SELECTOR_QUOTER_CALCULATE_SWAP
 
 
 class TestMaverickV2AdapterGetQuoteDisabled:

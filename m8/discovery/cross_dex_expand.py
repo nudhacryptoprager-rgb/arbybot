@@ -32,6 +32,49 @@ _SPECIALIZED_MIRROR_ADAPTERS = frozenset(
 )
 
 
+def _focus_token_key(route: Dict[str, Any]) -> str:
+    return str(
+        route.get("focus_token_address")
+        or route.get("exotic_address")
+        or route.get("token0_addr")
+        or ""
+    ).lower()
+
+
+def tag_cross_mechanic_routes(routes: List[Dict[str, Any]]) -> int:
+    """Tag routes when a focus token spans >=2 distinct pricing models."""
+    by_focus: Dict[str, List[Dict[str, Any]]] = {}
+    for route in routes:
+        focus = _focus_token_key(route)
+        if not focus:
+            continue
+        by_focus.setdefault(focus, []).append(route)
+    tagged = 0
+    for group in by_focus.values():
+        models = sorted(
+            {_pricing_model_for_dex(str(r.get("dex_id") or "")) for r in group}
+        )
+        distinct = [m for m in models if m and m != "unknown"]
+        if len(distinct) < 2:
+            continue
+        for route in group:
+            route["cross_mechanic"] = True
+            route["mirror_pricing_models"] = distinct
+            route["mechanic_pair"] = "cross_mechanic"
+            tagged += 1
+    return tagged
+
+
+def _expansion_quoteable_by_dex(routes: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts: Counter[str] = Counter()
+    for route in routes:
+        dex = str(route.get("dex_id") or "unknown")
+        status = route.get("quote_smoke_status") or route.get("quote_smoke")
+        if status and str(status).upper().startswith("QUOTE_OK"):
+            counts[dex] += 1
+    return dict(counts)
+
+
 def _pricing_model_for_dex(dex_id: str) -> str:
     """Pricing-model taxonomy for a dex_id (clmm/cpmm/solidly_stable/...).
 
@@ -629,6 +672,7 @@ def expand_token_neighborhood(
                 reject_hist["CONNECTOR_POOL_NOT_QUOTEABLE"] += 1
 
     routes_admitted = same_pair_routes + token_presence_routes + connector_routes
+    _cm_tagged = tag_cross_mechanic_routes(routes_admitted)
     unique_token_syms = {
         focus_sym,
         *[r.get("token0", "") for r in routes_admitted],
@@ -663,6 +707,7 @@ def expand_token_neighborhood(
         "token_seen_on_dexes": token_seen_on_dexes,
         "subgraph": subgraph,
         "cross_mechanic": cross_mechanic,
+        "cross_mechanic_routes_tagged": _cm_tagged,
         "venues_quoteable": len(quoteable_dexes),
         "hint_metrics": hint_metrics,
     }
@@ -833,6 +878,8 @@ def _build_route(
         "pool_address": pool_addr,
         "factory_verified": bool(pool_entry.get("factory_verified")),
         "source": "m8_cross_dex_expansion",
+        "focus_token_address": pair.get("focus_token_address") or pair.get("exotic_address"),
+        "focus_token_symbol": pair.get("focus_token_symbol") or pair.get("exotic_symbol"),
         "fee": pool_entry.get("fee"),
         "tick_spacing": pool_entry.get("tick_spacing"),
         "hooks": pool_entry.get("hooks"),
@@ -1036,6 +1083,9 @@ def _expand_batch_token_neighborhood(
         )
     )
     pools_found_by_dex: Counter = Counter(r["dex_id"] for r in routes_admitted)
+    _cm_tagged = tag_cross_mechanic_routes(routes_admitted)
+    quoteable_by_dex = _expansion_quoteable_by_dex(routes_admitted)
+    admitted_by_dex = dict(pools_found_by_dex)
     from m8.discovery.distinct_pricing_lane import (
         build_per_adapter_lane_report,
         evaluate_distinct_pricing_lane,
@@ -1055,6 +1105,9 @@ def _expand_batch_token_neighborhood(
         "dexes_checked": len(allowed_dex_ids),
         "dex_ids_checked": sorted(allowed_dex_ids),
         "pools_found_by_dex": dict(pools_found_by_dex),
+        "quoteable_by_dex": quoteable_by_dex,
+        "admitted_by_dex": admitted_by_dex,
+        "cross_mechanic_routes_tagged": _cm_tagged,
         "routes_admitted_count": len(routes_admitted),
         "routes_admitted_raw": len(routes_admitted),
         "same_pair_routes_count": len(same_pair_routes),

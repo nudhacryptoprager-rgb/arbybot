@@ -37,6 +37,7 @@ class DexRoute:
     vault_address: Optional[str] = None   # Balancer: Vault contract address
     pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
     curve_coin1_sym: Optional[str] = None  # Curve: symbol of coin at index 1
+    balancer_assets: Optional[List[str]] = None  # Balancer: full pool asset list for queryBatchSwap
 
     def __post_init__(self) -> None:
         pass

@@ -827,6 +827,31 @@ class TestGrossNetSemantics:
         assert a["positive_cycle_max_repeat"] == 3
         assert a["positive_cycle_multi_hit_count"] == 1
 
+    def test_cycles_quoteable_lte_cycles_found(self):
+        """cycles_quoteable (gross-quoted) cannot exceed cycles_found (attempted)."""
+        a = _empty_artifact()
+        assert a["cycles_quoteable"] <= a["cycles_found"]
+
+    def test_cross_mechanic_cycles_top_level_from_bridge_metrics(self):
+        from m9.graph_arb.artifacts import build_artifact
+
+        a = build_artifact(
+            chain="base",
+            duration_minutes=10.0,
+            cycle_results=[],
+            topology=_make_topology(),
+            sizes_usd=(1000.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+            bridge_source_metrics={
+                "bridge_shadow_run": True,
+                "cross_mechanic_cycles": 12,
+            },
+        )
+        assert a["cross_mechanic_cycles"] == 12
+        assert a["m8_participation"]["cross_mechanic_cycles"] == 12
+
 
 # ---------------------------------------------------------------------------
 # Step 5 (GPT fix): run_context.inventory_path contract

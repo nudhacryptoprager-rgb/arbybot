@@ -137,3 +137,89 @@ def test_merge_shadow_requires_quoteable_distinct_pricing():
     out = merge_distinct_pricing_into_acceptance(acceptance, routes=routes)
     assert out["ready_for_bridge_shadow"] is False
     assert out["distinct_pricing_shadow_quote_ready"] is False
+
+
+def test_stamp_productive_from_diagnostic_and_curve_indices(tmp_path):
+    diag = {
+        "productive_quote_counts": {
+            "balancer_vault:0xpool1": "QUOTE_OK_PRODUCTIVE",
+            "maverick_v2:0xpool2": "QUOTE_OK_PRODUCTIVE",
+        }
+    }
+    curve = {
+        "pools": {
+            "0xcurve1": {"probe_status": "QUOTE_OK_INT128"},
+        }
+    }
+    (tmp_path / "data/tmp").mkdir(parents=True)
+    (tmp_path / "data/runs/_rolling").mkdir(parents=True)
+    (tmp_path / "data/tmp/m9_productive_quote_diagnostic_latest.json").write_text(
+        __import__("json").dumps(diag), encoding="utf-8"
+    )
+    (tmp_path / "data/runs/_rolling/m9_curve_pool_indices_latest.json").write_text(
+        __import__("json").dumps(curve), encoding="utf-8"
+    )
+    routes = [
+        {
+            "dex_id": "balancer_vault",
+            "pool_address": "0xpool1",
+            "quote_smoke_status": "QUOTE_OK_BALANCER",
+        },
+        {"dex_id": "maverick_v2", "pool_address": "0xpool2", "quote_smoke_status": "QUOTE_OK_MAVERICK"},
+        {"dex_id": "curve_stable", "pool_address": "0xcurve1"},
+    ]
+    from m8.discovery.distinct_pricing_lane import (
+        evaluate_distinct_pricing_lane,
+        stamp_productive_quote_status_from_artifacts,
+    )
+
+    stamp_productive_quote_status_from_artifacts(routes, repo_root=tmp_path)
+    lane = evaluate_distinct_pricing_lane(routes)
+    assert lane["productive_balancer_quoteable_routes"] == 1
+    assert lane["productive_maverick_quoteable_routes"] == 1
+    assert lane["productive_curve_quoteable_routes"] == 1
+    assert lane["distinct_pricing_productive_quote_ready"] is True
+
+
+def test_merge_shadow_requires_productive_quote_not_only_discovery():
+    acceptance = {
+        "subgraph_ready": True,
+        "bridge_shadow_lane_eligible": True,
+    }
+    routes = [
+        {
+            "dex_id": "curve_stable",
+            "pool_address": "0x" + "1" * 40,
+            "quote_smoke_status": "QUOTE_OK",
+        },
+        {
+            "dex_id": "balancer_vault",
+            "pool_id": "0x" + "2" * 64,
+            "quote_smoke_status": "QUOTE_OK_BALANCER",
+        },
+        {
+            "dex_id": "maverick_v2",
+            "pool_address": "0x" + "3" * 40,
+            "quote_smoke_status": "QUOTE_OK_MAVERICK",
+        },
+    ]
+    out_discovery_only = merge_distinct_pricing_into_acceptance(acceptance, routes=routes)
+    assert out_discovery_only["distinct_pricing_shadow_quote_ready"] is True
+    assert out_discovery_only["distinct_pricing_productive_quote_ready"] is False
+    assert out_discovery_only["ready_for_bridge_shadow"] is False
+
+    productive_counts = {
+        "curve_stable:0x" + "1" * 40: "QUOTE_OK_PRODUCTIVE",
+        "balancer_vault:0x" + "2" * 64: "QUOTE_OK_PRODUCTIVE",
+        "maverick_v2:0x" + "3" * 40: "QUOTE_OK_PRODUCTIVE",
+    }
+    out_productive = merge_distinct_pricing_into_acceptance(
+        acceptance,
+        routes=[dict(r) for r in routes],
+        productive_counts=productive_counts,
+    )
+    assert out_productive["productive_balancer_quoteable_routes"] == 1
+    assert out_productive["productive_maverick_quoteable_routes"] == 1
+    assert out_productive["productive_curve_quoteable_routes"] == 1
+    assert out_productive["distinct_pricing_productive_quote_ready"] is True
+    assert out_productive["ready_for_bridge_shadow"] is True

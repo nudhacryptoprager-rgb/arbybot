@@ -13,6 +13,7 @@ from m8.discovery.cross_dex_expand import (
     collect_token_anchor_pairs,
     discovery_dexes_from_config,
     expand_cross_dex,
+    tag_cross_mechanic_routes,
 )
 
 
@@ -370,3 +371,32 @@ def test_build_route_carries_provenance_from_registry_venue():
     r = routes[0]
     assert r.get("pool_first_seen_block") in (12345, 12350)
     assert r.get("token_first_seen_ts") == 1710000000.0
+
+
+def test_tag_cross_mechanic_routes_by_focus_token():
+    focus = "0xabc0000000000000000000000000000000000001"
+    routes = [
+        {
+            "dex_id": "uniswap_v3",
+            "pool_address": "0xpool1",
+            "focus_token_address": focus,
+            "quote_smoke_status": "QUOTE_OK",
+        },
+        {
+            "dex_id": "curve_stable",
+            "pool_address": "0xpool2",
+            "focus_token_address": focus,
+            "quote_smoke_status": "QUOTE_OK_INT128",
+        },
+        {
+            "dex_id": "uniswap_v3",
+            "pool_address": "0xpool3",
+            "focus_token_address": "0xother",
+            "quote_smoke_status": "QUOTE_OK",
+        },
+    ]
+    tagged = tag_cross_mechanic_routes(routes)
+    assert tagged == 2
+    assert routes[0]["cross_mechanic"] is True
+    assert routes[1]["cross_mechanic"] is True
+    assert routes[2].get("cross_mechanic") is not True

@@ -300,39 +300,40 @@ class MaverickV2Adapter:
 
         token_a_in = token_in_lc == token_a.lower()
 
-        calldata = _encode_calculate_swap(
-            pool_address=pool_lc,
-            amount_in=amount_in,
-            token_a_in=token_a_in,
-        )
-
-        # The raw_http_probe handles the actual eth_call; this method is used
-        # when MaverickV2Adapter is called directly (e.g., from the web3 path).
         if self.provider is None:
             raise QuoteError(
                 code=ErrorCode.QUOTE_REVERT,
                 message="MaverickV2Adapter.get_quote requires a provider for direct eth_call.",
             )
 
-        try:
-            # Use web3 eth_call (direct_http path)
-            result_hex = self.provider.eth.call(
-                {"to": MAVERICK_V2_POOL_INFO_ADDRESS, "data": calldata},
-                "latest",
-            )
+        def _eth_call(to: str, data: str) -> str:
+            result_hex = self.provider.eth.call({"to": to, "data": data}, "latest")
             if isinstance(result_hex, bytes):
-                result_hex = "0x" + result_hex.hex()
-            amount_out, _ = _decode_calculate_swap(result_hex)
+                return "0x" + result_hex.hex()
+            return str(result_hex)
+
+        try:
+            from m9.graph_arb.productive_distinct_quote import quote_maverick_productive
+
+            amount_out, gas_est, debug = quote_maverick_productive(
+                _eth_call,
+                pool_address=pool_lc,
+                amount_in=amount_in,
+                token_a_in=token_a_in,
+            )
         except Exception as exc:
             raise QuoteError(
                 code=ErrorCode.QUOTE_REVERT,
-                message=f"Maverick V2 calculateSwap failed: {exc}",
+                message=f"Maverick V2 productive quote failed: {exc}",
             ) from exc
 
         return {
             "amount_out": amount_out,
-            "gas_estimate": _MAVERICK_V2_GAS_ESTIMATE,
-            "quote_source": "maverick_v2_pool_info",
+            "gas_estimate": gas_est or _MAVERICK_V2_GAS_ESTIMATE,
+            "quote_source": str(debug.get("quote_abi_path") or "maverick_v2_quoter"),
+            "quote_target": debug.get("quote_target"),
+            "quote_selector": debug.get("quote_selector"),
+            "quote_contour": debug.get("quote_contour"),
         }
 
     def supports_fee_tiers(self) -> bool:

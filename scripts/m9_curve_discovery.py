@@ -321,21 +321,30 @@ def main() -> int:
     if not anchor_tokens:
         log.warning("No anchor_tokens configured for chain=%s; all pools will be admitted", args.chain)
 
-    # Resolve RPC (prefer BASE_RPC / dRPC via centralized resolver)
+    # Resolve RPC (productive bootstrap first, then env fallback)
     rpc_url: str | None = None
     rpc_provider = "unknown"
     try:
-        from core.env import load_root_dotenv
+        from m8.discovery.specialized_index_rpc import resolve_productive_rpc
 
-        load_root_dotenv()
-        from core.rpc_urls import resolve_rpc_http
-
-        _cid = 8453 if args.chain == "base" else None
-        rpc_url, rpc_provider, _ = resolve_rpc_http(
-            chain_id=_cid, network=args.chain,
-        )
+        rpc_url = resolve_productive_rpc(args.chain)
+        if rpc_url:
+            rpc_provider = "productive"
     except Exception as exc:
-        log.warning("resolve_rpc_http failed: %s", exc)
+        log.warning("resolve_productive_rpc failed: %s", exc)
+    if not rpc_url:
+        try:
+            from core.env import load_root_dotenv
+
+            load_root_dotenv()
+            from core.rpc_urls import resolve_rpc_http
+
+            _cid = 8453 if args.chain == "base" else None
+            rpc_url, rpc_provider, _ = resolve_rpc_http(
+                chain_id=_cid, network=args.chain,
+            )
+        except Exception as exc:
+            log.warning("resolve_rpc_http failed: %s", exc)
     if not rpc_url:
         rpc_env, rpc_default = _RPC_CONFIG.get(
             args.chain, ("BASE_RPC", "https://base-rpc.publicnode.com"),

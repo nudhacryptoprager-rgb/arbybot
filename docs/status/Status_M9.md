@@ -8,7 +8,7 @@
 
 **Verified vs bridge (розділено):** canonical `m9_graph_latest.json` (`qsr≈0.89`, inventory=`m9_verified_inventory`) підтверджує **QSR contour**, не M8→M9 ingestion. Bridge-shadow (fresh 2026-06-05): `data/tmp/m9_graph_bridge_shadow_latest.json` — `bridge_cycles_found=0`, `cycles_with_m8_pool=0`, `cross_mechanic_cycles=0`, `graph_edges_from_m8=2`; productive diagnostic **2 routes** (`route_qsr=0.50`). **Dynamic M8→M9 bridge ingestion не доведений.**
 
-**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (topology lane)** — `data/tmp/m8_hot_path_latest.json`: `transition_triggers_1_to_2=10`. **Hard gate (code):** `DISTINCT_PRICING_BALANCER_MAVERICK_LANES_NOT_READY` — per-lane acceptance: `curve_lane_ready`, `balancer_lane_ready`, `maverick_lane_ready` окремо; Curve-only **не** задовольняє `distinct_pricing_all_lanes_ready`. **Поточний стан:** Curve partial ready (`curve_stable=26`); Balancer/Maverick discovery+quote lanes **not runtime-validated** (`balancer=0`, `maverick=0`). Economics claim заборонений до `cycles_quoteable_with_distinct_pricing_pool > 0`. Batch expansion `connector_routes_count=0` лишається blocker для `T-C + C-anchor`.
+**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (topology lane)** — `data/tmp/m8_hot_path_latest.json`: `transition_triggers_1_to_2=10`. **Hard gate (code):** distinct-pricing lane тепер розділено на discovery/productive metrics. **Поточний стан:** P0 productive quote sync validated на pool/route level: `data/tmp/m9_productive_quote_diagnostic_latest.json` має `productive_quote_ok=53/93` (`Balancer=18`, `Maverick=35`), bridge stamp має `productive_balancer_quoteable_routes=74`, `productive_maverick_quoteable_routes=60`, `productive_curve_quoteable_routes=5`, `distinct_pricing_productive_quote_ready=true`. **Cycle-level ще BLOCKED:** latest 10m shadow `data/tmp/m9_graph_bridge_shadow_latest.json` має `cycles_found=424`, `cycles_quoteable=0`, `cross_mechanic_cycles=0`, `cycles_positive_gross=0`; M8/M8.1 stale. Economics claim заборонений до `cycles_quoteable_with_distinct_pricing_pool > 0` і хоча б одного валідного cycle-level quote.
 
 **External pool hints (Фаза 1.6):** `external_pool_hints_status: RUNTIME_VALIDATED` — pre-3h regen: `438 tokens`, `681 pools`, `262 verified`, `tcr=0.5982`. DexScreener/GeckoTerminal/`thegraph_token_api` + `new_pools_backfill` (5 pages). Hot-path застосовує hints → `10` transitions via `dexscreener`. **M9 bridge-shadow 30m** (post-acceptance): `data/tmp/m9_graph_bridge_shadow_latest.json` — `cycles_found=5952`, `cycles_quoteable=0`, `cycles_positive_gross=0`, `gate_acceptance=false` — **не** profit/M9 PASS.
 
@@ -78,7 +78,7 @@
 
 **Session 2026-06-08 distinct-pricing quote RCA (Balancer/Maverick/Curve):**
 
-**Status: BLOCKED** — distinct-pricing **coverage + quote smoke improved**; Balancer/Maverick quote lanes **runtime-validated**; Curve lane **restored in shadow** but **quote not ready** (`curve_quoteable_routes=0`, indices partial **5/32**). `connector_routes_count=0`. **No M9 economics claim.** **Do not run M9 shadow** until `curve_routes_ready>0` **and** `balancer_quoteable_routes + maverick_quoteable_routes > 0` (B/M gate met; Curve gate **not** met).
+**Status: BLOCKED** — distinct-pricing **coverage + discovery quote-smoke improved**; Balancer/Maverick **discovery/indexer quote-smoke validated**, but **M9 productive quote path is not synchronized**. `raw_http_probe.py` / adapter path still must prove the same BalancerQueries + MaverickQuoter behavior before M9 shadow/economics. Curve lane **restored in shadow** but **quote not ready** (`curve_quoteable_routes=0`, indices partial **5/32**). `connector_routes_count=0`. **No M9 economics claim.** **Do not run M9 shadow** until `curve_routes_ready>0`, `curve_quoteable_routes>0`, and productive-route diagnostics prove `balancer_quoteable_routes + maverick_quoteable_routes > 0` through the M9 quote path, not only through indexer smoke.
 
 | Layer | Metric | Value |
 |-------|--------|------:|
@@ -88,9 +88,24 @@
 | Curve indices | `QUOTE_OK_INT128` pools | **5** / 32 (27 failed/skip on public RPC) |
 | Expansion batch | routes admitted | **1169** (`connector_routes_count=0`) |
 | Shadow bridge | active balancer / maverick / curve | **94** / **149** / **32** |
-| Quote lane (shadow) | balancer / maverick / curve quoteable | **79** / **90** / **0** |
+| Discovery quote-smoke | balancer / maverick / curve quoteable | **79** / **90** / **0** |
+| M9 productive quote path | Balancer / Maverick | **not validated** — raw HTTP/productive adapter still differs from discovery smoke |
 | Debug artifacts | balancer / maverick quote debug | present (`m9_balancer_quote_debug_latest.json`, `m9_maverick_quote_debug_latest.json`) |
 | Productive admission | balancer/maverick `enabled_for_productive` | **false** until productive gate + Curve quote ready |
+
+**Session 2026-06-09 P0 productive quote sync:**
+
+**Status: PARTIAL_REACHED / BLOCKED** — M9 productive quote path for Balancer/Maverick is now validated at pool/route level, but cycle-level shadow still has zero quoteable cycles. Treat this as **productive pool-path sync REACHED**, not M9 economics.
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Productive diagnostic | `productive_quote_ok` | **53 / 93** |
+| Productive diagnostic | Balancer / Maverick quoteable routes | **18** / **35** |
+| Bridge stamp | productive Balancer / Maverick / Curve quoteable | **74** / **60** / **5** |
+| Bridge stamp | `distinct_pricing_productive_quote_ready` | **true** |
+| Shadow soak | `cycles_found` / `cycles_quoteable` | **424** / **0** |
+| Shadow soak | `cross_mechanic_cycles` / `cycles_positive_gross` | **0** / **0** |
+| Freshness | M8 / M8.1 | **stale** / **stale** |
 
 **Session 2026-06-07 distinct-pricing lane refresh (superseded partial):**
 

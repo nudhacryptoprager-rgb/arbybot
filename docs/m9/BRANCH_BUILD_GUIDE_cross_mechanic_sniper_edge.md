@@ -245,6 +245,40 @@ Runtime acceptance: `verified_second_pool_count > 0` на full watchlist regen; 
 resolve_productive_http_rpc` (не public). Blocker після V4 fix:
 `M8_2_HINT_TO_EXPANSION_MATCHING_OR_CROSSDEX_LOW` (same-DEX v4 hints ≠ cross-DEX).
 
+## 0j) Productive quote sync gate for distinct-pricing lanes
+
+**Hard rule:** discovery/indexer quote-smoke is not the same as M9 productive quote.
+Balancer/Maverick may show `QUOTE_OK_*` in `m8_*_pool_index_latest.json`, but M9
+existence/economics remains blocked until the same pools quote through:
+
+- `m9/graph_arb/raw_http_probe.py` for `--quote-backend raw_http`;
+- the adapter path used by M9 runner for non-raw quote backends;
+- route diagnostics over the shadow bridge inventory, not only isolated indexer smoke.
+
+Required alignment before M9 shadow:
+
+1. Balancer productive path must use the same working BalancerQueries/Vault target,
+   ABI encoding, asset ordering, sender/recipient, and amount policy as the indexer
+   smoke that produced `QUOTE_OK_BALANCER`.
+2. Maverick productive path must use the same working Maverick quoter target and ABI
+   as the indexer smoke that produced `QUOTE_OK_MAVERICK`; old PoolInformation
+   `calculateSwap` responses with `0x` are a blocker, not market evidence.
+3. `bridge_source_metrics` must keep separate fields for discovery quote-smoke and
+   M9 productive quote diagnostics. Never collapse them into one `quoteable` claim.
+4. `enabled_for_productive=false` stays for Balancer/Maverick until productive route
+   diagnostics prove non-zero quote success on fresh shadow inventory.
+
+Acceptance for this gate:
+
+- Balancer/Maverick route diagnostic through M9 quote path has `route_qsr > 0`.
+- Debug artifacts identify the actual quote target and ABI path.
+- A short shadow run may start only after Curve has at least one quoteable route and
+  Balancer/Maverick productive diagnostics are non-zero.
+- Passing this gate is **pool/route-level only**. It does not imply M9 economics.
+  The next gate is cycle-level: `cycles_quoteable > 0`,
+  `cross_mechanic_cycles > 0`, and only then positive gross/net evidence may be
+  evaluated.
+
 ## 1) Що ВЖЕ зроблено в цій гілці (Фаза 1 — DONE)
 
 Реалізовано і покрито тестами (`tests/unit/test_m8_cross_dex_expand.py`,

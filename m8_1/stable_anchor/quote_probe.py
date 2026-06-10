@@ -43,6 +43,10 @@ class QuoteResult:
     reject_reason: Optional[str]
     gas_estimate: Optional[int]
     raw_error: Optional[str]
+    quote_target: Optional[str] = None
+    quote_selector: Optional[str] = None
+    quote_abi_path: Optional[str] = None
+    quote_pool_id: Optional[str] = None
 
 
 def size_usd_to_amount_in(token: TokenInfo, size_usd: float) -> int:
@@ -242,8 +246,8 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
                 token_out=token_out.address,
                 amount_in=amount_in,
             )
-            amount_out = _bv_result.amount_out
-            gas_est = _bv_result.gas_estimate
+            amount_out = _bv_result["amount_out"]
+            gas_est = _bv_result.get("gas_estimate")
         elif route.adapter_type == "uniswap_v4":
             if route.tick_spacing is None:
                 raise ValueError("missing tick_spacing on V4 route")

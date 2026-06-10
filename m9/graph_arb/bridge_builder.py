@@ -1256,8 +1256,21 @@ def build_bridge_inventory(
     # ------------------------------------------------------------------
     final_active = _without_curve_routes(base_active + m8_new_routes)
     try:
-        from m8.discovery.distinct_pricing_lane import evaluate_distinct_pricing_lane
+        from m8.discovery.distinct_pricing_lane import (
+            evaluate_distinct_pricing_lane,
+            quoteable_by_dex,
+            stamp_productive_quote_status_from_artifacts,
+        )
 
+        bridge_source_metrics.update(
+            stamp_productive_quote_status_from_artifacts(final_active)
+        )
+        bridge_source_metrics["discovery_quoteable_by_dex"] = quoteable_by_dex(
+            final_active, field="quote_smoke_status"
+        )
+        bridge_source_metrics["productive_quoteable_by_dex"] = quoteable_by_dex(
+            final_active, field="productive_quote_status"
+        )
         _distinct_lane = evaluate_distinct_pricing_lane(final_active)
         bridge_source_metrics.update(_distinct_lane)
         if not _distinct_lane.get("distinct_pricing_lane_ready"):

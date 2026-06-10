@@ -49,6 +49,7 @@ EXIT_CONFIG_ERROR = 1
 EXIT_NO_CYCLES = 2
 EXIT_ALL_QUOTES_FAILED = 3
 EXIT_BRIDGE_UNIVERSE_TOO_SMALL = 4
+EXIT_BRIDGE_SHADOW_CYCLE_GATE = 5
 
 
 def _iso_now() -> str:
@@ -1036,6 +1037,40 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         _bridge_source_metrics["bridge_routes_in_m9"] = topology.route_count
         _bridge_source_metrics["bridge_cycles_found"] = len(cycles)
         _bridge_source_metrics["bridge_discovery_cycles_found"] = _discovery_cycles_found
+
+    if (
+        _is_bridge_inventory_run
+        and float(getattr(args, "duration_minutes", 0) or 0) >= 5.0
+        and not os.environ.get("ARBY_BRIDGE_SHADOW_SKIP_CYCLE_GATE")
+    ):
+        _cm_pools = _cross_mechanic_pool_addrs
+        _expected_cm_cycles = (
+            sum(
+                1
+                for _cyc in cycles
+                if any(
+                    e.pool_address.lower() in _cm_pools for e in _cyc.edges
+                )
+            )
+            if _cm_pools
+            else 0
+        )
+        if _bridge_source_metrics is not None:
+            _bridge_source_metrics["expected_cross_mechanic_cycles"] = _expected_cm_cycles
+            _bridge_source_metrics["cross_mechanic_pool_addrs_tracked"] = len(_cm_pools)
+        if not _cm_pools or _expected_cm_cycles == 0:
+            log.error(
+                "BRIDGE_SHADOW_CYCLE_GATE: cross_mechanic_pools=%d expected_cycles=%d "
+                "(need >0 before duration>=5m shadow). Refresh expansion cross_mechanic "
+                "tags or productive stamp. Bypass: ARBY_BRIDGE_SHADOW_SKIP_CYCLE_GATE=1",
+                len(_cm_pools),
+                _expected_cm_cycles,
+            )
+            if _bridge_source_metrics is not None:
+                _bridge_source_metrics["existence_blocker"] = (
+                    "BRIDGE_SHADOW_NO_EXPECTED_CROSS_MECHANIC_CYCLES"
+                )
+            return EXIT_BRIDGE_SHADOW_CYCLE_GATE
 
     if not cycles:
         _spread_early = (

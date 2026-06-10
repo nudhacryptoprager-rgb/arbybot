@@ -1151,6 +1151,7 @@ def build_artifact(
         "router_sim_net_bps": router_sim_net_bps,  # null until router simulation enabled
         "cycles_with_m8_pool": _cycles_with_m8_pool,  # cycles that traverse ≥1 M8-sourced pool
         "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,  # positive gross only
+        "cross_mechanic_cycles": _cross_mechanic_cycles,  # cycles touching cross-mechanic pool set
         "m8_multi_venue_verified": _m8_multi_venue_verified,  # tokens confirmed on >=2 DEXes
         "positive_cycle_multi_hit_count": positive_cycle_multi_hit_count,  # cycles positive ≥2 sweeps
         "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id

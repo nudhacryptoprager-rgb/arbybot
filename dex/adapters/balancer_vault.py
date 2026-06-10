@@ -255,31 +255,38 @@ class BalancerVaultAdapter:
                 message=f"balancer: amount_in must be positive, got {amount_in}",
             )
 
-        calldata = "0x" + _encode_query_batch_swap(
-            pool_id=pool_id,
-            token_in_addr=token_in,
-            token_out_addr=token_out,
-            amount_in=amount_in,
-        ).hex()
+        _raw_rpc = getattr(self.provider, "rpc_url", None)
+        rpc_url = _raw_rpc if isinstance(_raw_rpc, str) and _raw_rpc.startswith("http") else None
+
+        def _eth_call(to: str, data: str) -> str:
+            return str(
+                self.provider.eth_call(
+                    to=to,
+                    data=data,
+                    block=block_number,
+                )
+            )
 
         try:
-            result = self.provider.eth_call(
-                to=self.vault_address,
-                data=calldata,
-                block=block_number,
+            from m9.graph_arb.productive_distinct_quote import quote_balancer_productive
+
+            amount_out, debug = quote_balancer_productive(
+                _eth_call,
+                pool_id=pool_id,
+                token_in=token_in,
+                token_out=token_out,
+                amount_in=amount_in,
+                vault=self.vault_address,
+                rpc_url=str(rpc_url) if rpc_url else None,
             )
-            delta_in, delta_out = _decode_query_batch_swap(result)
         except QuoteError:
             raise
         except Exception as e:
             raise QuoteError(
                 code=ErrorCode.QUOTE_REVERT,
-                message=f"Balancer queryBatchSwap failed: {e}",
+                message=f"Balancer productive queryBatchSwap failed: {e}",
             ) from e
 
-        # delta_in should be positive (Vault receives token_in)
-        # delta_out should be negative (Vault sends token_out)
-        amount_out = abs(delta_out)
         if amount_out == 0:
             raise QuoteError(
                 code=ErrorCode.QUOTE_REVERT,
@@ -288,11 +295,12 @@ class BalancerVaultAdapter:
 
         return {
             "amount_out": amount_out,
-            "gas_estimate": 150_000,  # Balancer calls are gas-moderate (vault routing overhead)
-            "quote_source": "balancer_vault_queryBatchSwap",
+            "gas_estimate": 150_000,
+            "quote_source": str(debug.get("quote_contour") or "balancer_vault_queryBatchSwap"),
             "adapter_type": self.ADAPTER_TYPE,
-            "delta_in": delta_in,
-            "delta_out": delta_out,
+            "quote_target": debug.get("quote_target"),
+            "quote_selector": debug.get("quote_selector"),
+            "quote_abi_path": debug.get("quote_abi_path"),
             "sqrt_price_after": 0,
             "ticks_crossed": 0,
         }

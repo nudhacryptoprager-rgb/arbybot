@@ -175,6 +175,11 @@ def probe_quote_raw_http(
             raw_error="provider_throttle_cooldown",
         )
 
+    quote_target: Optional[str] = None
+    quote_selector: Optional[str] = None
+    quote_abi_path: Optional[str] = None
+    quote_pool_id: Optional[str] = None
+
     try:
         rpc_throttle.acquire(n=1)  # 1 HTTP call per probe (no eth_chainId)
         client = _get_client()
@@ -263,8 +268,9 @@ def probe_quote_raw_http(
             gas_est = None
 
         elif route.adapter_type in ("balancer_stable", "balancer_weighted"):
-            # Balancer queryBatchSwap — requires pool_id from config/adapter_metadata.yaml.
             from dex.adapters.balancer_vault import BALANCER_VAULT_ADDRESS
+            from m9.graph_arb.productive_distinct_quote import quote_balancer_productive
+
             _vault = route.vault_address or BALANCER_VAULT_ADDRESS
             _pool_id = route.pool_id
             if not _pool_id:
@@ -278,13 +284,26 @@ def probe_quote_raw_http(
                     gas_estimate=None,
                     raw_error="route.pool_id is None; add to config/adapter_metadata.yaml",
                 )
-            from dex.adapters.balancer_vault import _encode_query_batch_swap, _decode_query_batch_swap
-            _vault_addr = _vault if _vault.startswith("0x") else "0x" + _vault
-            _calldata_bytes = _encode_query_batch_swap(_pool_id, token_in.address, token_out.address, amount_in)
-            _calldata_hex = "0x" + _calldata_bytes.hex()
-            hex_result = _eth_call_raw(rpc_url, _vault_addr, _calldata_hex, client)
-            _, amount_out = _decode_query_batch_swap(hex_result)
+
+            def _bal_call(to: str, data: str) -> str:
+                return _eth_call_raw(rpc_url, to, data, client)
+
+            _bal_assets = getattr(route, "balancer_assets", None)
+            amount_out, _bal_debug = quote_balancer_productive(
+                _bal_call,
+                pool_id=_pool_id,
+                token_in=token_in.address,
+                token_out=token_out.address,
+                amount_in=amount_in,
+                vault=_vault,
+                all_assets=_bal_assets,
+                rpc_url=rpc_url,
+            )
             gas_est = None
+            quote_target = _bal_debug.get("quote_target")
+            quote_selector = _bal_debug.get("quote_selector")
+            quote_abi_path = _bal_debug.get("quote_abi_path")
+            quote_pool_id = _bal_debug.get("quote_pool_id")
 
         elif route.adapter_type == "uniswap_v4":
             if route.tick_spacing is None:
@@ -298,28 +317,15 @@ def probe_quote_raw_http(
             amount_out, gas_est = _decode_v4_response(hex_result, zero_for_one)
 
         elif route.adapter_type == "maverick_v2":
-            # PoolInformation.calculateSwap(pool, amount, tokenAIn, exactOutput, sqrtPriceLimit)
-            # Selector: 0x2764cd0b  (keccak256("calculateSwap(address,uint128,bool,bool,uint256)")[:4])
-            # route.quoter is set to pool_address by builder.py for maverick_v2.
-            # route.token_in_index is repurposed as token_a_in flag (1=True, 0=False)
-            # when set by bridge_builder from adapter_metadata.yaml token_a field.
-            from dex.adapters.maverick_v2 import (
-                MAVERICK_V2_POOL_INFO_ADDRESS,
-                _encode_calculate_swap,
-                _decode_calculate_swap,
-                _SELECTOR_TOKEN_A,
-            )
+            from dex.adapters.maverick_v2 import _SELECTOR_TOKEN_A
+            from m9.graph_arb.productive_distinct_quote import quote_maverick_productive
+
             pool_lc = route.quoter.lower()
             token_in_lc = token_in.address.lower()
-
-            # Determine tokenAIn direction.
-            # If token_in_index is explicitly set (0=False, 1=True), use it directly.
-            # Otherwise, fetch tokenA() from the pool to determine direction.
             token_a_in: bool
             if route.token_in_index is not None:
                 token_a_in = bool(route.token_in_index)
             else:
-                # Live tokenA() lookup: GET tokenA address from pool contract
                 _ta_calldata = "0x" + _SELECTOR_TOKEN_A.hex()
                 try:
                     _ta_result = _eth_call_raw(rpc_url, pool_lc, _ta_calldata, client)
@@ -331,14 +337,19 @@ def probe_quote_raw_http(
                         f"Maverick V2 tokenA() lookup failed for pool {pool_lc}: {_ta_exc}"
                     ) from _ta_exc
 
-            calldata = _encode_calculate_swap(
+            def _mv_call(to: str, data: str) -> str:
+                return _eth_call_raw(rpc_url, to, data, client)
+
+            amount_out, gas_est, _mv_debug = quote_maverick_productive(
+                _mv_call,
                 pool_address=pool_lc,
                 amount_in=amount_in,
                 token_a_in=token_a_in,
             )
-            hex_result = _eth_call_raw(rpc_url, MAVERICK_V2_POOL_INFO_ADDRESS, calldata, client)
-            amount_out, _ = _decode_calculate_swap(hex_result)
-            gas_est = None
+            quote_target = _mv_debug.get("quote_target")
+            quote_selector = _mv_debug.get("quote_selector")
+            quote_abi_path = _mv_debug.get("quote_abi_path")
+            quote_pool_id = _mv_debug.get("quote_pool_id")
 
         else:
             raise ValueError(f"unsupported adapter_type: {route.adapter_type!r}")
@@ -356,6 +367,10 @@ def probe_quote_raw_http(
                 reject_reason="QUOTE_ZERO_OUTPUT",
                 gas_estimate=None,
                 raw_error=None,
+                quote_target=quote_target,
+                quote_selector=quote_selector,
+                quote_abi_path=quote_abi_path,
+                quote_pool_id=quote_pool_id,
             )
         return QuoteResult(
             route_id=route_id,
@@ -366,6 +381,10 @@ def probe_quote_raw_http(
             reject_reason=None,
             gas_estimate=gas_est,
             raw_error=None,
+            quote_target=quote_target,
+            quote_selector=quote_selector,
+            quote_abi_path=quote_abi_path,
+            quote_pool_id=quote_pool_id,
         )
 
     except httpx.HTTPStatusError as exc:

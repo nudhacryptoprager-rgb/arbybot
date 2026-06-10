@@ -182,7 +182,8 @@ class TestBalancerVaultAdapterGetQuote:
         assert result["amount_out"] == amount_out
         assert result["adapter_type"] == "balancer_vault"
         assert "quote_source" in result
-        assert "queryBatchSwap" in result["quote_source"]
+        assert result["quote_source"] in ("vault", "balancer_queries")
+        assert result.get("quote_abi_path") == "queryBatchSwap"
         assert result["gas_estimate"] > 0
 
     def test_zero_amount_in_raises(self):

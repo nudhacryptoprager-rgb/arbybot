@@ -32,6 +32,11 @@ def _resolve_rpc_url() -> str:
         from core.env import load_root_dotenv
 
         load_root_dotenv()
+        from m8.discovery.specialized_index_rpc import resolve_productive_rpc
+
+        url = resolve_productive_rpc("base")
+        if url:
+            return url
         from core.rpc_urls import resolve_rpc_http
 
         url, _, _ = resolve_rpc_http(chain_id=8453, network="base")
@@ -466,12 +471,11 @@ def main() -> None:
         if pool_kind is None:
             print(f"SKIP ({probe_status})")
             failed.append(pool_addr)
-            if args.debug:
-                failed_detail[pool_addr] = {
-                    "reason": probe_status,
-                    "coin_indices": entry["coin_indices"],
-                    "probe": probe_debug,
-                }
+            failed_detail[pool_addr] = {
+                "reason": probe_status,
+                "coin_indices": entry["coin_indices"],
+                "probe": probe_debug,
+            }
             if args.admit_failed_probe:
                 pool_kind = "stable"
                 probe_status = probe_status or "QUOTE_REVERT_BOTH"
@@ -507,8 +511,23 @@ def main() -> None:
         "pool_kind_counts": by_kind,
         "pools": pools_out,
     }
-    if args.debug and failed_detail:
+    if failed_detail:
         artifact["pools_failed_detail"] = failed_detail
+        debug_path = REPO_ROOT / "data/tmp/m9_curve_productive_debug_latest.json"
+        debug_path.parent.mkdir(parents=True, exist_ok=True)
+        debug_path.write_text(
+            json.dumps(
+                {
+                    "generated_at_utc": _iso_now(),
+                    "pools_failed": len(failed),
+                    "pools_ok": len(pools_out),
+                    "failed_detail": failed_detail,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"Curve productive debug -> {debug_path}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
     print(f"\nWrote {len(pools_out)} pools -> {args.output}")
