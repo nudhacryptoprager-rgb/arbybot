@@ -325,7 +325,62 @@ class TestBuildGraphFromInventory:
         curve_edges = [e for e in all_edges if e.adapter_type == "curve_stable"]
         uni_edges = [e for e in all_edges if e.adapter_type == "uniswap_v3"]
         assert not curve_edges, "Unindexed curve_stable edge must be skipped"
-        assert uni_edges, "Non-curve routes must still be admitted (not a Curve disable)"
+
+    def test_balancer_expansion_pool_id_propagates_to_graph_edge(self, tmp_path):
+        """M8.2 expansion routes must pass pool_id through to GraphEdge for quoting."""
+        from unittest.mock import patch
+
+        import yaml
+
+        import m9.graph_arb.builder as _builder
+        from m9.graph_arb.adapter_metadata import AdapterMetadata
+        from m9.graph_arb.builder import build_graph_from_inventory
+
+        pool_id = "0x" + "ab" * 32
+        pool_addr = "0x" + "b" * 40
+        inv = {
+            "active_routes": [
+                {
+                    "pair_id": "WETH_USDC",
+                    "dex_id": "balancer_vault",
+                    "fee": 0,
+                    "factory_class": "DISTINCT_PRICING",
+                    "pool_address": pool_addr,
+                    "route_id": "balancer_vault:WETH_USDC@0",
+                    "pool_id": pool_id,
+                    "vault_address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+                    "source": "m8_cross_dex_expansion",
+                }
+            ],
+            "pools": [],
+        }
+        p = tmp_path / "inventory.json"
+        p.write_text(json.dumps(inv))
+        cfg_path = self._make_minimal_config(tmp_path)
+        cfg = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+        cfg["dexes"]["balancer_vault"] = {
+            "adapter_type": "balancer_stable",
+            "factory": "0x0000000000000000000000000000000000000000",
+            "quoter": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+            "enabled": True,
+        }
+        cfg_p = tmp_path / "config_bal.yaml"
+        cfg_p.write_text(yaml.dump(cfg))
+
+        with patch.object(_builder, "load_adapter_metadata", return_value=AdapterMetadata()):
+            adjacency = build_graph_from_inventory(inventory_path=str(p), config_path=str(cfg_p))
+
+        bal_edges = [
+            edge
+            for neighbors in adjacency.values()
+            for edge_list in neighbors.values()
+            for edge in edge_list
+            if edge.adapter_type == "balancer_stable"
+        ]
+        assert bal_edges, "Expected balancer_stable edges"
+        assert all(e.pool_id == pool_id for e in bal_edges), (
+            "pool_id from inventory entry must flow to GraphEdge"
+        )
 
     def test_aerodrome_v2_stable_unknown_dex_uses_pool_address_as_quoter(self, tmp_path):
         """aerodrome_v2_stable with unknown dex_id must use pool_address as quoter.

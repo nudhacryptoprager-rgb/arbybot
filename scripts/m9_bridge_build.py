@@ -213,7 +213,11 @@ def main() -> int:
 
     # Warn if staleness is high (non-fatal: still proceed)
     if metrics["m8_stale"]:
-        log.warning("WARN: m8 artifact is stale (>4h old) — run M8 sniper to refresh")
+        log.warning(
+            "WARN: m8 artifact is stale (age=%ss > %ss) — run M8 sniper to refresh",
+            metrics.get("sniper_age_seconds"),
+            metrics.get("m8_stale_threshold_seconds"),
+        )
     if metrics["m8_1_stale"]:
         log.warning("WARN: m8_1 artifact is stale (>4h old) — run M8.1 stable-anchor to refresh")
 

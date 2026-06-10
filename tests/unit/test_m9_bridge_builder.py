@@ -118,6 +118,42 @@ class TestBridgeBuilderUnit:
         assert _is_symbol_valid("") is False
         assert _is_symbol_valid(None) is False  # type: ignore
 
+    def test_enrich_sniper_event_resolves_zero_address_as_weth(self):
+        from m9.graph_arb.bridge_builder import _enrich_sniper_event
+
+        event = {
+            "token0": "0x0000000000000000000000000000000000000000",
+            "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "token0_symbol": None,
+            "token1_symbol": None,
+        }
+        enriched = _enrich_sniper_event(event)
+        assert enriched["token0_symbol"] == "WETH"
+        assert enriched["token1_symbol"] == "USDC"
+
+    def test_enrich_sniper_event_fallback_hex_prefix(self):
+        from m9.graph_arb.bridge_builder import _enrich_sniper_event
+
+        exotic = "0xea1d939bb7991f41d7858eddfab8df10a1a97b07"
+        event = {
+            "token0": exotic,
+            "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "token0_symbol": None,
+            "token1_symbol": None,
+        }
+        enriched = _enrich_sniper_event(event)
+        assert enriched["token1_symbol"] == "USDC"
+        assert enriched["token0_symbol"] == exotic[2:8].upper()
+
+    def test_m8_funnel_reject_histogram_symbol_missing(self):
+        from m9.graph_arb.bridge_builder import _build_m8_funnel_reject_histogram
+
+        events = [{"event_id": "e1", "token0_symbol": None, "token1_symbol": None}]
+        hist = _build_m8_funnel_reject_histogram(
+            events, [], [], [], [], [], [], [], [], []
+        )
+        assert hist["TOKEN_SYMBOL_MISSING"] == 1
+
     def test_is_symbol_valid_rejects_too_long(self):
         from m9.graph_arb.bridge_builder import _is_symbol_valid
         assert _is_symbol_valid("A" * 16) is False
@@ -1327,10 +1363,36 @@ class TestCurveDiscoveryContract:
         result = json.loads(out.read_text(encoding="utf-8"))
         return metrics, result
 
-    def test_discovery_routes_enter_production_mode(self, tmp_path):
+    def _write_quotable_curve_indices(self, tmp_path, pool_addrs) -> str:
+        indices = tmp_path / "curve_indices.json"
+        indices.write_text(
+            json.dumps(
+                {
+                    "schema_version": "m9_curve_pool_indices.1",
+                    "chain": "base",
+                    "pools": {
+                        addr.lower(): {
+                            "pool_kind": "stable",
+                            "probe_status": "QUOTE_OK_INT128",
+                            "coin_indices": {"USDC": 0, "MONEY": 1},
+                        }
+                        for addr in pool_addrs
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return str(indices)
+
+    def test_discovery_routes_enter_production_mode(self, tmp_path, monkeypatch):
         """Discovered Curve routes must enter active_routes without seed flag."""
         n_base = 2
         disc = self._make_discovery_artifact(n_pools=2)
+        pool_addrs = [p["pool_address"] for p in disc["discovered_pools"]]
+        monkeypatch.setenv(
+            "ARBY_CURVE_POOL_INDICES",
+            self._write_quotable_curve_indices(tmp_path, pool_addrs),
+        )
         metrics, result = self._build_with_disc(tmp_path, include_seed=False, n_base=n_base, disc_artifact=disc)
         disc_routes = [
             r for r in result["active_routes"]
@@ -1341,9 +1403,14 @@ class TestCurveDiscoveryContract:
         )
         assert metrics["curve_discovery_count"] == 2
 
-    def test_discovery_routes_have_correct_fields(self, tmp_path):
+    def test_discovery_routes_have_correct_fields(self, tmp_path, monkeypatch):
         """Discovered routes must have factory_verified=True and metadata_seeded=False."""
         disc = self._make_discovery_artifact(n_pools=1)
+        pool_addrs = [p["pool_address"] for p in disc["discovered_pools"]]
+        monkeypatch.setenv(
+            "ARBY_CURVE_POOL_INDICES",
+            self._write_quotable_curve_indices(tmp_path, pool_addrs),
+        )
         _, result = self._build_with_disc(tmp_path, disc_artifact=disc)
         disc_routes = [
             r for r in result["active_routes"]
@@ -1421,6 +1488,79 @@ class TestCurveDiscoveryContract:
             assert r.get("metadata_seeded") is True, (
                 f"Seed route {r.get('pool_address')} must have metadata_seeded=True"
             )
+
+
+class TestCurveProductiveAdmission:
+    """Curve routes without QUOTE_OK probe must not enter productive bridge output."""
+
+    def test_unprobed_curve_route_filtered_from_active_routes(self, tmp_path, monkeypatch):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        disc = tmp_path / "curve_disc.json"
+        pool_addr = "0xdeadbeef000000000000000000000000000001"
+        disc.write_text(
+            json.dumps(
+                {
+                    "schema_version": "m9_curve_discovery.1",
+                    "generated_at_utc": "2026-06-10T12:00:00Z",
+                    "chain": "base",
+                    "factory_address": "0xd2002373543ce3527023c75e7518c274a51ce712",
+                    "discovered_pools": [
+                        {
+                            "pool_address": pool_addr,
+                            "pool_kind": "stable",
+                            "coin_indices": {"USDC": 0, "MONEY": 1},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        indices = tmp_path / "curve_indices.json"
+        indices.write_text(
+            json.dumps(
+                {
+                    "schema_version": "m9_curve_pool_indices.1",
+                    "chain": "base",
+                    "pools": {
+                        pool_addr.lower(): {
+                            "pool_kind": "stable",
+                            "probe_status": "QUOTE_REVERT_BOTH",
+                            "coin_indices": {"USDC": 0, "MONEY": 1},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ARBY_CURVE_POOL_INDICES", str(indices))
+        monkeypatch.setenv("ARBY_CURVE_FACTORY_DISCOVERY", str(disc))
+
+        sniper = tmp_path / "sniper.json"
+        sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
+        anchor = tmp_path / "anchor.json"
+        anchor.write_text(json.dumps({"active_routes": []}), encoding="utf-8")
+        base = tmp_path / "base.json"
+        base.write_text(json.dumps({"active_routes": []}), encoding="utf-8")
+        out = tmp_path / "bridge.json"
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base),
+            output_path=str(out),
+            curve_discovery_path=str(disc),
+            expansion_path=None,
+        )
+        result = json.loads(out.read_text(encoding="utf-8"))
+        curve_routes = [
+            r
+            for r in result["active_routes"]
+            if r.get("adapter_type") == "curve_stable"
+        ]
+        assert curve_routes == []
+        assert metrics["curve_productive_admission_filtered"] == 1
+        assert metrics["curve_productive_admission_after"] == 0
 
 
 class TestBridgePreservesDepthAndQuality:

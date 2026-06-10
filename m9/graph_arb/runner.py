@@ -106,6 +106,8 @@ def _connect_rpc(chain: str) -> "object | None":
 
 
 _REVERT_QUARANTINE_PATH = "data/tmp/m9_revert_quarantine.json"
+_PHANTOM_QUARANTINE_PATH = "data/tmp/m9_phantom_quarantine.json"
+_PHANTOM_REJECT = "PHANTOM_QUOTE_BPS_OVERFLOW"
 # Route is flagged as revert-dominant when QUOTE_REVERT makes up this fraction of its leg errors
 _REVERT_DOMINANT_THRESHOLD = 0.8
 
@@ -179,7 +181,9 @@ def _write_revert_quarantine(
 
     # Accumulate per-route leg error counts
     # "HARD" = QUOTE_REVERT or QUOTE_RPC_ERROR; "OTHER" = everything else
-    _HARD_ERRORS = frozenset({"QUOTE_REVERT", "QUOTE_RPC_ERROR"})
+    _HARD_ERRORS = frozenset(
+        {"QUOTE_REVERT", "QUOTE_RPC_ERROR", "QUOTE_ZERO_OUTPUT"}
+    )
     route_errors: "_dd[str, dict]" = _dd(lambda: {"HARD": 0, "OTHER": 0, "pair_id": "", "pool_address": ""})
     for qr in cycle_results:
         edges = qr.cycle.edges
@@ -245,6 +249,74 @@ def _write_revert_quarantine(
     log.info(
         "QUOTE_REVERT quarantine written: %d routes → %s",
         len(quarantine), output_path,
+    )
+
+
+def resolve_phantom_quarantine_addresses(phantom_data: dict) -> set:
+    """Pool addresses from phantom overflow feedback (schema m9_phantom_quarantine.1)."""
+    return {
+        (e.get("pool_address") or "").lower()
+        for e in phantom_data.get("pools", []) or []
+        if e.get("pool_address")
+    }
+
+
+def _write_phantom_quarantine(
+    cycle_results: list,
+    log: "logging.Logger",
+    output_path: str = _PHANTOM_QUARANTINE_PATH,
+) -> None:
+    """Persist pools that produced PHANTOM_QUOTE_BPS_OVERFLOW cycle rejects."""
+    import json as _json
+    from collections import Counter as _Counter
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _Path
+
+    pool_counts: "_Counter[str]" = _Counter()
+    route_by_pool: dict = {}
+    for qr in cycle_results:
+        if qr.reject_reason != _PHANTOM_REJECT:
+            continue
+        for edge in qr.cycle.edges:
+            pool = (edge.pool_address or "").lower()
+            if not pool:
+                continue
+            pool_counts[pool] += 1
+            route_by_pool.setdefault(
+                pool,
+                {
+                    "pool_address": pool,
+                    "route_id": edge.route_id,
+                    "pair_id": edge.pair_id,
+                    "dex_id": edge.dex_id,
+                    "adapter_type": edge.adapter_type,
+                    "quarantine_reason": _PHANTOM_REJECT,
+                },
+            )
+    if not pool_counts:
+        return
+    pools = []
+    for pool, count in pool_counts.most_common():
+        entry = dict(route_by_pool[pool])
+        entry["phantom_count"] = count
+        pools.append(entry)
+    out = {
+        "schema_version": "m9_phantom_quarantine.1",
+        "generated_at_utc": _dt.now(tz=_tz.utc).isoformat(),
+        "pool_count": len(pools),
+        "pools": pools,
+    }
+    path = _Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        _json.dump(out, fh, indent=2)
+    import os as _os
+    _os.replace(tmp, str(path))
+    log.info(
+        "PHANTOM_QUOTE_BPS_OVERFLOW quarantine written: %d pools → %s",
+        len(pools),
+        output_path,
     )
 
 
@@ -875,6 +947,27 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             log.debug("No revert quarantine file found at %s — first run or cleared", _REVERT_QUARANTINE_PATH)
         except Exception as _rq_exc:
             log.warning("Failed to load revert quarantine: %s", _rq_exc)
+
+        _phantom_quarantine_skipped = 0
+        try:
+            import json as _pq_json
+            _pq_path = getattr(args, "phantom_quarantine_path", _PHANTOM_QUARANTINE_PATH)
+            with open(_pq_path, encoding="utf-8") as _pq_fh:
+                _pq_addrs = resolve_phantom_quarantine_addresses(_pq_json.load(_pq_fh))
+            if _pq_addrs:
+                _phantom_quarantine_skipped = len(_pq_addrs)
+                _exclude_pool_addresses = (
+                    (_exclude_pool_addresses or frozenset()) | frozenset(_pq_addrs)
+                )
+                log.info(
+                    "Phantom quarantine: excluding %d pool_addresses — %s feedback",
+                    _phantom_quarantine_skipped,
+                    _PHANTOM_REJECT,
+                )
+        except FileNotFoundError:
+            log.debug("No phantom quarantine file at %s", _PHANTOM_QUARANTINE_PATH)
+        except Exception as _pq_exc:
+            log.warning("Failed to load phantom quarantine: %s", _pq_exc)
 
         if _lane == "productive":
             _diag_path = "data/runs/_rolling/m9_quote_route_diagnostic_latest.json"
@@ -1604,7 +1697,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         _bridge_source_metrics["cycles_with_m8_pool"] = _cycles_with_m8
         _bridge_source_metrics["positive_cycles_with_m8_pool"] = _positive_cycles_with_m8
         if _cross_mechanic_pool_addrs:
-            _cross_mechanic_cycles = sum(
+            _quoteable_statuses_cm = frozenset({"POSITIVE_GROSS", "NEGATIVE_GROSS"})
+            _cross_mechanic_cycles_found = sum(
                 1
                 for qr in cycle_results
                 if any(
@@ -1612,10 +1706,26 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                     for e in qr.cycle.edges
                 )
             )
-            _bridge_source_metrics["cross_mechanic_cycles"] = _cross_mechanic_cycles
+            _cross_mechanic_cycles_quoteable = sum(
+                1
+                for qr in cycle_results
+                if qr.status in _quoteable_statuses_cm
+                and any(
+                    e.pool_address.lower() in _cross_mechanic_pool_addrs
+                    for e in qr.cycle.edges
+                )
+            )
+            _bridge_source_metrics["cross_mechanic_cycles"] = _cross_mechanic_cycles_found
+            _bridge_source_metrics["cross_mechanic_cycles_found"] = (
+                _cross_mechanic_cycles_found
+            )
+            _bridge_source_metrics["cross_mechanic_cycles_quoteable"] = (
+                _cross_mechanic_cycles_quoteable
+            )
             log.info(
-                "Cross-mechanic cycle participation: cross_mechanic_cycles=%d",
-                _cross_mechanic_cycles,
+                "Cross-mechanic cycle participation: found=%d quoteable=%d",
+                _cross_mechanic_cycles_found,
+                _cross_mechanic_cycles_quoteable,
             )
         if _is_bridge_inventory_run:
             _quoteable_statuses = frozenset({"POSITIVE_GROSS", "NEGATIVE_GROSS"})
@@ -1703,6 +1813,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Write QUOTE_REVERT quarantine: routes whose legs failed exclusively with QUOTE_REVERT.
     # This feedback file guides inventory refresh: quarantine these fee-tier/pool combos.
     _write_revert_quarantine(cycle_results, log)
+    _write_phantom_quarantine(cycle_results, log)
 
     positive = sum(1 for qr in cycle_results if qr.gross_bps > 0)
     log.info(

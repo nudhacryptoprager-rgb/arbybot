@@ -67,5 +67,6 @@ def test_exotic_dex_productivity_block():
         (ROOT / "config/exotic_base_anchor.yaml").read_text(encoding="utf-8")
     )
     prod = exotic.get("m9_dex_productivity") or {}
-    assert prod["balancer_vault"]["enabled_for_productive"] is False
+    assert prod["balancer_vault"]["enabled_for_productive"] is True
+    assert prod["maverick_v2"]["enabled_for_productive"] is True
     assert prod["curve_stable"]["enabled_for_productive"] is True

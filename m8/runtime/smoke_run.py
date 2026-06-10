@@ -47,6 +47,7 @@ fails for any factory that has verification blocks configured.
 from __future__ import annotations
 
 import argparse
+import json
 import functools
 import os
 import sys
@@ -111,7 +112,7 @@ logger = get_logger(__name__)
 
 _ARTIFACT_WRITE_INTERVAL_S: float = 60.0  # aligned with M8 dashboard REFRESH_MS
 _MAX_BLOCKS_PER_CALL: int = 500    # bounded getLogs chunk (v4 factories 408 on 2k+)
-_MIN_GETLOGS_CHUNK_BLOCKS: int = 100
+_MIN_GETLOGS_CHUNK_BLOCKS: int = 10
 _GETLOGS_TRANSIENT_RETRIES: int = 2
 _GETLOGS_RETRY_DELAY_S: float = 2.0
 _FAILOVER_GETLOGS_ERRORS = frozenset({
@@ -168,10 +169,21 @@ def _fetch_erc20_symbol(token_addr: str, w3: Any) -> Optional[str]:
 
 # Per-run in-process cache (not LRU -- just a dict -- sufficient for 1 run)
 _symbol_cache: Dict[str, Optional[str]] = {}
+_ZERO_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+
+def _native_symbol_for_addr(token_addr: str) -> Optional[str]:
+    """V4 native-ETH pairs use the zero address for token0 on Base."""
+    if (token_addr or "").lower() == _ZERO_TOKEN_ADDRESS:
+        return "WETH"
+    return None
 
 
 def _get_symbol(token_addr: str, w3: Any) -> Optional[str]:
     """Symbol with per-run dict cache; never raises."""
+    native = _native_symbol_for_addr(token_addr)
+    if native:
+        return native
     if token_addr in _symbol_cache:
         return _symbol_cache[token_addr]
     sym = _fetch_erc20_symbol(token_addr, w3)
@@ -870,6 +882,30 @@ def _build_filter_params(
 # Build rolling artifact from funnel + recent events
 # ---------------------------------------------------------------------------
 
+_ROLLING_SNIPER_ARTIFACT = Path("data/runs/_rolling/new_pool_sniper_latest.json")
+
+
+def _load_preserved_recent_events_dicts(
+    status: str,
+    recent_events: List[NewPoolEvent],
+) -> Optional[List[Dict[str, Any]]]:
+    """Keep prior recent_events when a failed run would otherwise wipe the rolling window."""
+    if status != "RPC_ERROR" or recent_events:
+        return None
+    if not _ROLLING_SNIPER_ARTIFACT.exists():
+        return None
+    try:
+        prev = json.loads(_ROLLING_SNIPER_ARTIFACT.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if prev.get("status") == "RPC_ERROR":
+        return None
+    preserved = list(prev.get("recent_events") or [])
+    if not preserved:
+        return None
+    return preserved[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]
+
+
 def _build_and_write_artifact(
     funnel: FunnelTracker,
     recent_events: List[NewPoolEvent],
@@ -886,6 +922,10 @@ def _build_and_write_artifact(
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
     recent_window = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]
+    preserved_recent = _load_preserved_recent_events_dicts(status, recent_events)
+    if preserved_recent:
+        metrics["recent_events_preserved_from_prior"] = len(preserved_recent)
+        metrics["preserve_reason"] = "RPC_ERROR_EMPTY_WINDOW"
 
     # ------------------------------------------------------------------
     # Step 7: Batch ERC20 symbol() via core.multicall.
@@ -921,7 +961,9 @@ def _build_and_write_artifact(
             )
             symbol_map = {}
 
-    recent_list = []
+    recent_list: List[Dict[str, Any]] = []
+    if preserved_recent:
+        recent_list = list(preserved_recent)
     for e in recent_window:
         # Prefer batched result; fall back to legacy cached single-call.
         token0_sym: Optional[str] = symbol_map.get(e.token0) if symbol_map else None
@@ -1013,6 +1055,14 @@ def _build_and_write_artifact(
     for e in recent_events:
         tok0_sym: Optional[str] = symbol_map.get(e.token0) if symbol_map else None
         tok1_sym: Optional[str] = symbol_map.get(e.token1) if symbol_map else None
+        if tok0_sym is None:
+            tok0_sym = _native_symbol_for_addr(e.token0)
+        if tok1_sym is None:
+            tok1_sym = _native_symbol_for_addr(e.token1)
+        if w3 is not None and tok0_sym is None:
+            tok0_sym = _get_symbol(e.token0, w3)
+        if w3 is not None and tok1_sym is None:
+            tok1_sym = _get_symbol(e.token1, w3)
         # Only include events that have symbols (needed by bridge token_verified stage)
         if tok0_sym and tok1_sym:
             dex_key = e.dex or "unknown"

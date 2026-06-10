@@ -571,6 +571,9 @@ class TestCheckCurvePoolsConfigured:
             "0xbbbb000000000000000000000000000000000002", "USDC", "USDbC", chain="base"
         )
         assert idx_in == 0 and idx_out == 1
+        assert not meta.curve_pool_quotable(
+            "0xbbbb000000000000000000000000000000000002", chain="base"
+        )
 
     def test_merge_curve_pool_indices_artifact(self, tmp_path):
         """Rolling artifact overlays config seed pools at load time."""

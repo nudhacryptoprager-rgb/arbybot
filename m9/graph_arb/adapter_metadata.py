@@ -30,12 +30,16 @@ _CURVE_FACTORY_DISCOVERY_SCHEMA = "m9_curve_discovery.1"
 
 
 _QUOTE_OK_PROBE_PREFIXES = ("QUOTE_OK",)
+# Factory enumeration supplies coin_indices only; quoting requires indices probe.
+DISCOVERY_UNPROBED = "DISCOVERY_UNPROBED"
 
 
 def _curve_probe_is_quotable(probe_status: Optional[str]) -> bool:
-    """Rolling discovery probe_status; None means YAML trust anchor (quotable)."""
+    """True only for YAML trust anchors (probe_status None) or QUOTE_OK_* probes."""
     if probe_status is None:
         return True
+    if probe_status == DISCOVERY_UNPROBED:
+        return False
     return any(probe_status.startswith(p) for p in _QUOTE_OK_PROBE_PREFIXES)
 
 
@@ -197,9 +201,13 @@ def _merge_curve_factory_discovery_artifact(
             coin_indices = {str(sym): int(idx) for sym, idx in coin_raw.items()}
         except (ValueError, TypeError):
             continue
-        probe_status = str(pool.get("probe_status", "")) or None
-        if probe_status and not _curve_probe_is_quotable(probe_status):
-            continue
+        raw_probe = pool.get("probe_status")
+        if raw_probe:
+            probe_status = str(raw_probe)
+            if not _curve_probe_is_quotable(probe_status):
+                continue
+        else:
+            probe_status = DISCOVERY_UNPROBED
         pool_kind = str(pool.get("pool_kind", "stable"))
         chain_pools[pool_addr] = _CurvePool(
             pool_address=pool_addr,
@@ -395,6 +403,37 @@ def load_adapter_metadata(
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
+
+def quotable_curve_pool_addresses(
+    curve_pool_indices_path: Optional[str] = None,
+    chain: str = "base",
+) -> frozenset:
+    """Return pool addresses with QUOTE_OK_* probe_status from rolling indices."""
+    path = _resolve_curve_pool_indices_path(
+        AdapterMetadata(), chain, curve_pool_indices_path
+    )
+    if path is None or not path.exists():
+        return frozenset()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return frozenset()
+    if raw.get("schema_version") != _CURVE_POOL_INDICES_SCHEMA:
+        return frozenset()
+    if raw.get("chain") and raw.get("chain") != chain:
+        return frozenset()
+    pools_raw = raw.get("pools") or {}
+    if not isinstance(pools_raw, dict):
+        return frozenset()
+    out: set = set()
+    for pool_addr, pool_data in pools_raw.items():
+        if not isinstance(pool_data, dict):
+            continue
+        probe = pool_data.get("probe_status")
+        if probe is not None and _curve_probe_is_quotable(str(probe)):
+            out.add(str(pool_addr).lower())
+    return frozenset(out)
+
 
 def check_curve_pools_configured(
     metadata: "AdapterMetadata",

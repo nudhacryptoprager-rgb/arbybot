@@ -65,20 +65,50 @@ def _make_mock_cycle():
     m.min_factory_class = "EFFICIENT_BASELINE"
 
     # Build mock edges so _build_top_opportunity() can access edges[0].* fields
-    def _mock_edge(dex="uniswap_v3", factory="EFFICIENT_BASELINE",
-                   pool="0xaaaa", pair_id="USDC/WETH", fee_bps=5.0):
+    def _mock_edge(
+        dex="uniswap_v3",
+        factory="EFFICIENT_BASELINE",
+        pool="0xaaaa",
+        pair_id="USDC/WETH",
+        fee_bps=5.0,
+        token_in_sym="USDC",
+        token_out_sym="WETH",
+        token_in_addr="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        token_out_addr="0x4200000000000000000000000000000000000006",
+    ):
         e = MagicMock()
         e.dex_id = dex
         e.factory_class = factory
         e.pool_address = pool
         e.pair_id = pair_id
         e.fee_bps = fee_bps
+        e.token_in_sym = token_in_sym
+        e.token_out_sym = token_out_sym
+        e.token_in_addr = token_in_addr
+        e.token_out_addr = token_out_addr
         return e
 
     m.edges = [
         _mock_edge(pool="0xaaaa", pair_id="USDC/WETH"),
-        _mock_edge(dex="curve", factory="MID_EFFICIENCY", pool="0xbbbb", pair_id="WETH/USDT"),
-        _mock_edge(dex="uniswap_v3", pool="0xcccc", pair_id="USDT/USDC"),
+        _mock_edge(
+            dex="curve",
+            factory="MID_EFFICIENCY",
+            pool="0xbbbb",
+            pair_id="WETH/USDT",
+            token_in_sym="WETH",
+            token_out_sym="USDC",
+            token_in_addr="0x4200000000000000000000000000000000000006",
+            token_out_addr="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        ),
+        _mock_edge(
+            dex="uniswap_v3",
+            pool="0xcccc",
+            pair_id="USDT/USDC",
+            token_in_sym="USDC",
+            token_out_sym="WETH",
+            token_in_addr="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            token_out_addr="0x4200000000000000000000000000000000000006",
+        ),
     ]
     return m
 

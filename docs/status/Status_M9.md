@@ -1,6 +1,6 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **RUNTIME_VALIDATED__PRODUCTIVE_GATE_PASS** (обережно) — canonical soak на **виправленому** M8.2/bridge contour: `qsr=0.8923`, `ci_m9_productive_gate` **PASS**. **Economics не доведена** (`cycles_positive_gross=0`). **2-leg**: shadow-only. **depth100** не acceptance.
+**Status**: **BLOCKED** — P1 `CURVE_PRODUCTIVE_ADMISSION_TOO_BROAD` **resolved in code** (116→22 Curve routes у shadow bridge). **M8 ingestion частково розблоковано** (`graph_ready_from_m8=8`) і **cross-mechanic topology розблоковано** (`cross_mechanic_cycles=106`), але fresh shadow має `cycles_found=362`, `cycles_quoteable=0`, `qsr=0.0`, `cycles_positive_gross=0`, `cycles_with_m8_pool=0`. Primary blockers: `NO_QUOTEABLE_CYCLES_IN_FRESH_SHADOW`, `NO_POSITIVE_GROSS`, `CYCLES_WITH_M8_POOL_ZERO`, `MAVERICK_QUOTE_RPC_ERROR_DOMINANT`, `BALANCER_QUOTE_REVERT_DOMINANT`, `OVERSIZED_VS_DEPTH_DOMINATES`. Canonical soak (`qsr=0.8923`) — verified inventory contour only, не bridge economics.
 
 **M8.2 symbol/address bug:** виправлено в `cross_dex_expand.py` (символ і `token0_addr/token1_addr` канонізуються разом). Попередні claims `graph_ready_from_expansion=8` **інвалідовані** (був неправильний mapping).
 
@@ -8,13 +8,13 @@
 
 **Verified vs bridge (розділено):** canonical `m9_graph_latest.json` (`qsr≈0.89`, inventory=`m9_verified_inventory`) підтверджує **QSR contour**, не M8→M9 ingestion. Bridge-shadow (fresh 2026-06-05): `data/tmp/m9_graph_bridge_shadow_latest.json` — `bridge_cycles_found=0`, `cycles_with_m8_pool=0`, `cross_mechanic_cycles=0`, `graph_edges_from_m8=2`; productive diagnostic **2 routes** (`route_qsr=0.50`). **Dynamic M8→M9 bridge ingestion не доведений.**
 
-**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (topology lane)** — `data/tmp/m8_hot_path_latest.json`: `transition_triggers_1_to_2=10`. **Hard gate (code):** distinct-pricing lane тепер розділено на discovery/productive metrics. **Поточний стан:** P0 productive quote sync validated на pool/route level: `data/tmp/m9_productive_quote_diagnostic_latest.json` має `productive_quote_ok=53/93` (`Balancer=18`, `Maverick=35`), bridge stamp має `productive_balancer_quoteable_routes=74`, `productive_maverick_quoteable_routes=60`, `productive_curve_quoteable_routes=5`, `distinct_pricing_productive_quote_ready=true`. **Cycle-level ще BLOCKED:** latest 10m shadow `data/tmp/m9_graph_bridge_shadow_latest.json` має `cycles_found=424`, `cycles_quoteable=0`, `cross_mechanic_cycles=0`, `cycles_positive_gross=0`; M8/M8.1 stale. Economics claim заборонений до `cycles_quoteable_with_distinct_pricing_pool > 0` і хоча б одного валідного cycle-level quote.
+**Cross-Mechanic Sniper Edge (гілка):** **3h hot-path acceptance = PASS (topology lane)** — `data/tmp/m8_hot_path_latest.json`: `transition_triggers_1_to_2=10`. **P1 Curve admission (2026-06-10):** bridge фільтрує Curve до `QUOTE_OK_*` з `m9_curve_pool_indices_latest.json` (`curve_productive_admission_filtered=94`, active Curve **22**). RCA після fix: `QUOTE_REVERT` **0**; Curve більше не є головним blocker. **Cycle-level BLOCKED:** fresh shadow `cycles_found=362`, `cycles_quoteable=0`, `cross_mechanic_cycles=106`, `cycles_positive_gross=0`, `qsr=0.0`; `graph_ready_from_m8=8`, але `cycles_with_m8_pool=0`. Primary blockers: `NO_QUOTEABLE_CYCLES_IN_FRESH_SHADOW`, `CYCLES_WITH_M8_POOL_ZERO`, `MAVERICK_QUOTE_RPC_ERROR_DOMINANT`, `BALANCER_QUOTE_REVERT_DOMINANT`, `OVERSIZED_VS_DEPTH_DOMINATES`. Economics claim заборонений.
 
 **External pool hints (Фаза 1.6):** `external_pool_hints_status: RUNTIME_VALIDATED` — pre-3h regen: `438 tokens`, `681 pools`, `262 verified`, `tcr=0.5982`. DexScreener/GeckoTerminal/`thegraph_token_api` + `new_pools_backfill` (5 pages). Hot-path застосовує hints → `10` transitions via `dexscreener`. **M9 bridge-shadow 30m** (post-acceptance): `data/tmp/m9_graph_bridge_shadow_latest.json` — `cycles_found=5952`, `cycles_quoteable=0`, `cycles_positive_gross=0`, `gate_acceptance=false` — **не** profit/M9 PASS.
 
-**Напрямок гілки (узгоджено 2026-06-06, уточнено тімлідом) — активний пошук 2-го пулу, не пасивне очікування:** sniper-кандидати на момент launch майже завжди на ОДНОМУ дексі (Base ≈575 v4 launch/год). `multi_venue_tokens=0` — НЕ баг: до появи другого on-chain пулу edge не існує (без pending/preconf не передбачити неіснуючий пул). **Мета:** після першого pool event → watch-list (`m8_pending_pairs.json`) → **активний** `T-*` scan по всіх enabled DEX (factory logs / adapter resolvers), не чекати batch M8.2. Тригер входу: `token_seen_on_dexes: 1→2` + `cross_mechanic=true` → focused quote (`2,3,4` legs, incl. `T-C+C-anchor`) + honeypot → **`spread_lifetime` + `time_to_second_pool_s` (Фази 2/1.5)** як гейти перед production-shadow. Production-shadow лише якщо `second_pool_verified=true`, `quoteable_routes>=2`, `honeypot_pass=true`, `spread_lifetime` не порожній. Pending/preconf — R&D, не production foundation. Повний бриф: `docs/m9/BRANCH_BUILD_GUIDE_cross_mechanic_sniper_edge.md` (0b–0g, Фаза 1.5). Config-баг: `sushiswap_v3` topic0 дубльований у `config/new_pool_factories.yaml` → лейн глухий.
+**Напрямок гілки (узгоджено 2026-06-06, уточнено тімлідом) — активний пошук 2-го пулу, не пасивне очікування:** sniper-кандидати на момент launch майже завжди на ОДНОМУ дексі (Base ≈575 v4 launch/год). `multi_venue_tokens=0` — НЕ баг: до появи другого on-chain пулу edge не існує (без pending/preconf не передбачити неіснуючий пул). **Мета:** після першого pool event → watch-list (`m8_pending_pairs.json`) → **активний** `T-*` scan по всіх enabled DEX (factory logs / adapter resolvers), не чекати batch M8.2. Тригер входу: `token_seen_on_dexes: 1→2` + `cross_mechanic=true` → focused quote (`2,3,4` legs, incl. `T-C+C-anchor`) + honeypot → **`spread_lifetime` + `time_to_second_pool_s` (Фази 2/1.5)** як гейти перед production-shadow. Production-shadow лише якщо `second_pool_verified=true`, `quoteable_routes>=2`, `honeypot_pass=true`, `spread_lifetime` не порожній. Pending/preconf — R&D, не production foundation. Повний бриф: `docs/m9/BRANCH_BUILD_GUIDE_cross_mechanic_sniper_edge.md` (0b–0g, Фаза 1.5). `sushiswap_v3` topic0 у `config/new_pool_factories.yaml` виправлений і не є активним blocker.
 
-**Runtime evidence (sniper lane, rolling):** `new_pool_sniper_latest.json` — `ACTIVE`, `1605` candidates, `listener_mode=http_only`, `sniper_rpc_provider=drpc`, `sniper_rpc_failover_count=141` (lane-specific fallback працює; runtime acceptance Фази 1.5 pending).
+**Runtime evidence (sniper lane, rolling):** `new_pool_sniper_latest.json` — fresh and **ACTIVE** after chunk mitigation: `raw_fetched=11`, `snipe_candidates_total=11`, `recent_events=11`, `rpc_errors=0`, `sniper_rpc_provider=drpc`, `sniper_rpc_failover_count=18`, `getlogs_400_count=126`, `getlogs_chunk_size=9`. Bridge enrichment now maps symbols for native/anchor cases: `m8_new_pools_input=11`, `graph_ready_from_m8=8`, `m8_funnel_reject_histogram={TOKEN_SYMBOL_INVALID:1, NOT_ANCHOR_CONNECTED:2}`. This proves short-window M8 ingestion into bridge is alive, but **not** production economics: `cycles_with_m8_pool=0`.
 
 **Token-class policy (2026-06-07, independent review):** відмова від latency-вичищеного **known-token CLMM launch** edge (telemetry only). Стратегія лишається `1→2 venue + active scan + cross-mechanic`. **Known-token cross-mechanic** — окремий secondary shadow-клас з роздільним `spread_lifetime_by_token_class` / `spread_lifetime_by_mechanic_pair` (не змішувати з fresh long-tail). Код: `m8/discovery/token_classify.py`; bridge-shadow лише для `cross_mechanic` або `fresh_long_tail` з `connector_tokens>=1`. Production claim заборонений без `spread_lifetime`, honeypot/sell-side, net-sim.
 
@@ -106,6 +106,29 @@
 | Shadow soak | `cycles_found` / `cycles_quoteable` | **424** / **0** |
 | Shadow soak | `cross_mechanic_cycles` / `cycles_positive_gross` | **0** / **0** |
 | Freshness | M8 / M8.1 | **stale** / **stale** |
+
+**Session 2026-06-10 P1 Curve productive admission:**
+
+**Status: PARTIAL_REACHED / BLOCKED** — Curve admission fix **REACHED**; M8 bridge ingestion and cross-mechanic topology are partially unblocked; cycle quoteability/economics remain **BLOCKED**.
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Curve indices regen | `QUOTE_OK_INT128` pools | **22 / 116** |
+| Bridge shadow | Curve before/after admission filter | **116 → 22** (`filtered=94`) |
+| Productive stamp | curve / balancer / maverick quoteable | **22 / 79 / 60** |
+| RCA post-fix | `QUOTE_REVERT` / curve leg-errors | **0** / **30** |
+| RCA post-fix | Balancer / Maverick leg-errors | **305** / **250** |
+| RCA post-fix | dominant reject reasons | `QUOTE_CONFIG_MISSING__BALANCER_POOL_ID=305`, `QUOTE_RPC_ERROR=280` |
+| Shadow 5m (post M8 enrichment) | `cycles_found` / `cycles_quoteable` | **362** / **0** |
+| Shadow 5m | `cross_mechanic_cycles` / `cycles_positive_gross` | **106** / **0** |
+| Shadow 5m | `cycles_with_m8_pool` / `graph_ready_from_m8` | **0** / **8** |
+| Shadow 5m | cycle rejects | `OVERSIZED_VS_DEPTH=261`, `CYCLE_QUOTE_FAILED=91`, `PHANTOM_QUOTE_BPS_OVERFLOW=10` |
+| M8 sniper refresh | status / candidates / recent events | **ACTIVE** / **11** / **11** |
+| M8.1 anchor refresh | candidates / passes / quote success | **3279** / **354** / **1.0** |
+| M8.2 expansion regen | `routes_admitted` / `graph_ready_from_expansion` | **514** / **387** |
+| Bridge shadow | `graph_ready_total` / active routes / cross-mechanic tags | **634** / **540** / **77** |
+| Config | `balancer_vault` / `maverick_v2` `enabled_for_productive` | **true** |
+| Honeypot gate | `positive_gross_counts_as_evidence(strict=True)` | **enabled** in artifact builder |
 
 **Session 2026-06-07 distinct-pricing lane refresh (superseded partial):**
 

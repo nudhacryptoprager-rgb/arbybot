@@ -115,6 +115,47 @@ def _without_curve_routes(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         and r.get("adapter_type") != "curve_stable"
     ]
 
+
+def _filter_curve_routes_productive_admission(
+    routes: List[Dict[str, Any]],
+    *,
+    curve_pool_indices_path: Optional[str] = None,
+    chain: str = "base",
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """Keep only curve_stable routes whose pool passed rolling get_dy probe (QUOTE_OK_*)."""
+    from m9.graph_arb.adapter_metadata import load_adapter_metadata
+
+    if curve_temporarily_disabled():
+        return routes, {
+            "curve_productive_admission_before": 0,
+            "curve_productive_admission_after": 0,
+            "curve_productive_admission_filtered": 0,
+        }
+
+    meta = load_adapter_metadata(curve_pool_indices_path=curve_pool_indices_path)
+    kept: List[Dict[str, Any]] = []
+    curve_before = 0
+    curve_filtered = 0
+    for route in routes:
+        is_curve = (
+            route.get("dex_id") == "curve_stable"
+            or route.get("adapter_type") == "curve_stable"
+        )
+        if not is_curve:
+            kept.append(route)
+            continue
+        curve_before += 1
+        pool = str(route.get("pool_address") or "").lower()
+        if pool and meta.curve_pool_quotable(pool, chain=chain):
+            kept.append(route)
+        else:
+            curve_filtered += 1
+    return kept, {
+        "curve_productive_admission_before": curve_before,
+        "curve_productive_admission_after": curve_before - curve_filtered,
+        "curve_productive_admission_filtered": curve_filtered,
+    }
+
 _SCHEMA_VERSION = "m9_bridge_inventory.1"
 
 
@@ -147,6 +188,18 @@ def _artifact_age_seconds(artifact: Dict, now_ts: float) -> Optional[float]:
         return None
 
 
+_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+# Base anchor token addresses → symbols (address-only sniper events).
+_BASE_ANCHOR_ADDR_TO_SYMBOL: Dict[str, str] = {
+    "0x4200000000000000000000000000000000000006": "WETH",
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
+    "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": "EURC",
+    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": "cbBTC",
+    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
+    "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": "USDT",
+}
+
+
 def _is_symbol_valid(sym: str) -> bool:
     """Return True if symbol looks like a real token name (not junk)."""
     if not sym or not isinstance(sym, str):
@@ -156,6 +209,86 @@ def _is_symbol_valid(sym: str) -> bool:
     if sym.isdigit():
         return False
     return True
+
+
+def _symbol_from_token_addr(addr: Optional[str]) -> str:
+    """Resolve a display symbol from a token address when ERC20 symbol() is missing."""
+    if not addr or not isinstance(addr, str):
+        return ""
+    normalized = addr.lower()
+    if normalized == _ZERO_ADDRESS:
+        return "WETH"
+    anchor_sym = _BASE_ANCHOR_ADDR_TO_SYMBOL.get(normalized)
+    if anchor_sym:
+        return anchor_sym
+    if normalized.startswith("0x") and len(normalized) >= 10:
+        return normalized[2:8].upper()
+    return ""
+
+
+def _enrich_sniper_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill missing token symbols from addresses so token_verified can proceed."""
+    enriched = dict(event)
+    for side in ("0", "1"):
+        sym_key = f"token{side}_symbol"
+        addr_key = f"token{side}"
+        if not _is_symbol_valid(enriched.get(sym_key, "")):
+            resolved = _symbol_from_token_addr(enriched.get(addr_key))
+            if resolved:
+                enriched[sym_key] = resolved
+    return enriched
+
+
+def _build_m8_funnel_reject_histogram(
+    m8_events: List[Dict],
+    token_verified_events: List[Dict],
+    anchor_connected_events: List[Dict],
+    cross_dex_seen_events: List[Dict],
+    multi_venue_events: List[Dict],
+    supported_events: List[Dict],
+    fresh_window_events: List[Dict],
+    single_venue_events: List[Dict],
+    unsupported_events: List[Dict],
+    pending_events: List[Dict],
+) -> Dict[str, int]:
+    """Per-event reject reason for M8-origin pools that did not reach graph_ready."""
+    verified_ids = {e.get("event_id") for e in token_verified_events}
+    anchor_ids = {e.get("event_id") for e in anchor_connected_events}
+    cross_ids = {e.get("event_id") for e in cross_dex_seen_events}
+    multi_ids = {e.get("event_id") for e in multi_venue_events}
+    ready_ids = {
+        e.get("event_id")
+        for e in supported_events + fresh_window_events
+        if e.get("event_id")
+    }
+    hist: Dict[str, int] = {}
+    for e in m8_events:
+        eid = e.get("event_id")
+        if eid in ready_ids:
+            continue
+        t0_sym = e.get("token0_symbol")
+        t1_sym = e.get("token1_symbol")
+        if eid not in verified_ids:
+            if t0_sym is None or t1_sym is None:
+                reason = "TOKEN_SYMBOL_MISSING"
+            else:
+                reason = "TOKEN_SYMBOL_INVALID"
+        elif eid not in anchor_ids:
+            reason = "NOT_ANCHOR_CONNECTED"
+        elif eid not in cross_ids:
+            reason = "CROSS_DEX_NOT_SEEN"
+        elif eid in {x.get("event_id") for x in unsupported_events}:
+            reason = "UNSUPPORTED_DEX_TYPE"
+        elif eid in {x.get("event_id") for x in pending_events}:
+            reason = "PENDING_ADAPTER"
+        elif eid in {x.get("event_id") for x in single_venue_events}:
+            reason = "STRUCTURAL_SINGLE_VENUE_TOPOLOGY"
+        elif eid not in multi_ids:
+            reason = "MULTI_VENUE_GATE_FAILED"
+        else:
+            reason = "OTHER_REJECT"
+        hist[reason] = hist.get(reason, 0) + 1
+    return hist
 
 
 def _is_anchor_connected(token0_sym: str, token1_sym: str) -> bool:
@@ -512,11 +645,12 @@ def build_bridge_inventory(
     m8_stale: bool
     m8_1_stale: bool
 
+    _sniper_age_seconds: Optional[float] = None
     if sniper is None:
         m8_stale = True
     else:
-        age = _artifact_age_seconds(sniper, now_ts)
-        m8_stale = (age is None) or (age > _M8_STALE_SECONDS)
+        _sniper_age_seconds = _artifact_age_seconds(sniper, now_ts)
+        m8_stale = (_sniper_age_seconds is None) or (_sniper_age_seconds > _M8_STALE_SECONDS)
 
     if anchor is None:
         m8_1_stale = True
@@ -538,7 +672,7 @@ def build_bridge_inventory(
                 if _ev.get("event_id") not in _seen_ids:
                     _raw_events.append(_ev)
                     _seen_ids.add(_ev.get("event_id"))
-    m8_events: List[Dict] = _raw_events
+    m8_events: List[Dict] = [_enrich_sniper_event(e) for e in _raw_events]
     m8_new_pools_input = len(m8_events)
 
     # Stage 2: token_verified — symbol present and non-junk
@@ -1132,6 +1266,13 @@ def build_bridge_inventory(
         "dex_coverage_matrix": dex_coverage_matrix,
         "m8_stale": m8_stale,
         "m8_1_stale": m8_1_stale,
+        "sniper_age_seconds": (
+            round(_sniper_age_seconds, 1) if _sniper_age_seconds is not None else None
+        ),
+        "sniper_generated_at_utc": (
+            sniper.get("generated_at_utc") if sniper else None
+        ),
+        "m8_stale_threshold_seconds": _M8_STALE_SECONDS,
         "sniper_path": sniper_path,
         "anchor_path": anchor_path,
         "base_inv_path": base_inv_path,
@@ -1145,6 +1286,18 @@ def build_bridge_inventory(
         "m8_multi_venue_quoteable_count": _m8_multi_venue_quoteable_count,  # gate: >=2 quoteable DEX IDs
         "m8_multi_venue_verified_count": _m8_multi_venue_verified_count,    # backward compat alias
         "structural_single_venue_blocked_count": _structural_single_venue_blocked,
+        "m8_funnel_reject_histogram": _build_m8_funnel_reject_histogram(
+            m8_events,
+            token_verified_events,
+            anchor_connected_events,
+            cross_dex_seen_events,
+            multi_venue_events,
+            supported_events,
+            _fresh_window_events,
+            _single_venue_events,
+            unsupported_events,
+            pending_events,
+        ),
         # Stage 4c fresh-window diagnostics
         "sniper_in_fresh_window": _sniper_in_fresh_window,
         "sniper_age_seconds": round(_sniper_age, 1) if _sniper_age is not None else None,
@@ -1255,6 +1408,15 @@ def build_bridge_inventory(
     # Per-pool quality state (discovery → productive admission)
     # ------------------------------------------------------------------
     final_active = _without_curve_routes(base_active + m8_new_routes)
+    if not os.environ.get("ARBY_M9_CURVE_ADMIT_ALL", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        final_active, _curve_adm = _filter_curve_routes_productive_admission(
+            final_active
+        )
+        bridge_source_metrics.update(_curve_adm)
     try:
         from m8.discovery.distinct_pricing_lane import (
             evaluate_distinct_pricing_lane,

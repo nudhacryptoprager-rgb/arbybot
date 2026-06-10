@@ -137,5 +137,26 @@ class TestSniperGetLogsFailover(unittest.TestCase):
         self.assertEqual(w3.eth.get_logs.call_count, 2)
 
 
+class TestSniperArtifactPreserve(unittest.TestCase):
+    def test_preserve_recent_events_on_rpc_error(self, tmp_path=None):
+        import json
+        from pathlib import Path
+
+        from m8.runtime.smoke_run import _load_preserved_recent_events_dicts
+
+        rolling = Path("data/runs/_rolling")
+        rolling.mkdir(parents=True, exist_ok=True)
+        art = rolling / "new_pool_sniper_latest.json"
+        prior = {
+            "status": "ACTIVE",
+            "recent_events": [{"event_id": "e1", "pool_address": "0xabc"}],
+        }
+        art.write_text(json.dumps(prior), encoding="utf-8")
+        preserved = _load_preserved_recent_events_dicts("RPC_ERROR", [])
+        self.assertIsNotNone(preserved)
+        self.assertEqual(len(preserved), 1)
+        self.assertIsNone(_load_preserved_recent_events_dicts("ACTIVE", []))
+
+
 if __name__ == "__main__":
     unittest.main()

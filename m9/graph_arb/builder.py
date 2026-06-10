@@ -399,6 +399,17 @@ def build_graph_from_inventory(
                 _pool_id = _b_pool.pool_id
                 _pool_kind = _b_pool.pool_kind
                 _vault_address = _adapter_meta.balancer_vault_address(_meta_chain)
+            # M8.2 expansion / bridge inventory may carry pool_id before YAML index merge.
+            if not _pool_id:
+                _entry_pool_id = entry.get("pool_id")
+                if _entry_pool_id:
+                    _pool_id = str(_entry_pool_id).lower()
+            if not _vault_address:
+                _entry_vault = entry.get("vault_address")
+                if _entry_vault:
+                    _vault_address = str(_entry_vault).lower()
+            if not _vault_address:
+                _vault_address = _adapter_meta.balancer_vault_address(_meta_chain)
 
         # Curve index lookup happens per-direction (fwd / rev), computed below.
 

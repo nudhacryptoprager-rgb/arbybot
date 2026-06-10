@@ -13,6 +13,7 @@ _HARD_DIAG_REJECTS = frozenset(
         "QUOTE_CONFIG_MISSING",
         "QUOTE_CONFIG_MISSING__BALANCER_POOL_ID",
         "QUOTE_DECODE",
+        "QUOTE_ZERO_OUTPUT",
     }
 )
 

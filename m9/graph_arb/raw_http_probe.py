@@ -404,8 +404,12 @@ def probe_quote_raw_http(
 
     except Exception as exc:
         err_str = str(exc)
-        if "execution reverted" in err_str or "revert" in err_str.lower():
+        if "MAVERICK_ZERO_OUT" in err_str:
+            reject = "QUOTE_ZERO_OUTPUT"
+        elif "execution reverted" in err_str or "revert" in err_str.lower():
             reject = "QUOTE_REVERT"
+        elif err_str.strip() in ("0x", "0x0") or err_str.strip().lower() == "empty eth_call result":
+            reject = "QUOTE_ZERO_OUTPUT"
         elif "response too short" in err_str or "too short" in err_str.lower():
             reject = "QUOTE_DECODE"
         elif "invalid v2 token direction" in err_str.lower() or "coin indices" in err_str.lower():
