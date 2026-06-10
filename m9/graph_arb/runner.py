@@ -180,11 +180,22 @@ def _write_revert_quarantine(
     from collections import defaultdict as _dd
 
     # Accumulate per-route leg error counts
-    # "HARD" = QUOTE_REVERT or QUOTE_RPC_ERROR; "OTHER" = everything else
-    _HARD_ERRORS = frozenset(
-        {"QUOTE_REVERT", "QUOTE_RPC_ERROR", "QUOTE_ZERO_OUTPUT"}
+    from m9.graph_arb.quote_reject_classify import (
+        BALANCER_AUTO_QUARANTINE_CODES,
+        BALANCER_PERMANENT_QUARANTINE_CODES,
+        HARD_QUOTE_REJECTS,
+        extract_balancer_code,
     )
-    route_errors: "_dd[str, dict]" = _dd(lambda: {"HARD": 0, "OTHER": 0, "pair_id": "", "pool_address": ""})
+
+    route_errors: "_dd[str, dict]" = _dd(
+        lambda: {
+            "HARD": 0,
+            "OTHER": 0,
+            "pair_id": "",
+            "pool_address": "",
+            "balancer_codes": _dd(int),
+        }
+    )
     for qr in cycle_results:
         edges = qr.cycle.edges
         for i, leg in enumerate(qr.leg_results or []):
@@ -193,14 +204,14 @@ def _write_revert_quarantine(
             if not leg.ok and leg.reject_reason:
                 entry = route_errors[leg.route_id]
                 entry["pair_id"] = edges[i].pair_id
-                # Record pool_address so the next run can quarantine by address directly,
-                # instead of re-parsing symbols from the route_id (which is ambiguous for
-                # tokens whose symbol contains '-', e.g. "open-slide").
                 entry["pool_address"] = (edges[i].pool_address or "").lower()
-                if leg.reject_reason in _HARD_ERRORS:
+                if leg.reject_reason in HARD_QUOTE_REJECTS:
                     entry["HARD"] += 1
                 else:
                     entry["OTHER"] += 1
+                _bal_code = extract_balancer_code(leg.raw_error or "")
+                if _bal_code:
+                    entry["balancer_codes"][_bal_code] += 1
 
     quarantine = []
     for route_id, counts in route_errors.items():
@@ -209,7 +220,18 @@ def _write_revert_quarantine(
         if total == 0:
             continue
         hard_rate = hard / total
-        if hard_rate >= _REVERT_DOMINANT_THRESHOLD and total >= 5:
+        _bal_codes = counts.get("balancer_codes") or {}
+        _perm_bal = any(c in BALANCER_PERMANENT_QUARANTINE_CODES for c in _bal_codes)
+        _auto_bal = any(
+            c in BALANCER_AUTO_QUARANTINE_CODES and n >= 2 for c, n in _bal_codes.items()
+        )
+        _dominant_bal = max(_bal_codes, key=_bal_codes.get) if _bal_codes else None
+        if _perm_bal or _auto_bal or (hard_rate >= _REVERT_DOMINANT_THRESHOLD and total >= 5):
+            _reason = "QUOTE_REVERT_DOMINANT"
+            if _perm_bal and _dominant_bal in BALANCER_PERMANENT_QUARANTINE_CODES:
+                _reason = f"BALANCER_{_dominant_bal.replace('BAL#', '')}_PERMANENT"
+            elif _auto_bal and _dominant_bal:
+                _reason = f"BALANCER_{_dominant_bal.replace('BAL#', '')}_REPEAT"
             quarantine.append(
                 {
                     "route_id": route_id,
@@ -218,7 +240,8 @@ def _write_revert_quarantine(
                     "revert_count": hard,
                     "total_leg_errors": total,
                     "revert_rate": round(hard_rate, 4),
-                    "quarantine_reason": "QUOTE_REVERT_DOMINANT",
+                    "quarantine_reason": _reason,
+                    "balancer_codes": dict(_bal_codes),
                 }
             )
 
@@ -561,10 +584,44 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     from m9.graph_arb.finder import find_cycles, analyze_topology, rank_cycles
     from m9.graph_arb.artifacts import build_artifact, write_artifact
 
+    # Safe for minimal argparse.Namespace in gate/regression tests (no parser defaults).
+    duration_minutes = float(
+        getattr(args, "duration_minutes", 1.0) or 1.0
+    )
+    artifact_path = getattr(
+        args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
+    )
+    cycles_limit = int(getattr(args, "cycles_limit", 5000) or 5000)
+
     run_timestamp = _iso_now()
     started_at = time.monotonic()
     sweeps_completed = 0
     process_id = os.getpid()
+
+    def _write_runner_preflight(status: str, detail: str = "") -> None:
+        """Mark run start so killed/background launches are detectable in artifact."""
+        import json as _pf_json
+
+        pre = {
+            "schema_family": "m9_graph_arb",
+            "run_status": status,
+            "runner_outcome": status,
+            "run_timestamp": run_timestamp,
+            "run_context": {
+                "chain": args.chain,
+                "duration_minutes": duration_minutes,
+                "inventory_path": getattr(args, "inventory", None),
+                "artifact_path": artifact_path,
+                "process_id": process_id,
+            },
+            "detail": detail,
+        }
+        try:
+            write_artifact(pre, artifact_path)
+        except Exception:
+            pass
+
+    _write_runner_preflight("STARTING", "runner_preflight")
 
     # Resolve RPC URL early — before graph building so all build_artifact() calls
     # (including early-exit ones) record the correct provider identity.
@@ -1036,7 +1093,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             )
             if _disc_adj:
                 _discovery_cycles_found = len(
-                    find_cycles(_disc_adj, max_cycles=min(args.cycles_limit, 5000))
+                    find_cycles(_disc_adj, max_cycles=min(cycles_limit, 5000))
                 )
                 log.info(
                     "Discovery topology reference: %d cycles before productive filters",
@@ -1044,6 +1101,44 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 )
         except Exception as _disc_topo_exc:
             log.debug("Discovery topology reference skipped: %s", _disc_topo_exc)
+
+    _truth_prices: Optional[Dict[str, float]] = None
+    try:
+        from m9.graph_arb.inventory_truth import enrich_inventory_for_quote_truth
+        from m9.graph_arb.route_quarantine import merge_paused_pools_from_lane_rca
+        from m9.graph_arb.token_price_fetcher import (
+            build_dual_key_price_map,
+            extend_price_map_from_inventory,
+            fetch_token_prices_usd,
+        )
+
+        try:
+            _rq_merge = merge_paused_pools_from_lane_rca()
+            if _rq_merge.get("added"):
+                log.info(
+                    "Hard quarantine: added %d paused Balancer pools from lane RCA",
+                    _rq_merge["added"],
+                )
+        except Exception as _rq_exc:
+            log.debug("Paused-pool quarantine merge skipped: %s", _rq_exc)
+
+        _truth_w3 = _connect_rpc(args.chain) if rpc_url else None
+        _truth_price_result = fetch_token_prices_usd(timeout_s=3.0)
+        _truth_prices = extend_price_map_from_inventory(
+            inventory_path,
+            args.config,
+            _truth_price_result.prices_by_address
+            or build_dual_key_price_map(_truth_price_result.prices),
+        )
+        inventory_path = enrich_inventory_for_quote_truth(
+            inventory_path,
+            args.config,
+            w3=_truth_w3,
+            token_prices=_truth_prices,
+        )
+        log.info("Quote-size truth inventory enrichment: path=%s", inventory_path)
+    except Exception as _truth_exc:
+        log.warning("Quote-size truth enrichment skipped: %s", _truth_exc)
 
     try:
         adjacency = build_graph_from_inventory(
@@ -1053,6 +1148,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             exclude_pool_addresses=_exclude_pool_addresses,
             min_effective_depth_usd=getattr(args, "min_effective_depth_usd", 0.0),
             lane=_lane,
+            token_prices_usd=_truth_prices if _lane == "productive" else None,
         )
     except Exception as exc:
         log.error("Failed to build graph: %s", exc)
@@ -1068,7 +1164,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         artifact = build_artifact(
             chain=args.chain,
-            duration_minutes=args.duration_minutes,
+            duration_minutes=duration_minutes,
             cycle_results=[],
             topology=topology,
             sizes_usd=tuple(args.sizes_usd),
@@ -1099,11 +1195,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             bridge_source_metrics=_bridge_source_metrics,
             cost_model=_cost_model,
         )
-        write_artifact(artifact, args.artifact_path)
+        write_artifact(artifact, artifact_path)
         return EXIT_CONFIG_ERROR
 
     # Find cycles
-    log.info("Finding cycles (limit=%d)...", args.cycles_limit)
+    log.info("Finding cycles (limit=%d)...", cycles_limit)
 
     # Count graph edges sourced from M8 sniper routes (requires pair_id with underscore)
     if _m8_pool_addrs:
@@ -1130,7 +1226,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                     _graph_edges_from_m8,
                 )
         log.info("Graph edges from M8 sniper routes: %d", _graph_edges_from_m8)
-    cycles = find_cycles(adjacency, cycle_lengths=_cycle_lengths, max_cycles=args.cycles_limit)
+    cycles = find_cycles(adjacency, cycle_lengths=_cycle_lengths, max_cycles=cycles_limit)
     # --- Fee-cap pre-filter (Step 2 hardening) -----------------------------------
     # Any cycle whose *total* fee exceeds _MAX_CYCLE_FEE_BPS can never be
     # profitable at realistic price discrepancies.  Cycles with fees like
@@ -1210,7 +1306,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 log.debug("Spread lifetime sidecar (no cycles): %s", _sl_early_exc)
         artifact = build_artifact(
             chain=args.chain,
-            duration_minutes=args.duration_minutes,
+            duration_minutes=duration_minutes,
             cycle_results=[],
             topology=topology,
             sizes_usd=tuple(args.sizes_usd),
@@ -1242,14 +1338,14 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             cost_model=_cost_model,
             spread_lifetime_block=_spread_early,
         )
-        write_artifact(artifact, args.artifact_path)
+        write_artifact(artifact, artifact_path)
         return EXIT_NO_CYCLES
 
     if args.dry_run:
         log.info("Dry-run mode: skipping quoting (topology cycles_found=%d)", len(cycles))
         artifact = build_artifact(
             chain=args.chain,
-            duration_minutes=args.duration_minutes,
+            duration_minutes=duration_minutes,
             cycle_results=[],
             topology=topology,
             sizes_usd=tuple(args.sizes_usd),
@@ -1282,13 +1378,23 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             bridge_source_metrics=_bridge_source_metrics,
             cost_model=_cost_model,
         )
-        write_artifact(artifact, args.artifact_path)
+        write_artifact(artifact, artifact_path)
         return EXIT_OK
 
     # Крок 3: Fetch live token prices from CoinGecko; fall back to hardcoded dict.
     from m9.graph_arb.token_price_fetcher import fetch_token_prices_usd
     _price_result = fetch_token_prices_usd(timeout_s=5.0)
-    _runtime_token_prices: dict = _price_result.prices
+    from m9.graph_arb.token_price_fetcher import (
+        build_dual_key_price_map,
+        extend_price_map_from_inventory,
+    )
+
+    _runtime_token_prices: dict = extend_price_map_from_inventory(
+        inventory_path,
+        args.config,
+        _price_result.prices_by_address
+        or build_dual_key_price_map(_price_result.prices),
+    )
     log.info(
         "Token prices: source=%s stale=%s",
         _price_result.source, _price_result.stale,
@@ -1314,7 +1420,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Each sweep quotes a batch of max_cycles_per_sweep cycles, then writes a
     # partial artifact so the rolling artifact stays fresh even mid-soak.
     from m9.graph_arb.quoter import schedule_cycle_quotes
-    deadline = started_at + args.duration_minutes * 60.0
+    deadline = started_at + duration_minutes * 60.0
     max_per_sweep = getattr(args, "max_cycles_per_sweep", 200)
     cycle_count = len(ranked)
     all_results: list = []
@@ -1608,7 +1714,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         partial = build_artifact(
             chain=args.chain,
-            duration_minutes=args.duration_minutes,
+            duration_minutes=duration_minutes,
             cycle_results=all_results,
             topology=topology,
             sizes_usd=tuple(args.sizes_usd),
@@ -1652,7 +1758,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             cost_model=_cost_model,
             active_rpc_by_sweep=dict(_active_rpc_by_sweep),
         )
-        write_artifact(partial, args.artifact_path)
+        write_artifact(partial, artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
         _sched_info = ""
         if _cycle_scheduler is not None:
@@ -1661,7 +1767,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         log.info(
             "Sweep %d done: %d new, %d total, %d positive, elapsed=%.1fs/%.0fs%s",
             sweeps_completed, len(new_results), len(all_results),
-            positive_so_far, elapsed_so_far, args.duration_minutes * 60, _sched_info,
+            positive_so_far, elapsed_so_far, duration_minutes * 60, _sched_info,
         )
 
         if time.monotonic() >= deadline:
@@ -1815,7 +1921,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Build and write final artifact with full elapsed_s
     artifact = build_artifact(
         chain=args.chain,
-        duration_minutes=args.duration_minutes,
+        duration_minutes=duration_minutes,
         cycle_results=cycle_results,
         topology=topology,
         sizes_usd=tuple(args.sizes_usd),
@@ -1859,7 +1965,14 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         cost_model=_cost_model,
         active_rpc_by_sweep=dict(_active_rpc_by_sweep),
     )
-    write_artifact(artifact, args.artifact_path)
+    artifact["run_status"] = "COMPLETED"
+    artifact["runner_outcome"] = "COMPLETED"
+    artifact["duration_fulfilled"] = (time.monotonic() - started_at) >= (
+        duration_minutes * 60.0 * 0.95
+    )
+    if not artifact["duration_fulfilled"]:
+        artifact["runner_outcome"] = "ENDED_EARLY"
+    write_artifact(artifact, artifact_path)
 
     # Write QUOTE_REVERT quarantine: routes whose legs failed exclusively with QUOTE_REVERT.
     # This feedback file guides inventory refresh: quarantine these fee-tier/pool combos.
@@ -1871,7 +1984,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         "Sweep complete: %d cycles quoted, %d positive gross, artifact written to %s",
         len(cycle_results),
         positive,
-        args.artifact_path,
+        artifact_path,
     )
 
     if not cycle_results:

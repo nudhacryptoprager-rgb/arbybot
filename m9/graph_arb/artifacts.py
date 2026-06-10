@@ -847,6 +847,18 @@ def build_artifact(
     positive_cycle_multi_hit_count = sum(1 for v in _positive_repeat_counts.values() if v >= 2)
     positive_cycle_max_repeat = max(_positive_repeat_counts.values(), default=0)
 
+    def _qsr_for_subset(results: List[CycleQuoteResult]) -> float:
+        quoted_sub = [
+            qr for qr in results
+            if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
+        ]
+        if not quoted_sub:
+            return 0.0
+        return (
+            sum(1 for qr in quoted_sub if qr.status not in ("QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT"))
+            / len(quoted_sub)
+        )
+
     # QSR: quote success rate. Exclude ZERO_AMOUNT_IN (not a quoting attempt)
     # and OVERSIZED_VS_DEPTH (P0a: a real but extreme quote whose notional
     # overwhelms the bottleneck pool depth; neither a quote failure nor a market
@@ -855,12 +867,25 @@ def build_artifact(
         qr for qr in cycle_results
         if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
     ]
-    qsr = (
-        sum(1 for qr in quoted if qr.status not in ("QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT"))
-        / len(quoted)
-        if quoted
-        else 0.0
+    qsr = _qsr_for_subset(cycle_results)
+
+    from m9.graph_arb.size_truth import (
+        LIVENESS_MAX_SIZE_USD,
+        economic_size_floor_usd,
+        is_econ_size,
+        is_liveness_size,
     )
+
+    _cp = _cost_profile_for_compute or {}
+    _econ_floor_usd = economic_size_floor_usd(
+        gas_usd=float(_cp.get("gas_usd", 0.05)),
+        l1_fee_usd=float(_cp.get("l1_fee_usd", 0.01)),
+        slippage_bps=float(_cp.get("slippage_bps", 5.0)),
+    )
+    _liveness_results = [qr for qr in cycle_results if is_liveness_size(qr.size_usd)]
+    _econ_results = [qr for qr in cycle_results if is_econ_size(qr.size_usd, _econ_floor_usd)]
+    qsr_liveness = _qsr_for_subset(_liveness_results)
+    qsr_econ = _qsr_for_subset(_econ_results)
     oversized_vs_depth_count = sum(
         1 for qr in cycle_results if qr.status == "OVERSIZED_VS_DEPTH"
     )
@@ -1180,6 +1205,14 @@ def build_artifact(
         "positive_cycle_multi_hit_count": positive_cycle_multi_hit_count,  # cycles positive ≥2 sweeps
         "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id
         "qsr": round(qsr, 4),
+        "qsr_liveness": round(qsr_liveness, 4),
+        "qsr_econ": round(qsr_econ, 4),
+        "quote_size_truth": {
+            "liveness_max_size_usd": LIVENESS_MAX_SIZE_USD,
+            "economic_size_floor_usd": _econ_floor_usd,
+            "liveness_quote_attempts": len(_liveness_results),
+            "econ_quote_attempts": len(_econ_results),
+        },
         "oversized_vs_depth_count": oversized_vs_depth_count,  # excluded from QSR denominator
         "infra_status": infra_status,
         "quote_rpc_error_rate": quote_rpc_error_rate,

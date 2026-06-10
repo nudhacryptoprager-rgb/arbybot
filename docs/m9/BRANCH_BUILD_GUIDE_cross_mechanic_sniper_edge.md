@@ -279,6 +279,39 @@ Acceptance for this gate:
   `cross_mechanic_cycles > 0`, and only then positive gross/net evidence may be
   evaluated.
 
+## 0k) Quote-size truth gate before economics
+
+**Hard rule:** M9 economics is invalid if USD notional is converted through
+truncated symbols or default token metadata. The branch target is fresh long-tail
+tokens plus second-venue mirrors, but the quote engine must still size every leg
+by canonical token address.
+
+Required before any economics claim:
+
+1. Token decimals are resolved by lowercase token address first. Symbols and
+   truncated labels such as `0xd9aaec`, `0x833589`, or `0x420000` are display
+   labels only and must not drive decimals.
+2. Token prices are resolved by address first. Unknown price must reject with an
+   explicit reason such as `UNKNOWN_PRICE`; it must not silently fall back to
+   `1.0`.
+3. Liveness probes and economics probes are separate. Tiny probes may prove a
+   route can quote, but they must not be counted as economic opportunity checks
+   when gas/L1 cost dominates the notional.
+4. `effective_depth_usd` is required for productive distinct-pricing routes, or
+   the route must stay in liveness/shadow diagnostics only.
+5. Legacy bridged tokens such as USDbC may stay as diagnostic/control lanes, but
+   they should not dominate the quote budget for the fresh-long-tail thesis.
+
+Acceptance for this gate:
+
+- `token0_decimals` / `token1_decimals` are present on productive bridge routes,
+  or the builder has an address-keyed cache proving the same metadata.
+- Top cycles show human-scale raw `amount_in` for 6-decimal stablecoins.
+- Balancer `BAL#304` / Maverick size reverts caused by oversized notional are
+  near zero before increasing soak duration.
+- Artifacts expose separate `qsr_liveness` and `qsr_econ` (or equivalent fields)
+  when both probe classes are used.
+
 ## 1) Що ВЖЕ зроблено в цій гілці (Фаза 1 — DONE)
 
 Реалізовано і покрито тестами (`tests/unit/test_m8_cross_dex_expand.py`,

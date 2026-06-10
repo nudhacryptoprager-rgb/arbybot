@@ -83,25 +83,48 @@ def _enrich_balancer_rca(
     rows: List[Dict[str, Any]],
     inventory: Optional[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    if not inventory:
-        return rows
-    by_pool = {
-        str(r.get("pool_address", "")).lower(): r
-        for r in inventory.get("active_routes") or []
-        if r.get("pool_address")
-    }
+    from m9.graph_arb.quote_reject_classify import extract_balancer_code
+
+    by_pool: Dict[str, Dict[str, Any]] = {}
+    by_route_pool: Dict[str, str] = {}
+    if inventory:
+        for r in inventory.get("active_routes") or []:
+            pool = str(r.get("pool_address", "")).lower()
+            if pool:
+                by_pool[pool] = r
+            rid = str(r.get("route_id") or "")
+            if rid and pool:
+                by_route_pool[rid] = pool
+
     enriched = []
     for row in rows:
         pool = str(row.get("pool_address") or "").lower()
+        if not pool:
+            rid = str(row.get("route_id") or "")
+            for inv_r in (inventory or {}).get("active_routes") or []:
+                _t0 = str(inv_r.get("token0") or "")
+                _t1 = str(inv_r.get("token1") or "")
+                if _t0 in rid and _t1 in rid and inv_r.get("dex_id", "").startswith("balancer"):
+                    pool = str(inv_r.get("pool_address", "")).lower()
+                    break
         inv = by_pool.get(pool) or {}
+        raw = str(row.get("sample_raw_error") or "")
+        code = extract_balancer_code(raw)
+        from m9.graph_arb.quote_reject_classify import balancer_reason_for_code
+
+        reason_name = balancer_reason_for_code(code) if code else None
         enriched.append(
             {
                 **row,
+                "pool_address": pool or row.get("pool_address"),
                 "pool_id": inv.get("pool_id") or row.get("pool_id"),
                 "vault_address": inv.get("vault_address"),
                 "token0_addr": inv.get("token0_addr"),
                 "token1_addr": inv.get("token1_addr"),
+                "balancer_assets": inv.get("balancer_assets"),
                 "balancer_query_target": "BalancerQueries.querySwap",
+                "balancer_revert_code": code,
+                "balancer_reason": reason_name,
             }
         )
     return enriched
@@ -363,7 +386,7 @@ def build_cycle_rca(
         inventory,
     )
     maverick_rca = _adapter_rca_from_quote_diagnostics(
-        artifact, "maverick", primary_reason="QUOTE_RPC_ERROR"
+        artifact, "maverick", primary_reason="QUOTE_REVERT"
     ) or _top_route_failures(edge_hist, route_hist, "maverick")
 
     return {
@@ -388,6 +411,7 @@ def build_cycle_rca(
         "edge_error_histogram_top": edge_hist[:25],
         "sample_cycle_failures": sample_failures,
         "balancer_top_revert_routes": balancer_rca,
+        "maverick_top_revert_routes": maverick_rca,
         "maverick_top_rpc_error_routes": maverick_rca,
         "phantom_quote_diagnostics": phantom_diag,
         "m8_cycle_trace": _build_m8_cycle_trace(artifact, inventory),

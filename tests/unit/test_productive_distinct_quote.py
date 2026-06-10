@@ -99,6 +99,47 @@ class TestProductiveDistinctQuote:
         assert debug["quote_contour"] == "maverick_quoter"
         assert bytes.fromhex(calls[0]) == _SELECTOR_QUOTER_CALCULATE_SWAP
 
+    @staticmethod
+    def _maverick_token_a_in_flag(data: str) -> bool:
+        body = data[2:] if data.startswith("0x") else data
+        # selector(4) + pool(32) + amount(32) + tokenAIn(32)
+        slot = body[8 + 64 + 64 : 8 + 64 + 64 + 64]
+        return int(slot, 16) == 1
+
+    def test_maverick_direction_token_in_equals_token_a(self):
+        calls: list[bool] = []
+
+        def eth_call(to: str, data: str) -> str:
+            calls.append(self._maverick_token_a_in_flag(data))
+            return _maverick_quoter_ok_hex(10_000, 1_000)
+
+        quote_maverick_productive(
+            eth_call,
+            pool_address=_MAV_POOL,
+            amount_in=10_000,
+            token_a_in=False,
+            token_in=_TOKEN_A,
+            token_a=_TOKEN_A,
+        )
+        assert calls[0] is True
+
+    def test_maverick_direction_token_in_not_token_a(self):
+        calls: list[bool] = []
+
+        def eth_call(to: str, data: str) -> str:
+            calls.append(self._maverick_token_a_in_flag(data))
+            return _maverick_quoter_ok_hex(10_000, 1_000)
+
+        quote_maverick_productive(
+            eth_call,
+            pool_address=_MAV_POOL,
+            amount_in=10_000,
+            token_a_in=True,
+            token_in=_TOKEN_B,
+            token_a=_TOKEN_A,
+        )
+        assert calls[0] is False
+
     @patch("m9.graph_arb.raw_http_probe._eth_call_raw")
     def test_raw_http_maverick_matches_productive_path(self, mock_call):
         mock_call.return_value = _maverick_quoter_ok_hex(10_000, 5_000_000)

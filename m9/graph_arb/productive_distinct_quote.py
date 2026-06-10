@@ -142,44 +142,90 @@ def quote_balancer_productive(
         recipient=recipient_addr,
         all_assets=all_assets,
     )
-    hex_data = "0x" + data.hex()
     last_debug: Dict[str, Any] = {
         "quote_abi_path": "queryBatchSwap",
         "quote_selector": "0x" + _SELECTOR_QUERY_BATCH_SWAP.hex(),
         "quote_pool_id": pool_id,
     }
-    for contour, target in balancer_quote_targets(
-        chain=chain, vault=vault_addr, rpc_url=rpc_url
-    ):
-        debug = {
-            **last_debug,
-            "quote_contour": contour,
-            "quote_target": target,
-        }
-        try:
-            result = eth_call(target, hex_data)
-            _delta_in, delta_out = _decode_query_batch_swap(result)
-            amount_out = abs(delta_out)
-            if amount_out > 0:
-                debug["status"] = "QUOTE_OK_BALANCER"
-                return amount_out, debug
-            last_debug = {**debug, "status": "BALANCER_ZERO_OUT"}
-        except Exception as exc:
-            err = exc if isinstance(exc, dict) else str(exc)
-            last_debug = {**debug, "status": "BALANCER_QUOTE_REVERT", "raw_error": err}
+    try_amounts = [amount_in]
+    if amount_in > 10**6:
+        try_amounts.extend(
+            max(amount_in // div, 10**4)
+            for div in (10, 50, 200)
+            if amount_in // div >= 10**4
+        )
+    for probe_in in try_amounts:
+        data = _encode_query_batch_swap(
+            pool_id,
+            token_in,
+            token_out,
+            probe_in,
+            sender=sender_addr,
+            recipient=recipient_addr,
+            all_assets=all_assets,
+        )
+        hex_data = "0x" + data.hex()
+        for contour, target in balancer_quote_targets(
+            chain=chain, vault=vault_addr, rpc_url=rpc_url
+        ):
+            debug = {
+                **last_debug,
+                "quote_contour": contour,
+                "quote_target": target,
+                "probe_amount_in": probe_in,
+            }
+            try:
+                result = eth_call(target, hex_data)
+                _delta_in, delta_out = _decode_query_batch_swap(result)
+                amount_out = abs(delta_out)
+                if amount_out > 0:
+                    debug["status"] = "QUOTE_OK_BALANCER"
+                    return amount_out, debug
+                last_debug = {**debug, "status": "BALANCER_ZERO_OUT"}
+            except Exception as exc:
+                err = exc if isinstance(exc, dict) else str(exc)
+                last_debug = {**debug, "status": "BALANCER_QUOTE_REVERT", "raw_error": err}
+                if "BAL#304" not in str(err).upper():
+                    break
     raise ValueError(last_debug.get("raw_error") or "balancer productive quote failed")
 
 
-def quote_maverick_productive(
-    eth_call: EthCallFn,
-    *,
-    pool_address: str,
-    amount_in: int,
+def _maverick_probe_amounts(amount_in: int) -> List[int]:
+    """Smaller ladder for thin-bin Maverick pools (mirrors Balancer BAL#304 retry)."""
+    amounts = [amount_in]
+    if amount_in > 10_000:
+        for div in (10, 50, 200, 1000):
+            probe = max(amount_in // div, 10**3)
+            if probe < amount_in and probe not in amounts:
+                amounts.append(probe)
+    return amounts
+
+
+def _maverick_direction_candidates(
     token_a_in: bool,
-    chain: str = "base",
-) -> Tuple[int, Optional[int], Dict[str, Any]]:
-    """Quoter-first Maverick quote; PoolInformation only as explicit fallback."""
-    pool_lc = pool_address.lower()
+    *,
+    token_in: Optional[str] = None,
+    token_a: Optional[str] = None,
+) -> List[bool]:
+    """Probe order: explicit flag, address-inferred direction, then flip."""
+    candidates: List[bool] = [token_a_in]
+    if token_in and token_a:
+        inferred = token_in.lower() == token_a.lower()
+        if inferred not in candidates:
+            candidates.insert(0, inferred)
+    flipped = not candidates[0]
+    if flipped not in candidates:
+        candidates.append(flipped)
+    return candidates
+
+
+def _maverick_contours(
+    pool_lc: str,
+    *,
+    probe_in: int,
+    token_a_in: bool,
+    chain: str,
+) -> List[Tuple[str, str, str, Callable[[], str]]]:
     quoter = _maverick_quoter_address(chain)
     pool_info = _maverick_pool_info_address(chain)
     contours: List[Tuple[str, str, str, Callable[[], str]]] = []
@@ -189,8 +235,8 @@ def quote_maverick_productive(
                 "maverick_quoter",
                 quoter,
                 "0x" + _SELECTOR_QUOTER_CALCULATE_SWAP.hex(),
-                lambda: _encode_quoter_calculate_swap(
-                    pool_lc, amount_in, token_a_in, tick_limit=0
+                lambda _pin=probe_in, _tai=token_a_in: _encode_quoter_calculate_swap(
+                    pool_lc, _pin, _tai, tick_limit=0
                 ),
             )
         )
@@ -200,39 +246,83 @@ def quote_maverick_productive(
                 "pool_information",
                 pool_info,
                 "0x" + _SELECTOR_CALCULATE_SWAP.hex(),
-                lambda: _encode_calculate_swap(
-                    pool_lc, amount_in, token_a_in=token_a_in
+                lambda _pin=probe_in, _tai=token_a_in: _encode_calculate_swap(
+                    pool_lc, _pin, token_a_in=_tai
                 ),
             )
         )
-    last_debug: Dict[str, Any] = {"quote_pool_id": pool_lc}
-    for contour_name, target, selector, encode_fn in contours:
-        debug = {
-            **last_debug,
-            "quote_contour": contour_name,
-            "quote_target": target,
-            "quote_selector": selector,
-            "quote_abi_path": (
-                "MaverickV2Quoter.calculateSwap"
-                if contour_name == "maverick_quoter"
-                else "PoolInformation.calculateSwap"
-            ),
-        }
-        try:
-            calldata = encode_fn()
-            if not calldata.startswith("0x"):
-                calldata = "0x" + calldata
-            result = eth_call(target, calldata)
-            if contour_name == "maverick_quoter":
-                _amount_in, amount_out, gas_est = _decode_quoter_calculate_swap(result)
-            else:
-                amount_out, _end = _decode_calculate_swap(result)
-                gas_est = None
-            if amount_out > 0:
-                debug["status"] = "QUOTE_OK_MAVERICK"
-                return amount_out, gas_est, debug
-            last_debug = {**debug, "status": "MAVERICK_ZERO_OUT"}
-        except Exception as exc:
-            err = exc if isinstance(exc, dict) else str(exc)
-            last_debug = {**debug, "status": "MAVERICK_QUOTE_REVERT", "raw_error": err}
-    raise ValueError(last_debug.get("raw_error") or "maverick productive quote failed")
+    if pool_lc not in {quoter, pool_info}:
+        contours.append(
+            (
+                "pool_direct",
+                pool_lc,
+                "0x" + _SELECTOR_CALCULATE_SWAP.hex(),
+                lambda _pin=probe_in, _tai=token_a_in: _encode_calculate_swap(
+                    pool_lc, _pin, token_a_in=_tai
+                ),
+            )
+        )
+    return contours
+
+
+def quote_maverick_productive(
+    eth_call: EthCallFn,
+    *,
+    pool_address: str,
+    amount_in: int,
+    token_a_in: bool,
+    chain: str = "base",
+    token_in: Optional[str] = None,
+    token_a: Optional[str] = None,
+) -> Tuple[int, Optional[int], Dict[str, Any]]:
+    """Quoter-first Maverick quote; PoolInformation / pool-direct as fallbacks."""
+    pool_lc = pool_address.lower()
+    audit = {
+        "pool_address": pool_lc,
+        "token_in": (token_in or "").lower() or None,
+        "token_a": (token_a or "").lower() or None,
+    }
+    last_debug: Dict[str, Any] = {"quote_pool_id": pool_lc, **audit}
+    for dir_flag in _maverick_direction_candidates(
+        token_a_in, token_in=token_in, token_a=token_a
+    ):
+        for probe_in in _maverick_probe_amounts(amount_in):
+            for contour_name, target, selector, encode_fn in _maverick_contours(
+                pool_lc, probe_in=probe_in, token_a_in=dir_flag, chain=chain
+            ):
+                debug = {
+                    **last_debug,
+                    "token_a_in": dir_flag,
+                    "probe_amount_in": probe_in,
+                    "quote_contour": contour_name,
+                    "quote_target": target,
+                    "quote_selector": selector,
+                    "quote_abi_path": (
+                        "MaverickV2Quoter.calculateSwap"
+                        if contour_name == "maverick_quoter"
+                        else "PoolInformation.calculateSwap"
+                    ),
+                }
+                try:
+                    calldata = encode_fn()
+                    if not calldata.startswith("0x"):
+                        calldata = "0x" + calldata
+                    debug["calldata_prefix"] = calldata[:18]
+                    result = eth_call(target, calldata)
+                    if contour_name == "maverick_quoter":
+                        _amount_in, amount_out, gas_est = _decode_quoter_calculate_swap(result)
+                    else:
+                        amount_out, _end = _decode_calculate_swap(result)
+                        gas_est = None
+                    if amount_out > 0:
+                        debug["status"] = "QUOTE_OK_MAVERICK"
+                        return amount_out, gas_est, debug
+                    last_debug = {**debug, "status": "MAVERICK_ZERO_OUT"}
+                except Exception as exc:
+                    err = exc if isinstance(exc, dict) else str(exc)
+                    last_debug = {
+                        **debug,
+                        "status": "MAVERICK_QUOTE_REVERT",
+                        "raw_error": err,
+                    }
+    raise ValueError(json.dumps(last_debug))

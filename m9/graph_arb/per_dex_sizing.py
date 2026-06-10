@@ -78,7 +78,7 @@ def cap_sizes_to_depth_per_family(
 def micro_ladder_for_family(family: str) -> Tuple[float, ...]:
     """Optional family-specific micro front; global ladder is fallback."""
     if family in (FAMILY_MAVERICK_V2, FAMILY_BALANCER_VAULT):
-        return (0.05, 0.1, 0.25, 0.5, 1.0, 5.0)
+        return (0.02, 0.05, 0.1, 0.25, 0.5, 1.0)
     if family == FAMILY_V4_POOL_MANAGER:
         return (0.25, 0.5, 1.0, 5.0, 10.0)
     return _GLOBAL_MICRO_LADDER

@@ -33,6 +33,11 @@ STATUS_CYCLE_QUOTE_TIMEOUT = "CYCLE_QUOTE_TIMEOUT"
 STATUS_OVERSIZED_VS_DEPTH = "OVERSIZED_VS_DEPTH"
 _REJECT_OVERSIZED_VS_DEPTH = "OVERSIZED_VS_DEPTH"
 _REJECT_PHANTOM_QUOTE_BPS_OVERFLOW = "PHANTOM_QUOTE_BPS_OVERFLOW"
+_REJECT_TOKEN_DECIMALS_UNKNOWN = "TOKEN_DECIMALS_UNKNOWN"
+_REJECT_UNKNOWN_PRICE = "UNKNOWN_PRICE"
+
+STATUS_TOKEN_DECIMALS_UNKNOWN = "TOKEN_DECIMALS_UNKNOWN"
+STATUS_UNKNOWN_PRICE = "UNKNOWN_PRICE"
 
 # Depth-aware sizing (package #2): fraction of the bottleneck pool's
 # effective_depth_usd that the quote ladder is allowed to reach.  effective_depth_usd
@@ -188,6 +193,11 @@ def _probe_leg(
 
 def _make_dex_route(edge: GraphEdge) -> DexRoute:
     """Convert a GraphEdge to a DexRoute for the quote probe."""
+    token_in_index = edge.token_in_index
+    if edge.adapter_type == "maverick_v2" and edge.token_a_address and edge.token_in_addr:
+        token_in_index = (
+            1 if edge.token_in_addr.lower() == edge.token_a_address.lower() else 0
+        )
     return DexRoute(
         dex_id=edge.dex_id,
         adapter_type=edge.adapter_type,
@@ -196,7 +206,7 @@ def _make_dex_route(edge: GraphEdge) -> DexRoute:
         tick_spacing=edge.tick_spacing,
         curve_coin0_sym=None,
         hooks=edge.hooks,
-        token_in_index=edge.token_in_index,
+        token_in_index=token_in_index,
         token_out_index=edge.token_out_index,
         pool_id=edge.pool_id,
         vault_address=edge.vault_address,
@@ -235,13 +245,42 @@ def quote_cycle_sync(
             elapsed_s=0.0,
         )
 
-    # Convert size_usd to amount_in for start token
+    # Convert size_usd to amount_in for start token (address-first price/decimals)
     start_edge = cycle.edges[0]
-    token_price = 1.0
-    if token_price_usd:
-        token_price = token_price_usd.get(start_edge.token_in_sym, 1.0)
+    from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
 
-    initial_amount = int(size_usd / token_price * (10 ** start_edge.token_in_decimals))
+    if start_edge.token_in_decimals is None or int(start_edge.token_in_decimals) < 0:
+        return CycleQuoteResult(
+            cycle=cycle,
+            size_usd=size_usd,
+            amount_in=0,
+            amount_out=0,
+            gross_bps=0.0,
+            status=STATUS_TOKEN_DECIMALS_UNKNOWN,
+            reject_reason=_REJECT_TOKEN_DECIMALS_UNKNOWN,
+            leg_results=[],
+            elapsed_s=time.monotonic() - started,
+        )
+
+    token_price = resolve_token_price_usd(
+        start_edge.token_in_addr,
+        start_edge.token_in_sym,
+        token_price_usd,
+    )
+    if token_price is None or token_price <= 0:
+        return CycleQuoteResult(
+            cycle=cycle,
+            size_usd=size_usd,
+            amount_in=0,
+            amount_out=0,
+            gross_bps=0.0,
+            status=STATUS_UNKNOWN_PRICE,
+            reject_reason=_REJECT_UNKNOWN_PRICE,
+            leg_results=[],
+            elapsed_s=time.monotonic() - started,
+        )
+
+    initial_amount = int(size_usd / token_price * (10 ** int(start_edge.token_in_decimals)))
     current_amount = initial_amount
     leg_results: List[QuoteResult] = []
 

@@ -1,18 +1,33 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **BLOCKED** — **M8.2 mirror/cross-mechanic admission → cycle-quoteable** partially proven (prior shadow: `cycles_quoteable=37`, `cross_mechanic_cycles_quoteable=37`, `qsr=0.1307`). **P1 quote-path fixes landed** (Balancer `balancer_assets`, Maverick `token_a`, empty-eth_call→`QUOTE_REVERT`, micro ladder, M8 direct/derived cycle metrics, truncated-hex `token_map` collision fix in `builder.py`, Windows artifact write race fix). **Post-fix shadow (2026-06-10, stale M8 + bridge rebuild):** `cycles_quoteable=0`, `qsr=0.0` — RCA: truncated `pair_id` symbols (`0x833589`/`0x420000`) collapsed to one wstETH address in `token_map` → Balancer `QUOTE_RPC_ERROR`; graph fix verified (`balancer` USDC↔WETH edges distinct). **Re-shadow required** after fresh M8 sniper + bridge rebuild. Remaining blocker: **M9 economics/quote quality** — `cycles_positive_gross=0`, Maverick reverts, phantom overflow. Production claim заборонений.
+**Status**: **BLOCKED** — lane RCA + Maverick direction/contour fixes landed; pool-lane gates **PASS** (`productive_maverick_quoteable=37/43`, `productive_balancer_quoteable=18/18`). Fresh 10m foreground shadow (`run_timestamp=2026-06-10T18:33:29Z`, `runner_outcome=COMPLETED`, `duration_fulfilled=true`): **`cycles_quoteable=0`**, `qsr_liveness=0.0`, `qsr_econ=0.0`, `phantom=0`. Dominant blockers shifted again: **`OVERSIZED_VS_DEPTH=71`**, **`QUOTE_REVERT` (Balancer legs, 33)**, `CYCLE_QUOTE_FAILED=33`. Maverick leg-revert dominance **not reproduced** on shrunk productive graph (67 M8 edges, 14 topology cycles). P0 partial progress retained: USDC decimals OK, Balancer paused largely reduced. **Admission side-effect:** productive graph narrowed vs prior shadow (`cycles_found` 328→104). No production/profit claim. Use **foreground** `py -3.11 -u ...` only for evidence.
+
+**Session 2026-06-10 lane RCA + Maverick/Balancer fixes (10m foreground):**
+
+| Metric | Post-P0 shadow | Lane-fix shadow |
+|--------|----------------|-----------------|
+| Pool-lane Maverick `quoteable/verified` | — | **73/94** |
+| Productive Maverick `quote_ok/samples` | — | **37/43** |
+| Productive Balancer `quote_ok/samples` | — | **18/18** |
+| `cycles_found` (sweeps) | 328 | **104** |
+| `cycles_quoteable` | 0 | **0** |
+| `qsr_liveness` | 0.388 | **0.0** |
+| Top cycle rejects | `MAVERICK_QUOTE_REVERT` | **`OVERSIZED_VS_DEPTH`**, Balancer `QUOTE_REVERT` |
+| `phantom` | 0 | **0** |
+
+**docs_reread_confirmed:** true
 
 **Session 2026-06-10 fresh chain + 10m shadow (sniper → M8.1 → M8.2 → bridge → shadow → RCA):**
 
 | Layer | Metric | Value |
 |-------|--------|------:|
-| M8 sniper 30m | candidates / `m8_stale` | **150** / **false** |
-| M8.1 anchor | passes | **351** |
-| M8.2 expansion | routes / `multi_venue_tokens` / `verified_second_pool` | **607** / **14** / **5** |
-| Bridge | canonical / distinct-pricing active / cross-mechanic | **536** / **161** / **74** |
-| M9 shadow 10m | `cycles_quoteable` / `qsr` / `cm_quoteable` | **37** / **0.1307** / **37** |
-| M9 shadow 10m | `cycles_positive_gross` / `cycles_with_m8_pool` | **0** / **0** |
-| RCA top blockers | Maverick RPC / Balancer revert / phantom | **204** / **136** / **76** |
+| M8 sniper 30m | candidates / `m8_stale` | **143** / **false** |
+| M8.1 anchor | passes | **354** |
+| M8.2 expansion | routes / `multi_venue_tokens` / `verified_second_pool` | **672** / **14** / **5** |
+| Bridge | `graph_ready_total` / active / cross-mechanic | **698** / **610** / **74** |
+| M9 shadow 10m | `cycles_found` / `cycles_quoteable` / `qsr` | **337** / **0** / **0.0** |
+| M9 shadow 10m | `phantom` / `m8_derived` / `direct_sniper` | **0** / **337** / **0** |
+| RCA top blockers | Maverick revert / Balancer revert / RPC error | **222** / **304** / **4** |
 
 **M8.2 symbol/address bug:** виправлено в `cross_dex_expand.py` (символ і `token0_addr/token1_addr` канонізуються разом). Попередні claims `graph_ready_from_expansion=8` **інвалідовані** (був неправильний mapping).
 

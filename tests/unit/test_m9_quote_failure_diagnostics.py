@@ -9,6 +9,9 @@ from m9.graph_arb.artifacts import (
 )
 from m9.graph_arb.quoter import quote_cycle_sync
 from m9.graph_arb.models import CycleQuoteResult, GraphCycle, GraphEdge
+from m9.graph_arb.token_price_fetcher import build_dual_key_price_map
+
+_TEST_PRICES = build_dual_key_price_map({"AERO": 0.7, "USDC": 1.0, "WETH": 3500.0})
 
 
 def _mk_edge(
@@ -168,7 +171,10 @@ def test_quoter_phantom_reject_populates_debug_fields():
         )
 
     with patch("m9.graph_arb.quoter._probe_leg", side_effect=_double_leg):
-        result = quote_cycle_sync(cycle, 100.0, w3, quote_backend="raw_http", rpc_url="http://x")
+        result = quote_cycle_sync(
+            cycle, 100.0, w3, token_price_usd=_TEST_PRICES,
+            quote_backend="raw_http", rpc_url="http://x",
+        )
     assert result.reject_reason == "PHANTOM_QUOTE_BPS_OVERFLOW"
     assert result.raw_gross_bps is not None
     assert abs(result.raw_gross_bps) > 500.0
@@ -261,7 +267,10 @@ def test_quoter_negative_overflow_is_oversized_not_phantom():
         )
 
     with patch("m9.graph_arb.quoter._probe_leg", side_effect=_shrink_leg):
-        result = quote_cycle_sync(cycle, 100.0, w3, quote_backend="raw_http", rpc_url="http://x")
+        result = quote_cycle_sync(
+            cycle, 100.0, w3, token_price_usd=_TEST_PRICES,
+            quote_backend="raw_http", rpc_url="http://x",
+        )
 
     assert result.status == "OVERSIZED_VS_DEPTH"
     assert result.reject_reason == "OVERSIZED_VS_DEPTH"
@@ -289,7 +298,10 @@ def test_positive_overflow_still_phantom():
         )
 
     with patch("m9.graph_arb.quoter._probe_leg", side_effect=_double_leg):
-        result = quote_cycle_sync(cycle, 100.0, w3, quote_backend="raw_http", rpc_url="http://x")
+        result = quote_cycle_sync(
+            cycle, 100.0, w3, token_price_usd=_TEST_PRICES,
+            quote_backend="raw_http", rpc_url="http://x",
+        )
 
     assert result.status == "QUOTE_FAILED"
     assert result.reject_reason == "PHANTOM_QUOTE_BPS_OVERFLOW"

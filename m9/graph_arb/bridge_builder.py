@@ -1541,6 +1541,49 @@ def build_bridge_inventory(
         bridge_source_metrics["m8_provenance_error"] = str(_prov_exc)[:200]
 
     # ------------------------------------------------------------------
+    # Hard quarantine: drop paused / permanent-fail pools before write
+    # ------------------------------------------------------------------
+    try:
+        from m9.graph_arb.route_quarantine import load_hard_quarantine_pool_addresses
+
+        _hard_q = load_hard_quarantine_pool_addresses()
+        if _hard_q:
+            _before = len(final_active)
+            final_active = [
+                r
+                for r in final_active
+                if (r.get("pool_address") or "").lower() not in _hard_q
+            ]
+            bridge_source_metrics["hard_quarantine_pools_applied"] = len(_hard_q)
+            bridge_source_metrics["routes_dropped_hard_quarantine"] = _before - len(
+                final_active
+            )
+    except Exception as _hq_exc:
+        bridge_source_metrics["hard_quarantine_error"] = str(_hq_exc)[:200]
+
+    # ------------------------------------------------------------------
+    # Quote-size truth: propagate token decimals on every active route
+    # ------------------------------------------------------------------
+    try:
+        from m8_1.stable_anchor.config_loader import load_config as _load_m8_cfg
+        from m9.graph_arb.token_decimals import enrich_route_decimals, load_decimals_cache
+
+        _cfg_for_dec = None
+        _cfg_candidate = base_inv_path or "config/exotic_base_anchor.yaml"
+        if _cfg_candidate and Path(_cfg_candidate).exists():
+            _cfg_for_dec = _load_m8_cfg(_cfg_candidate)
+        _dec_cache = load_decimals_cache()
+        for _dr in final_active:
+            enrich_route_decimals(_dr, cfg=_cfg_for_dec, cache=_dec_cache, w3=None)
+        bridge_source_metrics["routes_with_decimals"] = sum(
+            1
+            for r in final_active
+            if r.get("token0_decimals") is not None and r.get("token1_decimals") is not None
+        )
+    except Exception as _dec_exc:
+        bridge_source_metrics["decimals_enrich_error"] = str(_dec_exc)[:200]
+
+    # ------------------------------------------------------------------
     # Write output artifact
     # ------------------------------------------------------------------
     output_artifact: Dict[str, Any] = {

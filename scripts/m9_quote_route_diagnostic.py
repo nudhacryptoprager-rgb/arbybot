@@ -85,25 +85,40 @@ def resolve_diagnostic_rpc(
     Must pass ``chain_id`` + ``network`` — calling ``resolve_rpc_http("base")`` as a
     positional arg wrongly binds the string to ``chain_id`` and ignores ``BASE_RPC``.
     """
-    from core.rpc_urls import _CHAIN_KEY_TO_ID, apply_productive_rpc_env, resolve_productive_http_rpc
+    from core.rpc_urls import (
+        _CHAIN_KEY_TO_ID,
+        apply_productive_rpc_env,
+        classify_provider,
+        is_public_rpc_url,
+        resolve_rpc_http,
+    )
 
     env_map = dict(env if env is not None else os.environ)
-    try:
-        env_map = apply_productive_rpc_env(chain.lower(), env=env_map)
-        url = resolve_productive_http_rpc(chain.lower(), env=env_map)
-        provider = "alchemy"
-        diag = {"source": "productive_pool"}
-        return url, provider, diag
-    except RuntimeError:
-        from core.rpc_urls import resolve_rpc_http
+    chain_key = chain.lower()
+    chain_id = _CHAIN_KEY_TO_ID.get(chain_key)
 
-        chain_key = chain.lower()
-        chain_id = _CHAIN_KEY_TO_ID.get(chain_key)
+    url: Optional[str] = None
+    provider = "unknown"
+    diag: Dict[str, Any] = {}
+
+    # Match runner: productive pool only when dedicated non-public primary resolves.
+    try:
+        prod_env = apply_productive_rpc_env(chain_key, env=env_map)
+        cand = (prod_env.get(f"{chain_key.upper()}_RPC_PRIMARY") or "").strip()
+        if cand and not is_public_rpc_url(cand):
+            url = cand
+            provider = classify_provider(cand)
+            diag = {"source": "productive_pool"}
+    except RuntimeError:
+        pass
+
+    if not url:
         url, provider, diag = resolve_rpc_http(
             chain_id=chain_id,
             network=chain_key,
             env=env_map,
         )
+
     if not url:
         raise RuntimeError(
             f"No RPC URL for chain={chain!r} (chain_id={chain_id}). "

@@ -322,20 +322,24 @@ def probe_quote_raw_http(
 
             pool_lc = route.quoter.lower()
             token_in_lc = token_in.address.lower()
-            token_a_in: bool
-            if route.token_in_index is not None:
-                token_a_in = bool(route.token_in_index)
-            else:
-                _ta_calldata = "0x" + _SELECTOR_TOKEN_A.hex()
-                try:
-                    _ta_result = _eth_call_raw(rpc_url, pool_lc, _ta_calldata, client)
-                    _ta_raw = _ta_result[2:] if _ta_result.startswith("0x") else _ta_result
-                    _token_a_addr = "0x" + _ta_raw[24:64]
-                    token_a_in = token_in_lc == _token_a_addr.lower()
-                except Exception as _ta_exc:
+            _token_a_addr: Optional[str] = None
+            _ta_calldata = "0x" + _SELECTOR_TOKEN_A.hex()
+            try:
+                _ta_result = _eth_call_raw(rpc_url, pool_lc, _ta_calldata, client)
+                _ta_raw = _ta_result[2:] if _ta_result.startswith("0x") else _ta_result
+                _token_a_addr = ("0x" + _ta_raw[24:64]).lower()
+            except Exception as _ta_exc:
+                if route.token_in_index is None:
                     raise ValueError(
                         f"Maverick V2 tokenA() lookup failed for pool {pool_lc}: {_ta_exc}"
                     ) from _ta_exc
+
+            if route.token_in_index is not None:
+                token_a_in = bool(route.token_in_index)
+            elif _token_a_addr:
+                token_a_in = token_in_lc == _token_a_addr
+            else:
+                token_a_in = True
 
             def _mv_call(to: str, data: str) -> str:
                 return _eth_call_raw(rpc_url, to, data, client)
@@ -346,6 +350,8 @@ def probe_quote_raw_http(
                 amount_in=amount_in,
                 token_a_in=token_a_in,
                 chain="base",
+                token_in=token_in_lc,
+                token_a=_token_a_addr,
             )
             quote_target = _mv_debug.get("quote_target")
             quote_selector = _mv_debug.get("quote_selector")
@@ -405,28 +411,35 @@ def probe_quote_raw_http(
 
     except Exception as exc:
         err_str = str(exc)
-        if "MAVERICK_ZERO_OUT" in err_str:
+        from m9.graph_arb.quote_reject_classify import classify_quote_failure
+
+        reject, _detail = classify_quote_failure(route.adapter_type, err_str)
+        if reject == "QUOTE_RPC_ERROR" and "MAVERICK_ZERO_OUT" in err_str:
             reject = "QUOTE_ZERO_OUTPUT"
-        elif "execution reverted" in err_str or "revert" in err_str.lower():
-            reject = "QUOTE_REVERT"
-        elif (
+        elif reject == "QUOTE_RPC_ERROR" and (
             err_str.strip() in ("0x", "0x0")
             or err_str.strip().lower() == "empty eth_call result"
             or "empty/short result" in err_str.lower()
         ):
-            reject = "QUOTE_REVERT"
-        elif "response too short" in err_str or "too short" in err_str.lower():
+            if route.adapter_type == "maverick_v2":
+                reject = "MAVERICK_NO_LIQUIDITY"
+            else:
+                reject = "QUOTE_REVERT"
+        elif reject == "QUOTE_RPC_ERROR" and (
+            "response too short" in err_str or "too short" in err_str.lower()
+        ):
             reject = "QUOTE_DECODE"
-        elif (
+        elif reject == "QUOTE_RPC_ERROR" and (
             "invalid v2 token direction" in err_str.lower()
             or "coin indices" in err_str.lower()
-            or "token pair not in all_assets" in err_str.lower()
         ):
             reject = "QUOTE_CONFIG_MISSING"
-        elif "zero reserves" in err_str.lower():
+        elif reject == "QUOTE_RPC_ERROR" and "zero reserves" in err_str.lower():
             reject = "QUOTE_REVERT"
-        else:
-            reject = "QUOTE_RPC_ERROR"
+        if _detail.get("balancer_code"):
+            err_str = f"{err_str} [{_detail.get('balancer_reason', _detail['balancer_code'])}]"
+        elif _detail.get("maverick_reason"):
+            err_str = f"{err_str} [{_detail['maverick_reason']}]"
         # Only trigger circuit-breaker for actual network-level failures.
         # ValueError (execution revert, decode error, bad ABI) and NotImplementedError
         # (unsupported adapter type) are code/data errors — not HTTP errors — and

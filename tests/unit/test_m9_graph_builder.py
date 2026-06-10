@@ -850,3 +850,59 @@ m9_dex_productivity:
     assert edge.token_in_addr.lower() == usdc
     assert edge.token_out_addr.lower() == weth
     assert edge.token_in_addr.lower() != edge.token_out_addr.lower()
+    assert edge.token_in_decimals == 6
+    assert edge.token_out_decimals == 18
+
+
+def test_usdbc_truncated_symbol_resolves_six_decimals(tmp_path):
+    """USDbC via truncated 0xd9aaec label must not default to 18 decimals."""
+    from m9.graph_arb.builder import build_graph_from_inventory
+
+    usdbc = "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca"
+    weth = "0x4200000000000000000000000000000000000006"
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        """chain: base
+dexes:
+  maverick_v2:
+    adapter_type: maverick_v2
+    quoter: "0x0000000000000000000000000000000000000001"
+    enabled: true
+tokens:
+  WETH:
+    address: "0x4200000000000000000000000000000000000006"
+    decimals: 18
+m9_dex_productivity:
+  maverick_v2:
+    enabled_for_productive: true
+"""
+    )
+    inv = {
+        "active_routes": [
+            {
+                "route_id": "mav_usdbc",
+                "pair_id": "0x420000_0xd9aaec",
+                "dex_id": "maverick_v2",
+                "adapter_type": "maverick_v2",
+                "token0": "0xd9aaec",
+                "token1": "T",
+                "token0_addr": usdbc,
+                "token1_addr": weth,
+                "pool_address": "0x" + "e" * 40,
+                "factory_verified": True,
+            }
+        ]
+    }
+    inv_path = tmp_path / "inv.json"
+    inv_path.write_text(json.dumps(inv))
+    adjacency = build_graph_from_inventory(
+        inventory_path=str(inv_path),
+        config_path=str(cfg),
+        lane="discovery",
+    )
+    edges = adjacency.get("0xd9aaec", {}).get("0x420000", []) or adjacency.get("0x420000", {}).get("0xd9aaec", [])
+    assert edges, "expected maverick edge for USDbC/WETH truncated pair"
+    e = edges[0]
+    dec_in = e.token_in_decimals
+    dec_out = e.token_out_decimals
+    assert 6 in (dec_in, dec_out), f"expected USDbC decimals=6, got in={dec_in} out={dec_out}"

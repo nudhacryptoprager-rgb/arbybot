@@ -278,18 +278,26 @@ def stamp_productive_quote_status_from_artifacts(
     root = repo_root or Path(__file__).resolve().parents[2]
     stamped = 0
 
-    diag_path = root / "data/tmp/m9_productive_quote_diagnostic_latest.json"
     productive_counts: Dict[str, str] = {}
-    if diag_path.exists():
+    for diag_name in (
+        "m9_productive_quote_diagnostic_latest.json",
+        "m9_productive_maverick_diagnostic_latest.json",
+        "m9_productive_balancer_diagnostic_latest.json",
+    ):
+        diag_path = root / "data/tmp" / diag_name
+        if not diag_path.exists():
+            continue
         try:
-            productive_counts = dict(
-                json.loads(diag_path.read_text(encoding="utf-8")).get(
-                    "productive_quote_counts"
+            productive_counts.update(
+                dict(
+                    json.loads(diag_path.read_text(encoding="utf-8")).get(
+                        "productive_quote_counts"
+                    )
+                    or {}
                 )
-                or {}
             )
         except (json.JSONDecodeError, OSError):
-            productive_counts = {}
+            continue
 
     curve_by_pool: Dict[str, str] = {}
     curve_path = root / "data/runs/_rolling/m9_curve_pool_indices_latest.json"

@@ -84,20 +84,33 @@ def _is_valid_eth_address(addr: object) -> bool:
     return True
 
 
-def _decimals_for_symbol(sym: str, cfg: M8_1Config, override: object) -> int:
-    if override is not None:
-        try:
-            return int(override)
-        except (TypeError, ValueError):
-            pass
-    tc = cfg.tokens.get(sym)
-    return int(tc.decimals) if tc is not None else 18
-
-
 def _is_truncated_hex_token(sym: str) -> bool:
     """True for partial address tokens like ``0x833589`` used as pair_id symbols."""
-    s = (sym or "").strip().lower()
-    return s.startswith("0x") and 2 < len(s) < 42
+    from m9.graph_arb.token_decimals import is_truncated_hex_token as _ith
+
+    return _ith(sym)
+
+
+def _resolve_decimals(
+    sym: str,
+    addr: str,
+    cfg: M8_1Config,
+    override: object,
+    cache: Optional[Dict[str, int]],
+) -> Optional[int]:
+    from m9.graph_arb.token_decimals import resolve_decimals_for_address
+
+    if not _is_valid_eth_address(addr):
+        return None
+    return resolve_decimals_for_address(
+        addr,
+        cfg=cfg,
+        override=override,
+        symbol=sym,
+        cache=cache,
+        w3=None,
+        persist_cache=False,
+    )
 
 
 def _entry_symbol_address_map(entry: dict) -> Dict[str, str]:
@@ -126,6 +139,7 @@ def _resolve_route_token(
     token_map: Dict[str, TokenInfo],
     cfg: M8_1Config,
     dec_key: str,
+    decimals_cache: Optional[Dict[str, int]] = None,
 ) -> Optional[TokenInfo]:
     """Resolve a route leg: inventory addr fields beat polluted token_map keys."""
     if not sym:
@@ -133,11 +147,10 @@ def _resolve_route_token(
     sym_map = _entry_symbol_address_map(entry)
     addr = sym_map.get(sym) or sym_map.get(sym.lower())
     if _is_valid_eth_address(addr):
-        return TokenInfo(
-            symbol=sym,
-            address=addr.lower(),
-            decimals=_decimals_for_symbol(sym, cfg, entry.get(dec_key)),
-        )
+        dec = _resolve_decimals(sym, addr, cfg, entry.get(dec_key), decimals_cache)
+        if dec is None:
+            return None
+        return TokenInfo(symbol=sym, address=addr.lower(), decimals=dec)
     existing = token_map.get(sym)
     if existing is not None and _is_valid_eth_address(existing.address):
         return existing
@@ -148,6 +161,7 @@ def _merge_inventory_token_addresses(
     token_map: Dict[str, TokenInfo],
     active_routes: list,
     cfg: M8_1Config,
+    decimals_cache: Optional[Dict[str, int]] = None,
 ) -> None:
     """Augment token_map with on-chain addresses from M8 bridge routes.
 
@@ -181,7 +195,9 @@ def _merge_inventory_token_addresses(
             if not sym or _is_truncated_hex_token(sym) or not _is_valid_eth_address(addr):
                 continue
             addr_l = addr.lower()
-            decimals = _decimals_for_symbol(sym, cfg, entry.get(dec_key))
+            decimals = _resolve_decimals(sym, addr_l, cfg, entry.get(dec_key), decimals_cache)
+            if decimals is None:
+                continue
             existing = token_map.get(sym)
             if existing is None:
                 token_map[sym] = TokenInfo(symbol=sym, address=addr_l, decimals=decimals)
@@ -215,6 +231,7 @@ def build_graph_from_inventory(
     exclude_pool_addresses: Optional["frozenset[str]"] = None,
     min_effective_depth_usd: float = 0.0,
     lane: str = "discovery",
+    token_prices_usd: Optional["Dict[str, float]"] = None,
 ) -> "Dict[str, Dict[str, List[GraphEdge]]]":
     """Build a directed adjacency dict from inventory active_routes.
 
@@ -274,11 +291,15 @@ def build_graph_from_inventory(
         )
         return {}
 
+    from m9.graph_arb.token_decimals import load_decimals_cache
+
+    _decimals_cache = load_decimals_cache()
+
     # Build token lookup: symbol → TokenInfo (config), then M8 route addresses.
     token_map: Dict[str, TokenInfo] = {}
     for sym, tc in cfg.tokens.items():
         token_map[sym] = TokenInfo(symbol=sym, address=tc.address, decimals=tc.decimals)
-    _merge_inventory_token_addresses(token_map, active_routes, cfg)
+    _merge_inventory_token_addresses(token_map, active_routes, cfg, _decimals_cache)
 
     adjacency: Dict[str, Dict[str, List[GraphEdge]]] = defaultdict(lambda: defaultdict(list))
     built_count = 0
@@ -289,9 +310,12 @@ def build_graph_from_inventory(
     curve_disabled_skipped = 0
     invalid_token_addr_skipped = 0
     unknown_token_skipped = 0
+    decimals_unknown_skipped = 0
     productivity_skipped = 0
     admission_skipped = 0
+    unknown_price_skipped = 0
     _productive_lane = (lane == "productive")
+    _price_map = token_prices_usd or {}
     _productive_dexes = (
         productive_dex_ids_from_config(config_path) if _productive_lane else frozenset()
     )
@@ -332,6 +356,22 @@ def build_graph_from_inventory(
             if not productive_admission_ok(entry, min_depth_usd=_min_depth):
                 admission_skipped += 1
                 continue
+            _entry_adapter = entry.get("adapter_type") or ""
+            _distinct_lane = _entry_adapter in (
+                "balancer_stable",
+                "balancer_weighted",
+                "maverick_v2",
+            ) or dex_id in ("balancer_vault", "maverick_v2")
+            if _distinct_lane:
+                _prod_status = str(
+                    entry.get("productive_quote_status")
+                    or entry.get("quote_smoke_status")
+                    or ""
+                )
+                _prod_ok = _prod_status.startswith("QUOTE_OK")
+                if entry.get("effective_depth_usd") is None and not _prod_ok:
+                    admission_skipped += 1
+                    continue
 
         if exclude_factory_classes and factory_class in exclude_factory_classes:
             continue
@@ -479,18 +519,37 @@ def build_graph_from_inventory(
                     except Exception:
                         pass
         elif adapter_type == "maverick_v2":
-            _ta = str(entry.get("token_a") or "").lower()
+            _ta = str(
+                entry.get("token_a") or entry.get("token_a_address") or ""
+            ).lower()
             if _ta.startswith("0x") and len(_ta) == 42:
                 _maverick_token_a = _ta
 
         # Curve index lookup happens per-direction (fwd / rev), computed below.
 
         # Resolve token info (entry addresses win over truncated-hex token_map keys)
-        t0 = _resolve_route_token(sym0, entry, token_map, cfg, "token0_decimals")
-        t1 = _resolve_route_token(sym1, entry, token_map, cfg, "token1_decimals")
+        t0 = _resolve_route_token(sym0, entry, token_map, cfg, "token0_decimals", _decimals_cache)
+        t1 = _resolve_route_token(sym1, entry, token_map, cfg, "token1_decimals", _decimals_cache)
+        if adapter_type == "maverick_v2" and not _maverick_token_a and t0 and t1:
+            for _cand in (entry.get("token0_addr"), entry.get("token_a"), t0.address):
+                _c = str(_cand or "").lower()
+                if _c.startswith("0x") and len(_c) == 42:
+                    _maverick_token_a = _c
+                    break
         if t0 is None or t1 is None:
             if _productive_lane:
-                unknown_token_skipped += 1
+                if t0 is None or t1 is None:
+                    _addr0 = _entry_symbol_address_map(entry).get(sym0, "")
+                    _addr1 = _entry_symbol_address_map(entry).get(sym1, "")
+                    if (
+                        _resolve_decimals(sym0, _addr0, cfg, entry.get("token0_decimals"), _decimals_cache)
+                        is None
+                        or _resolve_decimals(sym1, _addr1, cfg, entry.get("token1_decimals"), _decimals_cache)
+                        is None
+                    ):
+                        decimals_unknown_skipped += 1
+                    else:
+                        unknown_token_skipped += 1
                 continue
             logger.debug(
                 "Unknown token symbol in inventory edge",
@@ -503,19 +562,7 @@ def build_graph_from_inventory(
                     }
                 },
             )
-            # Last resort: placeholder (quote will fail — should be rare after merge)
-            if t0 is None:
-                t0 = TokenInfo(
-                    symbol=sym0,
-                    address=_ZERO_ETH_ADDRESS,
-                    decimals=_decimals_for_symbol(sym0, cfg, entry.get("token0_decimals")),
-                )
-            if t1 is None:
-                t1 = TokenInfo(
-                    symbol=sym1,
-                    address=_ZERO_ETH_ADDRESS,
-                    decimals=_decimals_for_symbol(sym1, cfg, entry.get("token1_decimals")),
-                )
+            continue
 
         if not _is_valid_eth_address(t0.address) or not _is_valid_eth_address(t1.address):
             invalid_token_addr_skipped += 1
@@ -564,6 +611,43 @@ def build_graph_from_inventory(
                 pool_address, chain=_meta_chain
             ):
                 curve_unquotable_skipped += 1
+            elif _productive_lane and _price_map:
+                from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
+
+                if resolve_token_price_usd(t0.address, sym0, _price_map) is None:
+                    unknown_price_skipped += 1
+                else:
+                    fwd_edge = GraphEdge(
+                        token_in_sym=sym0,
+                        token_out_sym=sym1,
+                        token_in_addr=t0.address,
+                        token_out_addr=t1.address,
+                        token_in_decimals=t0.decimals,
+                        token_out_decimals=t1.decimals,
+                        route_id=route_id,
+                        dex_id=dex_id,
+                        adapter_type=adapter_type,
+                        fee=fee,
+                        tick_spacing=tick_spacing,
+                        quoter_addr=quoter_addr,
+                        pool_address=pool_address,
+                        fee_bps=fee_bps,
+                        factory_class=factory_class,
+                        pair_id=pair_id,
+                        factory_verified=factory_verified_flag,
+                        hooks=hooks,
+                        token_in_index=_fwd_idx_in,
+                        token_out_index=_fwd_idx_out,
+                        pool_id=_pool_id,
+                        vault_address=_vault_address,
+                        pool_kind=_pool_kind,
+                        freshness_window=_freshness_window,
+                        effective_depth_usd=_effective_depth_usd,
+                        balancer_assets=_balancer_assets,
+                        token_a_address=_maverick_token_a,
+                    )
+                    adjacency[sym0][sym1].append(fwd_edge)
+                    built_count += 1
             else:
                 fwd_edge = GraphEdge(
                     token_in_sym=sym0,
@@ -615,6 +699,43 @@ def build_graph_from_inventory(
                 pool_address, chain=_meta_chain
             ):
                 curve_unquotable_skipped += 1
+            elif _productive_lane and _price_map:
+                from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
+
+                if resolve_token_price_usd(t1.address, sym1, _price_map) is None:
+                    unknown_price_skipped += 1
+                else:
+                    rev_edge = GraphEdge(
+                        token_in_sym=sym1,
+                        token_out_sym=sym0,
+                        token_in_addr=t1.address,
+                        token_out_addr=t0.address,
+                        token_in_decimals=t1.decimals,
+                        token_out_decimals=t0.decimals,
+                        route_id=route_id,
+                        dex_id=dex_id,
+                        adapter_type=adapter_type,
+                        fee=fee,
+                        tick_spacing=tick_spacing,
+                        quoter_addr=quoter_addr,
+                        pool_address=pool_address,
+                        fee_bps=fee_bps,
+                        factory_class=factory_class,
+                        pair_id=pair_id,
+                        factory_verified=factory_verified_flag,
+                        hooks=hooks,
+                        token_in_index=_rev_idx_in,
+                        token_out_index=_rev_idx_out,
+                        pool_id=_pool_id,
+                        vault_address=_vault_address,
+                        pool_kind=_pool_kind,
+                        freshness_window=_freshness_window,
+                        effective_depth_usd=_effective_depth_usd,
+                        balancer_assets=_balancer_assets,
+                        token_a_address=_maverick_token_a,
+                    )
+                    adjacency[sym1][sym0].append(rev_edge)
+                    built_count += 1
             else:
                 rev_edge = GraphEdge(
                     token_in_sym=sym1,
@@ -664,8 +785,10 @@ def build_graph_from_inventory(
                 "curve_disabled_skipped": curve_disabled_skipped,
                 "invalid_token_addr_skipped": invalid_token_addr_skipped,
                 "unknown_token_skipped": unknown_token_skipped,
+                "decimals_unknown_skipped": decimals_unknown_skipped,
                 "productivity_skipped": productivity_skipped,
                 "admission_skipped": admission_skipped,
+                "unknown_price_skipped": unknown_price_skipped,
             }
         },
     )

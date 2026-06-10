@@ -632,7 +632,14 @@ def resolve_rpc_http(chain_id: Optional[int] = None, network: Optional[str] = No
             if fallback and not is_public_rpc_url(fallback):
                 chain_url = fallback
             elif fallback and is_public_rpc_url(fallback):
-                diagnostics["skipped_public_chain_env"] = http_var
+                # Skip public chain env only when a dedicated alternative exists.
+                # Explicit-only env (e.g. diagnostic with BASE_RPC only) must honor BASE_RPC.
+                _alchemy = (env.get("ALCHEMY_API_KEY") or "").strip()
+                _prim = (env.get(primary_var) or "").strip()
+                if _alchemy or (_prim and not is_public_rpc_url(_prim)):
+                    diagnostics["skipped_public_chain_env"] = http_var
+                else:
+                    chain_url = fallback
         if chain_url:
             # Validate dRPC chain match
             drpc_ok, drpc_err = validate_drpc_url(chain_url, net)
