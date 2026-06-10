@@ -120,6 +120,59 @@ def _depth_gate_ok(route: Dict[str, Any], min_depth_usd: float) -> bool:
     return _depth_ok(route, min_depth_usd)
 
 
+def productive_admission_fail_reason(
+    route: Dict[str, Any],
+    *,
+    min_depth_usd: float = _DEFAULT_MIN_DEPTH_USD,
+    adapter_supported: Optional[bool] = None,
+    provider_ok: bool = True,
+    require_quote_smoke: bool = False,
+) -> Optional[str]:
+    """First failing productive gate for a route, or None when admission would pass."""
+    if _is_quarantined(route):
+        return "quarantined"
+    if route.get("factory_verified") is not True:
+        return "not_factory_verified"
+    if adapter_supported is None:
+        adapter_supported = bool(route.get("adapter_type")) and route.get("adapter_type") != "unknown"
+    if not adapter_supported:
+        return "adapter_unsupported"
+    if not _depth_gate_ok(route, min_depth_usd):
+        return "missing_depth"
+    if require_quote_smoke and not _quote_ok(route):
+        return "quote_smoke_fail"
+    if not provider_ok:
+        return "provider_not_ok"
+    if route.get("expansion_productive_admit") is False:
+        return "expansion_productive_admit_false"
+    return None
+
+
+def maverick_admission_fail_reason(route: Dict[str, Any]) -> Optional[str]:
+    """Distinct-pricing Maverick gate detail when route fails productive admission."""
+    base = productive_admission_fail_reason(route)
+    if base:
+        return base
+    adapter = route.get("adapter_type") or ""
+    dex = route.get("dex_id") or ""
+    if adapter != "maverick_v2" and dex != "maverick_v2":
+        return None
+    token_a = str(route.get("token_a") or route.get("token_a_address") or "").lower()
+    if not (token_a.startswith("0x") and len(token_a) == 42):
+        return "missing_token_a"
+    prod_status = str(
+        route.get("productive_quote_status") or route.get("quote_smoke_status") or ""
+    )
+    prod_ok = prod_status.startswith("QUOTE_OK")
+    if route.get("effective_depth_usd") is None and not prod_ok:
+        if not route.get("maverick_pool_lane_probe_amount") and not route.get(
+            "maverick_min_quoteable_amount_raw"
+        ):
+            return "missing_probe_amount"
+        return "missing_depth_or_quote_ok"
+    return None
+
+
 def productive_admission_ok(
     route: Dict[str, Any],
     *,

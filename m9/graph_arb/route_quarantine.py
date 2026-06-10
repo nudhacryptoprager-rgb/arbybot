@@ -22,6 +22,15 @@ _PERMANENT_QUARANTINE_REASONS = frozenset(
 )
 
 
+def resolve_phantom_quarantine_addresses(phantom_data: Dict[str, Any]) -> Set[str]:
+    """Pool addresses from phantom overflow feedback (schema m9_phantom_quarantine.1)."""
+    return {
+        str(e.get("pool_address") or "").lower()
+        for e in phantom_data.get("pools", []) or []
+        if e.get("pool_address")
+    }
+
+
 def resolve_diagnostic_quarantine_pools(diag: Dict[str, Any]) -> Set[str]:
     """Pool addresses to exclude after failed route diagnostic probes."""
     pools: Set[str] = set()

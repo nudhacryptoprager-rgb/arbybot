@@ -43,6 +43,9 @@ class GraphEdge:
     maverick_max_quoteable_amount_raw: Optional[int] = None
     maverick_token_a_in_probe: Optional[bool] = None
     maverick_pool_lane_token_in: Optional[str] = None
+    soft_quarantine_tag: Optional[str] = None
+    price_status: Optional[str] = None
+    decimals_status: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):
@@ -97,6 +100,9 @@ class GraphEdge:
             maverick_max_quoteable_amount_raw=self.maverick_max_quoteable_amount_raw,
             maverick_token_a_in_probe=self.maverick_token_a_in_probe,
             maverick_pool_lane_token_in=self.maverick_pool_lane_token_in,
+            soft_quarantine_tag=self.soft_quarantine_tag,
+            price_status=self.price_status,
+            decimals_status=self.decimals_status,
         )
 
 

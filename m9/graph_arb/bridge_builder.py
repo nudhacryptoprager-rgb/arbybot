@@ -1543,7 +1543,17 @@ def build_bridge_inventory(
             for r in _exploration_routes
             if str(r.get("dex_id") or "") in _distinct
         )
+        bridge_source_metrics["shadow_exploration_routes"] = len(_exploration_routes)
+        bridge_source_metrics["shadow_exploration_route_samples"] = [
+            {
+                "pool_address": r.get("pool_address"),
+                "dex_id": r.get("dex_id"),
+                "origin_source": r.get("origin_source"),
+            }
+            for r in _exploration_routes[:12]
+        ]
     except Exception as _prov_exc:
+        bridge_source_metrics.setdefault("shadow_exploration_routes", 0)
         bridge_source_metrics["m8_provenance_error"] = str(_prov_exc)[:200]
 
     # ------------------------------------------------------------------
@@ -1583,19 +1593,50 @@ def build_bridge_inventory(
     # ------------------------------------------------------------------
     try:
         from m8_1.stable_anchor.config_loader import load_config as _load_m8_cfg
-        from m9.graph_arb.token_decimals import enrich_route_decimals, load_decimals_cache
+        from m9.graph_arb.token_decimals import enrich_routes_decimals, load_decimals_cache
 
         _cfg_for_dec = None
         _cfg_candidate = base_inv_path or "config/exotic_base_anchor.yaml"
         if _cfg_candidate and Path(_cfg_candidate).exists():
             _cfg_for_dec = _load_m8_cfg(_cfg_candidate)
         _dec_cache = load_decimals_cache()
-        for _dr in final_active:
-            enrich_route_decimals(_dr, cfg=_cfg_for_dec, cache=_dec_cache, w3=None)
+        _dec_w3 = None
+        if os.environ.get("ARBY_BRIDGE_ENRICH_DECIMALS_ONCHAIN", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        ):
+            try:
+                from core.rpc_urls import resolve_rpc_http
+                from web3 import Web3
+
+                _rpc = resolve_rpc_http("base")
+                if _rpc:
+                    _dec_w3 = Web3(Web3.HTTPProvider(_rpc, request_kwargs={"timeout": 8}))
+            except Exception as _w3_exc:
+                bridge_source_metrics["decimals_w3_error"] = str(_w3_exc)[:120]
+        _dec_src_hist = enrich_routes_decimals(
+            final_active,
+            cfg=_cfg_for_dec,
+            cache=_dec_cache,
+            w3=_dec_w3,
+            persist_cache=True,
+        )
+        bridge_source_metrics["decimals_source_histogram"] = _dec_src_hist
         bridge_source_metrics["routes_with_decimals"] = sum(
             1
             for r in final_active
             if r.get("token0_decimals") is not None and r.get("token1_decimals") is not None
+        )
+        from m9.graph_arb.token_decimals import is_economics_grade_decimals_source
+
+        bridge_source_metrics["routes_decimals_economics_grade"] = sum(
+            1
+            for r in final_active
+            if r.get("token0_decimals") is not None
+            and r.get("token1_decimals") is not None
+            and is_economics_grade_decimals_source(r.get("token0_decimals_source"))
+            and is_economics_grade_decimals_source(r.get("token1_decimals_source"))
         )
     except Exception as _dec_exc:
         bridge_source_metrics["decimals_enrich_error"] = str(_dec_exc)[:200]

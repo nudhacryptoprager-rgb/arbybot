@@ -934,6 +934,7 @@ def _build_and_write_artifact(
     # legacy per-token call on any multicall error.
     # ------------------------------------------------------------------
     symbol_map: Dict[str, Optional[str]] = {}
+    decimals_map: Dict[str, Optional[int]] = {}
     if w3 is not None and (recent_window or recent_events):
         unique_tokens: List[str] = []
         seen: Set[str] = set()
@@ -954,12 +955,14 @@ def _build_and_write_artifact(
                 block_num = _get_block_number(w3) or 0
                 batcher = get_multicall_batcher(rpc_url_for_mc, block_num)
                 symbol_map = batcher.batch_symbol(unique_tokens) or {}
+                decimals_map = batcher.batch_decimals(unique_tokens) or {}
         except Exception as exc:
             logger.warning(
                 "multicall_symbol_batch_failed_falling_back",
                 extra={"context": {"error": str(exc)[:120]}},
             )
             symbol_map = {}
+            decimals_map = {}
 
     recent_list: List[Dict[str, Any]] = []
     if preserved_recent:
@@ -987,6 +990,14 @@ def _build_and_write_artifact(
             "token1": e.token1,
             "token0_symbol": token0_sym,
             "token1_symbol": token1_sym,
+            "token0_decimals": decimals_map.get(e.token0) if decimals_map else None,
+            "token1_decimals": decimals_map.get(e.token1) if decimals_map else None,
+            "token0_decimals_source": (
+                "erc20_call" if decimals_map.get(e.token0) is not None else None
+            ),
+            "token1_decimals_source": (
+                "erc20_call" if decimals_map.get(e.token1) is not None else None
+            ),
             "pair": pair,
             "fee": e.fee,
             "tick_spacing": e.tick_spacing,

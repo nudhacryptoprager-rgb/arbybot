@@ -32,6 +32,29 @@ _TOPO_NO_CYCLES = "NO_CYCLES"
 _TOPO_CYCLES_FOUND = "CYCLES_FOUND"
 _TOPO_FILTER_BLOCKED = "TOPOLOGY_FILTER_BLOCKED"
 
+_REQUIRED_PRODUCTIVE_SCAN_SCOPE_KEYS = (
+    "quarantine_exclusion_breakdown",
+    "productive_admission_skip_histogram",
+    "cycles_before_quarantine",
+    "cycles_after_quarantine",
+    "graph_build_metrics",
+)
+
+
+def validate_scan_scope_telemetry(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    """Return validation result for productive-lane scan-scope telemetry."""
+    scope = artifact.get("scan_scope") or {}
+    lane = scope.get("pool_quality_lane") or artifact.get("pool_quality_lane")
+    if lane != "productive":
+        return {"valid": True, "lane": lane, "missing": [], "blocker": None}
+    missing = [k for k in _REQUIRED_PRODUCTIVE_SCAN_SCOPE_KEYS if k not in scope]
+    return {
+        "valid": not missing,
+        "lane": lane,
+        "missing": missing,
+        "blocker": "NO_CYCLES_WITH_MISSING_SCAN_SCOPE_TELEMETRY" if missing else None,
+    }
+
 # Near-positive threshold for router-sim eligibility (bps below zero)
 _ROUTER_SIM_BPS_FLOOR = -10.0
 
@@ -744,6 +767,15 @@ def build_artifact(
     depth_quarantine_skipped: int = 0,
     # Count of pools excluded via revert-quarantine feedback from previous run
     revert_quarantine_skipped: int = 0,
+    phantom_quarantine_skipped: int = 0,
+    diagnostic_quarantine_skipped: int = 0,
+    quarantine_exclusion_breakdown: Optional[Dict[str, Any]] = None,
+    diagnostic_quarantine_mode: Optional[str] = None,
+    diagnostic_admission_mode: Optional[str] = None,
+    cycles_before_quarantine: Optional[int] = None,
+    cycles_after_quarantine: Optional[int] = None,
+    graph_build_admission_histogram: Optional[Dict[str, int]] = None,
+    graph_build_metrics: Optional[Dict[str, Any]] = None,
     # M8→M9 bridge provenance block (bridge_builder.build_bridge_inventory output)
     bridge_source_metrics: Optional[Dict[str, Any]] = None,
     route_meta_by_pool: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -790,6 +822,9 @@ def build_artifact(
             return qr.gross_bps > 0
 
     cycles_positive_gross = sum(1 for qr in cycle_results if _counts_as_positive_evidence(qr))
+    _economics_claim_suppressed = diagnostic_admission_mode == "topology_probe"
+    if _economics_claim_suppressed:
+        cycles_positive_gross = 0
 
     # Extract cost profile once — used for router-sim eligibility, per-cycle summaries,
     # and the top-level estimated_cost_bps field.
@@ -986,6 +1021,46 @@ def build_artifact(
         scan_scope["depth_quarantine_skipped"] = depth_quarantine_skipped
     if revert_quarantine_skipped > 0:
         scan_scope["revert_quarantine_skipped"] = revert_quarantine_skipped
+    if phantom_quarantine_skipped > 0:
+        scan_scope["phantom_quarantine_skipped"] = phantom_quarantine_skipped
+    if diagnostic_quarantine_skipped > 0:
+        scan_scope["diagnostic_quarantine_skipped"] = diagnostic_quarantine_skipped
+    if diagnostic_quarantine_mode:
+        scan_scope["diagnostic_quarantine_mode"] = diagnostic_quarantine_mode
+    if diagnostic_admission_mode:
+        scan_scope["diagnostic_admission_mode"] = diagnostic_admission_mode
+    if _economics_claim_suppressed:
+        scan_scope["economics_claim_suppressed"] = True
+    if pool_quality_lane == "productive":
+        scan_scope["quarantine_exclusion_breakdown"] = quarantine_exclusion_breakdown or {
+            "mode": diagnostic_quarantine_mode or "production",
+            "note": "empty_breakdown",
+        }
+        scan_scope["productive_admission_skip_histogram"] = (
+            graph_build_admission_histogram if graph_build_admission_histogram is not None else {}
+        )
+        scan_scope["cycles_before_quarantine"] = (
+            0 if cycles_before_quarantine is None else cycles_before_quarantine
+        )
+        scan_scope["cycles_after_quarantine"] = (
+            0 if cycles_after_quarantine is None else cycles_after_quarantine
+        )
+        scan_scope["graph_build_metrics"] = graph_build_metrics or {}
+        _edge_hist = (graph_build_metrics or {}).get("edge_build_skip_histogram")
+        if _edge_hist is not None:
+            scan_scope["edge_build_skip_histogram"] = _edge_hist
+        scan_scope["scan_scope_telemetry_complete"] = True
+    else:
+        if quarantine_exclusion_breakdown:
+            scan_scope["quarantine_exclusion_breakdown"] = quarantine_exclusion_breakdown
+        if cycles_before_quarantine is not None:
+            scan_scope["cycles_before_quarantine"] = cycles_before_quarantine
+        if cycles_after_quarantine is not None:
+            scan_scope["cycles_after_quarantine"] = cycles_after_quarantine
+        if graph_build_admission_histogram is not None:
+            scan_scope["productive_admission_skip_histogram"] = graph_build_admission_histogram
+        if graph_build_metrics:
+            scan_scope["graph_build_metrics"] = graph_build_metrics
 
     # Graph topology dict (canonical key in rolling artifact)
     graph_topology = {
@@ -1591,6 +1666,10 @@ def build_artifact(
         artifact["positive_cycles_by_adapter_family"] = None
         artifact["cycles_by_pricing_model"] = None
         artifact["positive_cycles_by_pricing_model"] = None
+
+    artifact["scan_scope_telemetry"] = validate_scan_scope_telemetry(artifact)
+    if _economics_claim_suppressed:
+        artifact["economics_claim_suppressed"] = True
 
     return artifact
 

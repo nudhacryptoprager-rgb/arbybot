@@ -5,10 +5,12 @@ Resolution order:
   2. Static known-address map (Base anchors)
   3. Config tokens matched by lowercase address
   4. Config tokens matched by canonical symbol (not truncated hex)
-  5. Runtime cache (``data/tmp/m9_token_decimals_cache.json``)
-  6. On-chain ``decimals()`` when *w3* is provided
+  5. Hint metadata (external hints — not economics-grade alone)
+  6. Runtime cache (``data/tmp/m9_token_decimals_cache.json``)
+  7. On-chain ``decimals()`` when *w3* is provided
 
-Never silently default to 18 for address-like or truncated-hex labels.
+Never silently default to 18 for address-like or truncated-hex labels in production.
+``topology_probe`` may use ``topology_probe_fallback`` (18) for graph structure only.
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from m8_1.stable_anchor.config_loader import M8_1Config
 
@@ -24,6 +26,18 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CACHE_PATH = "data/tmp/m9_token_decimals_cache.json"
 _ERC20_DECIMALS_SELECTOR = "0x313ce567"
+
+DECIMALS_SOURCE_ERC20 = "erc20_call"
+DECIMALS_SOURCE_CORE_CONFIG = "core_config"
+DECIMALS_SOURCE_HINT = "hint_metadata"
+DECIMALS_SOURCE_ROUTE_OVERRIDE = "route_override"
+DECIMALS_SOURCE_KNOWN_ADDRESS = "known_address"
+DECIMALS_SOURCE_CACHE = "cache"
+DECIMALS_SOURCE_FALLBACK_UNKNOWN = "fallback_unknown"
+DECIMALS_SOURCE_TOPOLOGY_PROBE = "topology_probe_fallback"
+
+DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC = "UNKNOWN_DIAGNOSTIC"
+TOPOLOGY_PROBE_DECIMALS_FALLBACK = 18
 
 # Base mainnet — lowercase address → decimals
 _KNOWN_ADDRESS_DECIMALS: Dict[str, int] = {
@@ -116,7 +130,22 @@ def fetch_on_chain_decimals(w3: Any, address: str) -> Optional[int]:
         return None
 
 
-def resolve_decimals_for_address(
+def _hint_decimals_for_route(route: Dict[str, Any], dec_key: str) -> Optional[int]:
+    hint_key = dec_key.replace("_decimals", "_decimals_hint")
+    raw = route.get(hint_key)
+    if raw is None:
+        meta = route.get("hint_metadata") or {}
+        if isinstance(meta, dict):
+            raw = meta.get(dec_key) or meta.get(hint_key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_decimals_with_source(
     address: str,
     *,
     cfg: Optional[M8_1Config] = None,
@@ -125,37 +154,45 @@ def resolve_decimals_for_address(
     cache: Optional[Dict[str, int]] = None,
     w3: Any = None,
     persist_cache: bool = True,
-) -> Optional[int]:
-    """Return decimals for *address*, or None when unknown."""
+    route: Optional[Dict[str, Any]] = None,
+    dec_key: str = "token0_decimals",
+    topology_probe: bool = False,
+) -> Tuple[Optional[int], str]:
+    """Return (decimals, source_tag). Source is ``fallback_unknown`` when unresolved."""
     if not is_valid_eth_address(address):
-        return None
+        if topology_probe:
+            return TOPOLOGY_PROBE_DECIMALS_FALLBACK, DECIMALS_SOURCE_TOPOLOGY_PROBE
+        return None, DECIMALS_SOURCE_FALLBACK_UNKNOWN
 
     addr_l = address.lower()
 
-    # Address truth wins over polluted inventory overrides (quote-size gate).
     if addr_l in _KNOWN_ADDRESS_DECIMALS:
-        return _KNOWN_ADDRESS_DECIMALS[addr_l]
+        return _KNOWN_ADDRESS_DECIMALS[addr_l], DECIMALS_SOURCE_KNOWN_ADDRESS
 
     if cfg is not None:
         for tc in cfg.tokens.values():
             if (tc.address or "").lower() == addr_l:
-                return int(tc.decimals)
+                return int(tc.decimals), DECIMALS_SOURCE_CORE_CONFIG
         sym = (symbol or "").strip()
         if sym and not is_truncated_hex_token(sym):
             tc = cfg.tokens.get(sym)
             if tc is not None and (tc.address or "").lower() == addr_l:
-                return int(tc.decimals)
+                return int(tc.decimals), DECIMALS_SOURCE_CORE_CONFIG
 
     if override is not None:
         try:
-            return int(override)
+            return int(override), DECIMALS_SOURCE_ROUTE_OVERRIDE
         except (TypeError, ValueError):
             pass
 
-    if cache is not None and addr_l in cache:
-        return int(cache[addr_l])
+    if route is not None:
+        hint = _hint_decimals_for_route(route, dec_key)
+        if hint is not None:
+            return hint, DECIMALS_SOURCE_HINT
 
-    # On-chain last — may populate cache
+    if cache is not None and addr_l in cache:
+        return int(cache[addr_l]), DECIMALS_SOURCE_CACHE
+
     if w3 is not None:
         dec = fetch_on_chain_decimals(w3, addr_l)
         if dec is not None:
@@ -168,9 +205,48 @@ def resolve_decimals_for_address(
                         save_decimals_cache(disk)
                     except Exception:
                         pass
-            return dec
+            return dec, DECIMALS_SOURCE_ERC20
 
-    return None
+    if topology_probe:
+        return TOPOLOGY_PROBE_DECIMALS_FALLBACK, DECIMALS_SOURCE_TOPOLOGY_PROBE
+
+    return None, DECIMALS_SOURCE_FALLBACK_UNKNOWN
+
+
+def resolve_decimals_for_address(
+    address: str,
+    *,
+    cfg: Optional[M8_1Config] = None,
+    override: object = None,
+    symbol: str = "",
+    cache: Optional[Dict[str, int]] = None,
+    w3: Any = None,
+    persist_cache: bool = True,
+) -> Optional[int]:
+    """Return decimals for *address*, or None when unknown."""
+    dec, _src = resolve_decimals_with_source(
+        address,
+        cfg=cfg,
+        override=override,
+        symbol=symbol,
+        cache=cache,
+        w3=w3,
+        persist_cache=persist_cache,
+    )
+    return dec
+
+
+def decimals_skip_extra(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Telemetry payload for decimals-related edge-build skips."""
+    return {
+        "token0_addr": entry.get("token0_addr") or entry.get("token0"),
+        "token1_addr": entry.get("token1_addr") or entry.get("token1"),
+        "token0_decimals": entry.get("token0_decimals"),
+        "token1_decimals": entry.get("token1_decimals"),
+        "token0_decimals_source": entry.get("token0_decimals_source"),
+        "token1_decimals_source": entry.get("token1_decimals_source"),
+        "decimals_status": entry.get("decimals_status"),
+    }
 
 
 def enrich_route_decimals(
@@ -178,8 +254,12 @@ def enrich_route_decimals(
     cfg: Optional[M8_1Config] = None,
     cache: Optional[Dict[str, int]] = None,
     w3: Any = None,
+    *,
+    topology_probe: bool = False,
+    persist_cache: bool = False,
 ) -> Dict[str, Any]:
-    """Set ``token0_decimals`` / ``token1_decimals`` on a bridge route dict."""
+    """Set decimals + ``token*_decimals_source`` on a bridge route dict."""
+    sources: List[str] = []
     for sym_key, addr_key, dec_key in (
         ("token0", "token0_addr", "token0_decimals"),
         ("token1", "token1_addr", "token1_decimals"),
@@ -190,15 +270,72 @@ def enrich_route_decimals(
             if is_valid_eth_address(field_sym):
                 addr = field_sym
         sym = str(route.get(sym_key) or "")
-        dec = resolve_decimals_for_address(
+        dec, src = resolve_decimals_with_source(
             addr,
             cfg=cfg,
             override=route.get(dec_key),
             symbol=sym,
             cache=cache,
             w3=w3,
-            persist_cache=False,
+            persist_cache=persist_cache,
+            route=route,
+            dec_key=dec_key,
+            topology_probe=topology_probe,
         )
+        src_key = dec_key.replace("_decimals", "_decimals_source")
+        route[src_key] = src
         if dec is not None:
             route[dec_key] = dec
+            sources.append(src)
+    if any(s in (DECIMALS_SOURCE_TOPOLOGY_PROBE, DECIMALS_SOURCE_FALLBACK_UNKNOWN) for s in sources):
+        route["decimals_status"] = DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC
+    elif route.get("token0_decimals") is not None and route.get("token1_decimals") is not None:
+        route["decimals_status"] = "resolved"
     return route
+
+
+def enrich_routes_decimals(
+    routes: List[Dict[str, Any]],
+    *,
+    cfg: Optional[M8_1Config] = None,
+    cache: Optional[Dict[str, int]] = None,
+    w3: Any = None,
+    topology_probe: bool = False,
+    persist_cache: bool = True,
+) -> Dict[str, int]:
+    """Enrich all routes; return histogram of decimals sources used."""
+    hist: Dict[str, int] = {}
+    if cache is None:
+        cache = load_decimals_cache()
+    for route in routes:
+        enrich_route_decimals(
+            route,
+            cfg=cfg,
+            cache=cache,
+            w3=w3,
+            topology_probe=topology_probe,
+            persist_cache=persist_cache,
+        )
+        for key in ("token0_decimals_source", "token1_decimals_source"):
+            src = route.get(key)
+            if src:
+                hist[str(src)] = hist.get(str(src), 0) + 1
+    if persist_cache and cache:
+        try:
+            disk = load_decimals_cache()
+            disk.update(cache)
+            save_decimals_cache(disk)
+        except Exception:
+            pass
+    return hist
+
+
+def is_economics_grade_decimals_source(source: Optional[str]) -> bool:
+    """ERC20-confirmed or core config only — hints/fallbacks excluded from economics."""
+    return source in (
+        DECIMALS_SOURCE_ERC20,
+        DECIMALS_SOURCE_CORE_CONFIG,
+        DECIMALS_SOURCE_KNOWN_ADDRESS,
+        DECIMALS_SOURCE_ROUTE_OVERRIDE,
+        DECIMALS_SOURCE_CACHE,
+    )

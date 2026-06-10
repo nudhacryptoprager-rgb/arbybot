@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from m8_1.stable_anchor.config_loader import load_config, M8_1Config
 from m8_1.stable_anchor.pairs import TokenInfo
@@ -22,6 +22,53 @@ _DEFAULT_INVENTORY = "data/tmp/m8_1_exotic_inventory_latest.json"
 # Merged shadow inventory (M8 + M8.1 + gap edges) takes priority when present
 _SHADOW_INVENTORY = "data/tmp/m9_shadow_inventory_with_gap_edges.json"
 _DEFAULT_CONFIG = "config/exotic_base_anchor.yaml"
+
+_LAST_GRAPH_BUILD_STATS: Dict[str, Any] = {}
+
+
+def get_last_graph_build_stats() -> Dict[str, Any]:
+    """Stats from the most recent ``build_graph_from_inventory`` call."""
+    return dict(_LAST_GRAPH_BUILD_STATS)
+
+
+def _record_admission_skip(
+    samples: Dict[str, List[Dict[str, Any]]],
+    reason: str,
+    entry: Dict[str, Any],
+    *,
+    limit: int = 20,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    rows = samples.setdefault(reason, [])
+    if len(rows) >= limit:
+        return
+    row: Dict[str, Any] = {
+        "route_id": entry.get("route_id"),
+        "pool_address": entry.get("pool_address"),
+        "dex_id": entry.get("dex_id"),
+        "pair_id": entry.get("pair_id"),
+    }
+    if extra:
+        row.update(extra)
+    rows.append(row)
+
+
+def _edge_price_gate(
+    token_addr: str,
+    token_sym: str,
+    price_map: Dict[str, float],
+    *,
+    topology_probe: bool,
+) -> tuple[bool, Optional[str]]:
+    """Return (allow_edge, price_status tag)."""
+    from m9.graph_arb.admission_mode import PRICE_STATUS_UNKNOWN_DIAGNOSTIC
+    from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
+
+    if resolve_token_price_usd(token_addr, token_sym, price_map) is not None:
+        return True, None
+    if topology_probe:
+        return True, PRICE_STATUS_UNKNOWN_DIAGNOSTIC
+    return False, None
 
 
 def _fee_bps_from_edge(adapter_type: str, fee: int, tick_spacing: Optional[int]) -> float:
@@ -180,21 +227,45 @@ def _resolve_route_token(
     cfg: M8_1Config,
     dec_key: str,
     decimals_cache: Optional[Dict[str, int]] = None,
-) -> Optional[TokenInfo]:
+    *,
+    topology_probe: bool = False,
+) -> "tuple[Optional[TokenInfo], Optional[str]]":
     """Resolve a route leg: inventory addr fields beat polluted token_map keys."""
+    from m9.graph_arb.token_decimals import (
+        DECIMALS_SOURCE_TOPOLOGY_PROBE,
+        DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC,
+        resolve_decimals_with_source,
+    )
+
     if not sym:
-        return None
+        return None, None
     sym_map = _entry_symbol_address_map(entry)
     addr = sym_map.get(sym) or sym_map.get(sym.lower())
     if _is_valid_eth_address(addr):
-        dec = _resolve_decimals(sym, addr, cfg, entry.get(dec_key), decimals_cache)
+        dec, src = resolve_decimals_with_source(
+            addr,
+            cfg=cfg,
+            override=entry.get(dec_key),
+            symbol=sym,
+            cache=decimals_cache,
+            w3=None,
+            persist_cache=False,
+            route=entry,
+            dec_key=dec_key,
+            topology_probe=topology_probe,
+        )
         if dec is None:
-            return None
-        return TokenInfo(symbol=sym, address=addr.lower(), decimals=dec)
+            return None, None
+        dec_status = (
+            DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC
+            if src == DECIMALS_SOURCE_TOPOLOGY_PROBE
+            else None
+        )
+        return TokenInfo(symbol=sym, address=addr.lower(), decimals=dec), dec_status
     existing = token_map.get(sym)
     if existing is not None and _is_valid_eth_address(existing.address):
-        return existing
-    return None
+        return existing, None
+    return None, None
 
 
 def _merge_inventory_token_addresses(
@@ -269,9 +340,11 @@ def build_graph_from_inventory(
     require_factory_verified: bool = False,
     # Pool-quality gate (Steps 2+3): productive lane filtering
     exclude_pool_addresses: Optional["frozenset[str]"] = None,
+    soft_quarantine_pools: Optional["frozenset[str]"] = None,
     min_effective_depth_usd: float = 0.0,
     lane: str = "discovery",
     token_prices_usd: Optional["Dict[str, float]"] = None,
+    diagnostic_admission_mode: Optional[str] = None,
 ) -> "Dict[str, Dict[str, List[GraphEdge]]]":
     """Build a directed adjacency dict from inventory active_routes.
 
@@ -355,7 +428,20 @@ def build_graph_from_inventory(
     admission_skipped = 0
     unknown_price_skipped = 0
     metadata_incomplete_skipped = 0
+    admission_skip_histogram: Counter[str] = Counter()
+    admission_skip_samples: Dict[str, List[Dict[str, Any]]] = {}
+    edge_build_skip_histogram: Counter[str] = Counter()
+    edge_build_skip_samples: Dict[str, List[Dict[str, Any]]] = {}
+    post_admission_no_edge_samples: Dict[str, List[Dict[str, Any]]] = {}
+    routes_after_admission = 0
+    routes_after_quarantine = 0
+    soft_quarantine_tagged = 0
     _productive_lane = (lane == "productive")
+    from m9.graph_arb.admission_mode import get_diagnostic_admission_mode
+
+    _admission_mode = diagnostic_admission_mode or get_diagnostic_admission_mode()
+    _topology_probe = _productive_lane and _admission_mode == "topology_probe"
+    _soft_pools = soft_quarantine_pools or frozenset()
     _price_map = token_prices_usd or {}
     _productive_dexes = (
         productive_dex_ids_from_config(config_path) if _productive_lane else frozenset()
@@ -372,6 +458,9 @@ def build_graph_from_inventory(
         _meta_chain = "mantle"
 
     for entry in active_routes:
+        _route_track = False
+        _route_edges_at_start = built_count
+        _route_last_skip: Optional[str] = None
         pair_id = entry.get("pair_id", "")
         dex_id = entry.get("dex_id", "")
         fee = int(entry.get("fee") or 0)
@@ -391,19 +480,49 @@ def build_graph_from_inventory(
             continue
 
         if _productive_lane:
-            from m9.graph_arb.pool_quality import productive_admission_ok
+            from m9.graph_arb.pool_quality import (
+                maverick_admission_fail_reason,
+                productive_admission_fail_reason,
+            )
 
             _min_depth = min_effective_depth_usd if min_effective_depth_usd > 0 else 50.0
-            if not productive_admission_ok(entry, min_depth_usd=_min_depth):
-                admission_skipped += 1
-                continue
+            if _topology_probe:
+                if entry.get("factory_verified") is not True:
+                    admission_skipped += 1
+                    admission_skip_histogram["not_factory_verified"] += 1
+                    _record_admission_skip(
+                        admission_skip_samples,
+                        "not_factory_verified",
+                        entry,
+                        extra={"fail_reason": "not_factory_verified"},
+                    )
+                    continue
+            else:
+                _fail_reason = productive_admission_fail_reason(
+                    entry, min_depth_usd=_min_depth
+                )
+                _entry_adapter_pre = entry.get("adapter_type") or ""
+                if _entry_adapter_pre == "maverick_v2" or dex_id == "maverick_v2":
+                    _mav_reason = maverick_admission_fail_reason(entry)
+                    if _mav_reason:
+                        _fail_reason = _mav_reason
+                if _fail_reason:
+                    admission_skipped += 1
+                    admission_skip_histogram["productive_admission_fail"] += 1
+                    _record_admission_skip(
+                        admission_skip_samples,
+                        "productive_admission_fail",
+                        entry,
+                        extra={"fail_reason": _fail_reason},
+                    )
+                    continue
             _entry_adapter = entry.get("adapter_type") or ""
             _distinct_lane = _entry_adapter in (
                 "balancer_stable",
                 "balancer_weighted",
                 "maverick_v2",
             ) or dex_id in ("balancer_vault", "maverick_v2")
-            if _distinct_lane:
+            if _distinct_lane and not _topology_probe:
                 _prod_status = str(
                     entry.get("productive_quote_status")
                     or entry.get("quote_smoke_status")
@@ -412,13 +531,23 @@ def build_graph_from_inventory(
                 _prod_ok = _prod_status.startswith("QUOTE_OK")
                 if entry.get("effective_depth_usd") is None and not _prod_ok:
                     admission_skipped += 1
+                    admission_skip_histogram["missing_depth_or_quote_ok"] += 1
+                    _record_admission_skip(
+                        admission_skip_samples,
+                        "missing_depth_or_quote_ok",
+                        entry,
+                        extra={"fail_reason": "missing_depth_or_quote_ok"},
+                    )
                     continue
+            routes_after_admission += 1
 
         if exclude_factory_classes and factory_class in exclude_factory_classes:
             continue
         if exclude_route_ids and route_id in exclude_route_ids:
             continue
         if require_factory_verified and entry.get("factory_verified") is not True:
+            admission_skip_histogram["not_factory_verified"] += 1
+            _record_admission_skip(admission_skip_samples, "not_factory_verified", entry)
             unverified_skipped += 1
             logger.debug(
                 "Skipping unverified route (require_factory_verified=True)",
@@ -426,10 +555,17 @@ def build_graph_from_inventory(
             )
             continue
 
+        _pool_lc = pool_address.lower()
+        _soft_tag: Optional[str] = None
+        if _productive_lane and _pool_lc in _soft_pools:
+            _soft_tag = "feedback_quarantine_soft"
+
         # Productive lane: pool-quality gate (Steps 2+3)
         if _productive_lane:
-            if exclude_pool_addresses and pool_address.lower() in exclude_pool_addresses:
+            if exclude_pool_addresses and _pool_lc in exclude_pool_addresses:
                 depth_skipped += 1
+                admission_skip_histogram["quarantine_hard_exclude"] += 1
+                _record_admission_skip(admission_skip_samples, "hard_quarantine", entry)
                 logger.debug(
                     "Productive lane: skipping quarantined pool",
                     extra={
@@ -442,10 +578,16 @@ def build_graph_from_inventory(
                     },
                 )
                 continue
+            routes_after_quarantine += 1
+            _route_track = True
+            _route_edges_at_start = built_count
             if min_effective_depth_usd > 0:
                 depth_usd = entry.get("effective_depth_usd")
                 if depth_usd is not None and float(depth_usd) < min_effective_depth_usd:
                     depth_skipped += 1
+                    edge_build_skip_histogram["missing_depth"] += 1
+                    _route_last_skip = "missing_depth"
+                    _record_admission_skip(edge_build_skip_samples, "missing_depth", entry)
                     logger.debug(
                         "Productive lane: skipping low-depth pool",
                         extra={
@@ -463,6 +605,10 @@ def build_graph_from_inventory(
         try:
             sym0, sym1 = _parse_pair_symbols(pair_id)
         except ValueError:
+            if _route_track:
+                edge_build_skip_histogram["invalid_pair_id"] += 1
+                _route_last_skip = "invalid_pair_id"
+                _record_admission_skip(edge_build_skip_samples, "invalid_pair_id", entry)
             continue
 
         # Determine adapter_type and tick_spacing from config
@@ -572,13 +718,28 @@ def build_graph_from_inventory(
         if _productive_lane and adapter_type in ("balancer_stable", "balancer_weighted"):
             if not _pool_id or not _balancer_assets:
                 metadata_incomplete_skipped += 1
+                edge_build_skip_histogram["metadata_incomplete"] += 1
+                admission_skip_histogram["balancer_metadata_incomplete"] += 1
+                _route_last_skip = "metadata_incomplete"
+                _record_admission_skip(edge_build_skip_samples, "metadata_incomplete", entry)
                 continue
 
         # Curve index lookup happens per-direction (fwd / rev), computed below.
 
         # Resolve token info (entry addresses win over truncated-hex token_map keys)
-        t0 = _resolve_route_token(sym0, entry, token_map, cfg, "token0_decimals", _decimals_cache)
-        t1 = _resolve_route_token(sym1, entry, token_map, cfg, "token1_decimals", _decimals_cache)
+        t0, t0_dec_status = _resolve_route_token(
+            sym0, entry, token_map, cfg, "token0_decimals", _decimals_cache,
+            topology_probe=_topology_probe,
+        )
+        t1, t1_dec_status = _resolve_route_token(
+            sym1, entry, token_map, cfg, "token1_decimals", _decimals_cache,
+            topology_probe=_topology_probe,
+        )
+        _edge_decimals_status: Optional[str] = None
+        if t0_dec_status or t1_dec_status:
+            from m9.graph_arb.token_decimals import DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC
+
+            _edge_decimals_status = DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC
         if adapter_type == "maverick_v2" and not _maverick_token_a and t0 and t1:
             for _cand in (entry.get("token0_addr"), entry.get("token_a"), t0.address):
                 _c = str(_cand or "").lower()
@@ -587,18 +748,48 @@ def build_graph_from_inventory(
                     break
         if t0 is None or t1 is None:
             if _productive_lane:
+                from m9.graph_arb.token_decimals import decimals_skip_extra
+
+                _skip_extra = decimals_skip_extra(entry)
                 if t0 is None or t1 is None:
                     _addr0 = _entry_symbol_address_map(entry).get(sym0, "")
                     _addr1 = _entry_symbol_address_map(entry).get(sym1, "")
                     if (
-                        _resolve_decimals(sym0, _addr0, cfg, entry.get("token0_decimals"), _decimals_cache)
-                        is None
-                        or _resolve_decimals(sym1, _addr1, cfg, entry.get("token1_decimals"), _decimals_cache)
-                        is None
+                        not _topology_probe
+                        and (
+                            _resolve_decimals(sym0, _addr0, cfg, entry.get("token0_decimals"), _decimals_cache)
+                            is None
+                            or _resolve_decimals(sym1, _addr1, cfg, entry.get("token1_decimals"), _decimals_cache)
+                            is None
+                        )
                     ):
                         decimals_unknown_skipped += 1
+                        if _route_track:
+                            edge_build_skip_histogram["decimals_unknown"] += 1
+                            _route_last_skip = "decimals_unknown"
+                            _record_admission_skip(
+                                edge_build_skip_samples, "decimals_unknown", entry, extra=_skip_extra
+                            )
+                            _record_admission_skip(
+                                post_admission_no_edge_samples,
+                                "decimals_unknown",
+                                entry,
+                                extra=_skip_extra,
+                            )
                     else:
                         unknown_token_skipped += 1
+                        if _route_track:
+                            edge_build_skip_histogram["unknown_token"] += 1
+                            _route_last_skip = "unknown_token"
+                            _record_admission_skip(
+                                edge_build_skip_samples, "unknown_token", entry, extra=_skip_extra
+                            )
+                            _record_admission_skip(
+                                post_admission_no_edge_samples,
+                                "unknown_token",
+                                entry,
+                                extra=_skip_extra,
+                            )
                 continue
             logger.debug(
                 "Unknown token symbol in inventory edge",
@@ -615,9 +806,17 @@ def build_graph_from_inventory(
 
         if not _is_valid_eth_address(t0.address) or not _is_valid_eth_address(t1.address):
             invalid_token_addr_skipped += 1
+            if _route_track:
+                edge_build_skip_histogram["invalid_token_address"] += 1
+                _route_last_skip = "invalid_token_address"
+                _record_admission_skip(edge_build_skip_samples, "invalid_token_address", entry)
             continue
         if t0.address.lower() == t1.address.lower():
             invalid_token_addr_skipped += 1
+            if _route_track:
+                edge_build_skip_histogram["same_token_pair"] += 1
+                _route_last_skip = "same_token_pair"
+                _record_admission_skip(edge_build_skip_samples, "same_token_pair", entry)
             continue
 
         edge_key_fwd = f"{route_id}>{sym0}@{sym1}"
@@ -656,15 +855,27 @@ def build_graph_from_inventory(
                 _fwd_idx_in is None or _fwd_idx_out is None
             ):
                 curve_unindexed_skipped += 1
+                if _route_track:
+                    edge_build_skip_histogram["curve_unindexed"] += 1
+                    _route_last_skip = "curve_unindexed"
+                    _record_admission_skip(edge_build_skip_samples, "curve_unindexed", entry)
             elif adapter_type == "curve_stable" and not _adapter_meta.curve_pool_quotable(
                 pool_address, chain=_meta_chain
             ):
                 curve_unquotable_skipped += 1
+                if _route_track:
+                    edge_build_skip_histogram["curve_unquotable"] += 1
+                    _route_last_skip = "curve_unquotable"
+                    _record_admission_skip(edge_build_skip_samples, "curve_unquotable", entry)
             elif _productive_lane and _price_map:
-                from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
-
-                if resolve_token_price_usd(t0.address, sym0, _price_map) is None:
+                _allow_fwd, _fwd_price_status = _edge_price_gate(
+                    t0.address, sym0, _price_map, topology_probe=_topology_probe
+                )
+                if not _allow_fwd:
                     unknown_price_skipped += 1
+                    edge_build_skip_histogram["unknown_price"] += 1
+                    _route_last_skip = "unknown_price"
+                    _record_admission_skip(edge_build_skip_samples, "unknown_price", entry)
                 else:
                     _mav_fwd = _maverick_probe_fields_for_token_in(entry, t0.address)
                     fwd_edge = GraphEdge(
@@ -701,7 +912,12 @@ def build_graph_from_inventory(
                         maverick_max_quoteable_amount_raw=_mav_fwd[2],
                         maverick_token_a_in_probe=_mav_fwd[3],
                         maverick_pool_lane_token_in=_mav_fwd[4],
+                        soft_quarantine_tag=_soft_tag,
+                        price_status=_fwd_price_status,
+                        decimals_status=_edge_decimals_status,
                     )
+                    if _soft_tag:
+                        soft_quarantine_tagged += 1
                     adjacency[sym0][sym1].append(fwd_edge)
                     built_count += 1
             else:
@@ -740,7 +956,12 @@ def build_graph_from_inventory(
                     maverick_max_quoteable_amount_raw=_mav_fwd[2],
                     maverick_token_a_in_probe=_mav_fwd[3],
                     maverick_pool_lane_token_in=_mav_fwd[4],
+                    soft_quarantine_tag=_soft_tag,
+                    price_status=None,
+                    decimals_status=_edge_decimals_status,
                 )
+                if _soft_tag:
+                    soft_quarantine_tagged += 1
                 adjacency[sym0][sym1].append(fwd_edge)
                 built_count += 1
 
@@ -758,15 +979,25 @@ def build_graph_from_inventory(
                 _rev_idx_in is None or _rev_idx_out is None
             ):
                 curve_unindexed_skipped += 1
+                if _route_track:
+                    edge_build_skip_histogram["curve_unindexed"] += 1
+                    _route_last_skip = "curve_unindexed"
             elif adapter_type == "curve_stable" and not _adapter_meta.curve_pool_quotable(
                 pool_address, chain=_meta_chain
             ):
                 curve_unquotable_skipped += 1
+                if _route_track:
+                    edge_build_skip_histogram["curve_unquotable"] += 1
+                    _route_last_skip = "curve_unquotable"
             elif _productive_lane and _price_map:
-                from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
-
-                if resolve_token_price_usd(t1.address, sym1, _price_map) is None:
+                _allow_rev, _rev_price_status = _edge_price_gate(
+                    t1.address, sym1, _price_map, topology_probe=_topology_probe
+                )
+                if not _allow_rev:
                     unknown_price_skipped += 1
+                    edge_build_skip_histogram["unknown_price"] += 1
+                    _route_last_skip = "unknown_price"
+                    _record_admission_skip(edge_build_skip_samples, "unknown_price", entry)
                 else:
                     _mav_rev = _maverick_probe_fields_for_token_in(entry, t1.address)
                     rev_edge = GraphEdge(
@@ -803,7 +1034,12 @@ def build_graph_from_inventory(
                         maverick_max_quoteable_amount_raw=_mav_rev[2],
                         maverick_token_a_in_probe=_mav_rev[3],
                         maverick_pool_lane_token_in=_mav_rev[4],
+                        soft_quarantine_tag=_soft_tag,
+                        price_status=_rev_price_status,
+                        decimals_status=_edge_decimals_status,
                     )
+                    if _soft_tag:
+                        soft_quarantine_tagged += 1
                     adjacency[sym1][sym0].append(rev_edge)
                     built_count += 1
             else:
@@ -842,9 +1078,59 @@ def build_graph_from_inventory(
                     maverick_max_quoteable_amount_raw=_mav_rev[2],
                     maverick_token_a_in_probe=_mav_rev[3],
                     maverick_pool_lane_token_in=_mav_rev[4],
+                    soft_quarantine_tag=_soft_tag,
+                    price_status=None,
+                    decimals_status=_edge_decimals_status,
                 )
+                if _soft_tag:
+                    soft_quarantine_tagged += 1
                 adjacency[sym1][sym0].append(rev_edge)
                 built_count += 1
+
+        if _route_track and built_count == _route_edges_at_start:
+            _no_edge_reason = _route_last_skip or "no_edge_built"
+            if not _route_last_skip:
+                edge_build_skip_histogram[_no_edge_reason] += 1
+            _record_admission_skip(
+                post_admission_no_edge_samples,
+                _no_edge_reason,
+                entry,
+                extra={"fail_reason": _no_edge_reason},
+            )
+
+    _routes_inventory = len(active_routes)
+    _edges_before_admission = (
+        routes_after_admission * 2 if _productive_lane else _routes_inventory * 2
+    )
+    _edges_after_admission = routes_after_admission * 2 if _productive_lane else built_count
+    _edges_after_quarantine = (
+        routes_after_quarantine * 2 if _productive_lane else built_count
+    )
+
+    global _LAST_GRAPH_BUILD_STATS
+    _LAST_GRAPH_BUILD_STATS = {
+        "lane": lane,
+        "diagnostic_admission_mode": _admission_mode if _productive_lane else "discovery",
+        "edge_count": built_count,
+        "routes_inventory": _routes_inventory,
+        "routes_after_admission": routes_after_admission,
+        "routes_after_quarantine": routes_after_quarantine,
+        "edges_before_admission": _edges_before_admission,
+        "edges_after_admission": _edges_after_admission,
+        "edges_after_quarantine": _edges_after_quarantine,
+        "edges_built": built_count,
+        "admission_skip_histogram": dict(admission_skip_histogram),
+        "admission_skip_samples": admission_skip_samples,
+        "edge_build_skip_histogram": dict(edge_build_skip_histogram),
+        "edge_build_skip_samples": edge_build_skip_samples,
+        "post_admission_no_edge_samples": post_admission_no_edge_samples,
+        "soft_quarantine_tagged": soft_quarantine_tagged,
+        "unverified_skipped": unverified_skipped,
+        "depth_skipped": depth_skipped,
+        "metadata_incomplete_skipped": metadata_incomplete_skipped,
+        "unknown_price_skipped": unknown_price_skipped,
+        "admission_skipped": admission_skipped,
+    }
 
     logger.info(
         "Graph built",

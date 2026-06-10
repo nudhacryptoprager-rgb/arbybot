@@ -23,7 +23,7 @@ def enrich_inventory_for_quote_truth(
     """Write enriched inventory with decimals (+ optional depth) and return path."""
     from m8_1.stable_anchor.config_loader import load_config
     from m9.graph_arb.distinct_depth_probe import enrich_route_depth_if_missing, needs_distinct_depth_probe
-    from m9.graph_arb.token_decimals import enrich_route_decimals, load_decimals_cache
+    from m9.graph_arb.token_decimals import enrich_routes_decimals, load_decimals_cache
     from m9.graph_arb.token_price_fetcher import build_dual_key_price_map
 
     inv_p = Path(inventory_path)
@@ -45,8 +45,10 @@ def enrich_inventory_for_quote_truth(
     _depth_probed = 0
     prices = token_prices or build_dual_key_price_map({})
 
+    inv["decimals_source_histogram"] = enrich_routes_decimals(
+        routes, cfg=cfg, cache=cache, w3=w3, persist_cache=True
+    )
     for route in routes:
-        enrich_route_decimals(route, cfg=cfg, cache=cache, w3=w3)
         if (
             w3 is not None
             and needs_distinct_depth_probe(route)
