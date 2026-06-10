@@ -216,10 +216,28 @@ def build_dex_quality_matrix(
     if missing_discovery:
         blockers.append("CONFIGURED_DEX_NO_DISCOVERY_EVIDENCE")
 
+    _distinct_dexes = {"curve_stable", "balancer_vault", "maverick_v2"}
+    _exp_summary = (expansion or {}).get("summary") or {}
+    _pools_by_dex = _exp_summary.get("pools_found_by_dex") or {}
+    _distinct_found = sum(int(_pools_by_dex.get(d, 0) or 0) for d in _distinct_dexes)
+    _distinct_active = int(bsm.get("active_distinct_pricing_routes") or 0)
+    _distinct_quoteable = sum(
+        int(matrix.get(d, {}).get("productive_quote_ok") or 0) for d in _distinct_dexes
+    )
+    _distinct_in_cycles = sum(
+        int(matrix.get(d, {}).get("cycles_quoteable") or 0) for d in _distinct_dexes
+    )
+
     return {
         "schema_version": "m9_dex_quality_matrix.1",
         "configured_dex_count": len(dex_ids),
         "visible_in_bridge_count": visible_in_bridge,
+        "distinct_pricing": {
+            "distinct_pricing_found": _distinct_found,
+            "distinct_pricing_active": _distinct_active,
+            "distinct_pricing_quoteable": _distinct_quoteable,
+            "distinct_pricing_in_cycles": _distinct_in_cycles,
+        },
         "expansion_dex_ids_checked": list(
             ((expansion or {}).get("summary") or {}).get("dex_ids_checked") or []
         ),

@@ -413,6 +413,10 @@ def _load_cross_dex_expansion_routes(
     return routes, {
         "reject_reason_histogram": data.get("reject_reason_histogram") or {},
         "multi_venue_tokens": summary.get("multi_venue_tokens", 0),
+        "subgraph_ready_tokens": summary.get("subgraph_ready_tokens", 0),
+        "connector_routes_count": summary.get("connector_routes_count", 0),
+        "verified_second_pool_count": summary.get("verified_second_pool_count", 0),
+        "routes_admitted_count": summary.get("routes_admitted_count", 0),
         "tokens_in": summary.get("tokens_in", 0),
         "dex_ids_checked": summary.get("dex_ids_checked") or [],
         "pools_found_by_dex": summary.get("pools_found_by_dex") or {},
@@ -1324,7 +1328,14 @@ def build_bridge_inventory(
         "expansion_routes_input": _expansion_meta.get(
             "expansion_routes_after_dedupe", len(_expansion_routes)
         ),
-        "expansion_multi_venue_count": _expansion_meta.get("multi_venue_tokens", 0),
+        "expansion_multi_venue_count": _expansion_meta.get("multi_venue_tokens", 0)
+        or _expansion_meta.get("subgraph_ready_tokens", 0),
+        "expansion_subgraph_ready_tokens": _expansion_meta.get(
+            "subgraph_ready_tokens", 0
+        ),
+        "expansion_verified_second_pool_count": _expansion_meta.get(
+            "verified_second_pool_count", 0
+        ),
         "expansion_tokens_in": _expansion_meta.get("tokens_in", 0),
         "expansion_dex_ids_checked": _expansion_meta.get("dex_ids_checked", []),
         "expansion_pools_found_by_dex": _expansion_meta.get("pools_found_by_dex", {}),
@@ -1509,6 +1520,23 @@ def build_bridge_inventory(
                 for r in final_active
                 if r.get("origin_source") not in CANONICAL_ORIGINS
             )
+        _distinct = {"curve_stable", "balancer_vault", "maverick_v2"}
+        bridge_source_metrics["active_dex_counts"] = dict(
+            _Counter(str(r.get("dex_id") or "unknown") for r in final_active)
+        )
+        bridge_source_metrics["exploration_dex_counts"] = dict(
+            _Counter(
+                str(r.get("dex_id") or "unknown") for r in _exploration_routes
+            )
+        )
+        bridge_source_metrics["active_distinct_pricing_routes"] = sum(
+            1 for r in final_active if str(r.get("dex_id") or "") in _distinct
+        )
+        bridge_source_metrics["exploration_distinct_pricing_routes"] = sum(
+            1
+            for r in _exploration_routes
+            if str(r.get("dex_id") or "") in _distinct
+        )
     except Exception as _prov_exc:
         bridge_source_metrics["m8_provenance_error"] = str(_prov_exc)[:200]
 

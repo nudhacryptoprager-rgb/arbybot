@@ -150,7 +150,9 @@ def merge_connector_routes_from_presence(
     anchor_syms = _anchor_symbols_from_config(config)
     connectors: Dict[str, str] = {}
     for route in token_presence_routes:
-        if route.get("expansion_source") != "specialized_index":
+        if route.get("expansion_source") != "specialized_index" and str(
+            route.get("resolve_source") or ""
+        ) != "specialized_index":
             continue
         conn_addr = str(route.get("connector_addr") or route.get("token1_addr") or "").lower()
         conn_sym = str(route.get("connector_token") or route.get("token1_symbol") or conn_addr[:8])

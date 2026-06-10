@@ -38,6 +38,37 @@ def test_infer_exploration_without_m8_token():
     assert infer_origin_source(route, {"0x2"}) == ORIGIN_EXPLORATION
 
 
+def test_infer_curve_factory_for_m8_token():
+    tok = "0xea1d939bb7991f41d7858eddfab8df10a1a97b07"
+    route = {
+        "source": "curve_factory_discovery",
+        "dex_id": "curve_stable",
+        "token0_addr": tok,
+        "factory_verified": True,
+    }
+    assert (
+        infer_origin_source(route, {tok})
+        == ORIGIN_SPECIALIZED_INDEX_FOR_M8_TOKEN
+    )
+
+
+def test_partition_admits_specialized_distinct_pricing_with_m8_match():
+    tok = "0xea1d939bb7991f41d7858eddfab8df10a1a97b07"
+    routes = [
+        {
+            "dex_id": "balancer_vault",
+            "resolve_source": "specialized_index",
+            "focus_token_address": tok,
+            "factory_verified": True,
+            "status": "active",
+        }
+    ]
+    canonical, exploration = partition_canonical_routes(routes, {tok})
+    assert len(canonical) == 1
+    assert canonical[0]["origin_source"] == ORIGIN_SPECIALIZED_INDEX_FOR_M8_TOKEN
+    assert len(exploration) == 0
+
+
 def test_partition_canonical_routes():
     m8_tok = "0xea1d939bb7991f41d7858eddfab8df10a1a97b07"
     routes = [

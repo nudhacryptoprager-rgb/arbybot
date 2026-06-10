@@ -441,7 +441,22 @@ def expand_token_neighborhood(
     from discovery.pool_resolver import get_pool_resolver
     from m8.discovery.mirror_index import MirrorIndex
 
+    from m8.discovery.token_normalize import TOKEN_ADDRESS_UNRESOLVED, is_valid_eth_address
+
     exotic_address = exotic_address.lower()
+    if not is_valid_eth_address(exotic_address):
+        return {
+            "same_pair_routes": [],
+            "token_presence_routes": [],
+            "connector_routes": [],
+            "connector_tokens": [],
+            "reject_reason_histogram": {TOKEN_ADDRESS_UNRESOLVED: 1},
+            "all_reject_rows": [
+                {"reason": TOKEN_ADDRESS_UNRESOLVED, "token": exotic_address}
+            ],
+            "hint_metrics": {},
+            "subgraph": {"subgraph_ready": False},
+        }
     dex_rows = dex_rows or discovery_dexes_from_config(config)
     allowed_dex_ids = allowed_dex_ids or {d["dex_id"] for d in dex_rows}
     productive_dexes = productive_dexes or {
@@ -735,6 +750,20 @@ def _resolve_via_factory(
     mirror_index: Any = None,
     config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
+    from m8.discovery.token_normalize import normalize_pair_addresses
+
+    ex_addr, an_addr, ex_sym, an_sym, pair_rej = normalize_pair_addresses(
+        exotic_symbol=exotic_symbol,
+        anchor_symbol=anchor_symbol,
+        exotic_address=exotic_address,
+        anchor_address=anchor_address,
+        config=config,
+    )
+    if pair_rej:
+        return None, pair_rej
+    exotic_symbol, anchor_symbol = ex_sym, an_sym
+    exotic_address, anchor_address = ex_addr, an_addr
+
     adapter = _DEX_ID_TO_ADAPTER.get(dex_id, "")
     if not adapter:
         return None, "UNSUPPORTED_DEX"
@@ -1104,17 +1133,27 @@ def _expand_batch_token_neighborhood(
     _m8_token_addrs = collect_m8_token_addrs(registry=registry)
     _hint_matched = 0
     _specialized_matched = 0
+    _token_dexes: Dict[str, Set[str]] = {}
     for _r in routes_admitted:
         stamp_route_origin_source(_r, _m8_token_addrs)
         if _r.get("matched_m8_token"):
             _hint_matched += 1
         if _r.get("origin_source") == "specialized_index_for_m8_token":
             _specialized_matched += 1
+        focus = str(
+            _r.get("focus_token_address")
+            or _r.get("exotic_address")
+            or ""
+        ).lower()
+        if focus.startswith("0x") and len(focus) == 42:
+            _token_dexes.setdefault(focus, set()).add(str(_r.get("dex_id") or ""))
+    _multi_venue_tokens = sum(1 for dexes in _token_dexes.values() if len(dexes) >= 2)
     summary = {
         "expansion_mode": "token_neighborhood_batch",
         "tokens_in": len(token_addrs),
         "pairs_in": 0,
         "subgraph_ready_tokens": subgraph_ready_count,
+        "multi_venue_tokens": _multi_venue_tokens,
         "dexes_checked": len(allowed_dex_ids),
         "dex_ids_checked": sorted(allowed_dex_ids),
         "pools_found_by_dex": dict(pools_found_by_dex),
@@ -1140,6 +1179,9 @@ def _expand_batch_token_neighborhood(
         "m8_tokens_in": len(_m8_token_addrs),
         "hint_tokens_matched": _hint_matched,
         "specialized_index_tokens_matched": _specialized_matched,
+        "verified_second_pool_count": int(
+            batch_hint_metrics.get("verified_second_pool_count") or 0
+        ),
         **distinct_lane,
     }
     return {

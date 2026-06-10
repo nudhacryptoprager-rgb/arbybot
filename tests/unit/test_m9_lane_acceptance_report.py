@@ -34,6 +34,36 @@ def test_build_acceptance_report_blockers_when_m8_not_ready():
     assert report["funnel_layers"][1]["m8_funnel_reject_histogram"]["TOKEN_SYMBOL_MISSING"] == 11
 
 
+def test_build_acceptance_report_m8_2_summary_from_artifact_summary():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={
+            "summary": {
+                "routes_admitted_count": 595,
+                "connector_routes_count": 59,
+                "subgraph_ready_tokens": 1,
+                "verified_second_pool_count": 7,
+                "multi_venue_tokens": 3,
+                "hint_tokens_matched": 283,
+                "external_hints_enabled": True,
+                "m8_tokens_in": 272,
+            }
+        },
+        bridge={"active_routes": [], "bridge_source_metrics": {}},
+        shadow=None,
+        rca=None,
+    )
+    layer = next(
+        x for x in report["funnel_layers"] if x["layer"] == "M8_2_expansion"
+    )
+    assert layer["routes_admitted"] == 595
+    assert layer["connector_routes_count"] == 59
+    assert layer["subgraph_ready_tokens"] == 1
+    assert layer["verified_second_pool_count"] == 7
+    assert layer["external_hints_enabled"] is True
+
+
 def test_build_acceptance_report_quote_blockers():
     report = build_acceptance_report(
         sniper={"status": "ACTIVE", "metrics": {}, "recent_events": [{}]},

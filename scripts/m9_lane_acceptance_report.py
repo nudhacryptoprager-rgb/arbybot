@@ -148,6 +148,7 @@ def build_acceptance_report(
     sniper_metrics = (sniper or {}).get("metrics") or {}
     anchor_metrics = (anchor or {}).get("metrics") or {}
     exp_metrics = (expansion or {}).get("metrics") or {}
+    exp_summary = (expansion or {}).get("summary") or {}
     bsm = (bridge or {}).get("bridge_source_metrics") or {}
 
     shadow_cycles_found = int((shadow or {}).get("cycles_found") or 0)
@@ -187,9 +188,19 @@ def build_acceptance_report(
         },
         {
             "layer": "M8_2_expansion",
-            "routes_admitted": exp_metrics.get("routes_admitted"),
-            "multi_venue_tokens": exp_metrics.get("multi_venue_tokens"),
-            "connector_routes": exp_metrics.get("connector_routes"),
+            "routes_admitted": exp_summary.get("routes_admitted_count")
+            or exp_metrics.get("routes_admitted"),
+            "routes_admitted_count": exp_summary.get("routes_admitted_count"),
+            "connector_routes_count": exp_summary.get("connector_routes_count"),
+            "subgraph_ready_tokens": exp_summary.get("subgraph_ready_tokens"),
+            "verified_second_pool_count": exp_summary.get(
+                "verified_second_pool_count"
+            ),
+            "multi_venue_tokens": exp_summary.get("multi_venue_tokens")
+            or exp_metrics.get("multi_venue_tokens"),
+            "hint_tokens_matched": exp_summary.get("hint_tokens_matched"),
+            "external_hints_enabled": exp_summary.get("external_hints_enabled"),
+            "m8_tokens_in": exp_summary.get("m8_tokens_in"),
         },
         {
             "layer": "M9_bridge",
@@ -296,7 +307,6 @@ def build_acceptance_report(
             }
         )
 
-    exp_summary = (expansion or {}).get("summary") or {}
     return {
         "schema_version": "m9_lane_acceptance_report.2",
         "funnel_layers": funnel_layers,

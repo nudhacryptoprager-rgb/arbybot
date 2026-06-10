@@ -59,6 +59,22 @@ def evaluate_lane_acceptance(
     if exp_lane.get("curve_lane_ready") is False:
         violations.append("expansion:curve_lane_not_ready")
 
+    dp = matrix_doc.get("distinct_pricing") or {}
+    if int(dp.get("distinct_pricing_found") or 0) == 0:
+        violations.append("distinct_pricing:not_found_in_expansion")
+    if int(dp.get("distinct_pricing_found") or 0) > 0 and int(
+        dp.get("distinct_pricing_active") or 0
+    ) == 0:
+        violations.append("distinct_pricing:found_but_not_active_in_bridge")
+    if int(dp.get("distinct_pricing_active") or 0) > 0 and int(
+        dp.get("distinct_pricing_quoteable") or 0
+    ) == 0:
+        violations.append("distinct_pricing:active_but_not_quoteable")
+    if int(dp.get("distinct_pricing_quoteable") or 0) > 0 and int(
+        dp.get("distinct_pricing_in_cycles") or 0
+    ) == 0:
+        violations.append("distinct_pricing:quoteable_but_not_in_cycles")
+
     bsm = {}
     if acceptance:
         for layer in acceptance.get("funnel_layers") or []:
