@@ -1,6 +1,20 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **BLOCKED** — P1 `CURVE_PRODUCTIVE_ADMISSION_TOO_BROAD` **resolved in code** (116→22 Curve routes у shadow bridge). **M8 ingestion частково розблоковано** (`graph_ready_from_m8=8`) і **cross-mechanic topology розблоковано** (`cross_mechanic_cycles=106`), але fresh shadow має `cycles_found=362`, `cycles_quoteable=0`, `qsr=0.0`, `cycles_positive_gross=0`, `cycles_with_m8_pool=0`. Primary blockers: `NO_QUOTEABLE_CYCLES_IN_FRESH_SHADOW`, `NO_POSITIVE_GROSS`, `CYCLES_WITH_M8_POOL_ZERO`, `MAVERICK_QUOTE_RPC_ERROR_DOMINANT`, `BALANCER_QUOTE_REVERT_DOMINANT`, `OVERSIZED_VS_DEPTH_DOMINATES`. Canonical soak (`qsr=0.8923`) — verified inventory contour only, не bridge economics.
+**Status**: **BLOCKED** — primary blocker **`M8_ROOTED_CONTOUR_RUNTIME_NOT_PROVEN`** (economics). Provenance gate **RUNTIME_VALIDATED** (fresh 30m canonical chain 2026-06-10): `m8_provenance_enforced=true`, `canonical_routes_count=301`, `routes_rejected_not_m8_derived=265`, `M8_EXPLORATION_ROUTES_PARTITIONED`. M8 funnel fresh: sniper **138** candidates (`m8_stale=false`), `graph_ready_from_m8=68`, expansion `external_hints_enabled=true`, `hint_tokens_matched=283`. **Economics still BLOCKED:** no fresh shadow post-rebuild; stale shadow `cycles_quoteable=0`, `cycles_with_m8_pool=0`; `canonical_cross_mechanic_routes=8` (<10 soak threshold). Blockers: `NO_QUOTEABLE_CYCLES`, `CYCLES_WITH_M8_POOL_ZERO`, `NO_CROSS_MECHANIC_CYCLES_QUOTEABLE`, `DEX_LANE_QUALITY_NOT_UNIFORM`. Production claim заборонений.
+
+**Session 2026-06-10 canonical M8-rooted chain (30m sniper → M8.1 → hints → expansion → bridge):**
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| M8 sniper 30m | candidates / status / `m8_stale` | **138** / ACTIVE / **false** |
+| Sniper provenance | artifact `candidate_token_addrs` | **138** tokens (`primary_source=m8_sniper`) |
+| M8.1 anchor | passes | **357** |
+| External hints | tokens / pools / verified / TCR | **753** / **482** / **189** / **0.251** |
+| M8.2 expansion | `m8_tokens_in` / `hint_tokens_matched` / routes | **272** / **283** / **526** admitted |
+| Bridge (provenance ON) | `canonical_routes` / `exploration` / `from_m8` / `from_expansion` | **301** / **265** / **68** / **396** |
+| Cross-mechanic | canonical / exploration partitioned | **8** / **77** |
+| Shadow (stale, pre-rebuild) | `cycles_quoteable` / `cycles_with_m8_pool` | **0** / **0** |
+| 10m shadow soak | skipped | `cross_mechanic_routes=8<10`, `cycles_quoteable=0` |
 
 **M8.2 symbol/address bug:** виправлено в `cross_dex_expand.py` (символ і `token0_addr/token1_addr` канонізуються разом). Попередні claims `graph_ready_from_expansion=8` **інвалідовані** (був неправильний mapping).
 

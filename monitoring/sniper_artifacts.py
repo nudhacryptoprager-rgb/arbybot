@@ -114,6 +114,7 @@ def make_sniper_artifact(
     dex_filter: Optional[str] = None,
     phase2_decision: Optional[Dict[str, Any]] = None,
     enricher_config: Optional[Dict[str, Any]] = None,
+    provenance: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a ``new_pool_sniper_latest.json`` artifact dict.
 
@@ -191,6 +192,8 @@ def make_sniper_artifact(
     artifact["self_test_by_dex"] = dict(self_test_by_dex) if self_test_by_dex else {}
     # Step 7: enricher config snapshot — records anchor prices, probe size, etc.
     artifact["enricher_config"] = dict(enricher_config) if enricher_config else None
+    if provenance:
+        artifact["provenance"] = dict(provenance)
 
     return artifact
 

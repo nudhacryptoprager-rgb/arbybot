@@ -150,6 +150,17 @@ def build_acceptance_report(
     exp_metrics = (expansion or {}).get("metrics") or {}
     bsm = (bridge or {}).get("bridge_source_metrics") or {}
 
+    shadow_cycles_found = int((shadow or {}).get("cycles_found") or 0)
+    shadow_cycles_quoteable = int((shadow or {}).get("cycles_quoteable") or 0)
+    shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
+    shadow_cycles_with_m8 = int((shadow or {}).get("cycles_with_m8_pool") or 0)
+    cm_found = int(
+        (shadow or {}).get("cross_mechanic_cycles_found")
+        or (shadow or {}).get("cross_mechanic_cycles")
+        or 0
+    )
+    cm_quoteable = int((shadow or {}).get("cross_mechanic_cycles_quoteable") or 0)
+
     funnel_layers = [
         {
             "layer": "M8_sniper",
@@ -185,9 +196,23 @@ def build_acceptance_report(
             "graph_ready_total": bsm.get("graph_ready_total"),
             "graph_ready_from_expansion": bsm.get("graph_ready_from_expansion"),
             "active_routes": len((bridge or {}).get("active_routes") or []),
+            "canonical_routes_count": bsm.get("canonical_routes_count"),
+            "exploration_routes_count": bsm.get("routes_rejected_not_m8_derived")
+            or len((bridge or {}).get("exploration_routes") or []),
+            "m8_provenance_enforced": bsm.get("m8_provenance_enforced"),
             "cross_mechanic_routes": sum(
                 1
                 for r in (bridge or {}).get("active_routes") or []
+                if r.get("cross_mechanic")
+            ),
+            "canonical_cross_mechanic_routes": sum(
+                1
+                for r in (bridge or {}).get("active_routes") or []
+                if r.get("cross_mechanic")
+            ),
+            "exploration_cross_mechanic_routes": sum(
+                1
+                for r in (bridge or {}).get("exploration_routes") or []
                 if r.get("cross_mechanic")
             ),
         },
@@ -206,6 +231,16 @@ def build_acceptance_report(
                 (shadow or {}).get("cross_mechanic_cycles_quoteable") or 0
             ),
             "cycles_with_m8_pool": (shadow or {}).get("cycles_with_m8_pool"),
+            "m8_pool_cycle_ratio": (
+                round(shadow_cycles_with_m8 / shadow_cycles_found, 4)
+                if shadow_cycles_found > 0
+                else None
+            ),
+            "m8_cross_mechanic_quoteable_ratio": (
+                round(cm_quoteable / cm_found, 4)
+                if cm_found > 0
+                else None
+            ),
         },
         {
             "layer": "M8_freshness",
@@ -217,10 +252,6 @@ def build_acceptance_report(
         },
     ]
 
-    shadow_cycles_found = int((shadow or {}).get("cycles_found") or 0)
-    shadow_cycles_quoteable = int((shadow or {}).get("cycles_quoteable") or 0)
-    shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
-    shadow_cycles_with_m8 = int((shadow or {}).get("cycles_with_m8_pool") or 0)
     phantom_count = int(
         ((shadow or {}).get("phantom_quote_diagnostics") or {}).get("phantom_count")
         or ((shadow or {}).get("cycle_reject_histogram") or {}).get(
@@ -240,12 +271,6 @@ def build_acceptance_report(
         blockers.append("QSR_ZERO")
     if int((shadow or {}).get("cycles_positive_gross") or 0) == 0:
         blockers.append("NO_POSITIVE_GROSS")
-    cm_found = int(
-        (shadow or {}).get("cross_mechanic_cycles_found")
-        or (shadow or {}).get("cross_mechanic_cycles")
-        or 0
-    )
-    cm_quoteable = int((shadow or {}).get("cross_mechanic_cycles_quoteable") or 0)
     if cm_found == 0:
         blockers.append("NO_CROSS_MECHANIC_CYCLES_IN_GRAPH")
     elif cm_quoteable == 0:
@@ -254,12 +279,41 @@ def build_acceptance_report(
         blockers.append("PHANTOM_QUOTE_PRESENT")
     if bsm.get("m8_stale") and int(bsm.get("graph_ready_from_m8") or 0) > 0:
         blockers.append("M8_ARTIFACT_STALE")
+    if not bsm.get("m8_provenance_enforced"):
+        blockers.append("M8_ROOTED_DATA_PROVENANCE_NOT_ENFORCED")
+    elif int(bsm.get("routes_rejected_not_m8_derived") or 0) > 0:
+        blockers.append("M8_EXPLORATION_ROUTES_PARTITIONED")
 
+    exploration_sample: List[Dict[str, Any]] = []
+    for r in ((bridge or {}).get("exploration_routes") or [])[:20]:
+        exploration_sample.append(
+            {
+                "origin_source": r.get("origin_source"),
+                "dex_id": r.get("dex_id"),
+                "source": r.get("source"),
+                "pool_address": r.get("pool_address"),
+                "why_not_m8_derived": r.get("origin_source") or "exploration",
+            }
+        )
+
+    exp_summary = (expansion or {}).get("summary") or {}
     return {
-        "schema_version": "m9_lane_acceptance_report.1",
+        "schema_version": "m9_lane_acceptance_report.2",
         "funnel_layers": funnel_layers,
         "dex_coverage": _dex_coverage(bridge, expansion, shadow),
         "cross_mechanic_topology": _cross_mechanic_topology(bridge, shadow),
+        "provenance": {
+            "m8_tokens_in": bsm.get("m8_tokens_in"),
+            "hint_tokens_matched": bsm.get("hint_tokens_matched"),
+            "specialized_index_tokens_matched": bsm.get(
+                "specialized_index_tokens_matched"
+            ),
+            "expansion_external_hints_enabled": exp_summary.get(
+                "external_hints_enabled"
+            ),
+            "expansion_m8_tokens_in": exp_summary.get("m8_tokens_in"),
+        },
+        "exploration_routes_sample": exploration_sample,
         "quote_lane_rca_summary": (rca or {}).get("summary"),
         "quote_lane_top_rejects": (rca or {}).get("by_reject_reason"),
         "quote_lane_adapter_errors": (rca or {}).get("by_adapter_family_leg_errors"),

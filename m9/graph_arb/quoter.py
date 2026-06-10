@@ -372,7 +372,17 @@ def quote_cycle_dynamic_sync(
     cycle_depth = cycle.min_effective_depth_usd if depth_aware else None
     depth_capped = False
     if isinstance(cycle_depth, (int, float)) and not isinstance(cycle_depth, bool) and cycle_depth > 0:
-        capped = cap_sizes_to_depth(candidates, cycle_depth, depth_size_fraction)
+        try:
+            from m9.graph_arb.per_dex_sizing import cap_sizes_to_depth_per_family
+
+            capped = cap_sizes_to_depth_per_family(
+                candidates,
+                float(cycle_depth),
+                edges=cycle.edges,
+                global_fraction=depth_size_fraction,
+            )
+        except Exception:
+            capped = cap_sizes_to_depth(candidates, cycle_depth, depth_size_fraction)
         depth_capped = capped != candidates
         candidates = capped
     else:

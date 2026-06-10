@@ -1092,6 +1092,9 @@ def _build_and_write_artifact(
     }
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from m8.discovery.origin_source import build_sniper_provenance_from_events
+
+    _sniper_provenance = build_sniper_provenance_from_events(recent_list)
     artifact = make_sniper_artifact(
         metrics=metrics,
         status=status,
@@ -1106,6 +1109,7 @@ def _build_and_write_artifact(
         dex_filter=metrics.get("dex_filter"),
         phase2_decision=phase2_summary,
         enricher_config=enricher_config,
+        provenance=_sniper_provenance,
     )
 
     # Per-candidate economics trace for events with a known price reference.

@@ -889,6 +889,22 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         except Exception as _gate_exc:
             log.warning("Bridge shadow universe gate skipped: %s", _gate_exc)
 
+    if _is_bridge_shadow_gate and not os.environ.get("ARBY_BRIDGE_ARTIFACT_MODE"):
+        try:
+            with open(inventory_path, encoding="utf-8") as _prov_fh:
+                _prov_inv = json.load(_prov_fh)
+            _prov_bsm = _prov_inv.get("bridge_source_metrics") or {}
+            if not _prov_bsm.get("m8_provenance_enforced"):
+                log.error(
+                    "BRIDGE_SHADOW_PROVENANCE_GATE: m8_provenance_enforced=false "
+                    "(canonical shadow requires M8-rooted bridge inventory). "
+                    "Rebuild with scripts/m9_bridge_build.py (default enforce ON) or set "
+                    "ARBY_BRIDGE_ARTIFACT_MODE=exploration_debug for legacy inventory."
+                )
+                return EXIT_BRIDGE_UNIVERSE_TOO_SMALL
+        except Exception as _prov_exc:
+            log.warning("Bridge shadow provenance gate skipped: %s", _prov_exc)
+
     # Build graph — productive lane applies hard quarantine only (soft tags kept).
     _lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
     _exclude_pool_addresses: "Optional[frozenset[str]]" = None

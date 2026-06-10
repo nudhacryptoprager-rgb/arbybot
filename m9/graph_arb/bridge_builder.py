@@ -611,6 +611,8 @@ def build_bridge_inventory(
     registry_path: Optional[str] = None,
     registry_ttl_seconds: Optional[float] = None,
     include_expansion_duplicates_for_shadow: bool = False,
+    enforce_m8_provenance: bool = False,
+    watchlist_path: Optional[str] = "data/tmp/m8_token_watchlist_latest.json",
 ) -> Dict[str, Any]:
     """Build the M9 bridge inventory from M8/M8.1 sources + base depth inventory.
 
@@ -940,6 +942,7 @@ def build_bridge_inventory(
             "depth_probe_ok": None,   # not yet depth-probed
             "effective_depth_usd": None,
             "freshness_window": freshness_window,
+            "origin_source": "m8_sniper",
         }
 
     m8_new_routes: List[Dict] = [
@@ -1457,6 +1460,59 @@ def build_bridge_inventory(
         bridge_source_metrics["pool_quality_error"] = str(_pq_exc)[:200]
 
     # ------------------------------------------------------------------
+    # M8 provenance gate (canonical bridge: M8 sniper / watchlist / specialized)
+    # ------------------------------------------------------------------
+    _exploration_routes: List[Dict[str, Any]] = []
+    try:
+        from m8.discovery.origin_source import (
+            CANONICAL_ORIGINS,
+            collect_m8_token_addrs,
+            partition_canonical_routes,
+        )
+
+        _m8_token_addrs = collect_m8_token_addrs(
+            sniper=sniper,
+            registry=_registry,
+            watchlist_path=watchlist_path,
+        )
+        bridge_source_metrics["m8_tokens_in"] = len(_m8_token_addrs)
+        bridge_source_metrics["hint_tokens_matched"] = sum(
+            1 for r in final_active if r.get("matched_m8_token")
+        )
+        bridge_source_metrics["specialized_index_tokens_matched"] = sum(
+            1
+            for r in final_active
+            if r.get("origin_source") == "specialized_index_for_m8_token"
+        )
+        _enforce = enforce_m8_provenance or os.environ.get(
+            "ARBY_BRIDGE_ENFORCE_M8_PROVENANCE", ""
+        ).strip().lower() in ("1", "true", "yes")
+        if _enforce:
+            _canonical, _exploration_routes = partition_canonical_routes(
+                final_active, _m8_token_addrs
+            )
+            bridge_source_metrics["routes_rejected_not_m8_derived"] = len(
+                _exploration_routes
+            )
+            bridge_source_metrics["m8_provenance_enforced"] = True
+            bridge_source_metrics["canonical_routes_count"] = len(_canonical)
+            final_active = _canonical
+        else:
+            for _r in final_active:
+                if not _r.get("origin_source"):
+                    from m8.discovery.origin_source import stamp_route_origin_source
+
+                    stamp_route_origin_source(_r, _m8_token_addrs)
+            bridge_source_metrics["m8_provenance_enforced"] = False
+            bridge_source_metrics["routes_rejected_not_m8_derived"] = sum(
+                1
+                for r in final_active
+                if r.get("origin_source") not in CANONICAL_ORIGINS
+            )
+    except Exception as _prov_exc:
+        bridge_source_metrics["m8_provenance_error"] = str(_prov_exc)[:200]
+
+    # ------------------------------------------------------------------
     # Write output artifact
     # ------------------------------------------------------------------
     output_artifact: Dict[str, Any] = {
@@ -1473,6 +1529,7 @@ def build_bridge_inventory(
             + m8_quarantined_routes_v4_hooks
         ),
         "pending_routes": m8_pending_routes,
+        "exploration_routes": _exploration_routes,
         "summary": {
             "active_count": len(final_active),
             "quarantined_count": (

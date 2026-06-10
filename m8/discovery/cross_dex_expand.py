@@ -918,6 +918,8 @@ def _build_route(
         # External hint provenance (M8.2 hint layer)
         "hint_status": pool_entry.get("hint_status"),
         "hint_source": pool_entry.get("hint_source"),
+        "origin_source": pool_entry.get("origin_source"),
+        "matched_m8_token": pool_entry.get("matched_m8_token"),
     }
 
 
@@ -1097,6 +1099,17 @@ def _expand_batch_token_neighborhood(
         pools_found_by_dex=dict(pools_found_by_dex),
     )
     distinct_lane = evaluate_distinct_pricing_lane(routes_admitted)
+    from m8.discovery.origin_source import collect_m8_token_addrs, stamp_route_origin_source
+
+    _m8_token_addrs = collect_m8_token_addrs(registry=registry)
+    _hint_matched = 0
+    _specialized_matched = 0
+    for _r in routes_admitted:
+        stamp_route_origin_source(_r, _m8_token_addrs)
+        if _r.get("matched_m8_token"):
+            _hint_matched += 1
+        if _r.get("origin_source") == "specialized_index_for_m8_token":
+            _specialized_matched += 1
     summary = {
         "expansion_mode": "token_neighborhood_batch",
         "tokens_in": len(token_addrs),
@@ -1124,6 +1137,9 @@ def _expand_batch_token_neighborhood(
             routes_admitted=routes_admitted,
         ),
         "per_adapter_lane_report": per_adapter_lane_report,
+        "m8_tokens_in": len(_m8_token_addrs),
+        "hint_tokens_matched": _hint_matched,
+        "specialized_index_tokens_matched": _specialized_matched,
         **distinct_lane,
     }
     return {

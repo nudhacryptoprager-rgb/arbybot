@@ -48,6 +48,12 @@ def main() -> int:
     p.add_argument(
         "--watchlist",
         default="data/tmp/m8_token_watchlist_latest.json",
+        help="Required for canonical mode; M8-derived token universe only",
+    )
+    p.add_argument(
+        "--exploration",
+        action="store_true",
+        help="Non-canonical mode without watchlist (hints not for production bridge)",
     )
     p.add_argument(
         "--output",
@@ -110,21 +116,27 @@ def main() -> int:
             log.error("Unknown source: %s", s)
             return 2
 
-    wl = load_watchlist(args.watchlist)
-    tokens = list((wl.get("tokens") or {}).keys())
-    if args.max_tokens is not None:
-        tokens = tokens[: args.max_tokens]
-    if not tokens and Path(args.watchlist).exists():
-        reg_path = "data/runs/_rolling/m8_pending_pairs.json"
-        if Path(reg_path).exists():
-            reg = json.loads(Path(reg_path).read_text(encoding="utf-8"))
-            tokens = list((reg.get("tokens") or {}).keys())
-            if args.max_tokens is not None:
-                tokens = tokens[: args.max_tokens]
-
-    if not tokens:
-        log.error("No tokens in watchlist or registry")
-        return 1
+    tokens: list[str] = []
+    if not args.exploration:
+        wl = load_watchlist(args.watchlist)
+        tokens = list((wl.get("tokens") or {}).keys())
+        if args.max_tokens is not None:
+            tokens = tokens[: args.max_tokens]
+        if not tokens and Path(args.watchlist).exists():
+            reg_path = "data/runs/_rolling/m8_pending_pairs.json"
+            if Path(reg_path).exists():
+                reg = json.loads(Path(reg_path).read_text(encoding="utf-8"))
+                tokens = list((reg.get("tokens") or {}).keys())
+                if args.max_tokens is not None:
+                    tokens = tokens[: args.max_tokens]
+        if not tokens:
+            log.error(
+                "Canonical hint refresh requires --watchlist with M8 tokens "
+                "(or use --exploration for non-canonical runs)"
+            )
+            return 1
+    else:
+        log.warning("EXPLORATION hint refresh: not for canonical M9 bridge")
 
     log.info("Refreshing hints for %d watchlist tokens", len(tokens))
 

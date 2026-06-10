@@ -103,6 +103,17 @@ def _parse_args() -> argparse.Namespace:
             "already exists in base inventory (tagged shadow_dedupe_duplicate)."
         ),
     )
+    p.add_argument(
+        "--no-enforce-m8-provenance",
+        action="store_true",
+        default=False,
+        help="Legacy: keep exploration/base routes in active_routes (default: enforce on)",
+    )
+    p.add_argument(
+        "--watchlist",
+        default="data/tmp/m8_token_watchlist_latest.json",
+        help="M8 token watchlist for provenance matching",
+    )
     return p.parse_args()
 
 
@@ -134,6 +145,8 @@ def main() -> int:
         registry_ttl_seconds=args.registry_ttl_seconds,
         expansion_path=(None if args.no_expansion else args.expansion or None),
         include_expansion_duplicates_for_shadow=args.include_expansion_duplicates_for_shadow,
+        enforce_m8_provenance=not args.no_enforce_m8_provenance,
+        watchlist_path=args.watchlist,
     )
 
     log.info("Bridge funnel:")
