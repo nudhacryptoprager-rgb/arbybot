@@ -35,6 +35,8 @@ class GraphEdge:
     pool_kind: Optional[str] = None       # "stable" | "weighted" | "crypto" | "linear"
     freshness_window: bool = False        # True when M8 sniped pool is within _FRESH_WINDOW_SECONDS
     effective_depth_usd: Optional[float] = None  # measured on-chain depth (pool_depth_probe)
+    balancer_assets: Optional[tuple] = None  # Balancer: full pool asset list for queryBatchSwap
+    token_a_address: Optional[str] = None  # Maverick: pool tokenA for direction flag
 
     def __post_init__(self) -> None:
         if not self.token_in_addr.startswith("0x"):
@@ -81,6 +83,8 @@ class GraphEdge:
             pool_kind=self.pool_kind,
             freshness_window=self.freshness_window,
             effective_depth_usd=self.effective_depth_usd,
+            balancer_assets=self.balancer_assets,
+            token_a_address=self.token_a_address,
         )
 
 

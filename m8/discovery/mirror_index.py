@@ -398,6 +398,7 @@ class MirrorIndex:
                         "pool_id": ent.pool_id,
                         "vault_address": ent.vault_address,
                         "pool_kind": ent.pool_kind,
+                        "balancer_assets": list(ent.assets),
                         "token0_symbol": t0s,
                         "token1_symbol": t1s,
                         "token0_addr": t0a,

@@ -188,6 +188,52 @@ def test_route_error_histogram_trim_keeps_top_offenders():
     assert list(trimmed) == ["route_44", "route_43", "route_42"]
 
 
+def test_raw_http_empty_eth_call_classified_as_revert_not_rpc():
+    """Empty 0x eth_call is adapter/pool miss, not transport RPC failure."""
+    from unittest.mock import patch
+
+    from m8_1.stable_anchor.pairs import TokenInfo
+    from m8_1.stable_anchor.pool_discovery import DexRoute
+    from m9.graph_arb.raw_http_probe import probe_quote_raw_http
+
+    route = DexRoute(
+        dex_id="maverick_v2",
+        adapter_type="maverick_v2",
+        quoter="0x54edaced9adb9428b87b33b8c53b3f027d4d3155",
+        fee=0,
+        tick_spacing=None,
+        curve_coin0_sym=None,
+        token_in_index=1,
+    )
+    token_in = TokenInfo(
+        symbol="WETH",
+        address="0x4200000000000000000000000000000000000006",
+        decimals=18,
+    )
+    token_out = TokenInfo(
+        symbol="FOO",
+        address="0xc0609e5c424482d20c6f31113d1f26ff9435d518",
+        decimals=18,
+    )
+
+    with patch(
+        "m9.graph_arb.raw_http_probe.provider_throttle.acquire", return_value=True
+    ), patch(
+        "m9.graph_arb.productive_distinct_quote.quote_maverick_productive",
+        side_effect=ValueError("eth_call empty/short result: '0x'"),
+    ):
+        result = probe_quote_raw_http(
+            "http://localhost:8545",
+            route,
+            token_in,
+            token_out,
+            10**15,
+        )
+
+    assert result.reject_reason == "QUOTE_REVERT"
+    assert result.ok is False
+
+
 def test_quoter_negative_overflow_is_oversized_not_phantom():
     """P0a: a catastrophic *negative* gross is OVERSIZED_VS_DEPTH, not a phantom.
 

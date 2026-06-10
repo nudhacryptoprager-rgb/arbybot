@@ -934,6 +934,8 @@ def _build_route(
         "coin_indices": pool_entry.get("coin_indices"),
         "pool_id": pool_entry.get("pool_id"),
         "vault_address": pool_entry.get("vault_address"),
+        "balancer_assets": pool_entry.get("balancer_assets"),
+        "token_a": pool_entry.get("token_a"),
         "resolve_source": pool_entry.get("resolve_source"),
         # Token-neighborhood expansion
         "expansion_route_kind": pool_entry.get("expansion_route_kind"),
@@ -983,6 +985,7 @@ def _expand_batch_token_neighborhood(
     connector_routes: List[Dict[str, Any]] = []
     connector_tokens_all: Set[str] = set()
     subgraph_ready_count = 0
+    multi_venue_subgraph_ready = 0
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
     from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
 
@@ -1043,6 +1046,14 @@ def _expand_batch_token_neighborhood(
         connector_tokens_all.update(nh.get("connector_tokens") or [])
         if nh.get("subgraph", {}).get("subgraph_ready"):
             subgraph_ready_count += 1
+        _nh_dexes = {
+            r.get("dex_id")
+            for bucket in ("same_pair_routes", "token_presence_routes", "connector_routes")
+            for r in (nh.get(bucket) or [])
+            if r.get("dex_id")
+        }
+        if len(_nh_dexes) >= 2 and (nh.get("connector_routes") or []):
+            multi_venue_subgraph_ready += 1
         for bucket, dest in (
             ("same_pair_routes", same_pair_routes),
             ("token_presence_routes", token_presence_routes),
@@ -1153,6 +1164,7 @@ def _expand_batch_token_neighborhood(
         "tokens_in": len(token_addrs),
         "pairs_in": 0,
         "subgraph_ready_tokens": subgraph_ready_count,
+        "multi_venue_subgraph_ready_tokens": multi_venue_subgraph_ready,
         "multi_venue_tokens": _multi_venue_tokens,
         "dexes_checked": len(allowed_dex_ids),
         "dex_ids_checked": sorted(allowed_dex_ids),

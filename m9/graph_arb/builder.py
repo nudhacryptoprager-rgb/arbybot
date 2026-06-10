@@ -94,6 +94,56 @@ def _decimals_for_symbol(sym: str, cfg: M8_1Config, override: object) -> int:
     return int(tc.decimals) if tc is not None else 18
 
 
+def _is_truncated_hex_token(sym: str) -> bool:
+    """True for partial address tokens like ``0x833589`` used as pair_id symbols."""
+    s = (sym or "").strip().lower()
+    return s.startswith("0x") and 2 < len(s) < 42
+
+
+def _entry_symbol_address_map(entry: dict) -> Dict[str, str]:
+    """Map pair_id symbols (incl. truncated hex) to validated route addresses."""
+    out: Dict[str, str] = {}
+    for sym_key, addr_key in (("token0", "token0_addr"), ("token1", "token1_addr")):
+        sym = str(entry.get(sym_key) or "")
+        addr = entry.get(addr_key) or ""
+        if not _is_valid_eth_address(addr) and _is_valid_eth_address(sym):
+            addr = sym
+        if not _is_valid_eth_address(addr):
+            continue
+        al = addr.lower()
+        if sym:
+            out[sym] = al
+            out[sym.lower()] = al
+        out[al] = al
+        if len(al) >= 10:
+            out[al[:8]] = al
+    return out
+
+
+def _resolve_route_token(
+    sym: str,
+    entry: dict,
+    token_map: Dict[str, TokenInfo],
+    cfg: M8_1Config,
+    dec_key: str,
+) -> Optional[TokenInfo]:
+    """Resolve a route leg: inventory addr fields beat polluted token_map keys."""
+    if not sym:
+        return None
+    sym_map = _entry_symbol_address_map(entry)
+    addr = sym_map.get(sym) or sym_map.get(sym.lower())
+    if _is_valid_eth_address(addr):
+        return TokenInfo(
+            symbol=sym,
+            address=addr.lower(),
+            decimals=_decimals_for_symbol(sym, cfg, entry.get(dec_key)),
+        )
+    existing = token_map.get(sym)
+    if existing is not None and _is_valid_eth_address(existing.address):
+        return existing
+    return None
+
+
 def _merge_inventory_token_addresses(
     token_map: Dict[str, TokenInfo],
     active_routes: list,
@@ -128,7 +178,7 @@ def _merge_inventory_token_addresses(
             (sym0, addr0, "token0_decimals"),
             (sym1, addr1, "token1_decimals"),
         ):
-            if not sym or not _is_valid_eth_address(addr):
+            if not sym or _is_truncated_hex_token(sym) or not _is_valid_eth_address(addr):
                 continue
             addr_l = addr.lower()
             decimals = _decimals_for_symbol(sym, cfg, entry.get(dec_key))
@@ -386,6 +436,8 @@ def build_graph_from_inventory(
         _pool_id: Optional[str] = None
         _vault_address: Optional[str] = None
         _pool_kind: Optional[str] = None
+        _balancer_assets: Optional[tuple] = None
+        _maverick_token_a: Optional[str] = None
 
         if adapter_type == "curve_stable":
             # Variant ("stable"/"crypto") drives the get_dy ABI selector in the
@@ -410,12 +462,32 @@ def build_graph_from_inventory(
                     _vault_address = str(_entry_vault).lower()
             if not _vault_address:
                 _vault_address = _adapter_meta.balancer_vault_address(_meta_chain)
+            if _b_pool is not None and _b_pool.assets:
+                _balancer_assets = _b_pool.assets
+            else:
+                _entry_assets = entry.get("balancer_assets")
+                if _entry_assets:
+                    _balancer_assets = tuple(str(a).lower() for a in _entry_assets)
+                elif pool_address:
+                    try:
+                        from m8.discovery.mirror_index import MirrorIndex
+
+                        for _bent in MirrorIndex.load(_meta_chain).balancer:
+                            if _bent.pool_address.lower() == pool_address.lower():
+                                _balancer_assets = _bent.assets
+                                break
+                    except Exception:
+                        pass
+        elif adapter_type == "maverick_v2":
+            _ta = str(entry.get("token_a") or "").lower()
+            if _ta.startswith("0x") and len(_ta) == 42:
+                _maverick_token_a = _ta
 
         # Curve index lookup happens per-direction (fwd / rev), computed below.
 
-        # Resolve token info
-        t0 = token_map.get(sym0)
-        t1 = token_map.get(sym1)
+        # Resolve token info (entry addresses win over truncated-hex token_map keys)
+        t0 = _resolve_route_token(sym0, entry, token_map, cfg, "token0_decimals")
+        t1 = _resolve_route_token(sym1, entry, token_map, cfg, "token1_decimals")
         if t0 is None or t1 is None:
             if _productive_lane:
                 unknown_token_skipped += 1
@@ -448,6 +520,9 @@ def build_graph_from_inventory(
         if not _is_valid_eth_address(t0.address) or not _is_valid_eth_address(t1.address):
             invalid_token_addr_skipped += 1
             continue
+        if t0.address.lower() == t1.address.lower():
+            invalid_token_addr_skipped += 1
+            continue
 
         edge_key_fwd = f"{route_id}>{sym0}@{sym1}"
         edge_key_rev = f"{route_id}>{sym1}@{sym0}"
@@ -473,6 +548,8 @@ def build_graph_from_inventory(
                 if adapter_type == "curve_stable"
                 else (None, None)
             )
+            if adapter_type == "maverick_v2" and _maverick_token_a:
+                _fwd_idx_in = 1 if t0.address.lower() == _maverick_token_a else 0
             # Curve quoting requires resolved coin indices: get_dy(i,j,dx) cannot
             # be called without them. A curve_stable edge with unresolved indices
             # is structurally unquoteable and would only emit QUOTE_REVERT, poisoning
@@ -514,6 +591,8 @@ def build_graph_from_inventory(
                     pool_kind=_pool_kind,
                     freshness_window=_freshness_window,
                     effective_depth_usd=_effective_depth_usd,
+                    balancer_assets=_balancer_assets,
+                    token_a_address=_maverick_token_a,
                 )
                 adjacency[sym0][sym1].append(fwd_edge)
                 built_count += 1
@@ -526,6 +605,8 @@ def build_graph_from_inventory(
                 if adapter_type == "curve_stable"
                 else (None, None)
             )
+            if adapter_type == "maverick_v2" and _maverick_token_a:
+                _rev_idx_in = 1 if t1.address.lower() == _maverick_token_a else 0
             if adapter_type == "curve_stable" and (
                 _rev_idx_in is None or _rev_idx_out is None
             ):
@@ -561,6 +642,8 @@ def build_graph_from_inventory(
                     pool_kind=_pool_kind,
                     freshness_window=_freshness_window,
                     effective_depth_usd=_effective_depth_usd,
+                    balancer_assets=_balancer_assets,
+                    token_a_address=_maverick_token_a,
                 )
                 adjacency[sym1][sym0].append(rev_edge)
                 built_count += 1

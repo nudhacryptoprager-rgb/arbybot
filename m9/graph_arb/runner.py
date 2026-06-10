@@ -795,6 +795,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # M8→M9 bridge provenance: if inventory is a bridge inventory, extract metrics
     _bridge_source_metrics: Optional[Dict[str, Any]] = None
     _m8_pool_addrs: "frozenset[str]" = frozenset()
+    _m8_direct_pool_addrs: "frozenset[str]" = frozenset()
+    _m8_derived_pool_addrs: "frozenset[str]" = frozenset()
     _cross_mechanic_pool_addrs: "frozenset[str]" = frozenset()
     try:
         import json as _json_bridge
@@ -810,11 +812,19 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _bsm.get("m8_1_stale"),
             )
         # Extract M8 pool addresses for cycle participation tracking
-        _m8_pool_addrs = frozenset(
+        _m8_direct_pool_addrs = frozenset(
             r.get("pool_address", "").lower()
             for r in _inv_raw.get("active_routes", [])
             if r.get("source") == "m8_sniper" and r.get("pool_address")
         )
+        _m8_derived_pool_addrs = frozenset(
+            r.get("pool_address", "").lower()
+            for r in _inv_raw.get("active_routes", [])
+            if r.get("pool_address")
+            and r.get("matched_m8_token")
+            and r.get("source") != "m8_sniper"
+        )
+        _m8_pool_addrs = _m8_direct_pool_addrs | _m8_derived_pool_addrs
         _cross_mechanic_pool_addrs = frozenset(
             r.get("pool_address", "").lower()
             for r in _inv_raw.get("active_routes", [])
@@ -822,6 +832,12 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         if _bridge_source_metrics is not None:
             _bridge_source_metrics["m8_pool_addrs_tracked"] = len(_m8_pool_addrs)
+            _bridge_source_metrics["m8_direct_pool_addrs_tracked"] = len(
+                _m8_direct_pool_addrs
+            )
+            _bridge_source_metrics["m8_derived_pool_addrs_tracked"] = len(
+                _m8_derived_pool_addrs
+            )
             _bridge_source_metrics["cross_mechanic_pool_addrs_tracked"] = len(
                 _cross_mechanic_pool_addrs
             )
@@ -1701,6 +1717,20 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     # M8 cycle participation metrics — must be computed after all cycle_results are collected
     if _bridge_source_metrics is not None and _m8_pool_addrs:
+        _cycles_with_direct = sum(
+            1
+            for qr in cycle_results
+            if any(
+                e.pool_address.lower() in _m8_direct_pool_addrs for e in qr.cycle.edges
+            )
+        )
+        _cycles_with_derived = sum(
+            1
+            for qr in cycle_results
+            if any(
+                e.pool_address.lower() in _m8_derived_pool_addrs for e in qr.cycle.edges
+            )
+        )
         _cycles_with_m8 = sum(
             1 for qr in cycle_results
             if any(e.pool_address.lower() in _m8_pool_addrs for e in qr.cycle.edges)
@@ -1710,6 +1740,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             if qr.gross_bps > 0
             and any(e.pool_address.lower() in _m8_pool_addrs for e in qr.cycle.edges)
         )
+        _bridge_source_metrics["cycles_with_direct_sniper_pool"] = _cycles_with_direct
+        _bridge_source_metrics["cycles_with_m8_derived_pool"] = _cycles_with_derived
         _bridge_source_metrics["cycles_with_m8_pool"] = _cycles_with_m8
         _bridge_source_metrics["positive_cycles_with_m8_pool"] = _positive_cycles_with_m8
         if _cross_mechanic_pool_addrs:
@@ -1749,8 +1781,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 1 for qr in cycle_results if qr.status in _quoteable_statuses
             )
         log.info(
-            "M8 pool cycle participation: cycles_with_m8=%d positive_with_m8=%d",
-            _cycles_with_m8, _positive_cycles_with_m8,
+            "M8 pool cycle participation: direct=%d derived=%d total=%d positive=%d",
+            _cycles_with_direct,
+            _cycles_with_derived,
+            _cycles_with_m8,
+            _positive_cycles_with_m8,
         )
         if _is_bridge_inventory_run:
             log.info(

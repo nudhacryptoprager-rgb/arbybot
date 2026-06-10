@@ -224,7 +224,10 @@ def build_dex_quality_matrix(
     _distinct_quoteable = sum(
         int(matrix.get(d, {}).get("productive_quote_ok") or 0) for d in _distinct_dexes
     )
-    _distinct_in_cycles = sum(
+    _shadow_cm_quoteable = int(
+        (shadow or {}).get("cross_mechanic_cycles_quoteable") or 0
+    )
+    _distinct_in_cycles = _shadow_cm_quoteable if _shadow_cm_quoteable > 0 else sum(
         int(matrix.get(d, {}).get("cycles_quoteable") or 0) for d in _distinct_dexes
     )
 

@@ -46,7 +46,12 @@ def evaluate_lane_acceptance(
             violations.append(f"{dex_id}:balancer_metadata_incomplete")
 
     global_shadow = matrix_doc.get("global_shadow") or {}
-    if int(global_shadow.get("cycles_quoteable") or 0) == 0:
+    shadow_cycles_quoteable = int(global_shadow.get("cycles_quoteable") or 0)
+    if acceptance:
+        for layer in acceptance.get("funnel_layers") or []:
+            if layer.get("layer") == "M9_shadow":
+                shadow_cycles_quoteable = int(layer.get("cycles_quoteable") or 0)
+    if shadow_cycles_quoteable == 0:
         violations.append("global:cycles_quoteable=0")
 
     phantom = 0
@@ -93,10 +98,11 @@ def evaluate_lane_acceptance(
                 shadow_cycles_with_m8 = int(layer.get("cycles_with_m8_pool") or 0)
     if shadow_cycles_with_m8 == 0:
         violations.append("m8:cycles_with_m8_pool_zero")
-    cm_quoteable = int(
-        (matrix_doc.get("global_shadow") or {}).get("cross_mechanic_cycles_quoteable")
-        or 0
-    )
+    cm_quoteable = int(global_shadow.get("cross_mechanic_cycles_quoteable") or 0)
+    if acceptance:
+        for layer in acceptance.get("funnel_layers") or []:
+            if layer.get("layer") == "M9_shadow":
+                cm_quoteable = int(layer.get("cross_mechanic_cycles_quoteable") or 0)
     if cm_quoteable == 0:
         violations.append("m8:cross_mechanic_cycles_quoteable_zero")
 

@@ -201,6 +201,7 @@ def _make_dex_route(edge: GraphEdge) -> DexRoute:
         pool_id=edge.pool_id,
         vault_address=edge.vault_address,
         pool_kind=edge.pool_kind,
+        balancer_assets=list(edge.balancer_assets) if edge.balancer_assets else None,
     )
 
 

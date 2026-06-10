@@ -122,6 +122,8 @@ def _build_m8_cycle_trace(
         ]
     edges_in_graph = int(m8_part.get("graph_edges_from_m8") or 0)
     cycles_with_m8 = int(m8_part.get("cycles_with_m8_pool") or 0)
+    cycles_with_direct = int(m8_part.get("cycles_with_direct_sniper_pool") or 0)
+    cycles_with_derived = int(m8_part.get("cycles_with_m8_derived_pool") or 0)
     pool_rows = []
     for r in m8_routes[:12]:
         pool_rows.append(
@@ -146,6 +148,8 @@ def _build_m8_cycle_trace(
         "graph_edges_from_m8": edges_in_graph,
         "graph_ready_from_m8": m8_part.get("graph_ready_from_m8"),
         "cycles_with_m8_pool": cycles_with_m8,
+        "cycles_with_direct_sniper_pool": cycles_with_direct,
+        "cycles_with_m8_derived_pool": cycles_with_derived,
         "m8_pool_addrs_tracked": m8_part.get("m8_pool_addrs_tracked"),
         "m8_route_samples": pool_rows,
         "diagnostic_hints": hints,

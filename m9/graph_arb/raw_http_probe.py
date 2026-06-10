@@ -345,6 +345,7 @@ def probe_quote_raw_http(
                 pool_address=pool_lc,
                 amount_in=amount_in,
                 token_a_in=token_a_in,
+                chain="base",
             )
             quote_target = _mv_debug.get("quote_target")
             quote_selector = _mv_debug.get("quote_selector")
@@ -408,11 +409,19 @@ def probe_quote_raw_http(
             reject = "QUOTE_ZERO_OUTPUT"
         elif "execution reverted" in err_str or "revert" in err_str.lower():
             reject = "QUOTE_REVERT"
-        elif err_str.strip() in ("0x", "0x0") or err_str.strip().lower() == "empty eth_call result":
-            reject = "QUOTE_ZERO_OUTPUT"
+        elif (
+            err_str.strip() in ("0x", "0x0")
+            or err_str.strip().lower() == "empty eth_call result"
+            or "empty/short result" in err_str.lower()
+        ):
+            reject = "QUOTE_REVERT"
         elif "response too short" in err_str or "too short" in err_str.lower():
             reject = "QUOTE_DECODE"
-        elif "invalid v2 token direction" in err_str.lower() or "coin indices" in err_str.lower():
+        elif (
+            "invalid v2 token direction" in err_str.lower()
+            or "coin indices" in err_str.lower()
+            or "token pair not in all_assets" in err_str.lower()
+        ):
             reject = "QUOTE_CONFIG_MISSING"
         elif "zero reserves" in err_str.lower():
             reject = "QUOTE_REVERT"

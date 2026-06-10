@@ -242,6 +242,12 @@ def build_acceptance_report(
                 (shadow or {}).get("cross_mechanic_cycles_quoteable") or 0
             ),
             "cycles_with_m8_pool": (shadow or {}).get("cycles_with_m8_pool"),
+            "cycles_with_direct_sniper_pool": (shadow or {}).get(
+                "cycles_with_direct_sniper_pool"
+            ),
+            "cycles_with_m8_derived_pool": (shadow or {}).get(
+                "cycles_with_m8_derived_pool"
+            ),
             "m8_pool_cycle_ratio": (
                 round(shadow_cycles_with_m8 / shadow_cycles_found, 4)
                 if shadow_cycles_found > 0

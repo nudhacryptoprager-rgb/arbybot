@@ -1111,6 +1111,8 @@ def build_artifact(
     # Dashboard fields: pull M8 cycle participation metrics from bridge_source_metrics
     # to top-level so CI gates and dashboards can read them without nested traversal.
     _cycles_with_m8_pool: int = 0
+    _cycles_with_direct_sniper_pool: int = 0
+    _cycles_with_m8_derived_pool: int = 0
     _positive_cycles_with_m8_pool: int = 0
     _cross_mechanic_cycles: int = 0
     _cross_mechanic_cycles_found: int = 0
@@ -1121,6 +1123,12 @@ def build_artifact(
     _m8_pool_addrs_tracked: Optional[int] = None
     if bridge_source_metrics is not None:
         _cycles_with_m8_pool = bridge_source_metrics.get("cycles_with_m8_pool") or 0
+        _cycles_with_direct_sniper_pool = (
+            bridge_source_metrics.get("cycles_with_direct_sniper_pool") or 0
+        )
+        _cycles_with_m8_derived_pool = (
+            bridge_source_metrics.get("cycles_with_m8_derived_pool") or 0
+        )
         _positive_cycles_with_m8_pool = bridge_source_metrics.get("positive_cycles_with_m8_pool") or 0
         _cross_mechanic_cycles = bridge_source_metrics.get("cross_mechanic_cycles") or 0
         _cross_mechanic_cycles_found = (
@@ -1162,6 +1170,8 @@ def build_artifact(
         "cost_adjusted_net_bps": cost_adjusted_net_bps,  # best_cycle_gross_bps - estimated_cost_bps
         "router_sim_net_bps": router_sim_net_bps,  # null until router simulation enabled
         "cycles_with_m8_pool": _cycles_with_m8_pool,  # cycles that traverse ≥1 M8-sourced pool
+        "cycles_with_direct_sniper_pool": _cycles_with_direct_sniper_pool,
+        "cycles_with_m8_derived_pool": _cycles_with_m8_derived_pool,
         "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,  # positive gross only
         "cross_mechanic_cycles": _cross_mechanic_cycles,  # backward compat: cycles found
         "cross_mechanic_cycles_found": _cross_mechanic_cycles_found,
@@ -1198,6 +1208,8 @@ def build_artifact(
             "graph_ready_from_m8": _graph_ready_from_m8,
             "graph_edges_from_m8": _graph_edges_from_m8,
             "cycles_with_m8_pool": _cycles_with_m8_pool,
+            "cycles_with_direct_sniper_pool": _cycles_with_direct_sniper_pool,
+            "cycles_with_m8_derived_pool": _cycles_with_m8_derived_pool,
             "positive_cycles_with_m8_pool": _positive_cycles_with_m8_pool,
             "cross_mechanic_cycles": _cross_mechanic_cycles,
             "cross_mechanic_cycles_found": _cross_mechanic_cycles_found,
@@ -1513,10 +1525,12 @@ def build_artifact(
 def write_artifact(artifact: Dict[str, Any], artifact_path: str = ROLLING_PATH) -> None:
     """Write artifact atomically to artifact_path (via .tmp rename)."""
     import time as _time
+    import uuid
 
     path = os.path.abspath(artifact_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = path + ".tmp"
+    # Per-write unique tmp avoids WinError 2 when concurrent runners share path.tmp
+    tmp_path = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
     with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(artifact, fh, ensure_ascii=False, separators=(",", ":"))
     # On Windows, os.replace can raise PermissionError if antivirus scans
@@ -1525,8 +1539,11 @@ def write_artifact(artifact: Dict[str, Any], artifact_path: str = ROLLING_PATH) 
         try:
             os.replace(tmp_path, path)
             return
-        except PermissionError:
+        except (PermissionError, FileNotFoundError):
             if attempt < 5:
                 _time.sleep(0.5 * (attempt + 1))
+                if not os.path.exists(tmp_path):
+                    with open(tmp_path, "w", encoding="utf-8") as fh:
+                        json.dump(artifact, fh, ensure_ascii=False, separators=(",", ":"))
             else:
                 raise

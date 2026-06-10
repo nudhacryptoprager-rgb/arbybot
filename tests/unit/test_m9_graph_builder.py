@@ -776,3 +776,77 @@ m9_dex_productivity:
         assert "uniswap_v3" in dex_ids
         assert "uniswap_v4" not in dex_ids
         assert graph_edge_count(adjacency) >= 2
+
+
+def test_truncated_hex_pair_symbols_resolve_distinct_addresses(tmp_path):
+    """Truncated pair_id symbols must not collapse to one token_map address."""
+    from m9.graph_arb.builder import build_graph_from_inventory
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        """chain: base
+dexes:
+  balancer_vault:
+    adapter_type: balancer_stable
+    quoter: "0xba12222222228d8ba445958a75a0704d566bf2c8"
+    enabled: true
+tokens:
+  USDC:
+    address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    decimals: 6
+  WETH:
+    address: "0x4200000000000000000000000000000000000006"
+    decimals: 18
+m9_dex_productivity:
+  balancer_vault:
+    enabled_for_productive: true
+"""
+    )
+    weth = "0x4200000000000000000000000000000000000006"
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    wsteth = "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a"
+    inv = {
+        "active_routes": [
+            {
+                "route_id": "bal_bad",
+                "pair_id": "0x420000_0x833589",
+                "dex_id": "balancer_vault",
+                "adapter_type": "balancer_stable",
+                "token0": "0x420000",
+                "token1": "T",
+                "token0_addr": weth,
+                "token1_addr": usdc,
+                "pool_address": "0x97a3ece859d9c1c41e225fbd6f10359dae7a73c9",
+                "pool_id": "0x97a3ece859d9c1c41e225fbd6f10359dae7a73c9000200000000000000000202",
+                "balancer_assets": [weth, usdc],
+                "factory_verified": True,
+            },
+            {
+                "route_id": "bal_pollute",
+                "pair_id": "0x420000_USDC",
+                "dex_id": "balancer_vault",
+                "adapter_type": "balancer_stable",
+                "token0": "0x420000",
+                "token1": "USDC",
+                "token0_addr": wsteth,
+                "token1_addr": usdc,
+                "pool_address": "0xcf192e94b974695294",
+                "pool_id": "0xcf192e94b9746952940002000000000000000002",
+                "factory_verified": True,
+            },
+        ]
+    }
+    inv_path = tmp_path / "inv.json"
+    inv_path.write_text(json.dumps(inv))
+    adjacency = build_graph_from_inventory(
+        inventory_path=str(inv_path),
+        config_path=str(cfg),
+        lane="discovery",
+    )
+    edges = adjacency.get("0x833589", {}).get("0x420000", [])
+    bal_edges = [e for e in edges if e.dex_id == "balancer_vault"]
+    assert bal_edges, "expected balancer edge for truncated hex pair"
+    edge = bal_edges[0]
+    assert edge.token_in_addr.lower() == usdc
+    assert edge.token_out_addr.lower() == weth
+    assert edge.token_in_addr.lower() != edge.token_out_addr.lower()
