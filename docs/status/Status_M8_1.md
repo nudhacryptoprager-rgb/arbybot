@@ -11,15 +11,18 @@
 ## Last Artifact
 
 `artifact_path`: data/runs/_rolling/m8_1_stable_anchor_latest.json
-`generated_at_utc`: 2026-05-27T09:11:58Z
+`generated_at_utc`: 2026-06-11T16:06:54Z
 `status`: ACTIVE
 `gate_acceptance`: true
 `strategy_gate_acceptance`: true
 `reasons`: []
-`quote_success_rate`: 0.9465
-`stable_anchor_passes_total`: 318
+`quote_success_rate`: 1.0
+`stable_anchor_candidates_total`: 3228
+`stable_anchor_passes_total`: 351
 `near_miss_routes_len`: 50
 `active_routes_len`: 0
+`route_discovery_scope`: quote_probe_only
+`m8_1_upstream_runtime_status`: REACHED
 
 ## Phase Status
 
@@ -30,8 +33,8 @@
 
 ## Blockers
 
-1. `active_routes_len=0` while `near_miss_routes_len=50` — M8.1 is currently useful as anchor/diagnostic context for M9, not as standalone active-route proof.
-2. `stable_anchor_fills_total=0` and `best_net_usd=null` — no execution-ready stable-anchor fill is proven.
+1. `active_routes_len=0` by design (`route_discovery_scope=quote_probe_only`) — route assembly is downstream in `m9_bridge_build.py`; bridge `anchor_connected=196` proves handoff.
+2. `stable_anchor_fills_total=0` and `best_net_usd=null` — no execution-ready stable-anchor fill is proven (M9 economics out of scope).
 3. `source_files_missing` RESOLVED — all `.py` source files reconstructed from bytecode (session 2026-05-22).
 
 ## Role in Pipeline

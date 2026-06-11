@@ -1,6 +1,19 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **DEPTH_MEASUREMENT_REACHED / ECONOMICS_BLOCKED** — primary blocker **`EXPANSION_PRODUCTIVE_ADMIT_STATIC_CONFIG_GATE`**. Depth ladder + `--force-reprobe` proven at runtime: `data/tmp/m9_bridge_inventory_shadow_latest.json` — `force_reprobe=395`, `probed_ok=393`, `exact100` **297→2**, **281 sane depths > $100** (median sane ≈ $3.9k, max ≈ $66k), `depth_probe_status`: MEASURED_CAPACITY=318 / TOO_THIN=67 / LOWER_BOUND_AT_MAX_PROBE=8. The old `DEPTH_TELEMETRY_MISSING_OR_FALLBACK_CAPPED` blocker is **closed at inventory level**.
+**M8/M8.1 upstream closure (2026-06-11):** **M8_M8_1_RUNTIME_REACHED** / **M8_2_M9_ECONOMICS_PENDING** — fresh 45m sniper + M8.1 + bridge rebuild; M9 economics **not** in closure scope.
+
+| Layer | Metric | Value |
+|-------|--------|------:|
+| Safety gate | `check_repo_safety.py` | **PASS** |
+| M8 sniper 45m | status / `recent_events` / RPC errors | **ACTIVE** / **278** / **0** |
+| M8 sniper | `generated_at_utc` | **2026-06-11T16:06:29Z** |
+| M8.1 anchor | candidates / passes / qsr | **3228** / **351** / **1.0** |
+| M8.1 | `m8_1_stale` / `active_routes_count` | **false** / **0** (quote_probe_only by design) |
+| Bridge | `m8_stale` / `m8_new_pools_input` / `graph_ready_from_m8` | **false** / **278** / **196** |
+| Bridge | `graph_ready_total` / `m8_1_stale` | **874** / **false** |
+| Lane acceptance blockers (M9 only) | | `CYCLES_WITH_M8_POOL_ZERO`, `NO_POSITIVE_GROSS`, `NO_CROSS_MECHANIC_CYCLES_IN_GRAPH` |
+
+**Status**: **M8_M8_1_RUNTIME_REACHED / M8_2_M9_ECONOMICS_BLOCKED** — primary blocker **`EXPANSION_PRODUCTIVE_ADMIT_STATIC_CONFIG_GATE`**. Depth ladder + `--force-reprobe` proven at runtime: `data/tmp/m9_bridge_inventory_shadow_latest.json` — `force_reprobe=395`, `probed_ok=393`, `exact100` **297→2**, **281 sane depths > $100** (median sane ≈ $3.9k, max ≈ $66k), `depth_probe_status`: MEASURED_CAPACITY=318 / TOO_THIN=67 / LOWER_BOUND_AT_MAX_PROBE=8. The old `DEPTH_TELEMETRY_MISSING_OR_FALLBACK_CAPPED` blocker is **closed at inventory level**.
 
 **Why economics is still blocked (sizing pipeline RCA, fresh 10m run `data/tmp/m9_graph_depth_truth_10m_v2.json`):** `cycles_quoteable=223`, `qsr=0.5348`, but `qsr_econ=0.0`, all top `market_size_usd=$0.05`, `cost_adjusted_net_bps≈-12004`, `depth_aware_known_rate=0.0`. Root causes (full chain in `docs/DEV_REPORT_LATEST.md`):
 1. **Static admission gate** — `expansion_productive_admit` is `dex_id in productive_dexes` (config flag), not depth-based; `uniswap_v4.enabled_for_productive=false` rejects **416/656 routes carrying 327 measured depths (278 sane > $100)** — the entire measured universe.

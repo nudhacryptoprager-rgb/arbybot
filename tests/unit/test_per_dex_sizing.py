@@ -27,7 +27,19 @@ def _edge(adapter: str, pool_char: str = "a") -> GraphEdge:
     )
 
 
-def test_productive_cycle_size_usd_cap_distinct_without_depth():
+def test_productive_cycle_size_usd_cap_distinct_without_depth_uses_economics_floor(monkeypatch):
+    monkeypatch.delenv("ARBY_M9_DIAGNOSTIC_ADMISSION_MODE", raising=False)
+
+    class _Cycle:
+        min_effective_depth_usd = None
+        edges = (_edge("maverick_v2"), _edge("uniswap_v3", "b"))
+
+    assert productive_cycle_size_usd_cap(_Cycle(), 1.0, {}) == 25.0
+
+
+def test_productive_cycle_size_usd_cap_distinct_without_depth_topology_probe(monkeypatch):
+    monkeypatch.setenv("ARBY_M9_DIAGNOSTIC_ADMISSION_MODE", "topology_probe")
+
     class _Cycle:
         min_effective_depth_usd = None
         edges = (_edge("maverick_v2"), _edge("uniswap_v3", "b"))

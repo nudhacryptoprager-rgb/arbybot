@@ -71,10 +71,27 @@ Phase 1: listener-only foundation (REACHED).
 Phase 2: scoring and dry-run (PAPER_ONLY_STABILIZED — 24h soak pending).
 Phase 3: constrained real execution (BLOCKED — requires Phase 2 evidence + kill-switch flip).
 
+## M9 Upstream Runtime (2026-06-11)
+
+**Session: 45m sniper → M8.1 → bridge rebuild (foreground, dedicated RPC)**
+
+| Metric | Value |
+|--------|------:|
+| `status` / `recent_events` | **ACTIVE** / **278** |
+| `generated_at_utc` | **2026-06-11T16:06:29Z** |
+| RPC errors / 429 | **0** / **0** |
+| Sniper funnel | raw=278, parse_ok=278, cycles=90 |
+| `m8_pending_pairs` tokens | **542** |
+| Bridge `m8_stale` | **false** |
+| Bridge `m8_new_pools_input` | **278** |
+| Bridge `graph_ready_from_m8` | **196** |
+
+`m8_upstream_runtime_status`: **REACHED** (fresh provenance-tagged discovery input accepted by bridge; M9 economics out of scope).
+
 ## M9 Bridge Status
 
 `m9_bridge_role_status`: DISCOVERY_INPUT_OPERATIONAL
-`m9_bridge_blocker`: M8_SNIPED_POOLS_ENTERING_M9_CYCLES_BUT_POSITIVE_CYCLES_WITH_M8_POOL=0
+`m9_bridge_blocker`: M9_ECONOMICS_BLOCKED (upstream M8/M8.1 fresh; cycle-level economics not proven)
 
 ## Canonical Commands
 

@@ -157,7 +157,13 @@ def productive_cycle_size_usd_cap(
     size_usd: float,
     token_price_usd: Optional[Dict[str, float]] = None,
 ) -> float:
-    """Cap cycle USD notional when distinct-pricing legs lack measured depth."""
+    """Return the USD notional allowed for this cycle quote.
+
+    The tiny distinct-pricing probe is a topology/liveness tool only.  In the
+    production/economics contour, unknown-depth distinct-pricing cycles must not
+    become $0.05 "opportunities"; they are lifted to the economics floor so the
+    quote either proves real size or fails honestly.
+    """
     _ = token_price_usd
     if _cycle_has_sane_measured_depth(cycle):
         return max(float(size_usd), _PRODUCTIVE_MEASURED_ECON_FLOOR_USD)
@@ -172,7 +178,11 @@ def productive_cycle_size_usd_cap(
             }
         )
         if fam in (FAMILY_MAVERICK_V2, FAMILY_BALANCER_VAULT, FAMILY_CURVE_STABLE):
-            return min(float(size_usd), _PRODUCTIVE_DISTINCT_MICRO_CAP_USD)
+            from m9.graph_arb.admission_mode import is_topology_probe_mode
+
+            if is_topology_probe_mode():
+                return min(float(size_usd), _PRODUCTIVE_DISTINCT_MICRO_CAP_USD)
+            return max(float(size_usd), _PRODUCTIVE_MEASURED_ECON_FLOOR_USD)
     return float(size_usd)
 
 

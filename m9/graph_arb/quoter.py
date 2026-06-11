@@ -479,6 +479,19 @@ def quote_cycle_dynamic_sync(
     else:
         cycle_depth = None
 
+    try:
+        from m9.graph_arb.per_dex_sizing import productive_cycle_size_usd_cap
+
+        normalized_candidates: List[float] = []
+        for candidate in candidates:
+            normalized = float(productive_cycle_size_usd_cap(cycle, candidate, token_price_usd))
+            if normalized > 0 and normalized not in normalized_candidates:
+                normalized_candidates.append(normalized)
+        if normalized_candidates:
+            candidates = tuple(normalized_candidates)
+    except Exception:
+        pass
+
     results: List[CycleQuoteResult] = []
     depth_curve: List[Dict[str, Any]] = []
     per_size_timeout = max(timeout_s / max(len(candidates), 1), 1.0)
@@ -496,11 +509,11 @@ def quote_cycle_dynamic_sync(
         results.append(result)
         depth_curve.append(
             {
-                "size_usd": size_usd,
+                "size_usd": result.size_usd,
                 "gross_bps": round(result.gross_bps, 6),
                 "status": result.status,
                 "reject_reason": result.reject_reason,
-                "profit_usd": round(size_usd * result.gross_bps / 10000.0, 6),
+                "profit_usd": round(result.size_usd * result.gross_bps / 10000.0, 6),
             }
         )
 
