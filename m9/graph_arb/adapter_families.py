@@ -152,4 +152,15 @@ def balancer_route_metadata_complete(route: Dict[str, Any]) -> bool:
     vault = route.get("vault_address")
     t0 = route.get("token0_addr") or route.get("token0")
     t1 = route.get("token1_addr") or route.get("token1")
-    return bool(pool_id and vault and t0 and t1)
+    assets = route.get("balancer_assets") or route.get("assets")
+    balances = route.get("balancer_balances") or route.get("balances")
+    return bool(
+        pool_id
+        and vault
+        and t0
+        and t1
+        and isinstance(assets, (list, tuple))
+        and len(assets) >= 2
+        and isinstance(balances, (list, tuple))
+        and len(balances) >= len(assets)
+    )

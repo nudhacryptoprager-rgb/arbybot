@@ -10,6 +10,8 @@ from m9.graph_arb.adapter_families import (
     family_contract,
     family_for_dex,
 )
+from m9.graph_arb.expansion_admission import is_sane_measured_depth
+from m9.graph_arb.pool_quality import productive_admission_ok
 
 _QUOTE_OK_PREFIXES = ("QUOTE_OK", "OK", "PASS", "SUCCESS")
 
@@ -50,6 +52,11 @@ def _empty_row(dex_id: str) -> Dict[str, Any]:
         "depth_ok": 0,
         "route_quote_ok": 0,
         "productive_quote_ok": 0,
+        "measured_depth_sane": 0,
+        "productive_admitted": 0,
+        "route_quoteable_in_cycles": 0,
+        "cycle_quoteable": 0,
+        "econ_size_quoteable": 0,
         "bridge_active_routes": 0,
         "cycles_found": 0,
         "cycles_quoteable": 0,
@@ -71,6 +78,8 @@ def _aggregate_routes_by_dex(
             "depth_ok": 0,
             "route_quote_ok": 0,
             "productive_quote_ok": 0,
+            "measured_depth_sane": 0,
+            "productive_admitted": 0,
             "m8": 0,
             "hint_only": 0,
             "metadata_incomplete": 0,
@@ -91,6 +100,10 @@ def _aggregate_routes_by_dex(
             bucket["route_quote_ok"] += 1
         if _status_quoteable(route.get("productive_quote_status")):
             bucket["productive_quote_ok"] += 1
+        if is_sane_measured_depth(route):
+            bucket["measured_depth_sane"] += 1
+        if productive_admission_ok(route):
+            bucket["productive_admitted"] += 1
         if route.get("source") == "m8_sniper":
             bucket["m8"] += 1
         hint = str(route.get("hint_status") or "")
@@ -153,12 +166,58 @@ def _shadow_cycle_stats(shadow: Optional[Dict[str, Any]]) -> Dict[str, Dict[str,
     }
 
 
+def _econ_floor_usd(shadow: Optional[Dict[str, Any]]) -> float:
+    try:
+        from m9.graph_arb.size_truth import economic_size_floor_usd
+
+        cost = (shadow or {}).get("cost_model") or {}
+        return float(economic_size_floor_usd(**cost) if isinstance(cost, dict) else economic_size_floor_usd())
+    except Exception:
+        return 25.0
+
+
+def _per_dex_cycle_funnel(shadow: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+    """Route/cycle quoteability from shadow artifact (post-run)."""
+    out: Dict[str, Dict[str, int]] = defaultdict(
+        lambda: {
+            "route_quoteable_in_cycles": 0,
+            "cycle_quoteable": 0,
+            "econ_size_quoteable": 0,
+        }
+    )
+    if not shadow:
+        return {}
+    econ_floor = _econ_floor_usd(shadow)
+    for qr in shadow.get("top_cycles") or []:
+        if not isinstance(qr, dict):
+            continue
+        status = str(qr.get("status") or "")
+        size = float(qr.get("market_size_usd") or qr.get("size_usd") or 0)
+        quoteable = status in ("POSITIVE_GROSS", "NEGATIVE_GROSS")
+        econ_ok = quoteable and size >= econ_floor
+        dexes_in_cycle: Set[str] = set()
+        for leg in qr.get("legs") or []:
+            if not isinstance(leg, dict):
+                continue
+            dex = str(leg.get("dex_id") or "")
+            if dex:
+                dexes_in_cycle.add(dex)
+        for dex in dexes_in_cycle:
+            out[dex]["route_quoteable_in_cycles"] += 1
+            if quoteable:
+                out[dex]["cycle_quoteable"] += 1
+            if econ_ok:
+                out[dex]["econ_size_quoteable"] += 1
+    return {k: dict(v) for k, v in out.items()}
+
+
 def build_dex_quality_matrix(
     *,
     config: Optional[Dict[str, Any]] = None,
     bridge: Optional[Dict[str, Any]] = None,
     expansion: Optional[Dict[str, Any]] = None,
     shadow: Optional[Dict[str, Any]] = None,
+    productive_dexes: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Build per-dex_id quality matrix artifact."""
     dex_ids = configured_dex_ids(config)
@@ -168,6 +227,8 @@ def build_dex_quality_matrix(
     exp = _expansion_counts(expansion)
     shadow_stats = _shadow_cycle_stats(shadow)
     global_shadow = shadow_stats.get("_global") or {}
+    cycle_funnel = _per_dex_cycle_funnel(shadow)
+    _productive_dexes = productive_dexes or frozenset()
 
     matrix: Dict[str, Dict[str, Any]] = {}
     for dex_id in dex_ids:
@@ -184,6 +245,12 @@ def build_dex_quality_matrix(
             int(ra.get("route_quote_ok", 0)),
         )
         row["productive_quote_ok"] = int(ra.get("productive_quote_ok", 0))
+        row["measured_depth_sane"] = int(ra.get("measured_depth_sane", 0))
+        row["productive_admitted"] = int(ra.get("productive_admitted", 0))
+        cf = cycle_funnel.get(dex_id, {})
+        row["route_quoteable_in_cycles"] = int(cf.get("route_quoteable_in_cycles", 0))
+        row["cycle_quoteable"] = int(cf.get("cycle_quoteable", 0))
+        row["econ_size_quoteable"] = int(cf.get("econ_size_quoteable", 0))
         row["bridge_active_routes"] = int(ra.get("bridge_active", 0))
         row["m8_participation_routes"] = int(ra.get("m8", 0))
         row["hint_only_routes"] = int(ra.get("hint_only", 0))
@@ -231,8 +298,38 @@ def build_dex_quality_matrix(
         int(matrix.get(d, {}).get("cycles_quoteable") or 0) for d in _distinct_dexes
     )
 
+  # Per-route funnel snapshot for distinct-pricing RCA (step 1 matrix).
+    funnel_rows: Dict[str, Dict[str, int]] = {}
+    for route in routes:
+        dex = str(route.get("dex_id") or "unknown")
+        bucket = funnel_rows.setdefault(
+            dex,
+            {
+                "found": 0,
+                "verified": 0,
+                "measured_depth": 0,
+                "productive_admitted": 0,
+                "route_quoteable": 0,
+            },
+        )
+        bucket["found"] += 1
+        if route.get("factory_verified"):
+            bucket["verified"] += 1
+        if is_sane_measured_depth(route):
+            bucket["measured_depth"] += 1
+        if productive_admission_ok(route):
+            bucket["productive_admitted"] += 1
+        if _status_quoteable(route.get("productive_quote_status")):
+            bucket["route_quoteable"] += 1
+    for dex, cf in cycle_funnel.items():
+        fr = funnel_rows.setdefault(dex, {})
+        fr["in_cycles"] = int(cf.get("route_quoteable_in_cycles", 0))
+        fr["cycle_quoteable"] = int(cf.get("cycle_quoteable", 0))
+        fr["econ_size_quoteable"] = int(cf.get("econ_size_quoteable", 0))
+
     return {
-        "schema_version": "m9_dex_quality_matrix.1",
+        "schema_version": "m9_dex_quality_matrix.2",
+        "per_dex_funnel": funnel_rows,
         "configured_dex_count": len(dex_ids),
         "visible_in_bridge_count": visible_in_bridge,
         "distinct_pricing": {

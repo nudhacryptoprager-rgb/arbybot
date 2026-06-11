@@ -189,7 +189,7 @@ def fetch_graphql_pools(
                 "pool_address": str(row.get("address") or pool_id[:42]).lower(),
                 "pool_kind": str(row.get("type") or "stable").lower(),
                 "pool_type": str(row.get("type") or "stable"),
-                "assets": sorted(assets),
+                "assets": [a.lower() for a in assets],
                 "balances": balances,
                 "vault_address": vault,
                 "source": "balancer_graphql",
@@ -264,7 +264,7 @@ def verify_vault_pool(
         return None, "BALANCER_FOCUS_TOKEN_MISSING"
     if all(b <= 0 for b in balances):
         return None, "BALANCER_ZERO_BALANCES"
-    assets = sorted(t.lower() for t in tokens)
+    assets = [t.lower() for t in tokens]
     verified = {
         **pool,
         "pool_id": pool_id,

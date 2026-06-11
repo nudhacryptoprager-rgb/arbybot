@@ -343,10 +343,45 @@ def probe_quote_raw_http(
             _probe_tai = getattr(route, "maverick_token_a_in_probe", None)
             _min_raw = getattr(route, "maverick_min_quoteable_amount_raw", None)
             _pool_lane_probe = getattr(route, "maverick_pool_lane_probe_amount", None)
-            if _probe_tin and str(_probe_tin).lower() != token_in_lc:
-                _probe_tai = None
-                _min_raw = None
-                _pool_lane_probe = None
+            _by_tin = getattr(route, "maverick_probe_by_token_in", None)
+            if isinstance(_by_tin, dict) and token_in_lc not in _by_tin:
+                from m9.graph_arb.quote_reject_classify import classify_maverick_no_probe_for_token_in
+
+                reject, _detail = classify_maverick_no_probe_for_token_in(token_in_lc)
+                return QuoteResult(
+                    route_id=route_id,
+                    size_usd=0.0,
+                    amount_in=amount_in,
+                    amount_out=0,
+                    ok=False,
+                    reject_reason=reject,
+                    gas_estimate=None,
+                    raw_error=str(_detail),
+                )
+            if isinstance(_by_tin, dict) and token_in_lc in _by_tin:
+                row = _by_tin[token_in_lc] or {}
+                _probe_tin = token_in_lc
+                _probe_tai = row.get("maverick_token_a_in_probe")
+                if _probe_tai is None:
+                    _probe_tai = row.get("token_a_in")
+                _min_raw = row.get("maverick_min_quoteable_amount_raw")
+                _pool_lane_probe = row.get("maverick_pool_lane_probe_amount") or row.get(
+                    "probe_amount"
+                )
+            elif _probe_tin and str(_probe_tin).lower() != token_in_lc:
+                from m9.graph_arb.quote_reject_classify import classify_maverick_no_probe_for_token_in
+
+                reject, _detail = classify_maverick_no_probe_for_token_in(token_in_lc)
+                return QuoteResult(
+                    route_id=route_id,
+                    size_usd=0.0,
+                    amount_in=amount_in,
+                    amount_out=0,
+                    ok=False,
+                    reject_reason=reject,
+                    gas_estimate=None,
+                    raw_error=str(_detail),
+                )
             if (
                 _probe_tin
                 and _probe_tai is not None

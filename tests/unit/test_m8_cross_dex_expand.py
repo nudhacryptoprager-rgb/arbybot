@@ -15,6 +15,10 @@ from m8.discovery.cross_dex_expand import (
     expand_cross_dex,
     tag_cross_mechanic_routes,
 )
+from m9.graph_arb.depth_capacity_probe import (
+    DEPTH_PROBE_MEASURED_CAPACITY,
+)
+from m9.graph_arb.expansion_admission import expansion_productive_admit
 
 
 def _minimal_config() -> dict:
@@ -371,6 +375,28 @@ def test_build_route_carries_provenance_from_registry_venue():
     r = routes[0]
     assert r.get("pool_first_seen_block") in (12345, 12350)
     assert r.get("token_first_seen_ts") == 1710000000.0
+
+
+def test_v4_measured_depth_admitted_despite_productive_false():
+    productive_dexes = {"uniswap_v3"}
+    entry = {
+        "dex_id": "uniswap_v4",
+        "pool_address": "0xpoolv4",
+        "depth_probe_status": DEPTH_PROBE_MEASURED_CAPACITY,
+        "effective_depth_usd": 5000.0,
+        "factory_verified": True,
+    }
+    assert expansion_productive_admit(entry, productive_dexes) is True
+
+
+def test_v4_without_depth_not_admitted_when_productive_false():
+    productive_dexes = {"uniswap_v3"}
+    entry = {
+        "dex_id": "uniswap_v4",
+        "pool_address": "0xpoolv4",
+        "factory_verified": True,
+    }
+    assert expansion_productive_admit(entry, productive_dexes) is False
 
 
 def test_tag_cross_mechanic_routes_by_focus_token():

@@ -24,6 +24,22 @@ _TOKEN_B = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 _MAV_POOL = "0x" + "c" * 40
 
 
+def _get_pool_tokens_hex(tokens: list[str], balances: list[int]) -> str:
+    offset_tokens = 64
+    offset_balances = 64 + 32 + 32 * len(tokens)
+    parts = [
+        offset_tokens.to_bytes(32, "big"),
+        len(tokens).to_bytes(32, "big"),
+    ]
+    for t in tokens:
+        parts.append(bytes.fromhex(t.replace("0x", "").rjust(64, "0")))
+    parts.append(offset_balances.to_bytes(32, "big"))
+    parts.append(len(balances).to_bytes(32, "big"))
+    for b in balances:
+        parts.append(int(b).to_bytes(32, "big"))
+    return "0x" + b"".join(parts).hex()
+
+
 def _balancer_ok_hex(amount_in: int, amount_out: int) -> str:
     offset = 32
     length = 2
@@ -83,6 +99,11 @@ class TestProductiveDistinctQuote:
 
         def eth_call(to: str, data: str) -> str:
             calls.append((to.lower(), data[:10]))
+            if data.startswith("0xf94d4668"):
+                return _get_pool_tokens_hex(
+                    [_TOKEN_A, _TOKEN_B],
+                    [10**20, 10**12],
+                )
             if to.lower().endswith("548833"):
                 return _balancer_ok_hex(10**6, 999_000)
             raise ValueError("vault revert")
@@ -102,7 +123,8 @@ class TestProductiveDistinctQuote:
         assert amount_out == 999_000
         assert debug["quote_contour"] == "balancer_queries"
         assert debug["quote_selector"] == "0xf84d066e"
-        assert calls[0][0].endswith("548833")
+        assert any(c[0].endswith("548833") for c in calls)
+        assert calls[0][1].startswith("0xf94d4668")
 
     def test_maverick_productive_uses_quoter_selector(self):
         calls = []

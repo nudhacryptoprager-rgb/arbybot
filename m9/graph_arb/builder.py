@@ -59,15 +59,33 @@ def _edge_price_gate(
     price_map: Dict[str, float],
     *,
     topology_probe: bool,
+    route_entry: Optional[Dict[str, Any]] = None,
 ) -> tuple[bool, Optional[str]]:
     """Return (allow_edge, price_status tag)."""
     from m9.graph_arb.admission_mode import PRICE_STATUS_UNKNOWN_DIAGNOSTIC
+    from m9.graph_arb.expansion_admission import is_sane_measured_depth
     from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
 
     if resolve_token_price_usd(token_addr, token_sym, price_map) is not None:
         return True, None
     if topology_probe:
         return True, PRICE_STATUS_UNKNOWN_DIAGNOSTIC
+    if route_entry is not None and is_sane_measured_depth(route_entry):
+        peer_addr = str(
+            route_entry.get("token1_addr")
+            if str(token_addr).lower()
+            == str(route_entry.get("token0_addr") or "").lower()
+            else route_entry.get("token0_addr")
+            or ""
+        ).lower()
+        peer_sym = (
+            route_entry.get("token1")
+            if str(token_addr).lower()
+            == str(route_entry.get("token0_addr") or "").lower()
+            else route_entry.get("token0")
+        )
+        if resolve_token_price_usd(peer_addr, str(peer_sym or ""), price_map) is not None:
+            return True, PRICE_STATUS_UNKNOWN_DIAGNOSTIC
     return False, None
 
 
@@ -489,8 +507,11 @@ def build_graph_from_inventory(
             continue
 
         if _productive_lane and _productive_dexes and dex_id not in _productive_dexes:
-            productivity_skipped += 1
-            continue
+            from m9.graph_arb.expansion_admission import measured_depth_productive_override
+
+            if not measured_depth_productive_override(entry):
+                productivity_skipped += 1
+                continue
 
         if _productive_lane:
             from m9.graph_arb.pool_quality import (
@@ -883,7 +904,11 @@ def build_graph_from_inventory(
                     _record_admission_skip(edge_build_skip_samples, "curve_unquotable", entry)
             elif _productive_lane and _price_map:
                 _allow_fwd, _fwd_price_status = _edge_price_gate(
-                    t0.address, sym0, _price_map, topology_probe=_topology_probe
+                    t0.address,
+                    sym0,
+                    _price_map,
+                    topology_probe=_topology_probe,
+                    route_entry=entry,
                 )
                 if not _allow_fwd:
                     unknown_price_skipped += 1
@@ -1007,7 +1032,11 @@ def build_graph_from_inventory(
                     _route_last_skip = "curve_unquotable"
             elif _productive_lane and _price_map:
                 _allow_rev, _rev_price_status = _edge_price_gate(
-                    t1.address, sym1, _price_map, topology_probe=_topology_probe
+                    t1.address,
+                    sym1,
+                    _price_map,
+                    topology_probe=_topology_probe,
+                    route_entry=entry,
                 )
                 if not _allow_rev:
                     unknown_price_skipped += 1

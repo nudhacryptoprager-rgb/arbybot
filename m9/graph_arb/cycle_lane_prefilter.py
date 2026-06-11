@@ -73,9 +73,13 @@ def leg_productive_ready(
     *,
     amount_in: Optional[int] = None,
 ) -> bool:
-    """True when leg has productive stamp or verified CLMM quote path."""
+    """True when leg passes economics admission (quote-ready, not just graph topology)."""
+    from m9.graph_arb.pool_quality import economics_admission_fail_reason
+
     pool = str(getattr(edge, "pool_address", "") or "").lower()
     row = route_meta.get(pool) or {}
+    if economics_admission_fail_reason(row):
+        return False
     adapter = str(getattr(edge, "adapter_type", "") or row.get("adapter_type") or "")
     if adapter == "maverick_v2" and _status_quoteable(row.get("productive_quote_status")):
         probe = row.get("maverick_pool_lane_probe_amount")

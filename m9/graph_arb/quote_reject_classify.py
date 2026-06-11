@@ -91,6 +91,13 @@ def _maverick_contour_reason(contour: str, raw_err: str) -> str:
     return "MAVERICK_QUOTE_REVERT"
 
 
+def classify_maverick_no_probe_for_token_in(token_in: str) -> Tuple[str, Dict[str, Any]]:
+    return "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN", {
+        "maverick_reason": "no_probe_for_token_in",
+        "token_in": (token_in or "").lower(),
+    }
+
+
 def classify_maverick_revert(err: str) -> Tuple[str, Dict[str, Any]]:
     """Return (reject_reason, detail) for a Maverick quote failure."""
     stripped = (err or "").strip()
@@ -171,7 +178,6 @@ HARD_QUOTE_REJECTS = frozenset(
         "BALANCER_QUOTE_REVERT",
         "BALANCER_METADATA_INCOMPLETE",
         "BALANCER_UNKNOWN_REVERT_WITH_METADATA",
-        "MAVERICK_NO_LIQUIDITY",
         "MAVERICK_BAD_DIRECTION",
         "MAVERICK_BAD_POOL_CONFIG",
         "MAVERICK_ADAPTER_ENCODE_ERROR",

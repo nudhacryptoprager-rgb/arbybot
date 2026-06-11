@@ -13,6 +13,10 @@ DEPTH_PROBE_MEASURED_CAPACITY = "MEASURED_CAPACITY"
 DEPTH_PROBE_LOWER_BOUND_AT_MAX = "LOWER_BOUND_AT_MAX_PROBE"
 DEPTH_PROBE_TOO_THIN = "TOO_THIN"
 DEPTH_PROBE_UNKNOWN = "UNKNOWN"
+DEPTH_PROBE_ANALYTICAL_SUSPECT = "ANALYTICAL_SUSPECT"
+
+MAX_SANE_DEPTH_USD: float = 10_000_000.0
+MIN_SANE_MEASURED_DEPTH_USD: float = 50.0
 
 _IMPACT_THRESHOLD_LOW = 0.10
 _IMPACT_THRESHOLD_TOXIC = 0.50
@@ -189,15 +193,37 @@ def v3_liquidity_depth_lower_bound_usd(
     """Conservative CL depth lower bound from on-chain ``liquidity`` + ``sqrtPriceX96``."""
     if liquidity_raw <= 0 or sqrt_price_x96 <= 0 or price_in_usd <= 0:
         return None
-    sqrt_p = (float(sqrt_price_x96) / (2.0 ** 96)) ** 2
-    if sqrt_p <= 0:
+    sqrt_ratio = float(sqrt_price_x96) / (2.0 ** 96)
+    if sqrt_ratio <= 0:
         return None
-    # amount0 ≈ L * t / sqrt(P) for small moves in the active tick (uni v3 approx)
-    amt0 = float(liquidity_raw) * impact_threshold / (sqrt_p ** 0.5 * max(1.0 - impact_threshold, 0.01))
+    # token0 amount for a small sqrt-price move: delta_x ≈ L * t / sqrt(P)
+    amt0 = (
+        float(liquidity_raw)
+        * impact_threshold
+        / (sqrt_ratio * max(1.0 - impact_threshold, 0.01))
+    )
     usd = (amt0 / (10 ** int(dec_in))) * float(price_in_usd)
     if usd <= 0:
         return None
     return round(usd, 2)
+
+
+def mark_analytical_depth_suspect(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Flag outlier analytical depths; keep raw value for topology diagnostics."""
+    out = dict(result)
+    depth = out.get("effective_depth_usd")
+    if depth is None:
+        return out
+    try:
+        depth_f = float(depth)
+    except (TypeError, ValueError):
+        return out
+    if depth_f > MAX_SANE_DEPTH_USD:
+        out["depth_analytical_suspect_usd"] = round(depth_f, 2)
+        out["depth_probe_status"] = DEPTH_PROBE_ANALYTICAL_SUSPECT
+        out["depth_reject_reason"] = "ANALYTICAL_DEPTH_OUTLIER"
+        out["effective_depth_usd"] = None
+    return out
 
 
 def merge_depth_with_analytical(
@@ -208,7 +234,7 @@ def merge_depth_with_analytical(
 ) -> Dict[str, Any]:
     """Take max(probe, analytical) when analytical is available."""
     if not analytical_usd or analytical_usd <= 0:
-        return probe_result
+        return mark_analytical_depth_suspect(probe_result)
     out = dict(probe_result)
     cur = float(out.get("effective_depth_usd") or 0)
     if analytical_usd > cur:
@@ -217,7 +243,7 @@ def merge_depth_with_analytical(
             out["depth_probe_status"] = DEPTH_PROBE_MEASURED_CAPACITY
         out["depth_analytical_usd"] = round(float(analytical_usd), 2)
         out["depth_analytical_method"] = analytical_method
-    return out
+    return mark_analytical_depth_suspect(out)
 
 
 def is_measured_depth_status(status: Optional[str]) -> bool:

@@ -122,7 +122,21 @@ def _enrich_balancer_rca(
                 "token0_addr": inv.get("token0_addr"),
                 "token1_addr": inv.get("token1_addr"),
                 "balancer_assets": inv.get("balancer_assets"),
-                "balancer_query_target": "BalancerQueries.querySwap",
+                "balancer_balances": inv.get("balancer_balances"),
+                "pool_kind": inv.get("pool_kind"),
+                "swap_kind": "GIVEN_IN",
+                "asset_in_index": (
+                    list(inv.get("balancer_assets") or []).index(inv.get("token0_addr"))
+                    if inv.get("balancer_assets") and inv.get("token0_addr") in (inv.get("balancer_assets") or [])
+                    else None
+                ),
+                "asset_out_index": (
+                    list(inv.get("balancer_assets") or []).index(inv.get("token1_addr"))
+                    if inv.get("balancer_assets") and inv.get("token1_addr") in (inv.get("balancer_assets") or [])
+                    else None
+                ),
+                "amount_in": row.get("amount_in"),
+                "balancer_query_target": "queryBatchSwap",
                 "balancer_revert_code": code,
                 "balancer_reason": reason_name,
             }
@@ -457,8 +471,20 @@ def build_cycle_rca(
 
     fp = graph_fingerprint(artifact)
     qsr = artifact.get("qsr")
+    per_dex_matrix: Dict[str, Any] = {}
+    try:
+        from m9.graph_arb.dex_quality_matrix import build_dex_quality_matrix
+
+        per_dex_matrix = build_dex_quality_matrix(
+            bridge=inventory,
+            shadow=artifact,
+        )
+    except Exception:
+        per_dex_matrix = {}
     return {
-        "schema_version": "m9_quote_lane_rca.4",
+        "schema_version": "m9_quote_lane_rca.5",
+        "per_dex_funnel_matrix": per_dex_matrix.get("per_dex_funnel") or {},
+        "dex_quality_matrix": per_dex_matrix.get("matrix") or {},
         "source_artifact": source_artifact or str(_DEFAULT_SHADOW),
         "source_graph_fingerprint": fp,
         "cycles_found": cycles_found,

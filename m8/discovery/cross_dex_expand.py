@@ -551,7 +551,9 @@ def expand_token_neighborhood(
             return
         seen_routes.add(key)
         entry = {**pool_entry, "expansion_route_kind": route_kind}
-        productive = pool_entry.get("dex_id") in productive_dexes
+        from m9.graph_arb.expansion_admission import expansion_productive_admit
+
+        productive = expansion_productive_admit(pool_entry, productive_dexes)
         pair = {
             "exotic_symbol": pair_sym_a,
             "anchor_symbol": pair_sym_b,
@@ -1442,7 +1444,12 @@ def expand_cross_dex(
                 fresh_token_admitted += 1
 
             for dex_id, pool_entry in pools_by_dex.items():
-                productive = dex_id in productive_dexes
+                from m9.graph_arb.expansion_admission import expansion_productive_admit
+
+                productive = expansion_productive_admit(
+                    {**pool_entry, "dex_id": dex_id},
+                    productive_dexes,
+                )
                 pool_entry = {
                     **pool_entry,
                     "_venues_quoteable": venues_quoteable,

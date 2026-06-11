@@ -26,6 +26,11 @@ def test_balancer_metadata_complete_requires_pool_id():
         "vault_address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
         "token0_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
         "token1_addr": "0x4200000000000000000000000000000000000006",
+        "balancer_assets": [
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "0x4200000000000000000000000000000000000006",
+        ],
+        "balancer_balances": [10**12, 10**18],
     }
     assert balancer_route_metadata_complete(incomplete) is False
     assert balancer_route_metadata_complete(complete) is True

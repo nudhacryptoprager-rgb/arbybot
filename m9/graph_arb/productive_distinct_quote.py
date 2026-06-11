@@ -135,6 +135,28 @@ def balancer_quote_targets(
     return targets
 
 
+def fetch_balancer_vault_assets(
+    eth_call: EthCallFn,
+    *,
+    vault: str,
+    pool_id: str,
+) -> Tuple[List[str], List[int]]:
+    """Return vault ``getPoolTokens`` order (required for queryBatchSwap indices)."""
+    from m8.discovery.balancer_indexer import _decode_get_pool_tokens
+
+    _GET_POOL_TOKENS = "f94d4668"
+    pid = str(pool_id or "").lower().replace("0x", "")
+    if len(pid) != 64:
+        return [], []
+    calldata = "0x" + _GET_POOL_TOKENS + pid
+    try:
+        result = eth_call(str(vault).lower(), calldata)
+        tokens, balances = _decode_get_pool_tokens(result)
+        return [t.lower() for t in tokens], [int(b) for b in balances]
+    except Exception:
+        return [], []
+
+
 def quote_balancer_productive(
     eth_call: EthCallFn,
     *,
@@ -157,6 +179,12 @@ def quote_balancer_productive(
     sender_addr = sender or cfg["quote_smoke_sender"]
     recipient_addr = recipient or cfg["quote_smoke_recipient"]
     vault_addr = str(vault or BALANCER_VAULT_ADDRESS).lower()
+    vault_assets, vault_balances = fetch_balancer_vault_assets(
+        eth_call, vault=vault_addr, pool_id=pool_id
+    )
+    if vault_assets:
+        all_assets = vault_assets
+        balances = vault_balances
     amount_in = balancer_cap_amount_in(
         amount_in,
         token_in,

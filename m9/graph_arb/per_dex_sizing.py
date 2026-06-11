@@ -102,6 +102,39 @@ def cap_sizes_to_depth_per_family(
 
 
 _PRODUCTIVE_DISTINCT_MICRO_CAP_USD: float = 0.05
+_PRODUCTIVE_MEASURED_ECON_FLOOR_USD: float = 25.0
+
+
+def _edge_as_route_dict(edge: Any) -> Dict[str, Any]:
+    return {
+        "dex_id": getattr(edge, "dex_id", None),
+        "adapter_type": getattr(edge, "adapter_type", None),
+        "effective_depth_usd": getattr(edge, "effective_depth_usd", None),
+        "depth_probe_status": _edge_depth_probe_status(edge),
+    }
+
+
+def _cycle_has_sane_measured_depth(cycle: Any) -> bool:
+    from m9.graph_arb.expansion_admission import is_sane_measured_depth
+
+    measured_depths: list[float] = []
+    for edge in getattr(cycle, "edges", ()) or ():
+        route = _edge_as_route_dict(edge)
+        if is_sane_measured_depth(route):
+            measured_depths.append(float(route["effective_depth_usd"]))
+    if measured_depths:
+        return True
+    min_depth = getattr(cycle, "min_effective_depth_usd", None)
+    if min_depth is None:
+        return False
+    from m9.graph_arb.depth_capacity_probe import DEPTH_PROBE_MEASURED_CAPACITY
+
+    return is_sane_measured_depth(
+        {
+            "effective_depth_usd": min_depth,
+            "depth_probe_status": DEPTH_PROBE_MEASURED_CAPACITY,
+        }
+    )
 
 
 def _cycle_has_measured_depth(cycle: Any) -> bool:
@@ -126,6 +159,8 @@ def productive_cycle_size_usd_cap(
 ) -> float:
     """Cap cycle USD notional when distinct-pricing legs lack measured depth."""
     _ = token_price_usd
+    if _cycle_has_sane_measured_depth(cycle):
+        return max(float(size_usd), _PRODUCTIVE_MEASURED_ECON_FLOOR_USD)
     if _cycle_has_measured_depth(cycle):
         return float(size_usd)
     edges = getattr(cycle, "edges", ()) or ()

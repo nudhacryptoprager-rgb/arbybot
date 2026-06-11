@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 from m9.graph_arb.depth_capacity_probe import (
+    DEPTH_PROBE_ANALYTICAL_SUSPECT,
     DEPTH_PROBE_LOWER_BOUND_AT_MAX,
     DEPTH_PROBE_MEASURED_CAPACITY,
     DEPTH_PROBE_TOO_THIN,
     PROBE_LADDER_USD,
     capacity_usd_at_threshold,
     finalize_marginal_depth,
+    mark_analytical_depth_suspect,
+    merge_depth_with_analytical,
     merge_ladder_results,
     v2_analytical_depth_usd,
+    v3_liquidity_depth_lower_bound_usd,
 )
 
 
@@ -59,3 +63,33 @@ def test_v2_analytical_depth_positive():
         fee_bps=30,
     )
     assert depth > 100.0
+
+
+def test_v3_insane_analytical_depth_marked_suspect():
+    merged = merge_depth_with_analytical(
+        {"effective_depth_usd": 100.0, "depth_probe_status": DEPTH_PROBE_MEASURED_CAPACITY},
+        31_000_000_000_000.0,
+        analytical_method="v3_liquidity_bound",
+    )
+    assert merged["depth_probe_status"] == DEPTH_PROBE_ANALYTICAL_SUSPECT
+    assert merged["effective_depth_usd"] is None
+    assert merged["depth_analytical_suspect_usd"] == 31_000_000_000_000.0
+
+
+def test_mark_analytical_depth_suspect_on_probe_row():
+    flagged = mark_analytical_depth_suspect(
+        {"effective_depth_usd": 20_000_000.0, "depth_probe_status": DEPTH_PROBE_MEASURED_CAPACITY}
+    )
+    assert flagged["depth_probe_status"] == DEPTH_PROBE_ANALYTICAL_SUSPECT
+    assert flagged["effective_depth_usd"] is None
+
+
+def test_v3_liquidity_bound_sane_for_typical_pool():
+    depth = v3_liquidity_depth_lower_bound_usd(
+        liquidity_raw=10**18,
+        sqrt_price_x96=2**96,
+        dec_in=18,
+        price_in_usd=3000.0,
+    )
+    assert depth is not None
+    assert depth < 10_000_000.0

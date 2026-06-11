@@ -1795,7 +1795,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 log.info(
                     "Sweep %d dynamic_size: %d/%d cycles selected non-default size (sizes: %s)",
                     sweeps_completed, _sweep_dyn, len(new_results),
-                    [round(s, 1) for s in _dyn_sizes_seen],
+                    [round(s, 2) for s in _dyn_sizes_seen],
                 )
 
         # Step 9 (GPT fix): 429-adaptive prequote threshold.

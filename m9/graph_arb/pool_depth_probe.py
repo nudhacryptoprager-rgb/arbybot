@@ -781,7 +781,7 @@ def probe_route_marginal_depth(
             pass
 
     # V3 / Slipstream / V4: conservative liquidity lower bound (quote ladder validates).
-    if adapter_type in ("uniswap_v3", "aerodrome_slipstream", "uniswap_v4") and pool_address:
+    if adapter_type in ("uniswap_v3", "aerodrome_slipstream") and pool_address:
         try:
             liq_hex = _raw_eth_call(rpc_url, pool_address, _V3_LIQUIDITY_SELECTOR)
             slot_hex = _raw_eth_call(rpc_url, pool_address, _V3_SLOT0_SELECTOR)
@@ -798,7 +798,9 @@ def probe_route_marginal_depth(
         except Exception:
             pass
 
-    return depth
+    from m9.graph_arb.depth_capacity_probe import mark_analytical_depth_suspect
+
+    return mark_analytical_depth_suspect(depth)
 
 
 def enrich_routes_missing_depth(
@@ -926,8 +928,12 @@ def enrich_routes_missing_depth(
                 counts["probe_failed"] += 1
 
         try:
+            from m9.graph_arb.expansion_admission import measured_depth_productive_override
             from m9.graph_arb.pool_quality import annotate_route_pool_quality
 
+            if measured_depth_productive_override(route):
+                route["expansion_productive_admit"] = True
+                route["expansion_productive_admit_source"] = "measured_depth_override"
             annotate_route_pool_quality(route)
         except Exception:
             pass

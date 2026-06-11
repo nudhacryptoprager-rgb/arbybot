@@ -105,9 +105,42 @@ def compute_pool_quality_state(
     return STATE_QUOTE_OK
 
 
-def _depth_gate_ok(route: Dict[str, Any], min_depth_usd: float) -> bool:
-    """Depth required only when measured or ARBY_PRODUCTIVE_REQUIRE_DEPTH=1."""
+def _is_distinct_pricing_route(route: Dict[str, Any]) -> bool:
+    from m9.graph_arb.adapter_families import (
+        FAMILY_BALANCER_VAULT,
+        FAMILY_CURVE_STABLE,
+        FAMILY_MAVERICK_V2,
+        route_family,
+    )
+
+    family = route_family(route)
+    return family in (FAMILY_MAVERICK_V2, FAMILY_BALANCER_VAULT, FAMILY_CURVE_STABLE)
+
+
+def _expansion_admit_ok(route: Dict[str, Any]) -> bool:
+    if route.get("expansion_productive_admit") is not False:
+        return True
+    from m9.graph_arb.expansion_admission import measured_depth_productive_override
+
+    return measured_depth_productive_override(route)
+
+
+def _depth_gate_ok(
+    route: Dict[str, Any],
+    min_depth_usd: float,
+    *,
+    economics_lane: bool = False,
+) -> bool:
+    """Depth required when measured; distinct unknown blocked only on economics lane."""
     import os
+
+    from m9.graph_arb.depth_capacity_probe import DEPTH_PROBE_ANALYTICAL_SUSPECT
+    from m9.graph_arb.expansion_admission import is_analytical_suspect_depth
+
+    if route.get("depth_probe_status") == DEPTH_PROBE_ANALYTICAL_SUSPECT:
+        return False
+    if is_analytical_suspect_depth(route):
+        return False
 
     require = str(os.environ.get("ARBY_PRODUCTIVE_REQUIRE_DEPTH", "")).strip().lower() in (
         "1",
@@ -116,7 +149,11 @@ def _depth_gate_ok(route: Dict[str, Any], min_depth_usd: float) -> bool:
     )
     depth = route.get("effective_depth_usd")
     if depth is None:
-        return not require
+        if require:
+            return False
+        if economics_lane and _is_distinct_pricing_route(route):
+            return False
+        return True
     return _depth_ok(route, min_depth_usd)
 
 
@@ -143,8 +180,39 @@ def productive_admission_fail_reason(
         return "quote_smoke_fail"
     if not provider_ok:
         return "provider_not_ok"
-    if route.get("expansion_productive_admit") is False:
+    if not _expansion_admit_ok(route):
         return "expansion_productive_admit_false"
+    if route.get("depth_probe_status") == "ANALYTICAL_SUSPECT":
+        return "analytical_suspect_depth"
+    return None
+
+
+def _maverick_has_direction_probe(route: Dict[str, Any]) -> bool:
+    by_tin = route.get("maverick_probe_by_token_in")
+    if isinstance(by_tin, dict) and by_tin:
+        return True
+    return bool(
+        route.get("maverick_pool_lane_probe_amount")
+        and route.get("maverick_pool_lane_token_in")
+    )
+
+
+def _balancer_productive_ready(route: Dict[str, Any]) -> Optional[str]:
+    from m9.graph_arb.adapter_families import FAMILY_BALANCER_VAULT, balancer_route_metadata_complete, route_family
+    from m9.graph_arb.expansion_admission import is_sane_measured_depth
+
+    if route_family(route) != FAMILY_BALANCER_VAULT:
+        return None
+    if not balancer_route_metadata_complete(route):
+        return "balancer_metadata_incomplete"
+    prod_status = str(
+        route.get("productive_quote_status") or route.get("quote_smoke_status") or ""
+    )
+    prod_ok = prod_status.startswith("QUOTE_OK")
+    if not is_sane_measured_depth(route):
+        return "missing_measured_depth"
+    if not prod_ok:
+        return "balancer_quote_smoke_fail"
     return None
 
 
@@ -164,11 +232,9 @@ def maverick_admission_fail_reason(route: Dict[str, Any]) -> Optional[str]:
         route.get("productive_quote_status") or route.get("quote_smoke_status") or ""
     )
     prod_ok = prod_status.startswith("QUOTE_OK")
-    if route.get("effective_depth_usd") is None and not prod_ok:
-        if not route.get("maverick_pool_lane_probe_amount") and not route.get(
-            "maverick_min_quoteable_amount_raw"
-        ):
-            return "missing_probe_amount"
+    from m9.graph_arb.expansion_admission import is_sane_measured_depth
+
+    if not is_sane_measured_depth(route) and not prod_ok:
         return "missing_depth_or_quote_ok"
     return None
 
@@ -196,9 +262,40 @@ def productive_admission_ok(
         return False
     if not provider_ok:
         return False
-    if route.get("expansion_productive_admit") is False:
+    if not _expansion_admit_ok(route):
+        return False
+    if route.get("depth_probe_status") == "ANALYTICAL_SUSPECT":
         return False
     return True
+
+
+def economics_admission_fail_reason(route: Dict[str, Any]) -> Optional[str]:
+    """Economics-lane gate (distinct depth + adapter quote readiness)."""
+    if not _depth_gate_ok(route, _DEFAULT_MIN_DEPTH_USD, economics_lane=True):
+        return "missing_depth"
+    bal = _balancer_productive_ready(route)
+    if bal:
+        return bal
+    mav = maverick_economics_admission_fail_reason(route)
+    if mav:
+        return mav
+    return None
+
+
+def balancer_economics_admission_fail_reason(route: Dict[str, Any]) -> Optional[str]:
+    """Stricter Balancer gate for quote/economics (not graph topology)."""
+    return _balancer_productive_ready(route)
+
+
+def maverick_economics_admission_fail_reason(route: Dict[str, Any]) -> Optional[str]:
+    """Direction probe required before Maverick economics quotes."""
+    adapter = route.get("adapter_type") or ""
+    dex = route.get("dex_id") or ""
+    if adapter != "maverick_v2" and dex != "maverick_v2":
+        return None
+    if not _maverick_has_direction_probe(route):
+        return "missing_maverick_probe_by_token_in"
+    return None
 
 
 def annotate_route_pool_quality(
