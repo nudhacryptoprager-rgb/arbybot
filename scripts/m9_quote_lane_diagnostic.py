@@ -456,10 +456,14 @@ def build_cycle_rca(
     ) or _top_route_failures(edge_hist, route_hist, "maverick")
 
     fp = graph_fingerprint(artifact)
+    qsr = artifact.get("qsr")
     return {
-        "schema_version": "m9_quote_lane_rca.3",
+        "schema_version": "m9_quote_lane_rca.4",
         "source_artifact": source_artifact or str(_DEFAULT_SHADOW),
         "source_graph_fingerprint": fp,
+        "cycles_found": cycles_found,
+        "cycles_quoteable": cycles_quoteable,
+        "qsr": qsr,
         "summary": {
             "cycles_found": cycles_found,
             "cycles_quoteable": cycles_quoteable,

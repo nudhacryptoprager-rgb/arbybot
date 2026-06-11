@@ -39,19 +39,10 @@ DECIMALS_SOURCE_TOPOLOGY_PROBE = "topology_probe_fallback"
 DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC = "UNKNOWN_DIAGNOSTIC"
 TOPOLOGY_PROBE_DECIMALS_FALLBACK = 18
 
-# Base mainnet — lowercase address → decimals
-_KNOWN_ADDRESS_DECIMALS: Dict[str, int] = {
-    "0x4200000000000000000000000000000000000006": 18,  # WETH
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 6,   # USDC
-    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": 6,   # USDbC
-    "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": 6,   # EURC
-    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": 8,   # cbBTC
-    "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": 18,  # cbETH
-    "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452": 18,  # wstETH
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": 18,  # DAI
-    "0x940181a94a35a4569e4529a3cdfb74e38fd98631": 18,  # AERO
-    "0x417ac0e078398c154edfadd9ef675d30be60af93": 18,  # crvUSD
-}
+def _known_address_decimals(chain: str = "base") -> Dict[str, int]:
+    from m9.graph_arb.core_tokens_loader import address_decimals_map
+
+    return address_decimals_map(chain)
 
 
 def is_truncated_hex_token(sym: str) -> bool:
@@ -70,6 +61,11 @@ def is_valid_eth_address(addr: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def is_strict_token_address(addr: object) -> bool:
+    """Reject truncated hex stored as token address (e.g. ``0x420000``)."""
+    return is_valid_eth_address(addr)
 
 
 def build_config_address_decimals(cfg: M8_1Config) -> Dict[str, int]:
@@ -160,14 +156,21 @@ def resolve_decimals_with_source(
 ) -> Tuple[Optional[int], str]:
     """Return (decimals, source_tag). Source is ``fallback_unknown`` when unresolved."""
     if not is_valid_eth_address(address):
-        if topology_probe:
+        from m9.graph_arb.core_tokens_loader import resolve_truncated_address
+
+        resolved = resolve_truncated_address(str(address or symbol))
+        if resolved:
+            address = resolved
+        elif topology_probe:
             return TOPOLOGY_PROBE_DECIMALS_FALLBACK, DECIMALS_SOURCE_TOPOLOGY_PROBE
-        return None, DECIMALS_SOURCE_FALLBACK_UNKNOWN
+        else:
+            return None, DECIMALS_SOURCE_FALLBACK_UNKNOWN
 
     addr_l = address.lower()
 
-    if addr_l in _KNOWN_ADDRESS_DECIMALS:
-        return _KNOWN_ADDRESS_DECIMALS[addr_l], DECIMALS_SOURCE_KNOWN_ADDRESS
+    known = _known_address_decimals()
+    if addr_l in known:
+        return known[addr_l], DECIMALS_SOURCE_KNOWN_ADDRESS
 
     if cfg is not None:
         for tc in cfg.tokens.values():
@@ -236,9 +239,9 @@ def resolve_decimals_for_address(
     return dec
 
 
-def decimals_skip_extra(entry: Dict[str, Any]) -> Dict[str, Any]:
+def decimals_skip_extra(entry: Dict[str, Any], w3: Any = None) -> Dict[str, Any]:
     """Telemetry payload for decimals-related edge-build skips."""
-    return {
+    extra = {
         "token0_addr": entry.get("token0_addr") or entry.get("token0"),
         "token1_addr": entry.get("token1_addr") or entry.get("token1"),
         "token0_decimals": entry.get("token0_decimals"),
@@ -247,6 +250,14 @@ def decimals_skip_extra(entry: Dict[str, Any]) -> Dict[str, Any]:
         "token1_decimals_source": entry.get("token1_decimals_source"),
         "decimals_status": entry.get("decimals_status"),
     }
+    if w3 is not None:
+        from m9.graph_arb.token_metadata import probe_erc20_metadata
+
+        for leg, key in (("token0", "token0_addr"), ("token1", "token1_addr")):
+            addr = extra.get(key)
+            if addr:
+                extra[f"{leg}_erc20_probe"] = probe_erc20_metadata(w3, str(addr))
+    return extra
 
 
 def enrich_route_decimals(

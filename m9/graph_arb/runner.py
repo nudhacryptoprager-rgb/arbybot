@@ -1725,8 +1725,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             except Exception as _pq_exc:
                 log.debug("Prequote snapshot error (non-fatal): %s", _pq_exc)
 
+        from m9.graph_arb.depth_first_gate import apply_depth_first_gate
+
+        _depth_gated_batch, _depth_skipped = apply_depth_first_gate(
+            batch, tuple(args.sizes_usd)
+        )
+        if _depth_skipped:
+            all_results.extend(_depth_skipped)
         new_results = schedule_cycle_quotes(
-            batch,
+            _depth_gated_batch,
             w3=w3,
             sizes_usd=tuple(args.sizes_usd),
             timeout_s=getattr(args, "quote_timeout_s", 10.0),

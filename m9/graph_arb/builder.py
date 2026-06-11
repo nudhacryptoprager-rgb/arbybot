@@ -202,12 +202,19 @@ def _resolve_decimals(
 
 def _entry_symbol_address_map(entry: dict) -> Dict[str, str]:
     """Map pair_id symbols (incl. truncated hex) to validated route addresses."""
+    from m9.graph_arb.core_tokens_loader import resolve_truncated_address
+
     out: Dict[str, str] = {}
     for sym_key, addr_key in (("token0", "token0_addr"), ("token1", "token1_addr")):
         sym = str(entry.get(sym_key) or "")
         addr = entry.get(addr_key) or ""
         if not _is_valid_eth_address(addr) and _is_valid_eth_address(sym):
             addr = sym
+        if not _is_valid_eth_address(addr):
+            resolved = resolve_truncated_address(sym) or resolve_truncated_address(str(addr))
+            if resolved:
+                addr = resolved
+                entry[addr_key] = resolved
         if not _is_valid_eth_address(addr):
             continue
         al = addr.lower()
@@ -241,6 +248,12 @@ def _resolve_route_token(
         return None, None
     sym_map = _entry_symbol_address_map(entry)
     addr = sym_map.get(sym) or sym_map.get(sym.lower())
+    if not _is_valid_eth_address(addr):
+        leg = "token0" if dec_key == "token0_decimals" else "token1"
+        for cand in (entry.get(f"{leg}_addr"), entry.get(leg)):
+            if _is_valid_eth_address(cand):
+                addr = str(cand).lower()
+                break
     if _is_valid_eth_address(addr):
         dec, src = resolve_decimals_with_source(
             addr,

@@ -51,63 +51,16 @@ def _get_coingecko_api_key() -> str | None:
 # first and only falls back to these when the API is unreachable.
 # ---------------------------------------------------------------------------
 
-_BASELINE_PRICES: Dict[str, float] = {
-    "WETH": 3500.0,
-    "WETH_BASE": 3500.0,
-    "cbBTC": 110000.0,
-    "LBTC": 110000.0,
-    "cbETH": 3700.0,
-    "wstETH": 4200.0,
-    "USDC": 1.0,
-    "EURC": 1.10,
-    "DAI": 1.0,
-    "USDT": 1.0,
-    "crvUSD": 1.0,
-    "USDbC": 1.0,
-    "MONEY": 1.0,
-    "AERO": 0.70,
-    "VIRTUAL": 0.80,
-    "TOSHI": 0.0001,
-    "BRETT": 0.08,
-    "DEGEN": 0.005,
-    "WELL": 0.04,
-    "SNX": 2.5,
-    "YFI": 8000.0,
-    "LINK": 15.0,
-    "UNI": 8.0,
-    # Balancer-specific tokens (added 2026-05-29)
-    "OLAS": 0.30,
-    "IMO": 0.02,
-    "GYD": 1.0,
-    "AaveUSDC": 1.0,
-}
+def _baseline_prices(chain: str = "base") -> Dict[str, float]:
+    from m9.graph_arb.core_tokens_loader import symbol_baseline_prices
 
-# ---------------------------------------------------------------------------
-# Token address → symbol mapping for Base chain (for CoinGecko lookup).
-# Addresses are lowercase without trailing newline.
-# ---------------------------------------------------------------------------
+    return symbol_baseline_prices(chain)
 
-_BASE_ADDR_TO_SYMBOL: Dict[str, str] = {
-    "0x4200000000000000000000000000000000000006": "WETH",
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
-    "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": "EURC",
-    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": "cbBTC",
-    "0x940181a94a35a4569e4529a3cdfb74e38fd98631": "AERO",
-    "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b": "VIRTUAL",
-    "0xac1bd2486aaf3b5c0fc3fd868558b082a531b2b4": "TOSHI",
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
-    "0x417ac0e078398c154edfadd9ef675d30be60af93": "crvUSD",
-    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC",
-    "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": "cbETH",
-    "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452": "wstETH",
-    "0x4ed4e862860bed51a9570b96d89af5e1b0efefed": "DEGEN",
-    "0x532f27101965dd16442e59d40670faf5ebb142e4": "BRETT",
-    # Balancer-specific tokens
-    "0x54330d28ca3357f294334bdc454a032e7f353416": "OLAS",
-    "0x5a7a2bf9ffae199f088b25837dcd7e115cf8e1bb": "IMO",
-    "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8": "GYD",
-    "0x4ea71a20e655794051d1ee8b6e4a3269b13ccacc": "AaveUSDC",
-}
+
+def _base_addr_to_symbol(chain: str = "base") -> Dict[str, str]:
+    from m9.graph_arb.core_tokens_loader import address_symbol_map
+
+    return address_symbol_map(chain)
 
 # CoinGecko platform ID for Base chain
 _COINGECKO_PLATFORM = "base"
@@ -204,7 +157,7 @@ def extend_price_map_from_inventory(
 
     stable_addrs = frozenset(
         a.lower()
-        for a, sym in _BASE_ADDR_TO_SYMBOL.items()
+        for a, sym in _base_addr_to_symbol().items()
         if sym in ("USDC", "USDbC", "DAI", "crvUSD", "EURC", "GYD", "AaveUSDC", "MONEY")
     )
 
@@ -219,22 +172,22 @@ def extend_price_map_from_inventory(
                 continue
             if addr in out and float(out[addr]) > 0:
                 continue
-            if addr in _BASE_ADDR_TO_SYMBOL:
-                baseline = _BASELINE_PRICES.get(_BASE_ADDR_TO_SYMBOL[addr])
+            if addr in _base_addr_to_symbol():
+                baseline = _baseline_prices().get(_base_addr_to_symbol().get(addr, ""))
                 if baseline and float(baseline) > 0:
                     out[addr] = float(baseline)
                     continue
             if cfg is not None:
                 for tc in cfg.tokens.values():
                     if (tc.address or "").lower() == addr:
-                        px = out.get(tc.symbol) or _BASELINE_PRICES.get(tc.symbol)
+                        px = out.get(tc.symbol) or _baseline_prices().get(tc.symbol)
                         if px and float(px) > 0:
                             out[addr] = float(px)
                         break
             if addr in stable_addrs and addr not in out:
                 out[addr] = 1.0
-            elif sym and sym in _BASELINE_PRICES and addr not in out:
-                out[addr] = float(_BASELINE_PRICES[sym])
+            elif sym and sym in _baseline_prices() and addr not in out:
+                out[addr] = float(_baseline_prices()[sym])
 
     return build_dual_key_price_map(out)
 
@@ -242,7 +195,7 @@ def extend_price_map_from_inventory(
 def build_dual_key_price_map(symbol_prices: Dict[str, float]) -> Dict[str, float]:
     """Merge symbol prices with lowercase address keys for runtime quoting."""
     out = dict(symbol_prices)
-    for addr_lower, symbol in _BASE_ADDR_TO_SYMBOL.items():
+    for addr_lower, symbol in _base_addr_to_symbol().items():
         px = symbol_prices.get(symbol)
         if px is not None and float(px) > 0:
             out[addr_lower] = float(px)
@@ -264,13 +217,13 @@ def fetch_token_prices_usd(timeout_s: float = 5.0) -> TokenPriceResult:
         `.stale`   — True when using fallback prices
     """
     # Start with the baseline so the result is always non-empty
-    prices = dict(_BASELINE_PRICES)
+    prices = dict(_baseline_prices())
     prices_by_address = build_dual_key_price_map(prices)
 
     try:
         import httpx  # optional hard dep — available in the project
 
-        addrs_param = ",".join(_BASE_ADDR_TO_SYMBOL.keys())
+        addrs_param = ",".join(_base_addr_to_symbol().keys())
         url = _COINGECKO_URL_TEMPLATE.format(
             platform=_COINGECKO_PLATFORM,
             addrs=addrs_param,
@@ -294,7 +247,7 @@ def fetch_token_prices_usd(timeout_s: float = 5.0) -> TokenPriceResult:
             raise ValueError(f"CoinGecko returned empty/non-dict response: {str(data)[:120]}")
 
         updated: list[str] = []
-        for addr_lower, symbol in _BASE_ADDR_TO_SYMBOL.items():
+        for addr_lower, symbol in _base_addr_to_symbol().items():
             entry = data.get(addr_lower) or data.get(addr_lower.lower())
             if entry and isinstance(entry, dict):
                 usd_price = entry.get("usd")
@@ -311,7 +264,7 @@ def fetch_token_prices_usd(timeout_s: float = 5.0) -> TokenPriceResult:
         log.info(
             "CoinGecko token prices fetched: updated=%s stale_symbols=%s",
             updated,
-            [s for s in _BASELINE_PRICES if s not in updated],
+            [s for s in _baseline_prices() if s not in updated],
         )
         return TokenPriceResult(
             prices=prices,

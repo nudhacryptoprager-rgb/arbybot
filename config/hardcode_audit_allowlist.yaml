@@ -1,0 +1,136 @@
+# Hardcode audit classifications (config-only chain data goal).
+# Gate: scripts/check_hardcode_audit.py (+ check_repo_safety [22])
+#
+# ALLOWED_PROTOCOL_CONSTANT — zero/dead/selectors in code
+# CONFIG_REQUIRED — tracked debt; addresses allowed until migrated
+# DELETE_OR_ARCHIVE — must not exist at listed path (use scripts/archive/)
+# scan_exempt_paths — fully migrated; gate skips file
+
+schema_version: "hardcode_audit.2"
+
+scan_exempt_paths:
+  - discovery/graph_client.py
+  - discovery/index_factories.py
+  - monitoring/sniper_honeypot.py
+  - strategy/sniper_entry_decision.py
+  - m9/graph_arb/core_tokens_loader.py
+  - m9/graph_arb/token_decimals.py
+  - m9/graph_arb/token_price_fetcher.py
+  - m9/graph_arb/token_metadata.py
+  - m9/graph_arb/builder.py
+  - scripts/check_hardcode_audit.py
+  - scripts/discover_curve_indices.py
+
+ALLOWED_PROTOCOL_CONSTANT:
+  - path: m9/graph_arb/token_decimals.py
+    note: "ERC20 decimals() selector"
+  - path: m9/graph_arb/builder.py
+    note: "Sentinel zero address"
+  - path: discovery/index_factories.py
+    note: "Zero pool/pair sentinel checks"
+  - path: monitoring/sniper_honeypot.py
+    address: "0x000000000000000000000000000000000000dead"
+    note: "Burn sentinel for honeypot FAIL"
+
+CONFIG_REQUIRED:
+  - path: m8/discovery/hint_verifier.py
+    migrate_to: config/dexes.yaml
+  - path: m8/discovery/balancer_indexer.py
+    migrate_to: config/adapter_metadata.yaml
+  - path: m8/discovery/pool_hints.py
+    migrate_to: config/core_tokens.yaml
+  - path: m8/discovery/maverick_indexer.py
+    migrate_to: config/dexes.yaml
+  - path: m8/discovery/hot_path_common.py
+    migrate_to: config/dexes.yaml
+  - path: m8/discovery/origin_source.py
+    migrate_to: config/new_pool_factories.yaml
+  - path: m8/runtime/smoke_run.py
+    migrate_to: config/core_tokens.yaml
+  - path: dex/adapters/
+    migrate_to: config/dexes.yaml
+    note: "factory/router/quoter per adapter — directory prefix"
+  - path: discovery/verify.py
+    migrate_to: config/core_tokens.yaml
+  - path: core/rpc_urls.py
+    migrate_to: config/rpc_endpoints.yaml
+  - path: execution/
+    migrate_to: config/
+    note: "directory prefix"
+  - path: m7/
+    migrate_to: config/
+    note: "directory prefix"
+  - path: strategy/jobs/
+    migrate_to: config/
+    note: "directory prefix"
+  - path: monitoring/rolling_aggregator.py
+    migrate_to: config/
+  - path: scripts/probe_maverick_events.py
+    action: archive
+  - path: scripts/probe_maverick_events2.py
+    action: archive
+  - path: scripts/probe_maverick_factory.py
+    action: archive
+  - path: scripts/verify_balancer_pool_id.py
+    action: archive
+  - path: scripts/verify_v3_pools.py
+    action: archive
+  - path: scripts/verify_tokens.py
+    action: archive
+  - path: discovery/new_pool_listener.py
+    migrate_to: config/new_pool_factories.yaml
+  - path: dex/abi/
+    note: "ABI JSON fixtures — directory prefix"
+  - path: m9/graph_arb/adapter_metadata.py
+    migrate_to: config/adapter_metadata.yaml
+    status: loads_from_config
+  - path: m9/graph_arb/bridge_builder.py
+    migrate_to: config/
+    note: "route ingestion; addresses from artifacts"
+  - path: m9/graph_arb/distinct_depth_probe.py
+    migrate_to: config/adapter_metadata.yaml
+  - path: scripts/build_arb_m9_seed_inventory.py
+    migrate_to: config/
+    action: archive_candidate
+  - path: scripts/check_maverick_factory.py
+    action: archive
+  - path: scripts/check_rpc_endpoints.py
+    note: "zero-address sentinel in health probe"
+  - path: scripts/check_tenderly_simulation_endpoint.py
+    note: "zero-address sentinel"
+  - path: scripts/ci_m4_gate.py
+    migrate_to: config/
+  - path: scripts/find_sushi_pools.py
+    migrate_to: config/dexes.yaml
+  - path: scripts/m9_curve_discovery.py
+    migrate_to: config/dexes.yaml
+  - path: scripts/rpc_provider_ab_test.py
+    migrate_to: config/core_tokens.yaml
+  - path: scripts/verify_anchors.py
+    action: archive
+  - path: scripts/verify_flashblocks.py
+    action: archive
+  - path: scripts/warm_pool_cache.py
+    migrate_to: config/
+  - path: strategy/entry_candidate_enricher.py
+    migrate_to: config/core_tokens.yaml
+  - path: strategy/quote_adapters.py
+    note: "zero-address sentinel"
+  - path: core/gate_helpers.py
+    note: "zero-address sentinel"
+  - path: core/multicall.py
+    note: "Multicall3 canonical address"
+
+DELETE_OR_ARCHIVE:
+  - path: _quarantine_bad_curve.py
+    action: archived
+  - path: _fix_quarantine_curve.py
+    action: archived
+  - path: _unquarantine_curve.py
+    action: archived
+  - path: scripts/probe_maverick_events.py
+    action: archived
+  - path: scripts/probe_maverick_events2.py
+    action: archived
+  - path: scripts/probe_maverick_factory.py
+    action: archived

@@ -103,8 +103,7 @@ def get_chain_dexes(
 
         return [k for k, cfg in chain_dexes.items() if _eligible(k, cfg)]
     except Exception:
-        # Fallback to FACTORY_ADDRESSES
-        return list(FACTORY_ADDRESSES.get(chain, {}).keys())
+        return list(_factory_addresses_from_config(chain).keys())
 
 # v2.0.4: V3 Factory ABI for getPool() queries - single source of truth
 # RESTORE CONTRACT: This is the canonical ABI for all V3 factory getPool() calls
@@ -138,30 +137,26 @@ VE33_FACTORY_ABI = [
     }
 ]
 
-# Known factory addresses per (chain, dex)
-FACTORY_ADDRESSES: Dict[str, Dict[str, str]] = {
-    "arbitrum_one": {
-        "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
-        "sushiswap_v3": "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
-        # V2 factories
-        "uniswap_v2": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",  # legacy on mainnet
-        "sushiswap_v2": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
-    },
-    "base": {
-        "uniswap_v3": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
-        "aerodrome": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
-    },
-    "ethereum": {
-        "uniswap_v3": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
-        "uniswap_v2": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
-    },
-    "linea": {
-        "lynex_v3": "0x622b2c98123D303ae067DB4925CD6282B3A08D0F",  # Algebra adapter
-    },
-    "mantle": {
-        "agni_v3": "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035",  # Uniswap V3 fork
-    },
-}
+def _factory_addresses_from_config(chain: str) -> Dict[str, str]:
+    """Load factory addresses from config/dexes.yaml (single source of truth)."""
+    try:
+        from config import load_dexes
+
+        chain_dexes = load_dexes().get(chain, {}) or {}
+        out: Dict[str, str] = {}
+        for dex_key, dex_cfg in chain_dexes.items():
+            if not isinstance(dex_cfg, dict):
+                continue
+            factory = dex_cfg.get("factory")
+            if factory:
+                out[str(dex_key)] = str(factory)
+        return out
+    except Exception:
+        return {}
+
+
+# Deprecated alias — use _factory_addresses_from_config / get_factory_address.
+FACTORY_ADDRESSES: Dict[str, Dict[str, str]] = {}
 
 
 class DiscoveredPool(NamedTuple):
@@ -250,11 +245,9 @@ def get_factory_address(chain: str, dex: str) -> Optional[str]:
         if factory:
             return factory
     except Exception:
-        pass  # Fall back to hardcoded
-    
-    # Legacy fallback
-    chain_factories = FACTORY_ADDRESSES.get(chain, {})
-    return chain_factories.get(dex)
+        pass
+
+    return _factory_addresses_from_config(chain).get(dex)
 
 
 def query_v3_pool(
@@ -551,7 +544,7 @@ def index_intent_pairs(
         logger.info("RPC unavailable for %s, skipping factory indexing", chain)
         return index
     
-    chain_factories = FACTORY_ADDRESSES.get(chain, {})
+    chain_factories = _factory_addresses_from_config(chain)
     if dexes is None:
         dexes = list(chain_factories.keys())
     
@@ -673,7 +666,7 @@ def count_discovery_candidates(chain: str, dexes: Optional[List[str]] = None) ->
     registry = get_token_registry()
     
     pairs = universe.get_pairs_for_chain(chain)
-    chain_factories = FACTORY_ADDRESSES.get(chain, {})
+    chain_factories = _factory_addresses_from_config(chain)
     
     if dexes is None:
         dexes = list(chain_factories.keys())

@@ -57,14 +57,13 @@ __all__ = [
 DEFAULT_MIN_LIQUIDITY_USD: float = 1000.0
 DEFAULT_MIN_SPREAD_BPS: float = 50.0
 
-# Strong base / anchor tokens on Base (lowercase).  Mirrors monitoring.sniper_honeypot
-# but kept independent: anchor identity is an entry-decision concept, not a safety check.
-DEFAULT_ANCHOR_TOKENS: frozenset = frozenset({
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (Base)
-    "0x4200000000000000000000000000000000000006",  # WETH (Base)
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",  # DAI (Base)
-    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (Base)
-})
+def _load_default_anchor_tokens(chain: str = "base") -> frozenset:
+    from m9.graph_arb.core_tokens_loader import anchor_token_addresses
+
+    return anchor_token_addresses(chain)
+
+
+DEFAULT_ANCHOR_TOKENS: frozenset = _load_default_anchor_tokens()
 
 
 # ---------------------------------------------------------------------------

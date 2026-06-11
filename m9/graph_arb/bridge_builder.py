@@ -1593,7 +1593,8 @@ def build_bridge_inventory(
     # ------------------------------------------------------------------
     try:
         from m8_1.stable_anchor.config_loader import load_config as _load_m8_cfg
-        from m9.graph_arb.token_decimals import enrich_routes_decimals, load_decimals_cache
+        from m9.graph_arb.token_decimals import load_decimals_cache
+        from m9.graph_arb.token_metadata import enrich_route_token_metadata, validate_route_token_addresses
 
         _cfg_for_dec = None
         _cfg_candidate = base_inv_path or "config/exotic_base_anchor.yaml"
@@ -1615,13 +1616,33 @@ def build_bridge_inventory(
                     _dec_w3 = Web3(Web3.HTTPProvider(_rpc, request_kwargs={"timeout": 8}))
             except Exception as _w3_exc:
                 bridge_source_metrics["decimals_w3_error"] = str(_w3_exc)[:120]
-        _dec_src_hist = enrich_routes_decimals(
-            final_active,
-            cfg=_cfg_for_dec,
-            cache=_dec_cache,
-            w3=_dec_w3,
-            persist_cache=True,
-        )
+        _malformed_dropped = 0
+        _metadata_reject_hist: Dict[str, int] = {}
+        _dec_src_hist: Dict[str, int] = {}
+        _kept_active: List[Dict[str, Any]] = []
+        for _dr in final_active:
+            _rej = validate_route_token_addresses(_dr)
+            if _rej:
+                _malformed_dropped += 1
+                _metadata_reject_hist[_rej] = _metadata_reject_hist.get(_rej, 0) + 1
+                continue
+            enrich_route_token_metadata(
+                _dr,
+                cfg=_cfg_for_dec,
+                cache=_dec_cache,
+                w3=_dec_w3,
+                chain="base",
+                topology_probe=False,
+            )
+            for _sk in ("token0_decimals_source", "token1_decimals_source"):
+                _src = _dr.get(_sk)
+                if _src:
+                    _dec_src_hist[str(_src)] = _dec_src_hist.get(str(_src), 0) + 1
+            _kept_active.append(_dr)
+        if _malformed_dropped:
+            final_active = _kept_active
+            bridge_source_metrics["routes_dropped_malformed_token_address"] = _malformed_dropped
+            bridge_source_metrics["metadata_reject_histogram"] = _metadata_reject_hist
         bridge_source_metrics["decimals_source_histogram"] = _dec_src_hist
         bridge_source_metrics["routes_with_decimals"] = sum(
             1

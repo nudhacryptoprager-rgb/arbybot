@@ -1,0 +1,51 @@
+# M9 price baselines (fallback when CoinGecko unavailable).
+# Economics-grade fetches prefer live API; these are order-of-magnitude only.
+schema_version: "m9_token_baselines.1"
+extra_tokens:
+  base:
+    USDbC:
+      address: "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca"
+      decimals: 6
+    crvUSD:
+      address: "0x417ac0e078398c154edfadd9ef675d30be60af93"
+      decimals: 18
+    OLAS:
+      address: "0x54330d28ca3357f294334bdc454a032e7f353416"
+      decimals: 18
+    IMO:
+      address: "0x5a7a2bf9ffae199f088b25837dcd7e115cf8e1bb"
+      decimals: 18
+    GYD:
+      address: "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8"
+      decimals: 18
+
+chains:
+  base:
+    symbol_prices_usd:
+      WETH: 3500.0
+      WETH_BASE: 3500.0
+      cbBTC: 110000.0
+      LBTC: 110000.0
+      cbETH: 3700.0
+      wstETH: 4200.0
+      USDC: 1.0
+      EURC: 1.10
+      DAI: 1.0
+      USDT: 1.0
+      crvUSD: 1.0
+      USDbC: 1.0
+      MONEY: 1.0
+      AERO: 0.70
+      VIRTUAL: 0.80
+      TOSHI: 0.0001
+      BRETT: 0.08
+      DEGEN: 0.005
+      WELL: 0.04
+      SNX: 2.5
+      YFI: 8000.0
+      LINK: 15.0
+      UNI: 8.0
+      OLAS: 0.30
+      IMO: 0.02
+      GYD: 1.0
+      AaveUSDC: 1.0

@@ -649,7 +649,7 @@ def _compute_layer_telemetry(
 
     quoted = [
         qr for qr in cycle_results
-        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
+        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH", "DEPTH_BELOW_LIVENESS_FLOOR")
     ]
     by_adapter: Counter[str] = Counter()
     ok_adapter: Counter[str] = Counter()
@@ -914,7 +914,7 @@ def build_artifact(
     def _qsr_for_subset(results: List[CycleQuoteResult]) -> float:
         quoted_sub = [
             qr for qr in results
-            if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
+            if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH", "DEPTH_BELOW_LIVENESS_FLOOR")
         ]
         if not quoted_sub:
             return 0.0
@@ -929,7 +929,7 @@ def build_artifact(
     # signal, so it must not deflate QSR).
     quoted = [
         qr for qr in cycle_results
-        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH")
+        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH", "DEPTH_BELOW_LIVENESS_FLOOR")
     ]
     qsr = _qsr_for_subset(cycle_results)
 

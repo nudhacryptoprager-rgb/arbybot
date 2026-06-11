@@ -1783,6 +1783,36 @@ def main():
     if not issues:
         print("  OK: DEV_REPORT goal_status is one of REACHED/BLOCKED/IN_PROGRESS")
 
+    print("\n[22] Checking hardcode audit gate...")
+    try:
+        hc_result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "check_hardcode_audit.py")],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if hc_result.returncode != 0:
+            hc_lines = [
+                ln.strip()
+                for ln in (hc_result.stderr or hc_result.stdout or "").splitlines()
+                if ln.strip()
+            ]
+            for err in hc_lines[:10]:
+                all_issues.append(
+                    err if err.startswith("HARDCODE_AUDIT") else f"HARDCODE_AUDIT: {err}"
+                )
+                print(f"  {err}")
+            if len(hc_lines) > 10:
+                tail = f"HARDCODE_AUDIT: ... and {len(hc_lines) - 10} more"
+                all_issues.append(tail)
+                print(f"  {tail}")
+        else:
+            print("  OK: No unclassified on-chain addresses outside config/")
+    except Exception as exc:
+        msg = f"HARDCODE_AUDIT: gate error: {exc}"
+        all_issues.append(msg)
+        print(f"  {msg}")
+
     # Summary
     print("\n" + "=" * 50)
     # v1.1.0: INFO messages don't count toward warnings

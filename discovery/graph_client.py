@@ -56,19 +56,11 @@ _HOSTED_FALLBACKS: Dict[str, Dict[str, str]] = {
     },
 }
 
-# Known token symbol mappings (address → symbol) for Base chain
-# Used when subgraph returns addresses without symbol data
-_BASE_TOKEN_SYMBOLS: Dict[str, str] = {
-    "0x4200000000000000000000000000000000000006": "WETH",
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
-    "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": "USDT",
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
-    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": "cbBTC",
-    "0x940181a94a35a4569e4529a3cdfb74e38fd98631": "AERO",
-    "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b": "VIRTUAL",
-    "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": "cbETH",
-    "0xa88594d404727625a9437c3f886c7643872296ae": "WELL",
-}
+def _token_symbols_for_chain(chain: str) -> Dict[str, str]:
+    """Address → symbol from config/core_tokens.yaml (not inline hardcode)."""
+    from m9.graph_arb.core_tokens_loader import address_symbol_map
+
+    return {k.lower(): v for k, v in address_symbol_map(chain).items()}
 
 
 @dataclass
@@ -194,8 +186,8 @@ def _query_uniswap_v3_pools(
         try:
             t0_addr = p["token0"]["id"].lower()
             t1_addr = p["token1"]["id"].lower()
-            t0_sym = p["token0"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t0_addr, "")
-            t1_sym = p["token1"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t1_addr, "")
+            t0_sym = p["token0"].get("symbol", "") or _token_symbols_for_chain(chain).get(t0_addr, "")
+            t1_sym = p["token1"].get("symbol", "") or _token_symbols_for_chain(chain).get(t1_addr, "")
             t0_dec = int(p["token0"].get("decimals", 18))
             t1_dec = int(p["token1"].get("decimals", 18))
 
@@ -261,8 +253,8 @@ def _query_aerodrome_pools(
         try:
             t0_addr = p["token0"]["id"].lower()
             t1_addr = p["token1"]["id"].lower()
-            t0_sym = p["token0"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t0_addr, "")
-            t1_sym = p["token1"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t1_addr, "")
+            t0_sym = p["token0"].get("symbol", "") or _token_symbols_for_chain(chain).get(t0_addr, "")
+            t1_sym = p["token1"].get("symbol", "") or _token_symbols_for_chain(chain).get(t1_addr, "")
             t0_dec = int(p["token0"].get("decimals", 18))
             t1_dec = int(p["token1"].get("decimals", 18))
             is_stable = p.get("isStable", False)
@@ -360,8 +352,8 @@ def _query_pools_for_token(
         try:
             t0_addr = p["token0"]["id"].lower()
             t1_addr = p["token1"]["id"].lower()
-            t0_sym = p["token0"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t0_addr, "")
-            t1_sym = p["token1"].get("symbol", "") or _BASE_TOKEN_SYMBOLS.get(t1_addr, "")
+            t0_sym = p["token0"].get("symbol", "") or _token_symbols_for_chain(chain).get(t0_addr, "")
+            t1_sym = p["token1"].get("symbol", "") or _token_symbols_for_chain(chain).get(t1_addr, "")
             fee_tier = int(p.get("feeTier", 3000)) if protocol == "uniswap_v3" else (
                 1 if p.get("isStable", False) else 0
             )

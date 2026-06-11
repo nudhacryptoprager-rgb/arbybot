@@ -56,17 +56,18 @@ class HoneypotVerdict(str, Enum):
 
 # Addresses must be lowercase (no checksum).  These are Base mainnet examples.
 KNOWN_SCAM_TOKENS: frozenset = frozenset({
-    # Example well-known scam tokens on Base — expand as intelligence grows.
-    "0x000000000000000000000000000000000000dead",  # burn address (not tradeable)
+    # Protocol sentinel — burn address (not tradeable); see hardcode_audit_allowlist.
+    "0x000000000000000000000000000000000000dead",
 })
 
-KNOWN_LEGIT_TOKENS: frozenset = frozenset({
-    # Canonical stables and blue-chips on Base mainnet (lowercase).
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC (Base)
-    "0x4200000000000000000000000000000000000006",  # WETH (Base)
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",  # DAI (Base)
-    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC (Base)
-})
+
+def _load_known_legit_tokens(chain: str = "base") -> frozenset:
+    from m9.graph_arb.core_tokens_loader import anchor_token_addresses
+
+    return anchor_token_addresses(chain)
+
+
+KNOWN_LEGIT_TOKENS: frozenset = _load_known_legit_tokens()
 
 # ---------------------------------------------------------------------------
 # Public check function
