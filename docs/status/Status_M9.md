@@ -1,10 +1,15 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Status**: **DYNAMIC_PIPELINE_PARTIAL_REACHED** — blocker **`DEPTH_TELEMETRY_MISSING_OR_FALLBACK_CAPPED`** (`depth_known_rate≈0.60`, gate `<0.8`). Production 10m post-enrich: `data/tmp/m9_graph_production_depth_10m.json` — `cycles_quoteable=161`, `cycles_positive_gross=161`, `cost_adjusted_net_bps<0`, `phantom=12`. Split rejects: `OVERSIZED_VS_UNKNOWN_DEPTH_FALLBACK` vs `OVERSIZED_VS_MEASURED_DEPTH`. Not executable arb; no production/profit claim. **30m spread-lifetime** blocked until `net_positive` after fees/gas.
+**Status**: **DEPTH_MEASUREMENT_REACHED / ECONOMICS_BLOCKED** — primary blocker **`EXPANSION_PRODUCTIVE_ADMIT_STATIC_CONFIG_GATE`**. Depth ladder + `--force-reprobe` proven at runtime: `data/tmp/m9_bridge_inventory_shadow_latest.json` — `force_reprobe=395`, `probed_ok=393`, `exact100` **297→2**, **281 sane depths > $100** (median sane ≈ $3.9k, max ≈ $66k), `depth_probe_status`: MEASURED_CAPACITY=318 / TOO_THIN=67 / LOWER_BOUND_AT_MAX_PROBE=8. The old `DEPTH_TELEMETRY_MISSING_OR_FALLBACK_CAPPED` blocker is **closed at inventory level**.
 
-**Independent depth/sizing audit alignment:** confirmed. Current `effective_depth_usd` is not yet a real capacity measurement: bridge snapshot `data/tmp/m9_bridge_inventory_shadow_latest.json` has `395/654` active routes with depth, `297/395` exactly `100.0`, and `0` routes above `100.0`, matching the single `$100` probe ceiling. Therefore `OVERSIZED_VS_DEPTH`, `$0.05` distinct-pricing market sizes, and negative cost-adjusted bps are **depth/sizing telemetry blockers**, not a market verdict. Next acceptance must prove iterative measured depth, economics-floor quote sizes, and dynamic token pricing before any `NO_PROFIT` or production claim.
+**Why economics is still blocked (sizing pipeline RCA, fresh 10m run `data/tmp/m9_graph_depth_truth_10m_v2.json`):** `cycles_quoteable=223`, `qsr=0.5348`, but `qsr_econ=0.0`, all top `market_size_usd=$0.05`, `cost_adjusted_net_bps≈-12004`, `depth_aware_known_rate=0.0`. Root causes (full chain in `docs/DEV_REPORT_LATEST.md`):
+1. **Static admission gate** — `expansion_productive_admit` is `dex_id in productive_dexes` (config flag), not depth-based; `uniswap_v4.enabled_for_productive=false` rejects **416/656 routes carrying 327 measured depths (278 sane > $100)** — the entire measured universe.
+2. **Admitted graph is 91% depth-less** (174/191 routes: maverick=120, balancer=37) → every quoted cycle has `min_effective_depth_usd=None` → `$0.05` micro-cap → gas arithmetic gives −12004 bps regardless of market.
+3. **`v3_liquidity_depth_lower_bound_usd` scaling bug** — 14 routes with insane depth (up to $31T); the only 17 admitted depth-carrying routes are all poisoned by it.
+4. **Perverse `_depth_gate_ok`** — unknown depth passes admission while measured depth < $50 fails (rewards non-measurement).
+5. **Log artifact** — runner prints `dynamic_size: [0.1]` because `round(0.05,1)=0.1`; actual quoted size is $0.05.
 
-**Depth reprobe follow-up:** code now exposes `--force-reprobe` for legacy rows with `effective_depth_usd` but missing `depth_probe_status`; this is intended to refresh stale `$100` depth rows without touching post-ladder rows that already carry explicit status. **Runtime blocker remains active** until a fresh enrich run proves `depth_probe_status` populated and `effective_depth_usd > 100` appears in the bridge inventory.
+**Current net-negative evidence is an admission/sizing artifact, not a market verdict.** No production/profit claim; **30m spread-lifetime blocked** until P0 fixes land: depth-aware expansion admission (replace static V4 flag), V3 analytical depth fix + sanity cap, `_depth_gate_ok` symmetry. Acceptance for next 10m run: `depth_aware_known_rate > 0`, ≥1 opportunity with `market_size_usd ≥ $25`, `qsr_econ > 0`.
 
 **Session 2026-06-10 cycle-lane sync (pool-lane PASS vs cycle-lane FAIL):**
 
@@ -158,12 +163,7 @@
 | Config | `balancer_vault` / `maverick_v2` `enabled_for_productive` | **true** |
 | Honeypot gate | `positive_gross_counts_as_evidence(strict=True)` | **enabled** in artifact builder |
 
-**Session 2026-06-07 distinct-pricing lane refresh (superseded partial):**
-
-| Layer | Metric | Value |
-|-------|--------|------:|
-| Curve discovery | admitted pools | **6** (artifact) → **26** in bridge (prior run) |
-| Distinct-pricing lane | curve-only `distinct_pricing_lane_ready=true` | **invalid** per-lane gate |
+**Session 2026-06-07 distinct-pricing lane refresh (superseded partial):** Curve discovery admitted **6** pools (artifact) → **26** in bridge (prior run); curve-only `distinct_pricing_lane_ready=true` — **invalid** per-lane gate.
 
 **Session 2026-06-07 3h hot-path + M9 bridge-shadow (M8.2 acceptance):**
 
