@@ -474,11 +474,16 @@ def _active_second_venue_factory_scan(
     anchor_syms: Set[str],
     hint_metrics: Dict[str, Any],
     reject_hist: Counter,
+    scan_telemetry: Optional[Dict[str, Any]] = None,
 ) -> int:
     """On-chain factory scan for a second venue when registry+hints found only one DEX."""
+    from m8.discovery.scan_telemetry import empty_scan_telemetry, record_scan_attempt
+
     existing_dexes = {p["dex_id"] for p in t_pools.values()}
-    if len(existing_dexes) >= 2 or dry_run:
+    if len(existing_dexes) >= 2:
         return 0
+
+    telemetry = scan_telemetry if scan_telemetry is not None else empty_scan_telemetry()
 
     scan_anchors = [
         s for s in ("USDC", "WETH", "cbBTC", "EURC", "USDbC", "DAI")
@@ -501,6 +506,19 @@ def _active_second_venue_factory_scan(
                 continue
             if dex_id in existing_dexes:
                 continue
+            if dry_run:
+                record_scan_attempt(
+                    telemetry,
+                    token_address=exotic_address,
+                    dex_id=dex_id,
+                    anchor=anchor_sym,
+                    attempted=True,
+                    result="SKIPPED_DRY_RUN",
+                    reason="SKIPPED_DRY_RUN",
+                )
+                reject_hist["ACTIVE_SCAN_SKIPPED_DRY_RUN"] += 1
+                continue
+
             pool, reason = _resolve_via_factory(
                 chain,
                 dex_id,
@@ -512,6 +530,17 @@ def _active_second_venue_factory_scan(
                 resolver=resolver,
                 mirror_index=mirror_index,
                 config=config,
+            )
+            result = "OK" if pool else str(reason or "UNKNOWN")
+            record_scan_attempt(
+                telemetry,
+                token_address=exotic_address,
+                dex_id=dex_id,
+                anchor=anchor_sym,
+                attempted=True,
+                result=result,
+                reason=str(reason or result),
+                pool_address=(pool or {}).get("pool_address"),
             )
             if pool:
                 pool["resolve_source"] = "active_factory_scan"
@@ -530,7 +559,13 @@ def _active_second_venue_factory_scan(
                 ) + 1
                 if len({p["dex_id"] for p in t_pools.values()}) >= 2:
                     return found
-            elif reason not in ("NO_POOL", "SKIPPED_DRY_RUN", "UNSUPPORTED_DEX"):
+            elif reason == "NO_POOL":
+                reject_hist["ACTIVE_SCAN_NO_POOL"] += 1
+            elif reason == "UNSUPPORTED_DEX":
+                reject_hist["ACTIVE_SCAN_UNSUPPORTED_DEX"] += 1
+            elif reason == "SKIPPED_DRY_RUN":
+                reject_hist["ACTIVE_SCAN_SKIPPED_DRY_RUN"] += 1
+            else:
                 reject_hist[f"ACTIVE_SCAN_{reason}"] += 1
     return found
 
@@ -584,6 +619,9 @@ def expand_token_neighborhood(
 
     reject_hist: Counter = Counter()
     all_reject_rows: List[Dict[str, str]] = []
+    from m8.discovery.scan_telemetry import empty_scan_telemetry
+
+    scan_telemetry = empty_scan_telemetry()
     hint_metrics: Dict[str, Any] = {
         "hint_tokens_checked": 1 if external_hints_artifact else 0,
         "hint_pools_seen": 0,
@@ -630,6 +668,7 @@ def expand_token_neighborhood(
         anchor_syms=anchor_syms,
         hint_metrics=hint_metrics,
         reject_hist=reject_hist,
+        scan_telemetry=scan_telemetry,
     )
 
     seen_hints = int(hint_metrics.get("hint_pools_seen", 0))
@@ -864,6 +903,7 @@ def expand_token_neighborhood(
         "cross_mechanic_routes_tagged": _cm_tagged,
         "venues_quoteable": len(quoteable_dexes),
         "hint_metrics": hint_metrics,
+        "scan_telemetry": scan_telemetry,
     }
 
 
@@ -1128,6 +1168,13 @@ def _expand_batch_token_neighborhood(
     subgraph_ready_debug: List[Dict[str, Any]] = []
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
     from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
+    from m8.discovery.scan_telemetry import (
+        active_scan_coverage_rate,
+        empty_scan_telemetry,
+        merge_scan_telemetry,
+    )
+
+    batch_scan_telemetry = empty_scan_telemetry()
 
     batch_hint_metrics: Dict[str, Any] = {
         "hint_tokens_checked": 0,
@@ -1192,6 +1239,7 @@ def _expand_batch_token_neighborhood(
         batch_hint_metrics["active_factory_second_pool_count"] = int(
             batch_hint_metrics.get("active_factory_second_pool_count", 0)
         ) + int(hm.get("active_factory_second_pool_count", 0))
+        merge_scan_telemetry(batch_scan_telemetry, nh.get("scan_telemetry"))
         for k, v in (nh.get("reject_reason_histogram") or {}).items():
             reject_hist[k] += int(v or 0)
         all_reject_rows.extend(nh.get("all_reject_rows") or [])
@@ -1335,6 +1383,7 @@ def _expand_batch_token_neighborhood(
     _routes_by_origin: Counter = Counter(
         str(r.get("origin_source") or "unknown") for r in routes_admitted
     )
+    _coverage_rate = active_scan_coverage_rate(batch_scan_telemetry)
     summary = {
         "expansion_mode": "token_neighborhood_batch",
         "tokens_in": len(token_addrs),
@@ -1378,6 +1427,21 @@ def _expand_batch_token_neighborhood(
         "routes_rejected_not_m8_derived": len(_exploration_routes),
         "routes_by_origin_source": dict(_routes_by_origin),
         "subgraph_ready_debug_sample": subgraph_ready_debug,
+        "scan_expected_attempts": batch_scan_telemetry.get("scan_expected_attempts"),
+        "scan_actual_attempts": batch_scan_telemetry.get("scan_actual_attempts"),
+        "active_scan_coverage_rate": _coverage_rate,
+        "active_scan_attempted_by_dex": dict(
+            batch_scan_telemetry.get("active_scan_attempted_by_dex") or {}
+        ),
+        "active_scan_attempted_by_anchor": dict(
+            batch_scan_telemetry.get("active_scan_attempted_by_anchor") or {}
+        ),
+        "active_scan_no_pool_by_dex": dict(
+            batch_scan_telemetry.get("active_scan_no_pool_by_dex") or {}
+        ),
+        "active_scan_unsupported_dex_by_dex": dict(
+            batch_scan_telemetry.get("active_scan_unsupported_dex_by_dex") or {}
+        ),
         **distinct_lane,
     }
     return {
@@ -1388,6 +1452,8 @@ def _expand_batch_token_neighborhood(
         "input_registry_path": None,
         "summary": summary,
         "subgraph_ready_debug": subgraph_ready_debug,
+        "scan_telemetry": batch_scan_telemetry,
+        "scan_attempt_matrix": batch_scan_telemetry.get("scan_attempt_matrix") or {},
         "reject_reason_histogram": dict(reject_hist),
         "same_pair_routes": same_pair_routes,
         "token_presence_routes": token_presence_routes,

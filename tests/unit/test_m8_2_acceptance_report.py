@@ -19,6 +19,29 @@ def _good_expansion_summary(**overrides):
     return base
 
 
+def _coverage_fixture(summary: dict) -> dict:
+    dexes = summary.get("dex_ids_checked") or [
+        "uniswap_v3",
+        "aerodrome",
+        "balancer_vault",
+    ]
+    attempted = {dex: 10 for dex in dexes}
+    return {
+        "scan_attempt_matrix": {
+            "0xabc": {
+                dex: {"USDC": {"attempted": True, "result": "NO_POOL"}}
+                for dex in dexes
+            }
+        },
+        "scan_telemetry": {
+            "scan_expected_attempts": len(dexes) * 10,
+            "scan_actual_attempts": len(dexes) * 10,
+            "active_scan_attempted_by_dex": attempted,
+            "active_scan_attempted_by_anchor": {"USDC": len(dexes) * 10},
+        },
+    }
+
+
 def _artifacts(
     *,
     sniper_ts="2026-06-11T10:00:00Z",
@@ -27,12 +50,20 @@ def _artifacts(
     summary=None,
 ):
     summary = summary or _good_expansion_summary()
+    summary = {**summary, "dex_ids_checked": summary.get("dex_ids_checked") or ["uniswap_v3", "aerodrome"]}
+    coverage = _coverage_fixture(summary)
     return (
         {"generated_at_utc": sniper_ts, "recent_events": []},
         {"generated_at_utc": hints_ts, "hints": []},
         {
             "generated_at_utc": expansion_ts,
-            "summary": summary,
+            "summary": {
+                **summary,
+                "active_scan_coverage_rate": 1.0,
+                "scan_expected_attempts": coverage["scan_telemetry"]["scan_expected_attempts"],
+                "scan_actual_attempts": coverage["scan_telemetry"]["scan_actual_attempts"],
+                "active_scan_attempted_by_dex": coverage["scan_telemetry"]["active_scan_attempted_by_dex"],
+            },
             "routes_admitted": [
                 {
                     "origin_source": "m8_watchlist_hint",
@@ -41,6 +72,7 @@ def _artifacts(
                     "dex_id": "uniswap_v3",
                 }
             ],
+            **coverage,
         },
     )
 

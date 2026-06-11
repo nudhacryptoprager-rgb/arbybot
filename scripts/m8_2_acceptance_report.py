@@ -44,8 +44,11 @@ _M8_2_BLOCKERS = frozenset(
         "EXPANSION_FRESHNESS_ORDER_VIOLATION",
         "M8_2_EXPANSION_ARTIFACT_MISSING",
         "M8_2_HINTS_ARTIFACT_MISSING",
+        "ACTIVE_SCAN_COVERAGE_INCOMPLETE",
     }
 )
+
+_COVERAGE_MIN_RATE = 0.98
 
 
 def _load(path: Optional[Path]) -> Optional[Dict[str, Any]]:
@@ -114,6 +117,9 @@ def _expansion_metrics(
         "canonical_routes_count": summary.get("canonical_routes_count"),
         "exploration_routes_count": summary.get("exploration_routes_count"),
         "routes_rejected_not_m8_derived": summary.get("routes_rejected_not_m8_derived"),
+        "active_scan_coverage_rate": summary.get("active_scan_coverage_rate"),
+        "scan_expected_attempts": summary.get("scan_expected_attempts"),
+        "scan_actual_attempts": summary.get("scan_actual_attempts"),
     }
 
 
@@ -221,6 +227,13 @@ def build_m8_2_acceptance_report(
     provenance = _provenance_block(expansion=expansion, sniper=sniper)
     per_source_yield = _per_source_yield(hints, expansion)
     subgraph_debug = _subgraph_debug_block(expansion)
+    from m8.discovery.scan_telemetry import build_coverage_audit
+
+    scan_coverage = (
+        build_coverage_audit(expansion, min_coverage_rate=_COVERAGE_MIN_RATE)
+        if expansion is not None
+        else {"blockers": ["ACTIVE_SCAN_COVERAGE_INCOMPLETE"], "goal_status": "BLOCKED"}
+    )
 
     blockers: List[str] = []
     warnings: List[str] = []
@@ -259,11 +272,14 @@ def build_m8_2_acceptance_report(
     if int(provenance.get("exploration_routes_count") or 0) > 0:
         warnings.append("M8_2_EXPLORATION_ROUTES_PRESENT")
 
+    for cov_blocker in scan_coverage.get("blockers") or []:
+        blockers.append(str(cov_blocker))
+
     blockers = sorted(set(blockers))
     goal_status = "REACHED" if not blockers else "BLOCKED"
 
     return {
-        "schema_version": "m8_2_acceptance_report.2",
+        "schema_version": "m8_2_acceptance_report.3",
         "generated_at_utc": _iso_now(),
         "layer": "M8_2_expansion",
         "metrics": metrics,
@@ -271,6 +287,7 @@ def build_m8_2_acceptance_report(
         "provenance": provenance,
         "per_source_verified_yield": per_source_yield,
         "subgraph_ready_debug": subgraph_debug,
+        "scan_coverage": scan_coverage,
         "quality_gates": dict(_QUALITY_GATES),
         "blockers": blockers,
         "warnings": warnings,
