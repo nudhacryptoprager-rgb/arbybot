@@ -28,8 +28,9 @@ def test_build_acceptance_report_blockers_when_m8_not_ready():
         },
         rca=None,
     )
-    assert "M8_DIRECT_INGESTION_NOT_READY" in report["blockers"]
-    assert "NO_POSITIVE_GROSS" in report["blockers"]
+    assert "M8_DIRECT_INGESTION_NOT_READY" in report["bridge_upstream_warnings"]
+    assert "NO_POSITIVE_GROSS" in report["m9_blockers"]
+    assert "M8_DIRECT_INGESTION_NOT_READY" not in report["m9_blockers"]
     assert report["goal_status"] == "BLOCKED"
     assert report["funnel_layers"][1]["m8_funnel_reject_histogram"]["TOKEN_SYMBOL_MISSING"] == 11
 
@@ -75,6 +76,7 @@ def test_build_acceptance_report_quote_blockers():
                 "graph_ready_from_m8": 8,
                 "m8_stale": True,
                 "sniper_age_seconds": 7200,
+                "routes_rejected_not_m8_derived": 12,
             },
         },
         shadow={
@@ -82,6 +84,8 @@ def test_build_acceptance_report_quote_blockers():
             "cycles_quoteable": 0,
             "cycles_positive_gross": 0,
             "qsr": 0.0,
+            "qsr_econ": 0.0,
+            "depth_aware_known_rate": 0.0,
             "cross_mechanic_cycles": 106,
             "cross_mechanic_cycles_found": 106,
             "cross_mechanic_cycles_quoteable": 0,
@@ -89,11 +93,35 @@ def test_build_acceptance_report_quote_blockers():
             "phantom_quote_diagnostics": {"phantom_count": 10},
             "cycle_reject_histogram": {"OVERSIZED_VS_DEPTH": 261},
         },
-        rca=None,
+        rca={"by_reject_reason": {"QUOTE_REVERT": 50}},
     )
-    assert "NO_QUOTEABLE_CYCLES" in report["blockers"]
-    assert "QSR_ZERO" in report["blockers"]
-    assert "CYCLES_WITH_M8_POOL_ZERO" in report["blockers"]
-    assert "PHANTOM_QUOTE_PRESENT" in report["blockers"]
-    assert "NO_CROSS_MECHANIC_CYCLES_QUOTEABLE" in report["blockers"]
-    assert "M8_ARTIFACT_STALE" in report["blockers"]
+    assert "NO_QUOTEABLE_CYCLES" in report["m9_blockers"]
+    assert "QSR_ZERO" in report["m9_blockers"]
+    assert "QSR_ECON_ZERO" in report["m9_blockers"]
+    assert "DEPTH_UNKNOWN" in report["m9_blockers"]
+    assert "QUOTE_REVERT" in report["m9_blockers"]
+    assert "CYCLES_WITH_M8_POOL_ZERO" in report["m9_blockers"]
+    assert "PHANTOM_QUOTE_PRESENT" in report["m9_blockers"]
+    assert "NO_CROSS_MECHANIC_CYCLES_QUOTEABLE" in report["m9_blockers"]
+    assert "M8_ARTIFACT_STALE" in report["bridge_upstream_warnings"]
+    assert "M8_EXPLORATION_ROUTES_PARTITIONED" not in report["m9_blockers"]
+
+
+def test_m9_report_upstream_m8_2_not_ready():
+    m8_2 = {
+        "goal_status": "BLOCKED",
+        "blockers": ["SUBGRAPH_READY_LOW"],
+        "metrics": {"subgraph_ready_tokens": 1},
+    }
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor=None,
+        expansion={"summary": {"subgraph_ready_tokens": 1}},
+        bridge={"active_routes": [], "bridge_source_metrics": {}},
+        shadow=None,
+        rca=None,
+        m8_2_report=m8_2,
+    )
+    assert report["upstream_blockers"] == ["UPSTREAM_M8_2_NOT_READY"]
+    assert "SUBGRAPH_READY_LOW" in report["m8_2_upstream"]["blockers"]
+    assert report["m9_goal_status"] == "NOT_EVALUATED"

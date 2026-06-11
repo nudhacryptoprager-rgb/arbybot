@@ -1,92 +1,112 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-06-11T13:30:00Z
+timestamp_utc: 2026-06-11T16:27:36Z
 goal_status: BLOCKED
-blocker_status_after: EXPANSION_PRODUCTIVE_ADMIT_STATIC_CONFIG_GATE
+blocker_status_after: M8_2_RUNTIME_PARTIAL_REACHED__QUALITY_NOT_READY
 docs_reread_confirmed: true
-run_id: m9-depth-truth-sizing-rca-2026-06-11
-mode: M9_DEPTH_SIZING_PIPELINE_RCA
+run_id: m8-2-runtime-audit-2026-06-11
+mode: M8_2_RUNTIME_AUDIT
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Prove depth ladder at runtime (force-reprobe), trace M8→M8.1→M8.2→M9 sizing pipeline, find why market_size_usd stays $0.05
+session_goal: Audit M8.2 after M8/M8.1 upstream closure and identify blockers before claiming branch readiness.
 goal_status: BLOCKED
-close_allowed: false
-remaining_blockers: EXPANSION_PRODUCTIVE_ADMIT_STATIC_CONFIG_GATE (416 V4 routes with measured depth rejected by static config flag); V3_ANALYTICAL_DEPTH_INSANE_VALUES (14 routes up to $31T); PERVERSE_DEPTH_GATE (unknown depth admitted, measured depth < $50 rejected)
+close_allowed: true
+remaining_blockers: M8.2 finds and forwards routes, but `subgraph_ready_tokens=1`, `verified_second_pool_count=5`, external hints are stale vs fresh sniper, and no fresh M9 economics proof exists after this M8.2 run.
+primary_blocker_of_session: M8_2_QUALITY_AND_HANDOFF_NOT_100_PERCENT
+blocker_status_before: ACTIVE
+blocker_status_after: BLOCKED
 docs_reread_confirmed: true
 
-## Runtime evidence (fresh)
+## Runtime evidence
 
-| Artifact | note | Key metrics |
-|----------|------|-------------|
-| `data/tmp/m9_bridge_inventory_shadow_latest.json` | post `--force-reprobe` | routes=656, with_depth=393, `exact100`=2 (was 297), `gt100_sane`=281, sane max≈$66k, `depth_probe_status`: MEASURED_CAPACITY=318, TOO_THIN=67, LOWER_BOUND_AT_MAX_PROBE=8, None=263 |
-| enrich log (force-reprobe) | ~29 min RPC | candidates=656, force_reprobe=395, probed_ok=393, v4_ok=327/416 |
-| `data/tmp/m9_graph_depth_truth_10m_v2.json` | 10m productive run | cycles_found=1106, cycles_quoteable=223, qsr=0.5348, qsr_econ=0.0, `depth_aware_known_rate`=0.0, top `market_size_usd`=$0.05, `cost_adjusted_net_bps`≈-12004 |
-| `data/tmp/m9_quote_lane_rca_depth_truth_10m_v2.json` | strict-consistency | BALANCER_UNKNOWN_REVERT_WITH_METADATA=206, MAVERICK_NO_LIQUIDITY=154 |
-| `data/tmp/m9_inventory_truth_enriched.json` | admission simulation | admitted=191 of 656; admitted WITH depth=17 (all insane values), WITHOUT depth=174 (maverick=120, balancer=37, curve=4, v3=12); fail histogram: expansion_admit_false=394–416, quarantined=67, depth_lt_50=4 |
+| Artifact | Key metrics |
+|----------|-------------|
+| `data/runs/_rolling/new_pool_sniper_latest.json` | `status=ACTIVE`, `recent_events=278`, `generated_at_utc=2026-06-11T16:06:29Z`, `rpc_errors=0` |
+| `data/runs/_rolling/m8_1_stable_anchor_latest.json` | candidates=3228, passes=351, qsr=1.0 |
+| `data/runs/_rolling/m8_pending_pairs.json` | `generated_at_utc=2026-06-11T16:12:16Z`, tokens=701 |
+| `data/runs/_rolling/m8_external_pool_hints_latest.json` | `generated_at_utc=2026-06-11T07:50:18Z`, verified_second_pool_count=162, stale vs fresh sniper |
+| `data/runs/_rolling/m8_cross_dex_expansion_latest.json` | `generated_at_utc=2026-06-11T16:25:44Z`, tokens_in=701, routes_admitted=1025, multi_venue_tokens=14 |
+| `data/tmp/m9_bridge_inventory_shadow_latest.json` | `generated_at_utc=2026-06-11T16:27:36Z`, graph_ready_total=1130, graph_ready_from_expansion=817, active_routes=950 |
+| `data/tmp/m9_lane_acceptance_report_latest.json` | M8/M8.1 fresh, M8.2 visible, M9 blockers remain |
 
 ## Commands executed
 
 ```powershell
+py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m8_cross_dex_expand.py --chain base --config config/exotic_base_anchor.yaml --input data/runs/_rolling/m8_pending_pairs.json --expansion-mode token_neighborhood --external-hints data/runs/_rolling/m8_external_pool_hints_latest.json --output data/runs/_rolling/m8_cross_dex_expansion_latest.json --verbose
+
 py -3.11 -u scripts/m9_bridge_build.py --config config/exotic_base_anchor.yaml --registry data/runs/_rolling/m8_pending_pairs.json --include-expansion-duplicates-for-shadow --output data/tmp/m9_bridge_inventory_shadow_latest.json
-py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m9_enrich_bridge_depth.py --chain base --inventory data/tmp/m9_bridge_inventory_shadow_latest.json --force-reprobe --verbose
-py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 -u -m m9.graph_arb.runner --chain base --config config/exotic_base_anchor.yaml --inventory data/tmp/m9_bridge_inventory_shadow_latest.json --duration-minutes 10 --productive-lane --require-factory-verified --quote-backend raw_http --quote-workers 1 --max-cycles-per-sweep 20 --artifact-path data/tmp/m9_graph_depth_truth_10m_v2.json
-py -3.11 scripts/m9_quote_lane_diagnostic.py --artifact data/tmp/m9_graph_depth_truth_10m_v2.json --inventory data/tmp/m9_bridge_inventory_shadow_latest.json --output data/tmp/m9_quote_lane_rca_depth_truth_10m_v2.json --strict-consistency
+
+py -3.11 scripts/m9_lane_acceptance_report.py
 ```
 
-## Root cause analysis: why the system does not see real pool sizes
+## Key results
 
-The depth ladder measurement layer is now PROVEN at inventory level (281 sane depths > $100, up to $66k, `exact100` 297→2). The economics layer is blocked by an **admission topology bug**, not by measurement and not by the market.
+M8.2 is no longer the old "2 routes / BASEAI only" state. It now expands the fresh M8 registry into a large M8-derived universe:
 
-### RC1 — static config gate discards the measured-depth universe (PRIMARY)
+| Metric | Value |
+|--------|------:|
+| `tokens_in` / `m8_tokens_in` | 701 / 701 |
+| `routes_admitted_count` | 1025 |
+| `hint_tokens_matched` | 774 |
+| `multi_venue_tokens` | 14 |
+| `connector_routes_count` | 67 |
+| `subgraph_ready_tokens` | 1 |
+| `verified_second_pool_count` | 5 |
+| `external_hints_enabled` | true |
 
-`m8/discovery/cross_dex_expand.py` sets `expansion_productive_admit = (dex_id in productive_dexes)` — a **static config flag** from `m9_dex_productivity.enabled_for_productive`, fully independent of measured depth.
+DEX coverage in M8.2:
 
-`config/exotic_base_anchor.yaml` has `uniswap_v4.enabled_for_productive=false` ("admit via M8 sniper only until QSR proven"). All **416 of 656 routes are uniswap_v4 expansion routes** and carry `expansion_productive_admit=False`. These 416 rejected routes contain **327 measured depths, 300 MEASURED_CAPACITY, 278 sane > $100** — i.e. nearly the entire measured-depth universe the ladder just proved.
+| DEX | Routes |
+|-----|-------:|
+| uniswap_v4 | 678 |
+| maverick_v2 | 143 |
+| balancer_vault | 94 |
+| uniswap_v2 | 61 |
+| uniswap_v3 | 36 |
+| curve_stable | 9 |
+| aerodrome | 2 |
+| pancakeswap_v3 | 2 |
 
-`m9/graph_arb/pool_quality.py::productive_admission_fail_reason` then rejects them (`expansion_productive_admit_false`). The flag's own rationale is obsolete: this session's force-reprobe quoted V4 successfully at probe level (`v4_ok=327/416`).
+Distinct-pricing lane report at route level:
 
-### RC2 — admitted graph is 91% depth-less
+| Adapter | Discovered | Verified | Admitted | Quoteable |
+|---------|-----------:|---------:|---------:|----------:|
+| curve_stable | 9 | 9 | 9 | 9 |
+| balancer_vault | 94 | 94 | 94 | 79 |
+| maverick_v2 | 143 | 143 | 143 | 90 |
 
-After admission: 191 routes, of which **174 have no depth** (maverick=120, balancer=37, curve=4, v3=12) and 17 have depth — all 17 with insane analytical values (see RC3). Every quoted cycle is therefore built from depth-less edges → `cycle.min_effective_depth_usd=None` → `depth_aware_known_rate=0.0` in runtime gates. This is why bridge `depth_known_rate≈0.60` and runtime `0.0` coexist: the admission filter inverts the depth distribution.
+Bridge handoff after M8.2:
 
-### RC3 — V3 analytical depth produces insane values
+| Metric | Value |
+|--------|------:|
+| `graph_ready_total` | 1130 |
+| `graph_ready_from_m8` | 196 |
+| `graph_ready_from_expansion` | 817 |
+| `active_routes` | 950 |
+| `canonical_routes_count` | 1016 |
+| `routes_rejected_not_m8_derived` | 94 |
+| `m8_stale` / `m8_1_stale` | false / false |
 
-`m9/graph_arb/depth_capacity_probe.py::v3_liquidity_depth_lower_bound_usd` mis-scales Uniswap V3 `liquidity` (L is in sqrt-token units; the formula treats it as raw token units). Result: 14 routes with `effective_depth_usd` up to **$31T**. All 17 admitted routes WITH depth carry these garbage values, so even the surviving depth signal is unusable.
+## Audit conclusion
 
-### RC4 — perverse depth gate rewards ignorance
+M8.2 is **runtime-partial reached**: it consumes fresh M8 registry data, uses external hints, includes distinct-pricing DEX lanes, and passes a large M8-derived route set into bridge.
 
-`pool_quality.py::_depth_gate_ok`: route with `effective_depth_usd=None` **passes** admission; route with measured depth < $50 **fails**. The gate punishes measurement and admits unmeasured routes — the admitted set is systematically biased toward unknown depth, which then triggers the $0.05 micro-cap.
+M8.2 is **not 100% ready** because readiness should mean not only "many routes", but "enough verified, cross-DEX, connector-complete, economics-eligible subgraphs for M9". Current blockers:
 
-### RC5 — micro-cap arithmetic, not market verdict
-
-`per_dex_sizing.py::productive_cycle_size_usd_cap`: cycle has a Maverick/Balancer/Curve leg AND no measured depth → size capped to **$0.05**. At $0.05 notional, fixed gas (~$0.06) = ~12,000 bps cost → `cost_adjusted_net_bps≈-12004` for every opportunity. This is deterministic arithmetic; no market data can change it while sizing stays at $0.05.
-
-### RC6 — operator-facing log hides the cap
-
-Runner logs `dynamic_size: [0.1]` because `round(0.05, 1) == 0.1`. Operators see $0.1 while actual quoted size is the $0.05 micro-cap.
-
-### Secondary findings
-
-- `per_dex_sizing.py::micro_ladder_for_family` is dead code (never called).
-- M8 sniper contributes only 5/656 routes; `m8_stale=True` (age > 2.8h) — freshness, not sizing, blocker.
-- Distinct quote lane: `BALANCER_UNKNOWN_REVERT_WITH_METADATA=206`, `MAVERICK_NO_LIQUIDITY=154` — independent adapter blocker that also forces failing legs into the micro path.
-
-## Remediation plan (ordered)
-
-1. **P0 — data-driven V4 productive admission.** Replace the static `expansion_productive_admit` reject with a depth-aware gate: admit expansion route when `depth_probe_status ∈ {MEASURED_CAPACITY, LOWER_BOUND_AT_MAX_PROBE}` AND sane `effective_depth_usd ≥ $50`. Alternatively flip `uniswap_v4.enabled_for_productive=true` (probe-level quote rate now proven, v4_ok=327/416) — prefer the depth-aware gate to keep the admission honest per-pool.
-2. **P0 — fix `v3_liquidity_depth_lower_bound_usd`** scaling; add sanity cap (≤ $10M) and `ANALYTICAL_SUSPECT` status for out-of-range values; re-enrich the 14 poisoned rows.
-3. **P1 — fix `_depth_gate_ok` asymmetry**: for distinct-pricing families require measured depth (or QUOTE_OK) instead of letting unknown-depth pass where measured-thin fails.
-4. **P1 — log truthfully**: `round(s, 2)` in the dynamic_size sweep log.
-5. **P1 — re-run 10m** after 1–3. Acceptance: `depth_aware_known_rate > 0`, at least one `market_size_usd ≥ $25`, `qsr_econ > 0`, `top_opportunities.effective_depth_usd` not None.
-6. **P2 — adapter RCA**: Balancer `UNKNOWN_REVERT_WITH_METADATA` (206) and Maverick `NO_LIQUIDITY` (154) at leg level; do not touch gates for this.
-7. **P2 — remove or wire `micro_ladder_for_family`** (dead code).
-8. **P3 — fresh M8 sniper** before any production/profit claim chain.
+1. `subgraph_ready_tokens=1` is too low for production-quality M9 search.
+2. `verified_second_pool_count=5` is borderline and should be raised before claiming strong M8.2 coverage.
+3. External hints are stale relative to the fresh sniper run (`07:50` vs `16:06`).
+4. M8.2 logs still show resolver attempts with partial/symbol-like token identifiers such as `0x420000` / `0x833589`; these must not reach pair resolution.
+5. `connector_routes_count=67`, but only one token becomes subgraph-ready, so connector synthesis is not yet reliably converting coverage into usable topology.
+6. Route-level quoteability for Balancer/Maverick exists, but cycle-level economics remains unproven downstream.
 
 ## Decision
 
-- **Measurement layer (ladder, force-reprobe): REACHED** — fresh runtime proof of real depth distribution (median sane ≈ $3.9k, max ≈ $66k).
-- **Economics layer: BLOCKED** — admission topology discards the measured universe; sizing collapses to $0.05; net bps is a gas-arithmetic artifact.
-- **No market verdict possible** until P0 items land. Longer soaks are pointless before that.
-- `execution_enabled`: false | `kill_switch_active`: true
+- M8: REACHED for upstream runtime.
+- M8.1: REACHED for upstream quote-probe role.
+- M8.2: PARTIAL_REACHED, but BLOCKED for 100% readiness.
+- M9 economics: BLOCKED and not part of this closure.
+
+Do not run a long economics soak as the next action. First refresh hints after fresh M8, repair M8.2 token identity/connector readiness, and prove `subgraph_ready_tokens` plus `verified_second_pool_count` improve in the expansion artifact.

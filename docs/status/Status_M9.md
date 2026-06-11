@@ -1,6 +1,8 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**M8/M8.1 upstream closure (2026-06-11):** **M8_M8_1_RUNTIME_REACHED** / **M8_2_M9_ECONOMICS_PENDING** — fresh 45m sniper + M8.1 + bridge rebuild; M9 economics **not** in closure scope.
+**Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M9 gates → `scripts/m9_lane_acceptance_report.py` (`m9_blockers` only).
+
+**Current runtime line (2026-06-11):** **M8_M8_1_RUNTIME_REACHED / M8_2_QUALITY_BLOCKED / M9_ECONOMICS_NOT_EVALUATED**. Fresh M8/M8.1 accepted upstream; M8.2 handoff volume is large but quality gates (`subgraph_ready_tokens`, `verified_second_pool_count`, stale hints) remain BLOCKED. M9 economics evaluated separately.
 
 | Layer | Metric | Value |
 |-------|--------|------:|
@@ -9,20 +11,16 @@
 | M8 sniper | `generated_at_utc` | **2026-06-11T16:06:29Z** |
 | M8.1 anchor | candidates / passes / qsr | **3228** / **351** / **1.0** |
 | M8.1 | `m8_1_stale` / `active_routes_count` | **false** / **0** (quote_probe_only by design) |
-| Bridge | `m8_stale` / `m8_new_pools_input` / `graph_ready_from_m8` | **false** / **278** / **196** |
-| Bridge | `graph_ready_total` / `m8_1_stale` | **874** / **false** |
-| Lane acceptance blockers (M9 only) | | `CYCLES_WITH_M8_POOL_ZERO`, `NO_POSITIVE_GROSS`, `NO_CROSS_MECHANIC_CYCLES_IN_GRAPH` |
+| M8.2 expansion | tokens / routes / multi-venue | **701** / **1025** / **14** |
+| M8.2 quality | `connector_routes_count` / `subgraph_ready_tokens` / `verified_second_pool_count` | **67** / **1** / **5** |
+| M8.2 hints | `hint_tokens_matched` / `external_hints_enabled` | **774** / **true** |
+| M8.2 distinct-pricing route quoteability | Curve / Balancer / Maverick | **9/9** / **79/94** / **90/143** |
+| Bridge after M8.2 | `m8_stale` / `m8_1_stale` / `graph_ready_from_m8` | **false** / **false** / **196** |
+| Bridge after M8.2 | `graph_ready_from_expansion` / `graph_ready_total` / active routes | **817** / **1130** / **950** |
+| M8.2 acceptance (`m8_2_acceptance_report`) | blockers | `SUBGRAPH_READY_LOW`, `VERIFIED_SECOND_POOL_LOW`, `HINTS_STALE` |
+| M9 acceptance (`m9_blockers`) | shadow not run | **NOT_EVALUATED** (no mixed M8.2 blockers) |
 
-**Status**: **M8_M8_1_RUNTIME_REACHED / M8_2_M9_ECONOMICS_BLOCKED** — primary blocker **`EXPANSION_PRODUCTIVE_ADMIT_STATIC_CONFIG_GATE`**. Depth ladder + `--force-reprobe` proven at runtime: `data/tmp/m9_bridge_inventory_shadow_latest.json` — `force_reprobe=395`, `probed_ok=393`, `exact100` **297→2**, **281 sane depths > $100** (median sane ≈ $3.9k, max ≈ $66k), `depth_probe_status`: MEASURED_CAPACITY=318 / TOO_THIN=67 / LOWER_BOUND_AT_MAX_PROBE=8. The old `DEPTH_TELEMETRY_MISSING_OR_FALLBACK_CAPPED` blocker is **closed at inventory level**.
-
-**Why economics is still blocked (sizing pipeline RCA, fresh 10m run `data/tmp/m9_graph_depth_truth_10m_v2.json`):** `cycles_quoteable=223`, `qsr=0.5348`, but `qsr_econ=0.0`, all top `market_size_usd=$0.05`, `cost_adjusted_net_bps≈-12004`, `depth_aware_known_rate=0.0`. Root causes (full chain in `docs/DEV_REPORT_LATEST.md`):
-1. **Static admission gate** — `expansion_productive_admit` is `dex_id in productive_dexes` (config flag), not depth-based; `uniswap_v4.enabled_for_productive=false` rejects **416/656 routes carrying 327 measured depths (278 sane > $100)** — the entire measured universe.
-2. **Admitted graph is 91% depth-less** (174/191 routes: maverick=120, balancer=37) → every quoted cycle has `min_effective_depth_usd=None` → `$0.05` micro-cap → gas arithmetic gives −12004 bps regardless of market.
-3. **`v3_liquidity_depth_lower_bound_usd` scaling bug** — 14 routes with insane depth (up to $31T); the only 17 admitted depth-carrying routes are all poisoned by it.
-4. **Perverse `_depth_gate_ok`** — unknown depth passes admission while measured depth < $50 fails (rewards non-measurement).
-5. **Log artifact** — runner prints `dynamic_size: [0.1]` because `round(0.05,1)=0.1`; actual quoted size is $0.05.
-
-**Current net-negative evidence is an admission/sizing artifact, not a market verdict.** No production/profit claim; **30m spread-lifetime blocked** until P0 fixes land: depth-aware expansion admission (replace static V4 flag), V3 analytical depth fix + sanity cap, `_depth_gate_ok` symmetry. Acceptance for next 10m run: `depth_aware_known_rate > 0`, ≥1 opportunity with `market_size_usd ≥ $25`, `qsr_econ > 0`.
+**M8.2 audit verdict:** **PARTIAL_REACHED, not 100% ready.** The old tiny-expansion state is gone: M8.2 consumes the fresh `m8_pending_pairs.json`, matches hints, includes Curve/Balancer/Maverick, and bridge accepts `817` expansion routes. The remaining M8.2 blockers are quality blockers: `subgraph_ready_tokens=1`, `verified_second_pool_count=5`, stale external hints (`m8_external_pool_hints_latest.json` generated at `2026-06-11T07:50:18Z` while sniper is `2026-06-11T16:06:29Z`), and resolver noise with partial/symbol-like token IDs (`0x420000`, `0x833589`) during expansion. Do not claim M8.2 closure until fresh hint refresh + expansion raises subgraph-ready and verified second-pool counts.
 
 **Session 2026-06-10 cycle-lane sync (pool-lane PASS vs cycle-lane FAIL):**
 

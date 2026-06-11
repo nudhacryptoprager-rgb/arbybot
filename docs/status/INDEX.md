@@ -16,6 +16,7 @@
 | M7 - Triangular Feasibility (M7.A) | [IN PROGRESS] | [Status_M7.md](Status_M7.md) |
 | M8 - New-Pool Sniping Pivot | [OPEN] | [Status_M8.md](Status_M8.md) |
 | M8.1 - Stable-Anchor Inventory & Diagnostics | [ACTIVE] | [Status_M8_1.md](Status_M8_1.md) |
+| M8.2 - Cross-DEX Expansion & Mirror Handoff | [QUALITY_BLOCKED] | [Status_M8_2.md](Status_M8_2.md) |
 | M9 - Graph-Arb Long-Tail Shadow Scanner | [IN PROGRESS] | [Status_M9.md](Status_M9.md) |
 
 ## Current Focus
@@ -27,6 +28,8 @@
 **M8 - New-Pool Sniping Pivot**: next production-profit path after M7 economics evidence; starts as documentation-aligned OPEN milestone and must produce its own artifacts before any production claim. See [Status_M8.md](Status_M8.md).
 
 **M8.1 - Stable-Anchor Inventory & Diagnostics**: inventory layer for stable/near-peg pairs; feeds M9 graph builder. `gate_acceptance=true`, `strategy_gate_acceptance=false` (NO_STABLE_EDGE). See [Status_M8_1.md](Status_M8_1.md).
+
+**M8.2 - Cross-DEX Expansion & Mirror Handoff**: second-venue discovery, external hints, connector synthesis. Quality gates in `m8_2_acceptance_report.py`; independent of M9 economics. See [Status_M8_2.md](Status_M8_2.md).
 
 **M9 - Graph-Arb Long-Tail Shadow Scanner**: smoke10 complete (6522 sweeps, 300s, duration_fulfilled=true). `QUOTE_DECODE blocker FIXED` — root cause was missing `config/exotic_base_anchor.yaml` → cfg=None → zero-address quoter → all eth_call returned `0x`. After config created: QUOTE_DECODE=0. Current blocker: `mainnet.base.org` HTTP 429 rate-limiting → circuit breaker → QUOTE_RPC_ERROR. New blocker class: PROVIDER_QUALITY_BLOCKED (need premium RPC endpoint). Topology: CYCLES_FOUND, 102 edges, 8 tokens, 4 DEXes. `qsr=0.0` (RPC endpoint blocks all quotes). Next step: soak on dRPC/Alchemy endpoint. See [Status_M9.md](Status_M9.md).
 

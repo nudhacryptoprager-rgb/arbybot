@@ -136,6 +136,68 @@ def _cross_mechanic_topology(
     }
 
 
+def _m9_economics_blockers(
+    *,
+    shadow: Optional[Dict[str, Any]],
+    rca: Optional[Dict[str, Any]],
+    shadow_cycles_found: int,
+    shadow_cycles_quoteable: int,
+    shadow_cycles_with_m8: int,
+) -> List[str]:
+    """M9-only blockers: graph/cycle/quote/economics (not M8.2 hint/mirror quality)."""
+    blockers: List[str] = []
+    shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
+    qsr_econ = (shadow or {}).get("qsr_econ")
+    depth_known = (shadow or {}).get("depth_aware_known_rate")
+
+    if shadow_cycles_found > 0 and shadow_cycles_quoteable == 0:
+        blockers.append("NO_QUOTEABLE_CYCLES")
+    if int((shadow or {}).get("cycles_positive_gross") or 0) == 0 and shadow_cycles_found > 0:
+        blockers.append("NO_POSITIVE_GROSS")
+    if shadow_cycles_found > 0 and shadow_qsr == 0.0:
+        blockers.append("QSR_ZERO")
+    if shadow_cycles_found > 0 and qsr_econ is not None and float(qsr_econ) == 0.0:
+        blockers.append("QSR_ECON_ZERO")
+    if shadow_cycles_found > 0 and depth_known is not None and float(depth_known) == 0.0:
+        blockers.append("DEPTH_UNKNOWN")
+
+    rca_summary = (rca or {}).get("summary") or {}
+    top_reject = str(
+        rca_summary.get("top_reject")
+        or rca_summary.get("dominant_reject")
+        or ""
+    ).upper()
+    by_reject = (rca or {}).get("by_reject_reason") or {}
+    if "QUOTE_REVERT" in top_reject or int(by_reject.get("QUOTE_REVERT") or 0) > 0:
+        if shadow_cycles_found > 0 and shadow_cycles_quoteable == 0:
+            blockers.append("QUOTE_REVERT")
+
+    phantom_count = int(
+        ((shadow or {}).get("phantom_quote_diagnostics") or {}).get("phantom_count")
+        or ((shadow or {}).get("cycle_reject_histogram") or {}).get(
+            "PHANTOM_QUOTE_BPS_OVERFLOW", 0
+        )
+        or 0
+    )
+    if phantom_count > 0:
+        blockers.append("PHANTOM_QUOTE_PRESENT")
+
+    cm_found = int(
+        (shadow or {}).get("cross_mechanic_cycles_found")
+        or (shadow or {}).get("cross_mechanic_cycles")
+        or 0
+    )
+    cm_quoteable = int((shadow or {}).get("cross_mechanic_cycles_quoteable") or 0)
+    if shadow_cycles_found > 0 and shadow_cycles_with_m8 == 0:
+        blockers.append("CYCLES_WITH_M8_POOL_ZERO")
+    if cm_found == 0 and shadow_cycles_found > 0:
+        blockers.append("NO_CROSS_MECHANIC_CYCLES_IN_GRAPH")
+    elif cm_quoteable == 0 and cm_found > 0:
+        blockers.append("NO_CROSS_MECHANIC_CYCLES_QUOTEABLE")
+
+    return sorted(set(blockers))
+
+
 def build_acceptance_report(
     *,
     sniper: Optional[Dict[str, Any]],
@@ -144,6 +206,7 @@ def build_acceptance_report(
     bridge: Optional[Dict[str, Any]],
     shadow: Optional[Dict[str, Any]],
     rca: Optional[Dict[str, Any]],
+    m8_2_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     sniper_metrics = (sniper or {}).get("metrics") or {}
     anchor_metrics = (anchor or {}).get("metrics") or {}
@@ -269,37 +332,37 @@ def build_acceptance_report(
         },
     ]
 
-    phantom_count = int(
-        ((shadow or {}).get("phantom_quote_diagnostics") or {}).get("phantom_count")
-        or ((shadow or {}).get("cycle_reject_histogram") or {}).get(
-            "PHANTOM_QUOTE_BPS_OVERFLOW", 0
-        )
-        or 0
+    m9_blockers = _m9_economics_blockers(
+        shadow=shadow,
+        rca=rca,
+        shadow_cycles_found=shadow_cycles_found,
+        shadow_cycles_quoteable=shadow_cycles_quoteable,
+        shadow_cycles_with_m8=shadow_cycles_with_m8,
     )
 
-    blockers: List[str] = []
+    upstream_blockers: List[str] = []
+    m8_2_upstream: Dict[str, Any] = {
+        "goal_status": "NOT_EVALUATED",
+        "blockers": [],
+        "metrics": {},
+    }
+    if m8_2_report is not None:
+        m8_2_upstream = {
+            "goal_status": m8_2_report.get("goal_status"),
+            "blockers": list(m8_2_report.get("blockers") or []),
+            "metrics": dict(m8_2_report.get("metrics") or {}),
+            "provenance": dict(m8_2_report.get("provenance") or {}),
+        }
+        if m8_2_report.get("goal_status") == "BLOCKED":
+            upstream_blockers.append("UPSTREAM_M8_2_NOT_READY")
+
+    bridge_upstream_warnings: List[str] = []
     if int(bsm.get("graph_ready_from_m8") or 0) == 0:
-        blockers.append("M8_DIRECT_INGESTION_NOT_READY")
-    elif shadow_cycles_with_m8 == 0:
-        blockers.append("CYCLES_WITH_M8_POOL_ZERO")
-    if shadow_cycles_found > 0 and shadow_cycles_quoteable == 0:
-        blockers.append("NO_QUOTEABLE_CYCLES")
-    if shadow_qsr == 0.0 and shadow_cycles_found > 0:
-        blockers.append("QSR_ZERO")
-    if int((shadow or {}).get("cycles_positive_gross") or 0) == 0:
-        blockers.append("NO_POSITIVE_GROSS")
-    if cm_found == 0:
-        blockers.append("NO_CROSS_MECHANIC_CYCLES_IN_GRAPH")
-    elif cm_quoteable == 0:
-        blockers.append("NO_CROSS_MECHANIC_CYCLES_QUOTEABLE")
-    if phantom_count > 0:
-        blockers.append("PHANTOM_QUOTE_PRESENT")
+        bridge_upstream_warnings.append("M8_DIRECT_INGESTION_NOT_READY")
     if bsm.get("m8_stale") and int(bsm.get("graph_ready_from_m8") or 0) > 0:
-        blockers.append("M8_ARTIFACT_STALE")
-    if not bsm.get("m8_provenance_enforced"):
-        blockers.append("M8_ROOTED_DATA_PROVENANCE_NOT_ENFORCED")
-    elif int(bsm.get("routes_rejected_not_m8_derived") or 0) > 0:
-        blockers.append("M8_EXPLORATION_ROUTES_PARTITIONED")
+        bridge_upstream_warnings.append("M8_ARTIFACT_STALE")
+
+    blockers = sorted(set(upstream_blockers + m9_blockers))
 
     exploration_sample: List[Dict[str, Any]] = []
     for r in ((bridge or {}).get("exploration_routes") or [])[:20]:
@@ -313,8 +376,12 @@ def build_acceptance_report(
             }
         )
 
+    m9_goal = "BLOCKED" if m9_blockers else "PARTIAL"
+    if shadow is None and not m9_blockers:
+        m9_goal = "NOT_EVALUATED"
+
     return {
-        "schema_version": "m9_lane_acceptance_report.2",
+        "schema_version": "m9_lane_acceptance_report.3",
         "funnel_layers": funnel_layers,
         "dex_coverage": _dex_coverage(bridge, expansion, shadow),
         "cross_mechanic_topology": _cross_mechanic_topology(bridge, shadow),
@@ -333,8 +400,13 @@ def build_acceptance_report(
         "quote_lane_rca_summary": (rca or {}).get("summary"),
         "quote_lane_top_rejects": (rca or {}).get("by_reject_reason"),
         "quote_lane_adapter_errors": (rca or {}).get("by_adapter_family_leg_errors"),
+        "m8_2_upstream": m8_2_upstream,
+        "m9_blockers": m9_blockers,
+        "upstream_blockers": upstream_blockers,
+        "bridge_upstream_warnings": bridge_upstream_warnings,
         "blockers": blockers,
-        "goal_status": "BLOCKED" if blockers else "PARTIAL",
+        "goal_status": "BLOCKED" if blockers else m9_goal,
+        "m9_goal_status": m9_goal,
     }
 
 
@@ -347,10 +419,18 @@ def main() -> int:
     ap.add_argument("--shadow", default=str(_DEFAULT_PATHS["shadow"]))
     ap.add_argument("--rca", default=str(_DEFAULT_PATHS["rca"]))
     ap.add_argument(
+        "--m8-2-report",
+        default=str(REPO_ROOT / "data/tmp/m8_2_acceptance_report_latest.json"),
+        help="M8.2 acceptance report (mirror/subgraph/handoff gates)",
+    )
+    ap.add_argument(
         "--output",
         default=str(REPO_ROOT / "data/tmp/m9_lane_acceptance_report_latest.json"),
     )
     args = ap.parse_args()
+
+    m8_2_path = Path(args.m8_2_report)
+    m8_2_report = _load(m8_2_path) if m8_2_path.exists() else None
 
     report = build_acceptance_report(
         sniper=_load(Path(args.sniper)),
@@ -359,11 +439,15 @@ def main() -> int:
         bridge=_load(Path(args.bridge)),
         shadow=_load(Path(args.shadow)),
         rca=_load(Path(args.rca)),
+        m8_2_report=m8_2_report,
     )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report["funnel_layers"], indent=2))
+    print("m8_2_upstream:", report["m8_2_upstream"].get("goal_status"))
+    print("m9_blockers:", report["m9_blockers"])
+    print("upstream_blockers:", report["upstream_blockers"])
     print("blockers:", report["blockers"])
     print("written:", out)
     return 0
