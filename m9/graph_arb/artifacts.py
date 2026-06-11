@@ -243,10 +243,14 @@ def _build_top_opportunity(
     else:
         loss_reason = None
 
+    from m9.graph_arb.depth_telemetry import opportunity_depth_fields
+
+    _depth_fields = opportunity_depth_fields(qr, route_meta_by_pool)
     return {
         "cycle_id": cycle.cycle_id,
         "status": qr.status,
         "reject_reason": qr.reject_reason,
+        **_depth_fields,
         "dex": dexes[0] if len(dexes) == 1 else ",".join(dexes),
         "factory": factories[0] if len(factories) == 1 else ",".join(factories),
         "factory_verified": factory_verified,
@@ -649,7 +653,13 @@ def _compute_layer_telemetry(
 
     quoted = [
         qr for qr in cycle_results
-        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH", "DEPTH_BELOW_LIVENESS_FLOOR")
+        if qr.status not in (
+            "ZERO_AMOUNT_IN",
+            "OVERSIZED_VS_DEPTH",
+            "OVERSIZED_VS_MEASURED_DEPTH",
+            "OVERSIZED_VS_UNKNOWN_DEPTH_FALLBACK",
+            "DEPTH_BELOW_LIVENESS_FLOOR",
+        )
     ]
     by_adapter: Counter[str] = Counter()
     ok_adapter: Counter[str] = Counter()
@@ -821,7 +831,13 @@ def build_artifact(
         except Exception:
             return qr.gross_bps > 0
 
-    cycles_positive_gross = sum(1 for qr in cycle_results if _counts_as_positive_evidence(qr))
+    cycles_positive_gross_quote = sum(
+        1 for qr in cycle_results if qr.status == "POSITIVE_GROSS"
+    )
+    cycles_positive_gross_raw = sum(
+        1 for qr in cycle_results if _counts_as_positive_evidence(qr)
+    )
+    cycles_positive_gross = cycles_positive_gross_raw
     _economics_claim_suppressed = diagnostic_admission_mode == "topology_probe"
     if _economics_claim_suppressed:
         cycles_positive_gross = 0
@@ -914,7 +930,13 @@ def build_artifact(
     def _qsr_for_subset(results: List[CycleQuoteResult]) -> float:
         quoted_sub = [
             qr for qr in results
-            if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH", "DEPTH_BELOW_LIVENESS_FLOOR")
+            if qr.status not in (
+            "ZERO_AMOUNT_IN",
+            "OVERSIZED_VS_DEPTH",
+            "OVERSIZED_VS_MEASURED_DEPTH",
+            "OVERSIZED_VS_UNKNOWN_DEPTH_FALLBACK",
+            "DEPTH_BELOW_LIVENESS_FLOOR",
+        )
         ]
         if not quoted_sub:
             return 0.0
@@ -929,7 +951,13 @@ def build_artifact(
     # signal, so it must not deflate QSR).
     quoted = [
         qr for qr in cycle_results
-        if qr.status not in ("ZERO_AMOUNT_IN", "OVERSIZED_VS_DEPTH", "DEPTH_BELOW_LIVENESS_FLOOR")
+        if qr.status not in (
+            "ZERO_AMOUNT_IN",
+            "OVERSIZED_VS_DEPTH",
+            "OVERSIZED_VS_MEASURED_DEPTH",
+            "OVERSIZED_VS_UNKNOWN_DEPTH_FALLBACK",
+            "DEPTH_BELOW_LIVENESS_FLOOR",
+        )
     ]
     qsr = _qsr_for_subset(cycle_results)
 
@@ -951,7 +979,20 @@ def build_artifact(
     qsr_liveness = _qsr_for_subset(_liveness_results)
     qsr_econ = _qsr_for_subset(_econ_results)
     oversized_vs_depth_count = sum(
-        1 for qr in cycle_results if qr.status == "OVERSIZED_VS_DEPTH"
+        1
+        for qr in cycle_results
+        if qr.status
+        in (
+            "OVERSIZED_VS_DEPTH",
+            "OVERSIZED_VS_MEASURED_DEPTH",
+            "OVERSIZED_VS_UNKNOWN_DEPTH_FALLBACK",
+        )
+    )
+    oversized_vs_measured_depth_count = sum(
+        1 for qr in cycle_results if qr.status == "OVERSIZED_VS_MEASURED_DEPTH"
+    )
+    oversized_vs_unknown_depth_fallback_count = sum(
+        1 for qr in cycle_results if qr.status == "OVERSIZED_VS_UNKNOWN_DEPTH_FALLBACK"
     )
 
     # Economics gate (applies only when we have actual quote results)
@@ -967,6 +1008,19 @@ def build_artifact(
         econ_status = _ECON_PASS
 
     gate_acceptance = econ_status == _ECON_PASS
+
+    _bridge_depth_kr = (
+        (bridge_source_metrics or {}).get("depth_known_rate")
+        if bridge_source_metrics
+        else None
+    )
+    _economics_blocked_depth = False
+    if _bridge_depth_kr is not None:
+        from m9.graph_arb.depth_telemetry import economics_blocked_by_depth_telemetry
+
+        _economics_blocked_depth = economics_blocked_by_depth_telemetry(float(_bridge_depth_kr))
+        if _economics_blocked_depth and econ_status == _ECON_PASS:
+            econ_status = "BLOCKED_DEPTH_TELEMETRY_MISSING"
 
     # Topology gate
     if cycles_found > 0:
@@ -1290,6 +1344,8 @@ def build_artifact(
         "execution_mode": execution_mode,
         "cycles_found": cycles_found,
         "cycles_positive_gross": cycles_positive_gross,
+        "cycles_positive_gross_raw": cycles_positive_gross_raw,
+        "cycles_positive_gross_quote": cycles_positive_gross_quote,
         "cycles_quoteable": cycles_quoteable,
         "cycles_router_sim_eligible": cycles_router_sim_eligible,
         "best_cycle_net_bps": best_cycle_net_bps,  # alias for best_cycle_gross_bps; backward compat
@@ -1317,7 +1373,13 @@ def build_artifact(
             "liveness_quote_attempts": len(_liveness_results),
             "econ_quote_attempts": len(_econ_results),
         },
-        "oversized_vs_depth_count": oversized_vs_depth_count,  # excluded from QSR denominator
+        "oversized_vs_depth_count": oversized_vs_depth_count,
+        "oversized_vs_measured_depth_count": oversized_vs_measured_depth_count,
+        "oversized_vs_unknown_depth_fallback_count": oversized_vs_unknown_depth_fallback_count,
+        "bridge_depth_telemetry": {
+            "depth_known_rate": _bridge_depth_kr,
+            "economics_conclusion_blocked": _economics_blocked_depth,
+        },
         "infra_status": infra_status,
         "quote_rpc_error_rate": quote_rpc_error_rate,
         "quote_revert_rate": quote_revert_rate,

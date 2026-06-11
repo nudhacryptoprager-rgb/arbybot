@@ -6,7 +6,8 @@ long-tail routes with ``effective_depth_usd=None`` (they are not in the base
 depth-enriched inventory). This script probes only those missing routes with a
 price-agnostic anchor-side marginal depth probe and writes the inventory back.
 
-Already-enriched base routes (effective_depth_usd already set) are left untouched.
+Already-enriched base routes (effective_depth_usd already set) are left untouched
+unless ``--force-reprobe`` is used to refresh legacy single-rung depth rows.
 
 Reads / writes (in place by default):
   - data/runs/_rolling/m9_bridge_inventory_latest.json
@@ -75,6 +76,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ref-size-usd", type=float, default=2.0)
     p.add_argument("--dry-run", action="store_true", help="Probe but do not write")
     p.add_argument(
+        "--force-reprobe",
+        action="store_true",
+        help=(
+            "Re-probe legacy depth rows that have effective_depth_usd but no "
+            "depth_probe_status (this refreshes the old single-rung $100 cap)."
+        ),
+    )
+    p.add_argument(
         "--allow-public-rpc",
         action="store_true",
         help=(
@@ -137,8 +146,8 @@ def main() -> int:
     routes = inventory.get("active_routes", [])
     dex_quoters = _load_dex_quoters(args.dexes, args.chain)
     log.info(
-        "Enriching %d active routes (quoters loaded: %d) at $%.0f...",
-        len(routes), len(dex_quoters), args.probe_size_usd,
+        "Enriching %d active routes (quoters loaded: %d) at $%.0f, force_reprobe=%s...",
+        len(routes), len(dex_quoters), args.probe_size_usd, args.force_reprobe,
     )
 
     from m9.graph_arb.pool_depth_probe import enrich_routes_missing_depth
@@ -149,18 +158,32 @@ def main() -> int:
         dex_quoters=dex_quoters,
         probe_size_usd=args.probe_size_usd,
         ref_size_usd=args.ref_size_usd,
+        force_reprobe=args.force_reprobe,
     )
 
+    from m9.graph_arb.depth_telemetry import depth_known_rate, economics_blocked_by_depth_telemetry
+
+    _dkr = depth_known_rate(routes)
     log.info(
-        "Depth enrichment: candidates=%d probed_ok=%d failed=%d no_anchor=%d "
-        "skipped_v4=%d toxic=%d low_depth=%d v4_candidates=%d v4_ok=%d v4_failed=%d",
-        counts["candidates"], counts["probed_ok"], counts["probe_failed"],
-        counts["no_anchor"], counts["skipped_v4"], counts["toxic"], counts["low_depth"],
+        "Depth enrichment: candidates=%d force_reprobe=%d probed_ok=%d distinct_ok=%d failed=%d "
+        "no_anchor=%d skipped_v4=%d toxic=%d low_depth=%d depth_known_rate=%.4f "
+        "v4_candidates=%d v4_ok=%d v4_failed=%d",
+        counts["candidates"], counts.get("force_reprobe_candidates", 0),
+        counts["probed_ok"], counts.get("distinct_depth_ok", 0),
+        counts["probe_failed"], counts["no_anchor"], counts["skipped_v4"],
+        counts["toxic"], counts["low_depth"], _dkr,
         counts["v4_depth_candidates"], counts["v4_depth_probe_ok"],
         counts["v4_depth_probe_failed"],
     )
-
     metrics = inventory.setdefault("bridge_source_metrics", {})
+    metrics["depth_known_rate"] = _dkr
+    metrics["depth_known_count"] = sum(
+        1 for r in routes if r.get("effective_depth_usd") is not None
+    )
+    metrics["depth_active_routes"] = len(routes)
+    metrics["depth_force_reprobe_enabled"] = bool(args.force_reprobe)
+    metrics["depth_force_reprobe_candidates"] = counts.get("force_reprobe_candidates", 0)
+    metrics["economics_conclusion_blocked"] = economics_blocked_by_depth_telemetry(_dkr)
     metrics["v4_depth_candidates"] = counts["v4_depth_candidates"]
     metrics["v4_depth_probe_ok"] = counts["v4_depth_probe_ok"]
     metrics["v4_depth_probe_failed"] = counts["v4_depth_probe_failed"]

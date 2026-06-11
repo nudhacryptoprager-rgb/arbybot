@@ -57,23 +57,50 @@ _PHANTOM_CEILING_NO_DEPTH_BPS: float = 500.0
 _PHANTOM_CEILING_MAX_BPS: float = 2000.0
 
 
-def depth_aware_phantom_ceiling_bps(depth_usd: Optional[float]) -> float:
+def depth_aware_phantom_ceiling_bps(
+    depth_usd: Optional[float],
+    *,
+    depth_probe_status: Optional[str] = None,
+    freshness_window: bool = False,
+) -> float:
     """Return the maximum plausible absolute gross_bps for a given pool depth.
 
     ``depth_usd`` is the bottleneck ``effective_depth_usd`` of the cycle (the
     notional at which marginal price impact reaches the LOW threshold).  When
     no depth is measured the strictest ceiling applies, because an unknown-depth
     pool is the most likely phantom source.
+
+    Fresh M8 pools with ladder lower-bound depth use a relaxed ceiling so
+    capped/fallback depth does not hard-quarantine before round-trip replay.
     """
+    from m9.graph_arb.depth_capacity_probe import (
+        DEPTH_PROBE_LOWER_BOUND_AT_MAX,
+        DEPTH_PROBE_MEASURED_CAPACITY,
+    )
+
     if depth_usd is None or depth_usd <= 0:
-        return _PHANTOM_CEILING_NO_DEPTH_BPS
-    if depth_usd < 1_000:
-        return _PHANTOM_CEILING_NO_DEPTH_BPS
-    if depth_usd < 10_000:
-        return 800.0
-    if depth_usd < 100_000:
-        return 1_200.0
-    return _PHANTOM_CEILING_MAX_BPS
+        base = _PHANTOM_CEILING_NO_DEPTH_BPS
+    elif depth_usd < 1_000:
+        base = _PHANTOM_CEILING_NO_DEPTH_BPS
+    elif depth_usd < 10_000:
+        base = 800.0
+    elif depth_usd < 100_000:
+        base = 1_200.0
+    else:
+        base = _PHANTOM_CEILING_MAX_BPS
+
+    if freshness_window and depth_probe_status in (
+        DEPTH_PROBE_LOWER_BOUND_AT_MAX,
+        DEPTH_PROBE_MEASURED_CAPACITY,
+    ):
+        return max(base, 1_200.0)
+    if (
+        depth_probe_status == DEPTH_PROBE_LOWER_BOUND_AT_MAX
+        and depth_usd is not None
+        and float(depth_usd) >= 500.0
+    ):
+        return max(base, 800.0)
+    return base
 
 
 def is_phantom_gross(gross_bps: float, depth_usd: Optional[float]) -> bool:

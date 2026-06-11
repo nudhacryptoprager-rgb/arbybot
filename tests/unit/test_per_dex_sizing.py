@@ -33,3 +33,11 @@ def test_productive_cycle_size_usd_cap_distinct_without_depth():
         edges = (_edge("maverick_v2"), _edge("uniswap_v3", "b"))
 
     assert productive_cycle_size_usd_cap(_Cycle(), 1.0, {}) == 0.05
+
+
+def test_productive_cycle_size_usd_cap_no_micro_when_measured_depth():
+    class _Cycle:
+        min_effective_depth_usd = 5000.0
+        edges = (_edge("maverick_v2"), _edge("uniswap_v3", "b"))
+
+    assert productive_cycle_size_usd_cap(_Cycle(), 50.0, {}) == 50.0

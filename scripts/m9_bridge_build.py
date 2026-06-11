@@ -234,6 +234,31 @@ def main() -> int:
     if metrics["m8_1_stale"]:
         log.warning("WARN: m8_1 artifact is stale (>4h old) — run M8.1 stable-anchor to refresh")
 
+    try:
+        from m9.graph_arb.depth_telemetry import depth_known_rate, economics_blocked_by_depth_telemetry
+
+        _routes = []
+        try:
+            import json
+            from pathlib import Path
+
+            _out = Path(args.output)
+            if _out.exists():
+                _routes = json.loads(_out.read_text(encoding="utf-8")).get("active_routes") or []
+        except Exception:
+            pass
+        if _routes:
+            _dkr = depth_known_rate(_routes)
+            log.info("  depth_known_rate          : %.4f", _dkr)
+            if economics_blocked_by_depth_telemetry(_dkr):
+                log.warning(
+                    "WARN: depth_known_rate=%.4f < 0.8 — run scripts/m9_enrich_bridge_depth.py "
+                    "before M9 shadow/economics",
+                    _dkr,
+                )
+    except Exception:
+        pass
+
     log.info("Bridge build: OK (graph_ready_total=%d)", metrics["graph_ready_total"])
     return 0
 

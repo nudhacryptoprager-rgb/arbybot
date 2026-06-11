@@ -255,7 +255,11 @@ class TestProbeRouteMarginalDepth:
             dex_quoters={"uniswap_v3": "0x" + "99" * 20},
         )
         assert res["probe_ok"] is True
-        assert res["effective_depth_usd"] == 100.0
+        assert res["effective_depth_usd"] >= 50_000.0
+        assert res.get("depth_probe_status") in (
+            "LOWER_BOUND_AT_MAX_PROBE",
+            "MEASURED_CAPACITY",
+        )
         assert res["depth_reject_reason"] is None
 
     def test_v3_sublinear_low_depth(self, monkeypatch):
@@ -326,6 +330,70 @@ class TestEnrichRoutesMissingDepth:
         assert counts["probed_ok"] == 1
         assert routes[0]["effective_depth_usd"] == 500.0  # untouched
         assert routes[1]["effective_depth_usd"] == 42.0   # enriched
+
+    def test_force_reprobe_refreshes_legacy_100_depth_without_status(self, monkeypatch):
+        calls = {"n": 0}
+
+        def _stub(*a, **k):
+            calls["n"] += 1
+            return {
+                "probe_ok": True,
+                "effective_depth_usd": 2500.0,
+                "price_impact_at_100usd": 0.01,
+                "depth_reject_reason": None,
+                "depth_method": "marginal_anchor",
+                "depth_probe_status": "LOWER_BOUND_AT_MAX_PROBE",
+            }
+
+        monkeypatch.setattr(probe, "probe_route_marginal_depth", _stub)
+        routes = [
+            {
+                "effective_depth_usd": 100.0,
+                "pool_address": "0x" + "33" * 20,
+                "token0": "USDC",
+                "token1": "MEME",
+            }
+        ]
+
+        counts = probe.enrich_routes_missing_depth(
+            routes,
+            rpc_url="http://rpc",
+            sleep_s=0,
+            force_reprobe=True,
+        )
+
+        assert calls["n"] == 1
+        assert counts["candidates"] == 1
+        assert counts["force_reprobe_candidates"] == 1
+        assert routes[0]["effective_depth_usd"] == 2500.0
+        assert routes[0]["depth_probe_status"] == "LOWER_BOUND_AT_MAX_PROBE"
+
+    def test_force_reprobe_keeps_post_ladder_status_rows(self, monkeypatch):
+        monkeypatch.setattr(
+            probe,
+            "probe_route_marginal_depth",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not reprobe")),
+        )
+        routes = [
+            {
+                "effective_depth_usd": 100.0,
+                "depth_probe_status": "MEASURED_CAPACITY",
+                "pool_address": "0x" + "44" * 20,
+                "token0": "USDC",
+                "token1": "MEME",
+            }
+        ]
+
+        counts = probe.enrich_routes_missing_depth(
+            routes,
+            rpc_url="http://rpc",
+            sleep_s=0,
+            force_reprobe=True,
+        )
+
+        assert counts["candidates"] == 0
+        assert counts["force_reprobe_candidates"] == 0
+        assert routes[0]["effective_depth_usd"] == 100.0
 
     def test_skips_placeholder_pool(self, monkeypatch):
         monkeypatch.setattr(

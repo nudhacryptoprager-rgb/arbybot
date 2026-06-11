@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
 from m8_1.stable_anchor.quote_probe import probe_quote, QuoteResult
+from m9.graph_arb.depth_telemetry import oversized_reject_for_depth
 from m9.graph_arb.models import CycleQuoteResult, GraphCycle, GraphEdge
 
 # Quote backend identifiers
@@ -349,7 +350,18 @@ def quote_cycle_sync(
     from m9.graph_arb.profit_validation import depth_aware_phantom_ceiling_bps
 
     _cycle_depth = cycle.min_effective_depth_usd
-    _max_reasonable_bps = depth_aware_phantom_ceiling_bps(_cycle_depth)
+    _depth_statuses = [
+        getattr(e, "depth_probe_status", None)
+        for e in cycle.edges
+        if getattr(e, "depth_probe_status", None)
+    ]
+    _cycle_depth_status = _depth_statuses[0] if len(_depth_statuses) == 1 else None
+    _fresh = any(getattr(e, "freshness_window", False) for e in cycle.edges)
+    _max_reasonable_bps = depth_aware_phantom_ceiling_bps(
+        _cycle_depth,
+        depth_probe_status=_cycle_depth_status,
+        freshness_window=_fresh,
+    )
     if abs(gross_bps) > _max_reasonable_bps:
         # P0a: split the overflow by sign.
         #  * POSITIVE overflow → an impossible arbitrage spread → genuine phantom
@@ -363,8 +375,9 @@ def quote_cycle_sync(
             _ovf_status = STATUS_QUOTE_FAILED
             _ovf_reject = _REJECT_PHANTOM_QUOTE_BPS_OVERFLOW
         else:
-            _ovf_status = STATUS_OVERSIZED_VS_DEPTH
-            _ovf_reject = _REJECT_OVERSIZED_VS_DEPTH
+            _ovf_status, _ovf_reject = oversized_reject_for_depth(
+                _cycle_depth, gross_bps=gross_bps
+            )
         return CycleQuoteResult(
             cycle=cycle,
             size_usd=size_usd,
@@ -423,22 +436,46 @@ def quote_cycle_dynamic_sync(
     if not candidates:
         candidates = (1000.0,)
 
+    from m9.graph_arb.depth_telemetry import REJECT_DEPTH_BELOW_ECONOMICS_FLOOR
+    from m9.graph_arb.size_truth import economic_size_floor_usd
+
     cycle_depth = cycle.min_effective_depth_usd if depth_aware else None
     depth_capped = False
+    _econ_floor_usd = economic_size_floor_usd()
     if isinstance(cycle_depth, (int, float)) and not isinstance(cycle_depth, bool) and cycle_depth > 0:
         try:
-            from m9.graph_arb.per_dex_sizing import cap_sizes_to_depth_per_family
+            from m9.graph_arb.per_dex_sizing import (
+                bottleneck_depth_fraction,
+                cap_sizes_to_depth_per_family,
+            )
 
+            _frac = bottleneck_depth_fraction(cycle.edges)
+            _depth_cap_usd = float(cycle_depth) * _frac
+            if _depth_cap_usd < _econ_floor_usd:
+                return CycleQuoteResult(
+                    cycle=cycle,
+                    size_usd=_econ_floor_usd,
+                    amount_in=0,
+                    amount_out=0,
+                    gross_bps=0.0,
+                    status="DEPTH_BELOW_ECONOMICS_FLOOR",
+                    reject_reason=REJECT_DEPTH_BELOW_ECONOMICS_FLOOR,
+                    leg_results=[],
+                    elapsed_s=0.0,
+                    cycle_min_depth_usd=float(cycle_depth),
+                    depth_capped=True,
+                )
             capped = cap_sizes_to_depth_per_family(
                 candidates,
                 float(cycle_depth),
                 edges=cycle.edges,
-                global_fraction=depth_size_fraction,
             )
         except Exception:
             capped = cap_sizes_to_depth(candidates, cycle_depth, depth_size_fraction)
         depth_capped = capped != candidates
         candidates = capped
+        if not any(s >= _econ_floor_usd for s in candidates):
+            candidates = tuple(sorted(set(candidates) | {_econ_floor_usd}))
     else:
         cycle_depth = None
 

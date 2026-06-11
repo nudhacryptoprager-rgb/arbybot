@@ -13,7 +13,7 @@ from m9.graph_arb.adapter_families import (
     route_family,
 )
 
-# Max fraction of effective depth to quote per family (micro ladder front-loaded).
+# Max fraction of effective depth to quote per family (unknown / fallback-capped).
 DEPTH_FRACTION_BY_FAMILY: Dict[str, float] = {
     FAMILY_V2_FORK: 0.12,
     FAMILY_V3_FORK: 0.18,
@@ -26,13 +26,37 @@ DEPTH_FRACTION_BY_FAMILY: Dict[str, float] = {
     "aerodrome_slipstream_cl": 0.15,
 }
 
+# Raised fractions when ``depth_probe_status`` confirms measured capacity.
+DEPTH_FRACTION_MEASURED_BY_FAMILY: Dict[str, float] = {
+    FAMILY_BALANCER_VAULT: 0.15,
+    FAMILY_MAVERICK_V2: 0.15,
+    FAMILY_CURVE_STABLE: 0.20,
+    FAMILY_V2_FORK: 0.15,
+    FAMILY_V3_FORK: 0.20,
+    FAMILY_V4_POOL_MANAGER: 0.12,
+}
+
 _DEFAULT_DEPTH_FRACTION: float = 0.15
 _MIN_PROBE_USD: float = 0.02
 _GLOBAL_MICRO_LADDER: Tuple[float, ...] = (0.25, 0.5, 1.0, 5.0, 10.0)
 
 
-def depth_fraction_for_family(family: str) -> float:
-    return DEPTH_FRACTION_BY_FAMILY.get(family, _DEFAULT_DEPTH_FRACTION)
+def _edge_depth_probe_status(edge: Any) -> Optional[str]:
+    return getattr(edge, "depth_probe_status", None)
+
+
+def depth_fraction_for_family(
+    family: str,
+    *,
+    depth_probe_status: Optional[str] = None,
+) -> float:
+    from m9.graph_arb.depth_capacity_probe import is_measured_depth_status
+
+    base = DEPTH_FRACTION_BY_FAMILY.get(family, _DEFAULT_DEPTH_FRACTION)
+    if is_measured_depth_status(depth_probe_status):
+        measured = DEPTH_FRACTION_MEASURED_BY_FAMILY.get(family, base)
+        return max(base, measured)
+    return base
 
 
 def bottleneck_depth_fraction(edges: Iterable[Any]) -> float:
@@ -45,7 +69,9 @@ def bottleneck_depth_fraction(edges: Iterable[Any]) -> float:
                 "adapter_type": getattr(edge, "adapter_type", None),
             }
         )
-        fractions.append(depth_fraction_for_family(fam))
+        fractions.append(
+            depth_fraction_for_family(fam, depth_probe_status=_edge_depth_probe_status(edge))
+        )
     return min(fractions) if fractions else _DEFAULT_DEPTH_FRACTION
 
 
@@ -78,6 +104,21 @@ def cap_sizes_to_depth_per_family(
 _PRODUCTIVE_DISTINCT_MICRO_CAP_USD: float = 0.05
 
 
+def _cycle_has_measured_depth(cycle: Any) -> bool:
+    from m9.graph_arb.depth_capacity_probe import is_measured_depth_status
+
+    depth = getattr(cycle, "min_effective_depth_usd", None)
+    if isinstance(depth, (int, float)) and not isinstance(depth, bool) and float(depth) > 100.0:
+        return True
+    for edge in getattr(cycle, "edges", ()) or ():
+        if is_measured_depth_status(_edge_depth_probe_status(edge)):
+            return True
+        edge_depth = getattr(edge, "effective_depth_usd", None)
+        if edge_depth is not None and float(edge_depth) > 100.0:
+            return True
+    return False
+
+
 def productive_cycle_size_usd_cap(
     cycle: Any,
     size_usd: float,
@@ -85,8 +126,7 @@ def productive_cycle_size_usd_cap(
 ) -> float:
     """Cap cycle USD notional when distinct-pricing legs lack measured depth."""
     _ = token_price_usd
-    depth = getattr(cycle, "min_effective_depth_usd", None)
-    if isinstance(depth, (int, float)) and not isinstance(depth, bool) and float(depth) > 0:
+    if _cycle_has_measured_depth(cycle):
         return float(size_usd)
     edges = getattr(cycle, "edges", ()) or ()
     for edge in edges:

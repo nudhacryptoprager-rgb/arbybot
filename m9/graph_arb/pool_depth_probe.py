@@ -34,33 +34,11 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
-# Token USD prices (order-of-magnitude, same as runner.py)
-_TOKEN_PRICE_USD: Dict[str, float] = {
-    "WETH": 3500.0,
-    "WETH_BASE": 3500.0,
-    "cbBTC": 110000.0,
-    "cbETH": 3700.0,
-    "wstETH": 4200.0,
-    "USDC": 1.0,
-    "EURC": 1.10,
-    "DAI": 1.0,
-    "USDT": 1.0,
-    "AERO": 0.70,
-    "VIRTUAL": 0.80,
-    "TOSHI": 0.0001,
-    "BRETT": 0.08,
-    "DEGEN": 0.005,
-    "WELL": 0.04,
-    "SNX": 2.5,
-    "LINK": 15.0,
-    "UNI": 8.0,
-}
-
-# Default probe size in USD
+# Default first rung of the iterative depth ladder (see depth_capacity_probe).
 _PROBE_SIZE_USD = 100.0
 # Impact threshold above which a pool is considered TOXIC
 _IMPACT_THRESHOLD_TOXIC = 0.50
@@ -101,6 +79,29 @@ _V2_FORK_FEE_BPS_MAP: Dict[str, int] = {
     "baseswap_v2": 30,
 }
 _FEE_DENOMINATOR_BPS = 10_000
+
+_V3_LIQUIDITY_SELECTOR = "0x1a686502"
+_V3_SLOT0_SELECTOR = "0x3850c7bd"
+
+
+def _resolve_probe_price(
+    sym: str,
+    addr: str = "",
+    price_map: Optional[Dict[str, float]] = None,
+) -> tuple[float, str]:
+    """Config baseline → price_map → $1 fallback; records source for artifacts."""
+    from m9.graph_arb.token_price_fetcher import resolve_token_price_usd
+
+    if price_map:
+        px = resolve_token_price_usd(addr, sym, price_map)
+        if px is not None and float(px) > 0:
+            return float(px), "price_map"
+    from m9.graph_arb.token_price_fetcher import _baseline_prices
+
+    baseline = _baseline_prices()
+    if sym in baseline and float(baseline[sym]) > 0:
+        return float(baseline[sym]), "config_baseline"
+    return 1.0, "unit_fallback"
 
 
 def _encode_ve33_amount_out(amount_in: int, token_in: str) -> str:
@@ -342,7 +343,7 @@ def probe_pool_depth(
     addr0 = t0.get("address", "")
     addr1 = t1.get("address", "")
 
-    price0 = _TOKEN_PRICE_USD.get(sym0, 1.0)
+    price0, price0_source = _resolve_probe_price(sym0, addr0)
     amount_in = int(probe_size_usd / price0 * (10 ** dec0))
 
     if amount_in <= 0:
@@ -418,29 +419,55 @@ def probe_pool_depth(
     result["probe_amount_out"] = amount_out
     result["probe_ok"] = True
 
+    # V2 forks: analytical reserve depth (supplements single-rung probe).
+    if adapter_type in _V2_FORK_ADAPTER_TYPES:
+        try:
+            from m9.graph_arb.depth_capacity_probe import (
+                DEPTH_PROBE_MEASURED_CAPACITY,
+                merge_depth_with_analytical,
+                v2_analytical_depth_usd,
+            )
+
+            calldata = "0x" + _V2_GET_RESERVES_SELECTOR.hex()
+            hex_result = route.get("_v2_reserves_cached") or _raw_eth_call(
+                rpc_url, pool_address or quoter, calldata
+            )
+            if hex_result and hex_result != "0x":
+                raw = hex_result[2:] if str(hex_result).startswith("0x") else hex_result
+                if len(raw) >= 128:
+                    r0, r1 = int(raw[:64], 16), int(raw[64:128], 16)
+                    if int(addr0, 16) < int(addr1, 16):
+                        rin = r0
+                    else:
+                        rin = r1
+                    analytical = v2_analytical_depth_usd(
+                        rin, dec0, price0, fee_bps=_route_v2_fee_bps(route)
+                    )
+                    if analytical > 0:
+                        result["probe_ok"] = True
+                        result["effective_depth_usd"] = analytical
+                        result["depth_probe_status"] = DEPTH_PROBE_MEASURED_CAPACITY
+                        result["depth_method"] = "v2_reserves_analytical"
+                        result["depth_price_source"] = price0_source
+                        result["price_impact_at_100usd"] = 0.0
+                        return result
+        except Exception:
+            pass
+
     # Compute impact: compare actual output to expected from spot
-    # Expected output: (probe_size_usd / price0) tokens_in * price0/price1 = probe_size_usd / price1
-    price1 = _TOKEN_PRICE_USD.get(sym1, 1.0)
+    price1, _ = _resolve_probe_price(sym1, addr1)
     expected_out_units = probe_size_usd / price1
     expected_out_raw = expected_out_units * (10 ** dec1)
     if expected_out_raw > 0:
         actual_ratio = amount_out / expected_out_raw
-        impact = 1.0 - actual_ratio
-        result["price_impact_at_100usd"] = round(impact, 6)
+        impact = max(1.0 - actual_ratio, 0.0)
+        from m9.graph_arb.depth_capacity_probe import finalize_marginal_depth
 
-        if impact <= _IMPACT_THRESHOLD_LOW:
-            result["effective_depth_usd"] = probe_size_usd
-        else:
-            # Estimate: at what size does impact drop to threshold?
-            # For thin V3 pools: impact grows roughly linearly with amount
-            # effective_depth_usd ≈ probe_size_usd * THRESHOLD / impact
-            est_depth = probe_size_usd * _IMPACT_THRESHOLD_LOW / max(impact, 1e-9)
-            result["effective_depth_usd"] = round(est_depth, 2)
-
-        if impact >= _IMPACT_THRESHOLD_TOXIC:
-            result["depth_reject_reason"] = "TOXIC_PRICE_IMPACT"
-        elif impact > _IMPACT_THRESHOLD_LOW:
-            result["depth_reject_reason"] = "LOW_EFFECTIVE_DEPTH"
+        finalized = finalize_marginal_depth(
+            impact, probe_size_usd, at_max_ladder_rung=True
+        )
+        result.update(finalized)
+        result["depth_price_source"] = price0_source
     else:
         result["probe_error"] = "ZERO_EXPECTED_OUT"
 
@@ -482,6 +509,8 @@ def compute_marginal_depth(
     probe_size_usd: float,
     impact_threshold_low: float = _IMPACT_THRESHOLD_LOW,
     impact_threshold_toxic: float = _IMPACT_THRESHOLD_TOXIC,
+    *,
+    at_max_ladder_rung: bool = True,
 ) -> Dict[str, Any]:
     """Price-agnostic depth from a two-point marginal quote.
 
@@ -497,6 +526,8 @@ def compute_marginal_depth(
     so this needs neither for the output token. Returns the same field shape as
     ``probe_pool_depth`` so it can be written directly onto a route entry.
     """
+    from m9.graph_arb.depth_capacity_probe import finalize_marginal_depth, marginal_impact
+
     result: Dict[str, Any] = {
         "effective_depth_usd": None,
         "price_impact_at_100usd": None,
@@ -504,6 +535,7 @@ def compute_marginal_depth(
         "probe_error": None,
         "depth_reject_reason": None,
         "depth_method": "marginal_anchor",
+        "depth_probe_status": None,
     }
     if ref_in <= 0 or probe_in <= 0:
         result["probe_error"] = "ZERO_AMOUNT_IN"
@@ -512,29 +544,19 @@ def compute_marginal_depth(
         result["probe_error"] = "ZERO_AMOUNT_OUT"
         return result
 
-    rate_ref = ref_out / ref_in
-    rate_probe = probe_out / probe_in
-    if rate_ref <= 0:
+    impact = marginal_impact(ref_in, ref_out, probe_in, probe_out)
+    if impact is None:
         result["probe_error"] = "ZERO_SPOT_RATE"
         return result
 
-    impact = 1.0 - (rate_probe / rate_ref)
-    if impact < 0:
-        impact = 0.0  # probe rate better than ref (rounding / tiny pool); treat as no impact
-    result["price_impact_at_100usd"] = round(impact, 6)
-    result["probe_ok"] = True
-
-    if impact <= impact_threshold_low:
-        result["effective_depth_usd"] = round(float(probe_size_usd), 2)
-    else:
-        est_depth = probe_size_usd * impact_threshold_low / max(impact, 1e-9)
-        result["effective_depth_usd"] = round(est_depth, 2)
-
-    if impact >= impact_threshold_toxic:
-        result["depth_reject_reason"] = "TOXIC_PRICE_IMPACT"
-    elif impact > impact_threshold_low:
-        result["depth_reject_reason"] = "LOW_EFFECTIVE_DEPTH"
-
+    finalized = finalize_marginal_depth(
+        impact,
+        probe_size_usd,
+        at_max_ladder_rung=at_max_ladder_rung,
+        impact_threshold_low=impact_threshold_low,
+        impact_threshold_toxic=impact_threshold_toxic,
+    )
+    result.update(finalized)
     return result
 
 
@@ -557,14 +579,25 @@ def probe_route_marginal_depth(
     dex_quoters: Optional[Dict[str, str]] = None,
     probe_size_usd: float = _PROBE_SIZE_USD,
     ref_size_usd: float = _REF_SIZE_USD,
+    price_map: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Measure depth for one M8 long-tail route via anchor-side marginal probe.
 
-    Quotes anchor -> exotic at ``ref_size_usd`` and ``probe_size_usd`` and derives
-    a price-agnostic price impact. Uses the route's embedded token addresses, so it
-    works for exotic tokens absent from config. Returns the same field shape as
-    ``probe_pool_depth`` (with an extra ``depth_method`` marker).
+    Walks an ascending USD ladder ($100→$50k) with optional binary refinement.
+    Uses the route's embedded token addresses so exotic tokens absent from config
+    still probe correctly. Returns the same field shape as ``probe_pool_depth``.
     """
+    from m9.graph_arb.depth_capacity_probe import (
+        PROBE_LADDER_USD,
+        binary_refine_capacity_usd,
+        finalize_marginal_depth,
+        marginal_impact,
+        merge_depth_with_analytical,
+        merge_ladder_results,
+        v2_analytical_depth_usd,
+        v3_liquidity_depth_lower_bound_usd,
+    )
+
     dex_quoters = dex_quoters or {}
     result: Dict[str, Any] = {
         "effective_depth_usd": None,
@@ -572,7 +605,8 @@ def probe_route_marginal_depth(
         "probe_ok": False,
         "probe_error": None,
         "depth_reject_reason": None,
-        "depth_method": "marginal_anchor",
+        "depth_method": "marginal_anchor_ladder",
+        "depth_probe_status": None,
     }
 
     adapter_type = route.get("adapter_type", "uniswap_v3")
@@ -587,10 +621,9 @@ def probe_route_marginal_depth(
         return result
 
     anchor_dec = _ANCHOR_DECIMALS[anchor_sym]
-    anchor_price = _TOKEN_PRICE_USD.get(anchor_sym, 1.0)
+    anchor_price, price_source = _resolve_probe_price(anchor_sym, anchor_addr, price_map)
     ref_in = int(ref_size_usd / anchor_price * (10 ** anchor_dec))
-    probe_in = int(probe_size_usd / anchor_price * (10 ** anchor_dec))
-    if ref_in <= 0 or probe_in <= 0:
+    if ref_in <= 0:
         result["probe_error"] = "ZERO_AMOUNT_IN"
         return result
 
@@ -664,20 +697,107 @@ def probe_route_marginal_depth(
     if ref_out is None:
         result["probe_error"] = "REF_QUOTE_FAILED"
         return result
-    probe_out = _quote(probe_in)
-    if probe_out is None:
-        result["probe_error"] = "PROBE_QUOTE_FAILED"
-        return result
 
-    depth = compute_marginal_depth(
-        ref_in=ref_in,
-        ref_out=ref_out,
-        probe_in=probe_in,
-        probe_out=probe_out,
-        probe_size_usd=probe_size_usd,
-    )
-    depth["probe_amount_in"] = probe_in
-    depth["probe_amount_out"] = probe_out
+    ladder = list(PROBE_LADDER_USD)
+    if probe_size_usd not in ladder:
+        ladder = sorted(set(ladder + [float(probe_size_usd)]))
+
+    def _amount_in_for_usd(usd: float) -> int:
+        return int(usd / anchor_price * (10 ** anchor_dec))
+
+    def _quote_usd(usd: float) -> Optional[Tuple[int, int]]:
+        amt_in = _amount_in_for_usd(usd)
+        if amt_in <= 0:
+            return None
+        out = _quote(amt_in)
+        if out is None:
+            return None
+        return amt_in, out
+
+    rung_results: List[Dict[str, Any]] = []
+    prev_low_usd: Optional[float] = None
+    for idx, rung_usd in enumerate(ladder):
+        quoted = _quote_usd(rung_usd)
+        if quoted is None:
+            if idx == 0:
+                result["probe_error"] = "PROBE_QUOTE_FAILED"
+                return result
+            break
+        probe_in, probe_out = quoted
+        impact = marginal_impact(ref_in, ref_out, probe_in, probe_out)
+        if impact is None:
+            if idx == 0:
+                result["probe_error"] = "PROBE_QUOTE_FAILED"
+                return result
+            break
+        at_max = idx == len(ladder) - 1
+        rung = finalize_marginal_depth(impact, rung_usd, at_max_ladder_rung=at_max)
+        rung["probe_amount_in"] = probe_in
+        rung["probe_amount_out"] = probe_out
+        rung_results.append(rung)
+        if impact > _IMPACT_THRESHOLD_LOW and prev_low_usd is not None:
+            refined = binary_refine_capacity_usd(
+                prev_low_usd,
+                rung_usd,
+                lambda u: _quote_usd(u),
+                ref_in,
+                ref_out,
+            )
+            rung["effective_depth_usd"] = refined
+            rung["depth_method"] = "marginal_anchor_ladder_bsearch"
+        if impact > _IMPACT_THRESHOLD_LOW:
+            break
+        prev_low_usd = rung_usd
+
+    depth = merge_ladder_results(rung_results)
+    depth["depth_price_source"] = price_source
+    if rung_results:
+        last = rung_results[-1]
+        depth["probe_amount_in"] = last.get("probe_amount_in")
+        depth["probe_amount_out"] = last.get("probe_amount_out")
+
+    # V2 analytical depth from reserves (anchor-side input).
+    if adapter_type in _V2_FORK_ADAPTER_TYPES:
+        try:
+            calldata = "0x" + _V2_GET_RESERVES_SELECTOR.hex()
+            hex_result = route.get("_v2_reserves_cached") or _raw_eth_call(
+                rpc_url, pool_address or quoter, calldata
+            )
+            if hex_result and hex_result != "0x":
+                raw = hex_result[2:] if str(hex_result).startswith("0x") else hex_result
+                if len(raw) >= 128:
+                    r0, r1 = int(raw[:64], 16), int(raw[64:128], 16)
+                    if int(anchor_addr, 16) < int(exotic_addr, 16):
+                        rin = r0
+                    else:
+                        rin = r1
+                    analytical = v2_analytical_depth_usd(
+                        rin, anchor_dec, anchor_price, fee_bps=_route_v2_fee_bps(route)
+                    )
+                    depth = merge_depth_with_analytical(
+                        depth, analytical, analytical_method="v2_reserves"
+                    )
+        except Exception:
+            pass
+
+    # V3 / Slipstream / V4: conservative liquidity lower bound (quote ladder validates).
+    if adapter_type in ("uniswap_v3", "aerodrome_slipstream", "uniswap_v4") and pool_address:
+        try:
+            liq_hex = _raw_eth_call(rpc_url, pool_address, _V3_LIQUIDITY_SELECTOR)
+            slot_hex = _raw_eth_call(rpc_url, pool_address, _V3_SLOT0_SELECTOR)
+            if liq_hex and slot_hex and liq_hex != "0x" and slot_hex != "0x":
+                liq_raw = int(liq_hex, 16)
+                slot_raw = slot_hex[2:] if slot_hex.startswith("0x") else slot_hex
+                sqrt_x96 = int(slot_raw[:64], 16)
+                cl_bound = v3_liquidity_depth_lower_bound_usd(
+                    liq_raw, sqrt_x96, anchor_dec, anchor_price
+                )
+                depth = merge_depth_with_analytical(
+                    depth, cl_bound, analytical_method="v3_liquidity_bound"
+                )
+        except Exception:
+            pass
+
     return depth
 
 
@@ -688,15 +808,22 @@ def enrich_routes_missing_depth(
     probe_size_usd: float = _PROBE_SIZE_USD,
     ref_size_usd: float = _REF_SIZE_USD,
     sleep_s: float = 0.1,
+    force_reprobe: bool = False,
 ) -> Dict[str, int]:
     """Fill ``effective_depth_usd`` for routes that still lack it (M8 long-tail).
 
     Only routes where ``effective_depth_usd`` is None and a ``pool_address`` is
     present are probed; already-enriched base routes are left untouched. Mutates
     each probed route in place and returns funnel counts.
+
+    When ``force_reprobe`` is enabled, legacy rows are also re-probed if they
+    have an existing depth value but no ``depth_probe_status``. Rows with
+    explicit post-ladder depth status stay untouched, even if the measured
+    value happens to equal the first ladder rung.
     """
     counts = {
         "candidates": 0,
+        "force_reprobe_candidates": 0,
         "probed_ok": 0,
         "probe_failed": 0,
         "no_anchor": 0,
@@ -714,15 +841,35 @@ def enrich_routes_missing_depth(
         "no",
     ):
         counts["multicall_saved_calls_estimate"] = _multicall_prefetch_v2_reserves(
-            routes, rpc_url
+            routes, rpc_url, include_existing=force_reprobe
         )
+    _w3_distinct = None
+    _prices_distinct: Dict[str, float] = {}
+    try:
+        from web3 import Web3
+
+        from m9.graph_arb.token_price_fetcher import build_dual_key_price_map
+
+        _w3_distinct = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
+        _prices_distinct = build_dual_key_price_map({})
+    except Exception:
+        pass
+    counts["distinct_depth_ok"] = 0
     for route in routes:
-        if route.get("effective_depth_usd") is not None:
+        existing_depth = route.get("effective_depth_usd")
+        legacy_depth_row = (
+            existing_depth is not None
+            and route.get("depth_probe_status") is None
+        )
+        should_force_reprobe = bool(force_reprobe and legacy_depth_row)
+        if existing_depth is not None and not should_force_reprobe:
             continue
         pool_addr = route.get("pool_address") or ""
         if not pool_addr or pool_addr == "0x" + "0" * 40:
             continue
         counts["candidates"] += 1
+        if should_force_reprobe:
+            counts["force_reprobe_candidates"] += 1
         is_v4_route = route.get("adapter_type") == "uniswap_v4"
         if is_v4_route:
             counts["v4_depth_candidates"] += 1
@@ -733,6 +880,7 @@ def enrich_routes_missing_depth(
             dex_quoters=dex_quoters,
             probe_size_usd=probe_size_usd,
             ref_size_usd=ref_size_usd,
+            price_map=_prices_distinct or None,
         )
 
         route["effective_depth_usd"] = probe["effective_depth_usd"]
@@ -741,12 +889,27 @@ def enrich_routes_missing_depth(
         route["depth_probe_ok"] = probe["probe_ok"]
         route["depth_probe_error"] = probe.get("probe_error")
         route["depth_method"] = probe.get("depth_method", "marginal_anchor")
+        if probe.get("depth_probe_status") is not None:
+            route["depth_probe_status"] = probe["depth_probe_status"]
+        if probe.get("depth_price_source"):
+            route["depth_price_source"] = probe["depth_price_source"]
 
-        if probe["probe_ok"]:
+        if route.get("effective_depth_usd") is None and _w3_distinct is not None:
+            try:
+                from m9.graph_arb.distinct_depth_probe import enrich_route_depth_if_missing
+
+                if enrich_route_depth_if_missing(
+                    route, _w3_distinct, _prices_distinct, decimals_cache=None
+                ):
+                    counts["distinct_depth_ok"] += 1
+            except Exception:
+                pass
+
+        if route.get("effective_depth_usd") is not None:
             counts["probed_ok"] += 1
             if is_v4_route:
                 counts["v4_depth_probe_ok"] += 1
-            reject = probe.get("depth_reject_reason")
+            reject = probe.get("depth_reject_reason") or route.get("depth_reject_reason")
             if reject == "TOXIC_PRICE_IMPACT":
                 counts["toxic"] += 1
             elif reject == "LOW_EFFECTIVE_DEPTH":
@@ -778,12 +941,14 @@ def enrich_routes_missing_depth(
 def _multicall_prefetch_v2_reserves(
     routes: List[Dict[str, Any]],
     rpc_url: str,
+    *,
+    include_existing: bool = False,
 ) -> int:
     """Batch V2 getReserves via Multicall3; cache on route dict. Returns RPC calls saved."""
     v2_addrs: List[str] = []
     v2_routes: List[Dict[str, Any]] = []
     for route in routes:
-        if route.get("effective_depth_usd") is not None:
+        if route.get("effective_depth_usd") is not None and not include_existing:
             continue
         if route.get("adapter_type") not in _V2_FORK_ADAPTER_TYPES:
             continue

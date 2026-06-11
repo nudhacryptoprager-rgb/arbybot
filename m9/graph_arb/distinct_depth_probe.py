@@ -55,7 +55,9 @@ def estimate_balancer_depth_usd(
         if not pid.startswith("0x"):
             pid = "0x" + pid
         data = _GET_POOL_TOKENS_SELECTOR + pid[2:].rjust(64, "0")
-        vault = (vault_address or _BALANCER_VAULT).lower()
+        from web3 import Web3
+
+        vault = Web3.to_checksum_address(vault_address or _BALANCER_VAULT)
         result = w3.eth.call({"to": vault, "data": data})
         if isinstance(result, bytes):
             hex_res = "0x" + result.hex()
@@ -117,12 +119,51 @@ def enrich_route_depth_if_missing(
             decimals_cache=decimals_cache,
         )
 
-    # Maverick/Curve: conservative placeholder until dedicated probe ships.
-    if depth is None and dex in ("maverick_v2", "curve_stable"):
-        depth = 10.0
+    if depth is None and dex == "maverick_v2":
+        depth = estimate_maverick_depth_usd(
+            route, token_prices, cfg=cfg, decimals_cache=decimals_cache
+        )
+
+    if depth is None and dex == "curve_stable":
+        depth = None
 
     if depth is not None and depth > 0:
         route["effective_depth_usd"] = depth
         route["depth_probe_ok"] = True
         route["depth_probe_source"] = "distinct_depth_probe"
+        route["depth_status"] = "MEASURED"
+    elif needs_distinct_depth_probe(route):
+        route["depth_status"] = "UNKNOWN"
+        route["depth_probe_ok"] = False
     return depth
+
+
+def estimate_maverick_depth_usd(
+    route: Dict[str, Any],
+    token_prices: Dict[str, float],
+    *,
+    cfg=None,
+    decimals_cache: Optional[Dict[str, int]] = None,
+) -> Optional[float]:
+    """Direction-aware Maverick depth from pool-lane verified quote range."""
+    max_raw = route.get("maverick_max_quoteable_amount_raw") or route.get(
+        "maverick_pool_lane_probe_amount"
+    )
+    token_in = (
+        route.get("maverick_pool_lane_token_in")
+        or route.get("token_a")
+        or route.get("token0_addr")
+    )
+    if not max_raw or not is_valid_eth_address(str(token_in or "")):
+        return None
+    dec = (
+        resolve_decimals_for_address(
+            str(token_in), cfg=cfg, cache=decimals_cache, w3=None
+        )
+        or 18
+    )
+    price = resolve_token_price_usd(str(token_in), "", token_prices)
+    if price is None or price <= 0:
+        return None
+    human = int(max_raw) / (10 ** int(dec))
+    return round(human * float(price), 4)

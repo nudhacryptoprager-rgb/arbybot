@@ -847,6 +847,7 @@ def build_graph_from_inventory(
         _effective_depth_usd: Optional[float] = (
             float(_raw_depth) if _raw_depth is not None else None
         )
+        _depth_probe_status: Optional[str] = entry.get("depth_probe_status")
 
         # Forward: sym0 → sym1
         if not (exclude_edge_keys and edge_key_fwd in exclude_edge_keys):
@@ -917,6 +918,7 @@ def build_graph_from_inventory(
                         pool_kind=_pool_kind,
                         freshness_window=_freshness_window,
                         effective_depth_usd=_effective_depth_usd,
+                        depth_probe_status=_depth_probe_status,
                         balancer_assets=_balancer_assets,
                         balancer_balances=_balancer_balances,
                         token_a_address=_maverick_token_a,
@@ -961,6 +963,7 @@ def build_graph_from_inventory(
                     pool_kind=_pool_kind,
                     freshness_window=_freshness_window,
                     effective_depth_usd=_effective_depth_usd,
+                    depth_probe_status=_depth_probe_status,
                     balancer_assets=_balancer_assets,
                     balancer_balances=_balancer_balances,
                     token_a_address=_maverick_token_a,
@@ -1039,6 +1042,7 @@ def build_graph_from_inventory(
                         pool_kind=_pool_kind,
                         freshness_window=_freshness_window,
                         effective_depth_usd=_effective_depth_usd,
+                        depth_probe_status=_depth_probe_status,
                         balancer_assets=_balancer_assets,
                         balancer_balances=_balancer_balances,
                         token_a_address=_maverick_token_a,
@@ -1083,6 +1087,7 @@ def build_graph_from_inventory(
                     pool_kind=_pool_kind,
                     freshness_window=_freshness_window,
                     effective_depth_usd=_effective_depth_usd,
+                    depth_probe_status=_depth_probe_status,
                     balancer_assets=_balancer_assets,
                     balancer_balances=_balancer_balances,
                     token_a_address=_maverick_token_a,

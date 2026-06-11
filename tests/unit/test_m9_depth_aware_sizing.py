@@ -117,12 +117,16 @@ class TestDynamicDepthAware:
 
     def test_ladder_clamped_by_depth(self, monkeypatch):
         quoted = self._patch_quote(monkeypatch)
+        monkeypatch.setattr(
+            "m9.graph_arb.size_truth.economic_size_floor_usd",
+            lambda **_: 25.0,
+        )
         cyc = _cycle(d1=500.0, d2=150.0, d3=800.0)  # bottleneck 150
         res = quote_cycle_dynamic_sync(
             cyc, (50.0, 100.0, 500.0, 1000.0), w3=None,
         )
-        # Only sizes <= 150 quoted
-        assert quoted == [50.0, 100.0]
+        # Depth cap ~150 * 0.18 ≈ 27 → single probe at cap (above $25 econ floor)
+        assert quoted == [27.0]
         assert res.depth_capped is True
         assert res.cycle_min_depth_usd == 150.0
 

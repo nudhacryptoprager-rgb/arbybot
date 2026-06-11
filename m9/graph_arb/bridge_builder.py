@@ -604,6 +604,41 @@ def _build_static_simple_routes(chain: str = "base") -> List[Dict[str, Any]]:
     return routes
 
 
+_DEPTH_STASH_KEYS = (
+    "effective_depth_usd",
+    "depth_probe_ok",
+    "depth_probe_error",
+    "depth_probe_source",
+    "depth_method",
+    "price_impact_at_100usd",
+    "depth_status",
+    "depth_reject_reason",
+)
+
+
+def _depth_stash_from_routes(routes: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    stash: Dict[str, Dict[str, Any]] = {}
+    for route in routes:
+        pool = str(route.get("pool_address") or "").lower()
+        if not pool or route.get("effective_depth_usd") is None:
+            continue
+        stash[pool] = {k: route.get(k) for k in _DEPTH_STASH_KEYS if route.get(k) is not None}
+    return stash
+
+
+def _apply_depth_stash(routes: List[Dict[str, Any]], stash: Dict[str, Dict[str, Any]]) -> int:
+    applied = 0
+    for route in routes:
+        pool = str(route.get("pool_address") or "").lower()
+        if not pool or pool not in stash:
+            continue
+        if route.get("effective_depth_usd") is not None:
+            continue
+        route.update(stash[pool])
+        applied += 1
+    return applied
+
+
 def build_bridge_inventory(
     sniper_path: str = _DEFAULT_SNIPER,
     anchor_path: str = _DEFAULT_ANCHOR,
@@ -640,6 +675,11 @@ def build_bridge_inventory(
     Returns bridge_source_metrics dict.  Writes the output artifact to output_path.
     """
     now_ts = datetime.now(tz=timezone.utc).timestamp()
+
+    _depth_stash: Dict[str, Dict[str, Any]] = {}
+    _prior_out = _load_json(output_path)
+    if _prior_out:
+        _depth_stash.update(_depth_stash_from_routes(_prior_out.get("active_routes") or []))
 
     sniper = _load_json(sniper_path)
     anchor = _load_json(anchor_path)
@@ -1661,6 +1701,16 @@ def build_bridge_inventory(
         )
     except Exception as _dec_exc:
         bridge_source_metrics["decimals_enrich_error"] = str(_dec_exc)[:200]
+
+    if _depth_stash:
+        _depth_stash_applied = _apply_depth_stash(final_active, _depth_stash)
+        bridge_source_metrics["depth_stash_applied"] = _depth_stash_applied
+        try:
+            from m9.graph_arb.depth_telemetry import depth_known_rate
+
+            bridge_source_metrics["depth_known_rate"] = depth_known_rate(final_active)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Write output artifact
