@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 SCHEMA_VERSION = "m8_cross_dex_expansion.1"
+
+_log = logging.getLogger(__name__)
 
 # Align with m9/graph_arb/bridge_builder.py dex_id → adapter_type
 _DEX_ID_TO_ADAPTER: Dict[str, str] = {
@@ -306,28 +309,62 @@ def _anchor_symbols_from_config(config: Dict[str, Any]) -> Set[str]:
     return anchors
 
 
+def subgraph_missing_reason(
+    *,
+    token_seen_on_dexes: int,
+    connector_tokens: int,
+    active_routes: int,
+    unique_tokens: int,
+) -> str:
+    """Human-readable reason when subgraph_ready is false."""
+    if token_seen_on_dexes < 2:
+        return "TOKEN_SEEN_ON_ONE_DEX"
+    if connector_tokens < 1:
+        return "NO_CONNECTOR_TOKEN"
+    if active_routes < 4:
+        return "ACTIVE_ROUTES_LT_4"
+    if unique_tokens < 3:
+        return "UNIQUE_TOKENS_LT_3"
+    return "READY"
+
+
 def evaluate_subgraph_readiness(
     *,
     token_seen_on_dexes: int,
     connector_tokens: int,
     active_routes: int,
     unique_tokens: int,
+    same_pair_routes: int = 0,
+    connector_routes: int = 0,
 ) -> Dict[str, Any]:
     """M9 shadow acceptance gate for token-neighborhood mini-subgraphs."""
+    subgraph_ready = (
+        token_seen_on_dexes >= 2
+        and connector_tokens >= 1
+        and active_routes >= 4
+        and unique_tokens >= 3
+    )
     return {
         "token_seen_on_dexes": token_seen_on_dexes,
         "connector_token_count": connector_tokens,
         "unique_tokens": unique_tokens,
         "active_routes": active_routes,
+        "same_pair_routes": same_pair_routes,
+        "connector_routes": connector_routes,
         "token_seen_on_dexes_gte_2": token_seen_on_dexes >= 2,
         "connector_tokens_gte_1": connector_tokens >= 1,
         "active_routes_gte_4": active_routes >= 4,
         "unique_tokens_gte_3": unique_tokens >= 3,
-        "subgraph_ready": (
-            token_seen_on_dexes >= 2
-            and connector_tokens >= 1
-            and active_routes >= 4
-            and unique_tokens >= 3
+        "subgraph_ready": subgraph_ready,
+        "missing_reason": (
+            "READY"
+            if subgraph_ready
+            else subgraph_missing_reason(
+                token_seen_on_dexes=token_seen_on_dexes,
+                connector_tokens=connector_tokens,
+                active_routes=active_routes,
+                unique_tokens=unique_tokens,
+            )
         ),
     }
 
@@ -422,6 +459,82 @@ def _merge_external_hints(
         hint_metrics["hint_status_counts"] = status_hist
 
 
+def _active_second_venue_factory_scan(
+    t_pools: Dict[Tuple[str, str, str, str], Dict[str, Any]],
+    *,
+    chain: str,
+    exotic_address: str,
+    focus_sym: str,
+    dex_rows: List[Dict[str, Any]],
+    allowed_dex_ids: Set[str],
+    dry_run: bool,
+    resolver: Any,
+    mirror_index: Any,
+    config: Dict[str, Any],
+    anchor_syms: Set[str],
+    hint_metrics: Dict[str, Any],
+    reject_hist: Counter,
+) -> int:
+    """On-chain factory scan for a second venue when registry+hints found only one DEX."""
+    existing_dexes = {p["dex_id"] for p in t_pools.values()}
+    if len(existing_dexes) >= 2 or dry_run:
+        return 0
+
+    scan_anchors = [
+        s for s in ("USDC", "WETH", "cbBTC", "EURC", "USDbC", "DAI")
+        if s in anchor_syms
+    ]
+    if not scan_anchors:
+        scan_anchors = sorted(anchor_syms)
+
+    found = 0
+    for anchor_sym in scan_anchors:
+        if len({p["dex_id"] for p in t_pools.values()}) >= 2:
+            break
+        anchor_addr = _token_address_from_config(config, anchor_sym)
+        if not anchor_addr:
+            reject_hist["ACTIVE_SCAN_ANCHOR_ADDRESS_UNKNOWN"] += 1
+            continue
+        for dex in dex_rows:
+            dex_id = dex["dex_id"]
+            if dex_id not in allowed_dex_ids:
+                continue
+            if dex_id in existing_dexes:
+                continue
+            pool, reason = _resolve_via_factory(
+                chain,
+                dex_id,
+                focus_sym,
+                anchor_sym,
+                exotic_address=exotic_address,
+                anchor_address=anchor_addr,
+                dry_run=dry_run,
+                resolver=resolver,
+                mirror_index=mirror_index,
+                config=config,
+            )
+            if pool:
+                pool["resolve_source"] = "active_factory_scan"
+                pool["focus_token_symbol"] = focus_sym
+                pool["focus_token_address"] = exotic_address
+                pool["connector_token"] = anchor_sym
+                pool["connector_addr"] = anchor_addr
+                t_pools[_route_dedupe_key(pool)] = pool
+                existing_dexes.add(dex_id)
+                found += 1
+                hint_metrics["active_factory_second_pool_count"] = int(
+                    hint_metrics.get("active_factory_second_pool_count", 0)
+                ) + 1
+                hint_metrics["verified_second_pool_count"] = int(
+                    hint_metrics.get("verified_second_pool_count", 0)
+                ) + 1
+                if len({p["dex_id"] for p in t_pools.values()}) >= 2:
+                    return found
+            elif reason not in ("NO_POOL", "SKIPPED_DRY_RUN", "UNSUPPORTED_DEX"):
+                reject_hist[f"ACTIVE_SCAN_{reason}"] += 1
+    return found
+
+
 def expand_token_neighborhood(
     *,
     chain: str,
@@ -503,6 +616,22 @@ def expand_token_neighborhood(
         dry_run=dry_run,
         hint_metrics=hint_metrics,
     )
+    _active_second_venue_factory_scan(
+        t_pools,
+        chain=chain,
+        exotic_address=exotic_address,
+        focus_sym=focus_sym,
+        dex_rows=dex_rows,
+        allowed_dex_ids=allowed_dex_ids,
+        dry_run=dry_run,
+        resolver=resolver,
+        mirror_index=mirror_index,
+        config=config,
+        anchor_syms=anchor_syms,
+        hint_metrics=hint_metrics,
+        reject_hist=reject_hist,
+    )
+
     seen_hints = int(hint_metrics.get("hint_pools_seen", 0))
     verified_hints = int(hint_metrics.get("verified_second_pool_count", 0))
     if seen_hints:
@@ -592,8 +721,14 @@ def expand_token_neighborhood(
     for conn in connectors.values():
         conn_sym = conn.get("symbol") or ""
         conn_addr = conn.get("address") or ""
-        if not conn_sym:
+        if not conn_sym and not conn_addr:
+            reject_hist["CONNECTOR_ADDRESS_UNKNOWN"] += 1
             continue
+        if not conn_sym:
+            reject_hist["CONNECTOR_ADDRESS_UNKNOWN"] += 1
+            continue
+        if not conn_addr and not _token_address_from_config(config, conn_sym):
+            reject_hist["CONNECTOR_ADDRESS_UNKNOWN"] += 1
 
         # T-connector on other DEXes (factory / index)
         for dex in dex_rows:
@@ -682,11 +817,11 @@ def expand_token_neighborhood(
                 elif reason not in ("NO_POOL", "SKIPPED_DRY_RUN"):
                     all_reject_rows.append({"dex_id": dex_id, "reason": reason})
                     if reason.endswith("NOT_QUOTEABLE"):
-                        reject_hist["CONNECTOR_POOL_NOT_QUOTEABLE"] += 1
+                        reject_hist["CONNECTOR_ANCHOR_NOT_QUOTEABLE"] += 1
                     else:
                         reject_hist[reason] += 1
             if not hop_found and conn_sym not in anchor_syms:
-                reject_hist["CONNECTOR_POOL_NOT_QUOTEABLE"] += 1
+                reject_hist["CONNECTOR_ANCHOR_NO_POOL"] += 1
 
     routes_admitted = same_pair_routes + token_presence_routes + connector_routes
     _cm_tagged = tag_cross_mechanic_routes(routes_admitted)
@@ -702,6 +837,8 @@ def expand_token_neighborhood(
         connector_tokens=len(connectors),
         active_routes=len(routes_admitted),
         unique_tokens=len(unique_token_syms),
+        same_pair_routes=len(same_pair_routes),
+        connector_routes=len(connector_routes),
     )
     if not subgraph["subgraph_ready"]:
         reject_hist["SUBGRAPH_TOO_SMALL"] += 1
@@ -988,6 +1125,7 @@ def _expand_batch_token_neighborhood(
     connector_tokens_all: Set[str] = set()
     subgraph_ready_count = 0
     multi_venue_subgraph_ready = 0
+    subgraph_ready_debug: List[Dict[str, Any]] = []
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
     from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
 
@@ -1011,7 +1149,16 @@ def _expand_batch_token_neighborhood(
             1 for addr in token_addrs if hints_for_token(external_hints_artifact, addr)
         )
 
-    for addr in token_addrs:
+    for idx, addr in enumerate(token_addrs):
+        if idx and idx % 25 == 0:
+            _log.info(
+                "expansion progress %d/%d routes=%d subgraph_ready=%d active_scan=%d",
+                idx,
+                len(token_addrs),
+                len(routes_admitted),
+                subgraph_ready_count,
+                int(batch_hint_metrics.get("active_factory_second_pool_count") or 0),
+            )
         sym = str((reg_tokens.get(addr) or {}).get("symbol") or "")
         nh = expand_token_neighborhood(
             chain=chain,
@@ -1042,12 +1189,29 @@ def _expand_batch_token_neighborhood(
         batch_hint_metrics["eligible_hint_routes"] += int(
             hm.get("eligible_hint_routes", 0)
         )
+        batch_hint_metrics["active_factory_second_pool_count"] = int(
+            batch_hint_metrics.get("active_factory_second_pool_count", 0)
+        ) + int(hm.get("active_factory_second_pool_count", 0))
         for k, v in (nh.get("reject_reason_histogram") or {}).items():
             reject_hist[k] += int(v or 0)
         all_reject_rows.extend(nh.get("all_reject_rows") or [])
         connector_tokens_all.update(nh.get("connector_tokens") or [])
-        if nh.get("subgraph", {}).get("subgraph_ready"):
+        _sg = nh.get("subgraph") or {}
+        if _sg.get("subgraph_ready"):
             subgraph_ready_count += 1
+        elif len(subgraph_ready_debug) < 64:
+            subgraph_ready_debug.append(
+                {
+                    "token_address": addr,
+                    "token_symbol": sym,
+                    "token_seen_on_dexes": _sg.get("token_seen_on_dexes"),
+                    "connector_tokens": _sg.get("connector_token_count"),
+                    "same_pair_routes": _sg.get("same_pair_routes"),
+                    "connector_routes": _sg.get("connector_routes"),
+                    "active_routes": _sg.get("active_routes"),
+                    "missing_reason": _sg.get("missing_reason"),
+                }
+            )
         _nh_dexes = {
             r.get("dex_id")
             for bucket in ("same_pair_routes", "token_presence_routes", "connector_routes")
@@ -1141,7 +1305,11 @@ def _expand_batch_token_neighborhood(
         pools_found_by_dex=dict(pools_found_by_dex),
     )
     distinct_lane = evaluate_distinct_pricing_lane(routes_admitted)
-    from m8.discovery.origin_source import collect_m8_token_addrs, stamp_route_origin_source
+    from m8.discovery.origin_source import (
+        collect_m8_token_addrs,
+        partition_canonical_routes,
+        stamp_route_origin_source,
+    )
 
     _m8_token_addrs = collect_m8_token_addrs(registry=registry)
     _hint_matched = 0
@@ -1161,6 +1329,12 @@ def _expand_batch_token_neighborhood(
         if focus.startswith("0x") and len(focus) == 42:
             _token_dexes.setdefault(focus, set()).add(str(_r.get("dex_id") or ""))
     _multi_venue_tokens = sum(1 for dexes in _token_dexes.values() if len(dexes) >= 2)
+    _canonical_routes, _exploration_routes = partition_canonical_routes(
+        routes_admitted, _m8_token_addrs
+    )
+    _routes_by_origin: Counter = Counter(
+        str(r.get("origin_source") or "unknown") for r in routes_admitted
+    )
     summary = {
         "expansion_mode": "token_neighborhood_batch",
         "tokens_in": len(token_addrs),
@@ -1196,6 +1370,14 @@ def _expand_batch_token_neighborhood(
         "verified_second_pool_count": int(
             batch_hint_metrics.get("verified_second_pool_count") or 0
         ),
+        "active_factory_second_pool_count": int(
+            batch_hint_metrics.get("active_factory_second_pool_count") or 0
+        ),
+        "canonical_routes_count": len(_canonical_routes),
+        "exploration_routes_count": len(_exploration_routes),
+        "routes_rejected_not_m8_derived": len(_exploration_routes),
+        "routes_by_origin_source": dict(_routes_by_origin),
+        "subgraph_ready_debug_sample": subgraph_ready_debug,
         **distinct_lane,
     }
     return {
@@ -1205,6 +1387,7 @@ def _expand_batch_token_neighborhood(
         "config_path": None,
         "input_registry_path": None,
         "summary": summary,
+        "subgraph_ready_debug": subgraph_ready_debug,
         "reject_reason_histogram": dict(reject_hist),
         "same_pair_routes": same_pair_routes,
         "token_presence_routes": token_presence_routes,

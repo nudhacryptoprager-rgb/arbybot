@@ -84,6 +84,30 @@ def main() -> int:
         help="Pages of GeckoTerminal new_pools when --new-pools-backfill",
     )
     p.add_argument("--verbose", action="store_true")
+    p.add_argument(
+        "--retry-single-venue",
+        action="store_true",
+        default=True,
+        help="Extra fetch passes for tokens seen on only one DEX (default on)",
+    )
+    p.add_argument(
+        "--no-retry-single-venue",
+        action="store_false",
+        dest="retry_single_venue",
+        help="Disable single-venue retry passes",
+    )
+    p.add_argument(
+        "--retry-max",
+        type=int,
+        default=2,
+        help="Max extra passes per single-venue token",
+    )
+    p.add_argument(
+        "--retry-backoff-ms",
+        type=int,
+        default=250,
+        help="Backoff between single-venue retry passes",
+    )
     args = p.parse_args()
 
     logging.basicConfig(
@@ -117,6 +141,7 @@ def main() -> int:
             return 2
 
     tokens: list[str] = []
+    wl: dict = {}
     if not args.exploration:
         wl = load_watchlist(args.watchlist)
         tokens = list((wl.get("tokens") or {}).keys())
@@ -138,6 +163,20 @@ def main() -> int:
     else:
         log.warning("EXPLORATION hint refresh: not for canonical M9 bridge")
 
+    wl_tokens = (wl.get("tokens") or {}) if not args.exploration else {}
+
+    def _venue_count(token_addr: str) -> int:
+        venues = (wl_tokens.get(token_addr.lower()) or {}).get("venues") or {}
+        dexes = {
+            str(v.get("dex") or v.get("dex_id") or "")
+            for v in venues.values()
+            if v.get("dex") or v.get("dex_id")
+        }
+        return len(dexes)
+
+    if not args.exploration:
+        tokens = sorted(tokens, key=lambda t: (_venue_count(t), t))
+
     log.info("Refreshing hints for %d watchlist tokens", len(tokens))
 
     timer = TimedSource()
@@ -145,6 +184,8 @@ def main() -> int:
     second_pool_hints = 0
     verification_metrics = empty_verification_metrics()
     source_pool_counts: dict[str, int] = {}
+    per_source_verified_yield: dict[str, int] = {}
+    single_venue_retries = 0
 
     if args.new_pools_backfill:
         from m8.discovery.geckoterminal_hints import fetch_new_pools_backfill
@@ -171,37 +212,47 @@ def main() -> int:
                 int(source_pool_counts.get("geckoterminal_new_pools", 0)) + 1
             )
 
+    def _fetch_token_sources(token: str, venue_count: int) -> None:
+        nonlocal second_pool_hints, single_venue_retries
+        passes = 1
+        if args.retry_single_venue and venue_count < 2:
+            passes = max(1, int(args.retry_max) + 1)
+        for pass_idx in range(passes):
+            if pass_idx > 0:
+                single_venue_retries += 1
+                if args.retry_backoff_ms:
+                    time.sleep(args.retry_backoff_ms / 1000.0)
+            for source in sources:
+                try:
+                    batch = timer.run(
+                        f"{source}",
+                        lambda s=source, t=token: _fetch_source(s, t, chain=args.chain),
+                    )
+                except Exception as exc:
+                    log.warning("source=%s token=%s failed: %s", source, token[:10], exc)
+                    batch = []
+                for h in batch:
+                    h.focus_token = token
+                    if verify_mode != "none":
+                        h = verify_hint_onchain(
+                            h,
+                            chain=args.chain,
+                            verify_mode=verify_mode,
+                            metrics=verification_metrics,
+                        )
+                    all_hints.append(h)
+                    source_pool_counts[source] = int(source_pool_counts.get(source, 0)) + 1
+                    if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
+                        per_source_verified_yield[h.source] = int(
+                            per_source_verified_yield.get(h.source, 0)
+                        ) + 1
+                        if venue_count < 2:
+                            second_pool_hints += 1
+
     for i, token in enumerate(tokens):
         token = token.lower()
-        venue_count = len(
-            {
-                v.get("dex")
-                for v in ((wl.get("tokens") or {}).get(token) or {}).get("venues", {}).values()
-                if v.get("dex")
-            }
-        )
-        for source in sources:
-            try:
-                batch = timer.run(
-                    f"{source}",
-                    lambda s=source, t=token: _fetch_source(s, t, chain=args.chain),
-                )
-            except Exception as exc:
-                log.warning("source=%s token=%s failed: %s", source, token[:10], exc)
-                batch = []
-            for h in batch:
-                h.focus_token = token
-                if verify_mode != "none":
-                    h = verify_hint_onchain(
-                        h,
-                        chain=args.chain,
-                        verify_mode=verify_mode,
-                        metrics=verification_metrics,
-                    )
-                all_hints.append(h)
-                source_pool_counts[source] = int(source_pool_counts.get(source, 0)) + 1
-                if venue_count < 2 and h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
-                    second_pool_hints += 1
+        venue_count = _venue_count(token)
+        _fetch_token_sources(token, venue_count)
         if args.sleep_ms and i + 1 < len(tokens):
             time.sleep(args.sleep_ms / 1000.0)
 
@@ -216,6 +267,8 @@ def main() -> int:
         "second_pool_hints_found": second_pool_hints,
         "hint_source_latency_s": timer.latency_s,
         "hint_source_pool_counts": source_pool_counts,
+        "per_source_verified_yield": per_source_verified_yield,
+        "single_venue_retry_passes": single_venue_retries,
         "second_venue_source": second_venue_hist,
         "verify_mode": verify_mode,
         "new_pools_backfill": bool(args.new_pools_backfill),

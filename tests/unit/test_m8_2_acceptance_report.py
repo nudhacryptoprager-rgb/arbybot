@@ -107,6 +107,31 @@ def test_m8_2_pass_and_m9_fail_are_independent():
     assert m9["m8_2_upstream"]["goal_status"] == "REACHED"
 
 
+def test_m8_2_report_includes_per_source_yield_and_subgraph_debug():
+    sniper, hints, expansion = _artifacts()
+    hints["metrics"] = {
+        "per_source_verified_yield": {"dexscreener": 5, "geckoterminal": 3},
+    }
+    expansion["subgraph_ready_debug"] = [
+        {
+            "token_address": "0xabc",
+            "missing_reason": "TOKEN_SEEN_ON_ONE_DEX",
+        }
+    ]
+    expansion["summary"]["routes_by_origin_source"] = {
+        "m8_watchlist_hint": 10,
+        "exploration": 2,
+    }
+    expansion["summary"]["canonical_routes_count"] = 10
+    expansion["summary"]["exploration_routes_count"] = 2
+    report = build_m8_2_acceptance_report(
+        sniper=sniper, hints=hints, expansion=expansion, strict=True
+    )
+    assert report["per_source_verified_yield"]["dexscreener"] == 5
+    assert report["subgraph_ready_debug"]["top_missing_reasons"]["TOKEN_SEEN_ON_ONE_DEX"] == 1
+    assert report["provenance"]["canonical_routes_count"] == 10
+
+
 def test_m8_2_fail_sets_upstream_not_ready_on_m9():
     from scripts.m9_lane_acceptance_report import build_acceptance_report
 

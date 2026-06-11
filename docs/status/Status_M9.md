@@ -2,25 +2,15 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M9 gates → `scripts/m9_lane_acceptance_report.py` (`m9_blockers` only).
 
-**Current runtime line (2026-06-11):** **M8_M8_1_RUNTIME_REACHED / M8_2_QUALITY_BLOCKED / M9_ECONOMICS_NOT_EVALUATED**. Fresh M8/M8.1 accepted upstream; M8.2 handoff volume is large but quality gates (`subgraph_ready_tokens`, `verified_second_pool_count`, stale hints) remain BLOCKED. M9 economics evaluated separately.
+**Current runtime line:** **M8_M8_1_RUNTIME_REACHED / M8_2_QUALITY_BLOCKED / M9_ECONOMICS_NOT_EVALUATED**
 
-| Layer | Metric | Value |
-|-------|--------|------:|
-| Safety gate | `check_repo_safety.py` | **PASS** |
-| M8 sniper 45m | status / `recent_events` / RPC errors | **ACTIVE** / **278** / **0** |
-| M8 sniper | `generated_at_utc` | **2026-06-11T16:06:29Z** |
-| M8.1 anchor | candidates / passes / qsr | **3228** / **351** / **1.0** |
-| M8.1 | `m8_1_stale` / `active_routes_count` | **false** / **0** (quote_probe_only by design) |
-| M8.2 expansion | tokens / routes / multi-venue | **701** / **1025** / **14** |
-| M8.2 quality | `connector_routes_count` / `subgraph_ready_tokens` / `verified_second_pool_count` | **67** / **1** / **5** |
-| M8.2 hints | `hint_tokens_matched` / `external_hints_enabled` | **774** / **true** |
-| M8.2 distinct-pricing route quoteability | Curve / Balancer / Maverick | **9/9** / **79/94** / **90/143** |
-| Bridge after M8.2 | `m8_stale` / `m8_1_stale` / `graph_ready_from_m8` | **false** / **false** / **196** |
-| Bridge after M8.2 | `graph_ready_from_expansion` / `graph_ready_total` / active routes | **817** / **1130** / **950** |
-| M8.2 acceptance (`m8_2_acceptance_report`) | blockers | `SUBGRAPH_READY_LOW`, `VERIFIED_SECOND_POOL_LOW`, `HINTS_STALE` |
-| M9 acceptance (`m9_blockers`) | shadow not run | **NOT_EVALUATED** (no mixed M8.2 blockers) |
+| Layer | Status | Source |
+|-------|--------|--------|
+| M8 / M8.1 upstream | **REACHED** | [Status_M8.md](Status_M8.md), [Status_M8_1.md](Status_M8_1.md) |
+| M8.2 mirror/subgraph/handoff | **QUALITY_BLOCKED** | [Status_M8_2.md](Status_M8_2.md), `data/tmp/m8_2_acceptance_report_latest.json` |
+| M9 graph/cycle/economics | **NOT_EVALUATED** | `m9_lane_acceptance_report_latest.json` (`m9_blockers` only when shadow runs) |
 
-**M8.2 audit verdict:** **PARTIAL_REACHED, not 100% ready.** The old tiny-expansion state is gone: M8.2 consumes the fresh `m8_pending_pairs.json`, matches hints, includes Curve/Balancer/Maverick, and bridge accepts `817` expansion routes. The remaining M8.2 blockers are quality blockers: `subgraph_ready_tokens=1`, `verified_second_pool_count=5`, stale external hints (`m8_external_pool_hints_latest.json` generated at `2026-06-11T07:50:18Z` while sniper is `2026-06-11T16:06:29Z`), and resolver noise with partial/symbol-like token IDs (`0x420000`, `0x833589`) during expansion. Do not claim M8.2 closure until fresh hint refresh + expansion raises subgraph-ready and verified second-pool counts.
+M8.2 quality metrics, blockers, and provenance split live only in **Status_M8_2.md** — do not duplicate here. M9 shadow/economics runs only after M8.2 strict PASS (`UPSTREAM_M8_2_NOT_READY` otherwise).
 
 **Session 2026-06-10 cycle-lane sync (pool-lane PASS vs cycle-lane FAIL):**
 

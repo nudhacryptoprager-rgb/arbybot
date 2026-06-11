@@ -71,6 +71,25 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _per_source_yield(
+    hints: Optional[Dict[str, Any]],
+    expansion: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    hm = (hints or {}).get("metrics") or {}
+    yield_table = dict(hm.get("per_source_verified_yield") or {})
+    second_venue = dict(hm.get("second_venue_source") or {})
+    for source, count in second_venue.items():
+        yield_table.setdefault(source, int(count or 0))
+    exp_summary = (expansion or {}).get("summary") or {}
+    specialized = int(exp_summary.get("specialized_index_tokens_matched") or 0)
+    if specialized:
+        yield_table["specialized_index"] = specialized
+    active_scan = int(exp_summary.get("active_factory_second_pool_count") or 0)
+    if active_scan:
+        yield_table["active_factory_scan"] = active_scan
+    return yield_table
+
+
 def _expansion_metrics(
     expansion: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -83,12 +102,18 @@ def _expansion_metrics(
         "multi_venue_tokens": summary.get("multi_venue_tokens")
         or metrics.get("multi_venue_tokens"),
         "verified_second_pool_count": summary.get("verified_second_pool_count"),
+        "active_factory_second_pool_count": summary.get(
+            "active_factory_second_pool_count"
+        ),
         "connector_routes_count": summary.get("connector_routes_count"),
         "subgraph_ready_tokens": summary.get("subgraph_ready_tokens"),
         "hint_tokens_matched": summary.get("hint_tokens_matched"),
         "external_hints_enabled": summary.get("external_hints_enabled"),
         "second_pool_hints_found": summary.get("second_pool_hints_found"),
         "hint_to_verified_pool_rate": summary.get("hint_to_verified_pool_rate"),
+        "canonical_routes_count": summary.get("canonical_routes_count"),
+        "exploration_routes_count": summary.get("exploration_routes_count"),
+        "routes_rejected_not_m8_derived": summary.get("routes_rejected_not_m8_derived"),
     }
 
 
@@ -128,6 +153,21 @@ def _provenance_block(
     expansion: Optional[Dict[str, Any]],
     sniper: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    summary = (expansion or {}).get("summary") or {}
+    if summary.get("routes_by_origin_source"):
+        return {
+            "routes_by_origin_source": dict(summary.get("routes_by_origin_source") or {}),
+            "canonical_routes_count": int(summary.get("canonical_routes_count") or 0),
+            "exploration_routes_count": int(summary.get("exploration_routes_count") or 0),
+            "routes_rejected_not_m8_derived": int(
+                summary.get("routes_rejected_not_m8_derived") or 0
+            ),
+            "exploration_note": (
+                "exploration routes lack M8-derived provenance or verified evidence; "
+                "partitioned from canonical bridge handoff"
+            ),
+        }
+
     routes = list((expansion or {}).get("routes_admitted") or [])
     m8_token_addrs = collect_m8_token_addrs(sniper=sniper)
     canonical, exploration = partition_canonical_routes(routes, m8_token_addrs)
@@ -147,6 +187,25 @@ def _provenance_block(
         "exploration_routes_count": len(exploration),
         "routes_rejected_not_m8_derived": len(exploration),
         "exploration_origin_source_count": exploration_by_origin,
+        "exploration_note": (
+            "exploration routes lack M8-derived provenance or verified evidence"
+        ),
+    }
+
+
+def _subgraph_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    sample = (expansion or {}).get("subgraph_ready_debug") or (
+        (expansion or {}).get("summary") or {}
+    ).get("subgraph_ready_debug_sample") or []
+    if not sample:
+        return {"sample_count": 0, "top_missing_reasons": {}}
+    reasons: Counter[str] = Counter()
+    for row in sample:
+        reasons[str(row.get("missing_reason") or "unknown")] += 1
+    return {
+        "sample_count": len(sample),
+        "top_missing_reasons": dict(reasons.most_common(8)),
+        "sample": sample[:12],
     }
 
 
@@ -160,6 +219,8 @@ def build_m8_2_acceptance_report(
     metrics = _expansion_metrics(expansion)
     freshness = _freshness_block(sniper=sniper, hints=hints, expansion=expansion)
     provenance = _provenance_block(expansion=expansion, sniper=sniper)
+    per_source_yield = _per_source_yield(hints, expansion)
+    subgraph_debug = _subgraph_debug_block(expansion)
 
     blockers: List[str] = []
     warnings: List[str] = []
@@ -202,12 +263,14 @@ def build_m8_2_acceptance_report(
     goal_status = "REACHED" if not blockers else "BLOCKED"
 
     return {
-        "schema_version": "m8_2_acceptance_report.1",
+        "schema_version": "m8_2_acceptance_report.2",
         "generated_at_utc": _iso_now(),
         "layer": "M8_2_expansion",
         "metrics": metrics,
         "freshness": freshness,
         "provenance": provenance,
+        "per_source_verified_yield": per_source_yield,
+        "subgraph_ready_debug": subgraph_debug,
         "quality_gates": dict(_QUALITY_GATES),
         "blockers": blockers,
         "warnings": warnings,
