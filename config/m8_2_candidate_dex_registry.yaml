@@ -1,0 +1,84 @@
+# M8.2 candidate DEX / mirror-radar registry (Base chain).
+# Status lanes:
+#   configured  — factory/resolver in exotic config; eligible for on-chain scan
+#   hint_only   — API/radar discovery only until adapter proof
+#   unsupported — known venue, no resolver yet (explicit UNSUPPORTED_* in matrix)
+#   verified    — passed listener/resolver/verify/quote-smoke (manual promotion)
+schema_version: "m8_2_candidate_dex_registry.1"
+chain: base
+
+candidates:
+  # P0 — configured mirror coverage expansion
+  alien_base_v2:
+    priority: P0
+    registry_status: configured
+    adapter_type: uniswap_v2
+    config_dex_id: alien_base_v2
+    external_aliases: ["alienbase", "alien-base", "alien_base"]
+
+  alien_area51:
+    priority: P0
+    registry_status: configured
+    adapter_type: uniswap_v2
+    config_dex_id: alien_area51
+    external_aliases: ["area51", "alien-area51", "alien_area51"]
+
+  alien_base_v3:
+    priority: P0
+    registry_status: hint_only
+    adapter_type: uniswap_v3
+    external_aliases: ["alienbase-v3", "alien_base_v3"]
+    unsupported_reason: UNSUPPORTED_FACTORY_UNVERIFIED
+
+  quickswap_v2:
+    priority: P0
+    registry_status: hint_only
+    adapter_type: uniswap_v2
+    external_aliases: ["quickswap", "quickswap-v2-base"]
+    unsupported_reason: UNSUPPORTED_NO_BASE_V2_FACTORY
+
+  quickswap_algebra:
+    priority: P0
+    registry_status: configured
+    adapter_type: algebra
+    config_dex_id: quickswap_algebra
+    external_aliases: ["quickswap-v4", "quickswap-algebra", "quickswap-v3-base"]
+
+  iziswap_base:
+    priority: P0
+    registry_status: configured
+    adapter_type: iziswap
+    config_dex_id: iziswap_base
+    external_aliases: ["iziswap", "izumi", "iziswap-base"]
+
+  # P1 — research / hint-only until on-chain proof
+  hydrex:
+    priority: P1
+    registry_status: hint_only
+    adapter_type: unknown
+    external_aliases: ["hydrex", "hydrex-base"]
+    unsupported_reason: UNSUPPORTED_ADAPTER_PENDING
+
+  pancake_infinity:
+    priority: P1
+    registry_status: unsupported
+    adapter_type: unknown
+    external_aliases: ["pancakeswap-infinity", "pancake-infinity"]
+    unsupported_reason: UNSUPPORTED_INFINITY_NOT_WIRED
+
+  balancer_v3:
+    priority: P1
+    registry_status: unsupported
+    adapter_type: unknown
+    external_aliases: ["balancer-v3", "balancer_v3"]
+    unsupported_reason: UNSUPPORTED_BALANCER_V3_NOT_WIRED
+
+# Non-RPC radar providers (hint-only; never canonical without on-chain verify)
+radar_providers:
+  - dexscreener
+  - geckoterminal
+  - thegraph_token_api
+  - coinmarketcap_dex
+  - dexpaprika
+  - moralis
+  - codex_defined

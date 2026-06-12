@@ -17,6 +17,18 @@ def empty_scan_telemetry() -> Dict[str, Any]:
     }
 
 
+def empty_candidate_scan_telemetry() -> Dict[str, Any]:
+    return {
+        "candidate_scan_expected_attempts": 0,
+        "candidate_scan_actual_attempts": 0,
+        "candidate_scan_attempted_by_dex": {},
+        "candidate_scan_attempted_by_anchor": {},
+        "candidate_scan_unsupported_by_dex": {},
+        "candidate_scan_no_pool_by_dex": {},
+        "candidate_dex_attempt_matrix": {},
+    }
+
+
 def record_scan_attempt(
     telemetry: Dict[str, Any],
     *,
@@ -67,6 +79,85 @@ def record_scan_attempt(
     elif result == "SKIPPED_DRY_RUN" or reason == "SKIPPED_DRY_RUN":
         dry = telemetry.setdefault("active_scan_skipped_dry_run_by_dex", {})
         dry[dex_id] = int(dry.get(dex_id, 0)) + 1
+
+
+def record_candidate_scan_attempt(
+    telemetry: Dict[str, Any],
+    *,
+    token_address: str,
+    dex_id: str,
+    anchor: str,
+    registry_status: str,
+    attempted: bool,
+    result: str,
+    reason: str,
+    pool_address: Optional[str] = None,
+    count_expected: bool = True,
+) -> None:
+    """Record one candidate-DEX coverage attempt (separate from canonical 13-DEX matrix)."""
+    token = token_address.lower()
+    matrix = telemetry.setdefault("candidate_dex_attempt_matrix", {})
+    token_row = matrix.setdefault(token, {})
+    dex_row = token_row.setdefault(dex_id, {})
+    dex_row[anchor] = {
+        "attempted": attempted,
+        "registry_status": registry_status,
+        "result": result,
+        "reason": reason,
+        "pool_address": pool_address,
+    }
+
+    if not attempted:
+        return
+
+    if count_expected:
+        telemetry["candidate_scan_expected_attempts"] = int(
+            telemetry.get("candidate_scan_expected_attempts", 0)
+        ) + 1
+    telemetry["candidate_scan_actual_attempts"] = int(
+        telemetry.get("candidate_scan_actual_attempts", 0)
+    ) + 1
+
+    by_dex = telemetry.setdefault("candidate_scan_attempted_by_dex", {})
+    by_dex[dex_id] = int(by_dex.get(dex_id, 0)) + 1
+
+    by_anchor = telemetry.setdefault("candidate_scan_attempted_by_anchor", {})
+    by_anchor[anchor] = int(by_anchor.get(anchor, 0)) + 1
+
+    if result == "NO_POOL" or reason == "NO_POOL":
+        no_pool = telemetry.setdefault("candidate_scan_no_pool_by_dex", {})
+        no_pool[dex_id] = int(no_pool.get(dex_id, 0)) + 1
+    elif result == "UNSUPPORTED_DEX" or str(reason).startswith("UNSUPPORTED"):
+        unsup = telemetry.setdefault("candidate_scan_unsupported_by_dex", {})
+        unsup[dex_id] = int(unsup.get(dex_id, 0)) + 1
+
+
+def merge_candidate_scan_telemetry(
+    dest: Dict[str, Any],
+    src: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not src:
+        return dest
+    dest["candidate_scan_expected_attempts"] = int(
+        dest.get("candidate_scan_expected_attempts", 0)
+    ) + int(src.get("candidate_scan_expected_attempts", 0))
+    dest["candidate_scan_actual_attempts"] = int(
+        dest.get("candidate_scan_actual_attempts", 0)
+    ) + int(src.get("candidate_scan_actual_attempts", 0))
+    for key in (
+        "candidate_scan_attempted_by_dex",
+        "candidate_scan_attempted_by_anchor",
+        "candidate_scan_unsupported_by_dex",
+        "candidate_scan_no_pool_by_dex",
+    ):
+        d_hist = dest.setdefault(key, {})
+        for k, v in (src.get(key) or {}).items():
+            d_hist[k] = int(d_hist.get(k, 0)) + int(v or 0)
+
+    dest_matrix = dest.setdefault("candidate_dex_attempt_matrix", {})
+    for token, dex_map in (src.get("candidate_dex_attempt_matrix") or {}).items():
+        dest_matrix.setdefault(token, {}).update(dex_map)
+    return dest
 
 
 def merge_scan_telemetry(

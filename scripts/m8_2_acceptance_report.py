@@ -45,10 +45,40 @@ _M8_2_BLOCKERS = frozenset(
         "M8_2_EXPANSION_ARTIFACT_MISSING",
         "M8_2_HINTS_ARTIFACT_MISSING",
         "ACTIVE_SCAN_COVERAGE_INCOMPLETE",
+        "CANDIDATE_DEX_COVERAGE_INCOMPLETE",
+        "HIGH_STALE_HINT_RATE",
+    }
+)
+
+_COVERAGE_BLOCKERS = frozenset(
+    {
+        "ACTIVE_SCAN_COVERAGE_INCOMPLETE",
+        "CANDIDATE_DEX_COVERAGE_INCOMPLETE",
+        "M8_2_EXPANSION_ARTIFACT_MISSING",
+    }
+)
+
+_QUALITY_BLOCKERS = frozenset(
+    {
+        "SUBGRAPH_READY_LOW",
+        "VERIFIED_SECOND_POOL_LOW",
+        "MULTI_VENUE_TOKENS_LOW",
+        "CONNECTOR_SYNTHESIS_WEAK",
+    }
+)
+
+_EXTERNAL_RADAR_BLOCKERS = frozenset(
+    {
+        "HINTS_STALE",
+        "EXTERNAL_HINTS_STALE",
+        "EXPANSION_FRESHNESS_ORDER_VIOLATION",
+        "M8_2_HINTS_ARTIFACT_MISSING",
+        "HIGH_STALE_HINT_RATE",
     }
 )
 
 _COVERAGE_MIN_RATE = 0.98
+_STALE_HINT_RATE_MAX = 0.85
 
 
 def _load(path: Optional[Path]) -> Optional[Dict[str, Any]]:
@@ -120,6 +150,10 @@ def _expansion_metrics(
         "active_scan_coverage_rate": summary.get("active_scan_coverage_rate"),
         "scan_expected_attempts": summary.get("scan_expected_attempts"),
         "scan_actual_attempts": summary.get("scan_actual_attempts"),
+        "candidate_dexes_seen": summary.get("candidate_dexes_seen"),
+        "candidate_dexes_configured": summary.get("candidate_dexes_configured"),
+        "unsupported_candidate_dexes": summary.get("unsupported_candidate_dexes"),
+        "candidate_scan_coverage_rate": summary.get("candidate_scan_coverage_rate"),
     }
 
 
@@ -227,6 +261,11 @@ def build_m8_2_acceptance_report(
     provenance = _provenance_block(expansion=expansion, sniper=sniper)
     per_source_yield = _per_source_yield(hints, expansion)
     subgraph_debug = _subgraph_debug_block(expansion)
+    from m8.discovery.candidate_dex_registry import (
+        build_candidate_coverage_audit,
+        build_radar_metrics,
+        load_candidate_dex_registry,
+    )
     from m8.discovery.scan_telemetry import build_coverage_audit
 
     scan_coverage = (
@@ -234,6 +273,18 @@ def build_m8_2_acceptance_report(
         if expansion is not None
         else {"blockers": ["ACTIVE_SCAN_COVERAGE_INCOMPLETE"], "goal_status": "BLOCKED"}
     )
+    candidate_registry = load_candidate_dex_registry()
+    candidate_coverage = (
+        build_candidate_coverage_audit(
+            expansion, candidate_registry, min_coverage_rate=_COVERAGE_MIN_RATE
+        )
+        if expansion is not None
+        else {
+            "blockers": ["CANDIDATE_DEX_COVERAGE_INCOMPLETE"],
+            "goal_status": "BLOCKED",
+        }
+    )
+    radar_metrics = build_radar_metrics(hints, expansion)
 
     blockers: List[str] = []
     warnings: List[str] = []
@@ -274,12 +325,23 @@ def build_m8_2_acceptance_report(
 
     for cov_blocker in scan_coverage.get("blockers") or []:
         blockers.append(str(cov_blocker))
+    for cand_blocker in candidate_coverage.get("blockers") or []:
+        blockers.append(str(cand_blocker))
+
+    stale_rate = float(radar_metrics.get("stale_hint_rate") or 0.0)
+    if stale_rate > _STALE_HINT_RATE_MAX and hints is not None:
+        blockers.append("HIGH_STALE_HINT_RATE")
 
     blockers = sorted(set(blockers))
+    coverage_blockers = sorted(b for b in blockers if b in _COVERAGE_BLOCKERS)
+    quality_blockers = sorted(b for b in blockers if b in _QUALITY_BLOCKERS)
+    external_radar_blockers = sorted(
+        b for b in blockers if b in _EXTERNAL_RADAR_BLOCKERS
+    )
     goal_status = "REACHED" if not blockers else "BLOCKED"
 
     return {
-        "schema_version": "m8_2_acceptance_report.3",
+        "schema_version": "m8_2_acceptance_report.4",
         "generated_at_utc": _iso_now(),
         "layer": "M8_2_expansion",
         "metrics": metrics,
@@ -288,6 +350,11 @@ def build_m8_2_acceptance_report(
         "per_source_verified_yield": per_source_yield,
         "subgraph_ready_debug": subgraph_debug,
         "scan_coverage": scan_coverage,
+        "candidate_coverage": candidate_coverage,
+        "radar_metrics": radar_metrics,
+        "coverage_blockers": coverage_blockers,
+        "quality_blockers": quality_blockers,
+        "external_radar_blockers": external_radar_blockers,
         "quality_gates": dict(_QUALITY_GATES),
         "blockers": blockers,
         "warnings": warnings,

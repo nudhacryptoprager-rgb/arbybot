@@ -245,6 +245,72 @@ Runtime acceptance: `verified_second_pool_count > 0` на full watchlist regen; 
 resolve_productive_http_rpc` (не public). Blocker після V4 fix:
 `M8_2_HINT_TO_EXPANSION_MATCHING_OR_CROSSDEX_LOW` (same-DEX v4 hints ≠ cross-DEX).
 
+## 0i.1) Coverage expansion and mirror radar (M8.2 only)
+
+**Goal:** збільшити шанс знайти `1->2` venue transition для M8-sniped токена,
+не послаблюючи provenance і не пускаючи API-hints напряму в M9.
+
+Цей блок належить до M8.2. Він не є M9 economics gate і не може створювати
+production/economics claim.
+
+### Priority DEX candidates
+
+| Priority | DEX / family | Why it matters | Required work before canonical M8.2 coverage |
+|----------|--------------|----------------|----------------------------------------------|
+| P0 | Alien Base V2 / Area51 / V3 | Base-native launch venue; може давати early mirrors поза Uni/Aero | Move addresses to config, add factory listener, resolver, verifier, quote-smoke, depth-smoke |
+| P0 | QuickSwap V2 / Algebra | Algebra/CLMM family outside current dominant Uni/Aero path | Config factories, topic/layout support, token-first resolver, quote/depth smoke |
+| P0 | iZiSwap Base | Distinct CLMM implementation; useful for cross-mechanic mirrors | Config factory/quoter, pool verification, quote path, scan telemetry |
+| P1 | Hydrex | Emerging Base DEX; useful as mirror radar | Treat as hint/R&D until contract/indexer proof exists |
+| P1 | Pancake Infinity | Newer Pancake pool model; may capture fresh deployments | Add only after official Base factory/quoter evidence |
+| P1 | Balancer V3 | Distinct-pricing lane; potential larger pricing divergence | Keep separate from Balancer V2; require Vault/router proof |
+
+### Aggregator / API radar
+
+Use external APIs as recall amplifiers, not as truth:
+
+- DexScreener: primary token-pairs radar for fresh token mirrors.
+- GeckoTerminal / CoinGecko new pools: second-pool discovery and stale-hint comparison.
+- CoinMarketCap DEX API: additional pair/liquidity/security metadata when available.
+- DexPaprika: broad DEX/token/pool/swap radar.
+- Moralis: token-pair/liquidity enrichment.
+- Codex/Defined: optional real-time token/pool radar if access is available.
+
+### Truth contract
+
+- API rows are `HINT_ONLY` until on-chain verification succeeds.
+- A route becomes canonical M8.2 only after token metadata, pool contract evidence,
+  pool membership, liquidity/depth evidence, and quote-smoke are available.
+- Every candidate DEX must emit reason-coded rejects:
+  `NO_POOL`, `INDEX_NO_MATCH`, `UNSUPPORTED_LAYOUT`, `VERIFY_FAILED`,
+  `QUOTE_SMOKE_FAILED`, `DEPTH_SMOKE_FAILED`.
+- New coverage must be visible in the token-first scan matrix; pool-first rows are
+  not sufficient for M8.2 coverage claims.
+
+### Required metrics
+
+- `candidate_dexes_seen`
+- `candidate_dexes_configured`
+- `unsupported_candidate_dexes`
+- `candidate_dex_attempt_matrix`
+- `mirror_source_yield_by_provider`
+- `api_hint_to_onchain_verified_rate`
+- `stale_hint_rate`
+- `second_pool_source`
+- `hint_freshness_s`
+- `truth_status`
+
+### Acceptance
+
+Coverage expansion is reached only when:
+
+1. New DEX candidates are represented in config and scan telemetry, or explicitly
+   listed as unsupported with a reason.
+2. External API hints are merged into M8.2 as hints only and cannot bypass on-chain
+   verification.
+3. `m8_2_acceptance_report.py --strict` continues to separate coverage blockers
+   from quality blockers.
+4. M9 remains `NOT_EVALUATED` until M8.2 strict quality gates pass.
+
 ## 0j) Productive quote sync gate for distinct-pricing lanes
 
 **Hard rule:** discovery/indexer quote-smoke is not the same as M9 productive quote.

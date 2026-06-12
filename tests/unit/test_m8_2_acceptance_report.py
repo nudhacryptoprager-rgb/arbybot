@@ -26,6 +26,34 @@ def _coverage_fixture(summary: dict) -> dict:
         "balancer_vault",
     ]
     attempted = {dex: 10 for dex in dexes}
+    candidate_dexes = [
+        "alien_base_v2",
+        "alien_area51",
+        "quickswap_algebra",
+        "iziswap_base",
+        "alien_base_v3",
+        "quickswap_v2",
+        "hydrex",
+        "pancake_infinity",
+        "balancer_v3",
+    ]
+    candidate_attempted = {dex: 10 for dex in candidate_dexes}
+
+    def _candidate_cell(dex: str) -> dict:
+        if dex in ("alien_base_v2", "alien_area51", "quickswap_algebra", "iziswap_base"):
+            return {
+                "attempted": True,
+                "registry_status": "configured",
+                "result": "NO_POOL",
+                "reason": "NO_POOL",
+            }
+        return {
+            "attempted": True,
+            "registry_status": "hint_only",
+            "result": "UNSUPPORTED_DEX",
+            "reason": "UNSUPPORTED_HINT_ONLY",
+        }
+
     return {
         "scan_attempt_matrix": {
             "0xabc": {
@@ -38,6 +66,22 @@ def _coverage_fixture(summary: dict) -> dict:
             "scan_actual_attempts": len(dexes) * 10,
             "active_scan_attempted_by_dex": attempted,
             "active_scan_attempted_by_anchor": {"USDC": len(dexes) * 10},
+        },
+        "candidate_dex_attempt_matrix": {
+            "0xabc": {
+                dex: {"USDC": _candidate_cell(dex)} for dex in candidate_dexes
+            }
+        },
+        "candidate_scan_telemetry": {
+            "candidate_scan_expected_attempts": len(candidate_dexes) * 10,
+            "candidate_scan_actual_attempts": len(candidate_dexes) * 10,
+            "candidate_scan_attempted_by_dex": candidate_attempted,
+            "candidate_scan_attempted_by_anchor": {"USDC": len(candidate_dexes) * 10},
+            "candidate_dex_attempt_matrix": {
+                "0xabc": {
+                    dex: {"USDC": _candidate_cell(dex)} for dex in candidate_dexes
+                }
+            },
         },
     }
 
@@ -63,6 +107,20 @@ def _artifacts(
                 "scan_expected_attempts": coverage["scan_telemetry"]["scan_expected_attempts"],
                 "scan_actual_attempts": coverage["scan_telemetry"]["scan_actual_attempts"],
                 "active_scan_attempted_by_dex": coverage["scan_telemetry"]["active_scan_attempted_by_dex"],
+                "tokens_in": 1,
+                "m8_tokens_in": 1,
+                "candidate_dexes_seen": 9,
+                "candidate_dexes_configured": 4,
+                "unsupported_candidate_dexes": [
+                    "alien_base_v3",
+                    "balancer_v3",
+                    "hydrex",
+                    "pancake_infinity",
+                    "quickswap_v2",
+                ],
+                "candidate_scan_attempted_by_dex": coverage["candidate_scan_telemetry"][
+                    "candidate_scan_attempted_by_dex"
+                ],
             },
             "routes_admitted": [
                 {
@@ -162,6 +220,25 @@ def test_m8_2_report_includes_per_source_yield_and_subgraph_debug():
     assert report["per_source_verified_yield"]["dexscreener"] == 5
     assert report["subgraph_ready_debug"]["top_missing_reasons"]["TOKEN_SEEN_ON_ONE_DEX"] == 1
     assert report["provenance"]["canonical_routes_count"] == 10
+
+
+def test_m8_2_split_blockers():
+    sniper, hints, expansion = _artifacts(
+        summary=_good_expansion_summary(subgraph_ready_tokens=1)
+    )
+    report = build_m8_2_acceptance_report(
+        sniper=sniper, hints=hints, expansion=expansion, strict=True
+    )
+    assert "SUBGRAPH_READY_LOW" in report["quality_blockers"]
+    assert report["coverage_blockers"] == []
+    assert "candidate_coverage" in report
+    assert "radar_metrics" in report
+    assert report["radar_metrics"]["truth_status"] in (
+        "HINT_ONLY",
+        "HINT_DOMINANT",
+        "ONCHAIN_VERIFIED",
+        "STALE_HINT_RISK",
+    )
 
 
 def test_m8_2_fail_sets_upstream_not_ready_on_m9():

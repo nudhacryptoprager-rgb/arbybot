@@ -25,6 +25,17 @@ _SOURCE_FETCHERS = {
     "geckoterminal": "m8.discovery.geckoterminal_hints",
     "thegraph": "m8.discovery.graph_hints",
     "thegraph_token_api": "m8.discovery.thegraph_token_api_hints",
+    "coinmarketcap_dex": "m8.discovery.radar_providers",
+    "dexpaprika": "m8.discovery.radar_providers",
+    "moralis": "m8.discovery.radar_providers",
+    "codex_defined": "m8.discovery.radar_providers",
+}
+
+_RADAR_FETCH_FN = {
+    "coinmarketcap_dex": "fetch_coinmarketcap_dex_hints",
+    "dexpaprika": "fetch_dexpaprika_hints",
+    "moralis": "fetch_moralis_hints",
+    "codex_defined": "fetch_codex_defined_hints",
 }
 
 
@@ -34,6 +45,8 @@ def _fetch_source(source: str, token: str, *, chain: str):
     mod = importlib.import_module(_SOURCE_FETCHERS[source])
     if source == "geckoterminal":
         return mod.fetch_token_pool_hints(token, chain=chain)
+    if source in _RADAR_FETCH_FN:
+        return getattr(mod, _RADAR_FETCH_FN[source])(token, chain=chain)
     return mod.fetch_token_hints(token, chain=chain)
 
 
@@ -262,16 +275,25 @@ def main() -> int:
         if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
             second_venue_hist[h.source] = int(second_venue_hist.get(h.source, 0)) + 1
 
+    from m8.discovery.radar_providers import radar_provider_metrics
+
+    radar_metrics = radar_provider_metrics(
+        source_pool_counts,
+        per_source_verified_yield,
+        sources_requested=sources,
+    )
     metrics = {
         "hint_tokens_checked": len(tokens),
         "second_pool_hints_found": second_pool_hints,
         "hint_source_latency_s": timer.latency_s,
+        "hint_freshness_s": dict(timer.latency_s),
         "hint_source_pool_counts": source_pool_counts,
         "per_source_verified_yield": per_source_verified_yield,
         "single_venue_retry_passes": single_venue_retries,
         "second_venue_source": second_venue_hist,
         "verify_mode": verify_mode,
         "new_pools_backfill": bool(args.new_pools_backfill),
+        **radar_metrics,
         **verification_metrics,
     }
     artifact = build_artifact(

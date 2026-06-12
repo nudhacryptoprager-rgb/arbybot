@@ -126,6 +126,20 @@ base:
     fee_tiers: [100, 500, 3000, 10000]
     note: "M9: Base Uniswap V4 PoolManager + Quoter for M8 long-tail depth enrichment"
 
+  # M8.2 P0 candidate lanes (config-only; productive gate off until quote-smoke)
+  iziswap_base:
+    adapter_type: "iziswap"
+    factory: "0x8c7d3063579BdB0b90997e18A770eaE32E1eBb08"
+    quoter: "0x2db0AFD0045F3518c77eC6591a542e326Befd3D7"
+    fee_tiers: [400, 2000, 10000]
+    note: "M8.2 iZiSwap Base — candidate mirror coverage"
+
+  quickswap_algebra:
+    adapter_type: "algebra"
+    factory: "0xC5396866754799B9720125B104AE01d935Ab9C7b"
+    quoter: "0x23E0583a3a000d567bB3848115065c1890D87fb5"
+    note: "M8.2 QuickSwap V4 Algebra Base — candidate mirror coverage"
+
   uniswap_v2:
     adapter_type: "uniswap_v2"
     factory: "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"

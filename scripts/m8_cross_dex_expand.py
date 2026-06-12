@@ -47,6 +47,22 @@ def main() -> int:
         help="Rolling M8.2 external pool hints JSON (hint-only; verified in expansion)",
     )
     p.add_argument("--verbose", action="store_true")
+    p.add_argument(
+        "--scan-mode",
+        choices=("audit_full", "hot_path_incremental", "candidate_summary"),
+        default="candidate_summary",
+        help="audit_full=serial matrix; candidate_summary=batch+dedup (default); hot_path=single-venue factory scan",
+    )
+    p.add_argument(
+        "--progress",
+        default="data/tmp/m8_cross_dex_expand_progress.json",
+        help="Progress artifact for long foreground runs",
+    )
+    p.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Compare audit_full vs candidate_summary on --max-pairs sample",
+    )
     args = p.parse_args()
 
     logging.basicConfig(
@@ -83,6 +99,55 @@ def main() -> int:
         else:
             log.warning("External hints not found: %s", args.external_hints)
 
+    if args.benchmark:
+        import time
+        from pathlib import Path as _Path
+
+        sample = args.max_pairs or 50
+        t0 = time.monotonic()
+        audit_art = expand_cross_dex(
+            chain=args.chain,
+            config=config,
+            registry=registry,
+            anchor_artifact=anchor_artifact,
+            dry_run=True,
+            max_pairs=sample,
+            expansion_mode=args.expansion_mode,
+            external_hints_artifact=external_hints,
+            scan_mode="audit_full",
+        )
+        audit_s = round(time.monotonic() - t0, 3)
+        t1 = time.monotonic()
+        batch_art = expand_cross_dex(
+            chain=args.chain,
+            config=config,
+            registry=registry,
+            anchor_artifact=anchor_artifact,
+            dry_run=True,
+            max_pairs=sample,
+            expansion_mode=args.expansion_mode,
+            external_hints_artifact=external_hints,
+            scan_mode="candidate_summary",
+        )
+        batch_s = round(time.monotonic() - t1, 3)
+        bench = {
+            "schema_version": "m8_cross_dex_benchmark.1",
+            "sample_tokens": sample,
+            "audit_full_s": audit_s,
+            "candidate_summary_s": batch_s,
+            "audit_scan_attempts": (audit_art.get("scan_telemetry") or {}).get(
+                "scan_actual_attempts"
+            ),
+            "batch_scan_attempts": (batch_art.get("scan_telemetry") or {}).get(
+                "scan_actual_attempts"
+            ),
+        }
+        bench_path = _Path("data/tmp/m8_cross_dex_benchmark_latest.json")
+        bench_path.parent.mkdir(parents=True, exist_ok=True)
+        bench_path.write_text(json.dumps(bench, indent=2), encoding="utf-8")
+        log.info("benchmark written %s audit_s=%s batch_s=%s", bench_path, audit_s, batch_s)
+        return 0
+
     artifact = expand_cross_dex(
         chain=args.chain,
         config=config,
@@ -92,6 +157,8 @@ def main() -> int:
         max_pairs=args.max_pairs,
         expansion_mode=args.expansion_mode,
         external_hints_artifact=external_hints,
+        scan_mode=args.scan_mode,
+        progress_path=args.progress,
     )
     artifact["config_path"] = str(config_path).replace("\\", "/")
     artifact["input_registry_path"] = args.input

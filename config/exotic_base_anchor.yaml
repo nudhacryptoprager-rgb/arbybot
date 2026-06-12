@@ -80,6 +80,35 @@ dexes:
     fee_tiers: [100, 500, 3000, 10000]
     enabled: true
 
+  # M8.2 P0 candidate — Alien Base V2 (docs.alienbase.xyz/contracts)
+  alien_base_v2:
+    adapter_type: uniswap_v2
+    factory: "0x3e84d913803b02a4a7f027165e8ca42c14c0fde7"
+    router: "0x8c1a3cf8f83074169fe5d7ad50b978e1cd6b37c7"
+    enabled: true
+
+  # M8.2 P0 candidate — Alien Base Area51 factory
+  alien_area51:
+    adapter_type: uniswap_v2
+    factory: "0x2d5dd5fa7b8a1bfbdbb0916b42280208ee6de51e"
+    router: "0x837d9b4139dfbac869b2c67771730bc822863376"
+    enabled: true
+
+  # M8.2 P0 candidate — QuickSwap V4 Algebra on Base (docs.quickswap.exchange)
+  quickswap_algebra:
+    adapter_type: algebra
+    factory: "0xc5396866754799b9720125b104ae01d935ab9c7b"
+    quoter: "0x23e0583a3a000d567bb3848115065c1890d87fb5"
+    enabled: true
+
+  # M8.2 P0 candidate — iZiSwap on Base (developer.izumi.finance deployed contracts)
+  iziswap_base:
+    adapter_type: iziswap
+    factory: "0x8c7d3063579bdb0b90997e18a770eae32e1ebb08"
+    quoter: "0x2db0afd0045f3518c77ec6591a542e326befd3d7"
+    fee_tiers: [400, 2000, 10000]
+    enabled: true
+
   # Curve Stable-NG on Base — factory-stable-ng factory.
   # Quote adapter: raw_http_probe.py get_dy(i,j,dx) via token_in_index/token_out_index
   # from config/adapter_metadata.yaml (coin_indices). Enabled: 2 real pools populated.
@@ -275,6 +304,22 @@ m9_dex_productivity:
   baseswap_v2:
     enabled_for_discovery: true
     enabled_for_productive: true
+  alien_base_v2:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "M8.2 candidate lane — quote-smoke pending"
+  alien_area51:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "M8.2 candidate lane — quote-smoke pending"
+  quickswap_algebra:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "M8.2 candidate lane — quote-smoke pending"
+  iziswap_base:
+    enabled_for_discovery: true
+    enabled_for_productive: false
+    reason_if_disabled: "M8.2 candidate lane — quote-smoke pending"
   usdc_usdt_v3_pool: "0x0000000000000000000000000000000000000000"
 
 public_rpc_blocklist: []

@@ -27,6 +27,11 @@ _DEX_ID_TO_ADAPTER: Dict[str, str] = {
     "curve_stable": "curve_stable",
     "balancer_vault": "balancer_stable",
     "maverick_v2": "maverick_v2",
+    # M8.2 candidate mirror lanes (config-driven; see m8_2_candidate_dex_registry.yaml)
+    "alien_base_v2": "uniswap_v2",
+    "alien_area51": "uniswap_v2",
+    "quickswap_algebra": "algebra",
+    "iziswap_base": "iziswap",
 }
 
 # Specialized DEX mirror resolve uses rolling indices (mirror_index.py), not pool_resolver.
@@ -475,12 +480,16 @@ def _active_second_venue_factory_scan(
     hint_metrics: Dict[str, Any],
     reject_hist: Counter,
     scan_telemetry: Optional[Dict[str, Any]] = None,
+    scan_mode: str = "candidate_summary",
+    batch_resolver: Any = None,
+    neg_cache: Any = None,
+    skip_factory_scan: bool = False,
 ) -> int:
     """On-chain factory scan for a second venue when registry+hints found only one DEX."""
     from m8.discovery.scan_telemetry import empty_scan_telemetry, record_scan_attempt
 
     existing_dexes = {p["dex_id"] for p in t_pools.values()}
-    if len(existing_dexes) >= 2:
+    if len(existing_dexes) >= 2 or skip_factory_scan:
         return 0
 
     telemetry = scan_telemetry if scan_telemetry is not None else empty_scan_telemetry()
@@ -491,6 +500,82 @@ def _active_second_venue_factory_scan(
     ]
     if not scan_anchors:
         scan_anchors = sorted(anchor_syms)
+
+    use_batch = (
+        scan_mode != "audit_full"
+        and batch_resolver is not None
+        and not dry_run
+    )
+    if use_batch:
+        from discovery.index_factories import get_dex_fee_tiers
+        from m8.discovery.scan_batch import NegativeResultCache
+
+        anchor_pairs: List[Tuple[str, str]] = []
+        for anchor_sym in scan_anchors:
+            anchor_addr = _token_address_from_config(config, anchor_sym)
+            if anchor_addr:
+                anchor_pairs.append((anchor_sym, anchor_addr))
+        scan_dex_rows = [
+            d
+            for d in dex_rows
+            if d["dex_id"] in allowed_dex_ids and d["dex_id"] not in existing_dexes
+        ]
+        cache = neg_cache if neg_cache is not None else NegativeResultCache()
+        batch_results = batch_resolver.resolve_many(
+            token_addr=exotic_address,
+            anchors=anchor_pairs,
+            dex_rows=scan_dex_rows,
+            neg_cache=cache,
+            adapter_map=_DEX_ID_TO_ADAPTER,
+            fee_tiers_fn=get_dex_fee_tiers,
+        )
+        found = 0
+        for (dex_id, anchor_sym), (pool_addr, reason) in batch_results.items():
+            if dex_id in existing_dexes:
+                continue
+            result = "OK" if pool_addr else str(reason or "NO_POOL")
+            record_scan_attempt(
+                telemetry,
+                token_address=exotic_address,
+                dex_id=dex_id,
+                anchor=anchor_sym,
+                attempted=True,
+                result=result,
+                reason=str(reason or result),
+                pool_address=pool_addr,
+            )
+            if pool_addr and reason == "OK":
+                anchor_addr = _token_address_from_config(config, anchor_sym) or ""
+                pool = {
+                    "dex_id": dex_id,
+                    "pool_address": pool_addr,
+                    "fee": 0,
+                    "resolve_source": "active_factory_scan_batch",
+                    "factory_verified": True,
+                    "quote_smoke": "not_run",
+                    "focus_token_symbol": focus_sym,
+                    "focus_token_address": exotic_address,
+                    "connector_token": anchor_sym,
+                    "connector_addr": anchor_addr,
+                }
+                t_pools[_route_dedupe_key(pool)] = pool
+                existing_dexes.add(dex_id)
+                found += 1
+                hint_metrics["active_factory_second_pool_count"] = int(
+                    hint_metrics.get("active_factory_second_pool_count", 0)
+                ) + 1
+                hint_metrics["verified_second_pool_count"] = int(
+                    hint_metrics.get("verified_second_pool_count", 0)
+                ) + 1
+                if len({p["dex_id"] for p in t_pools.values()}) >= 2:
+                    return found
+            elif reason == "NO_POOL":
+                reject_hist["ACTIVE_SCAN_NO_POOL"] += 1
+            elif reason == "UNSUPPORTED_DEX":
+                reject_hist["ACTIVE_SCAN_UNSUPPORTED_DEX"] += 1
+            else:
+                reject_hist[f"ACTIVE_SCAN_{reason}"] += 1
+        return found
 
     found = 0
     for anchor_sym in scan_anchors:
@@ -570,6 +655,205 @@ def _active_second_venue_factory_scan(
     return found
 
 
+def _candidate_dex_coverage_scan(
+    *,
+    chain: str,
+    exotic_address: str,
+    focus_sym: str,
+    candidate_rows: List[Dict[str, Any]],
+    dry_run: bool,
+    resolver: Any,
+    mirror_index: Any,
+    config: Dict[str, Any],
+    anchor_syms: Set[str],
+    reject_hist: Counter,
+    candidate_telemetry: Optional[Dict[str, Any]] = None,
+    scan_telemetry: Optional[Dict[str, Any]] = None,
+    covered_candidates: Optional[Dict[str, str]] = None,
+    scan_mode: str = "candidate_summary",
+    batch_resolver: Any = None,
+    neg_cache: Any = None,
+) -> int:
+    """Token-first candidate DEX matrix (separate from canonical 13-DEX active scan)."""
+    from m8.discovery.candidate_dex_registry import candidate_scan_reason
+    from m8.discovery.scan_batch import mirror_canonical_candidate_telemetry
+    from m8.discovery.scan_telemetry import (
+        empty_candidate_scan_telemetry,
+        record_candidate_scan_attempt,
+    )
+
+    telemetry = (
+        candidate_telemetry
+        if candidate_telemetry is not None
+        else empty_candidate_scan_telemetry()
+    )
+    scan_anchors = [
+        s for s in ("USDC", "WETH", "cbBTC", "EURC", "USDbC", "DAI")
+        if s in anchor_syms
+    ]
+    if not scan_anchors:
+        scan_anchors = sorted(anchor_syms)
+
+    if covered_candidates and scan_telemetry is not None:
+        mirror_canonical_candidate_telemetry(
+            scan_telemetry=scan_telemetry,
+            candidate_telemetry=telemetry,
+            token_address=exotic_address,
+            covered=covered_candidates,
+            anchor_syms=scan_anchors,
+        )
+
+    if not candidate_rows:
+        return 0
+
+    use_batch = (
+        scan_mode != "audit_full"
+        and batch_resolver is not None
+        and not dry_run
+    )
+    rpc_rows = [r for r in candidate_rows if str(r.get("registry_status")) in ("configured", "verified")]
+    static_rows = [r for r in candidate_rows if r not in rpc_rows]
+
+    found = 0
+    for entry in static_rows:
+        dex_id = entry["dex_id"]
+        status = str(entry.get("registry_status") or "unsupported")
+        resolve_id = str(entry.get("config_dex_id") or dex_id)
+        pre_reason = candidate_scan_reason(entry)
+        for anchor_sym in scan_anchors:
+            anchor_addr = _token_address_from_config(config, anchor_sym)
+            if not anchor_addr:
+                reject_hist["CANDIDATE_SCAN_ANCHOR_ADDRESS_UNKNOWN"] += 1
+                continue
+
+            if status in ("hint_only", "unsupported") or pre_reason != "OK":
+                record_candidate_scan_attempt(
+                    telemetry,
+                    token_address=exotic_address,
+                    dex_id=dex_id,
+                    anchor=anchor_sym,
+                    registry_status=status,
+                    attempted=True,
+                    result="UNSUPPORTED_DEX",
+                    reason=pre_reason,
+                )
+                reject_hist[f"CANDIDATE_{pre_reason}"] += 1
+                continue
+
+    if use_batch and rpc_rows:
+        from discovery.index_factories import get_dex_fee_tiers
+        from m8.discovery.scan_batch import NegativeResultCache
+
+        anchor_pairs: List[Tuple[str, str]] = []
+        for anchor_sym in scan_anchors:
+            anchor_addr = _token_address_from_config(config, anchor_sym)
+            if anchor_addr:
+                anchor_pairs.append((anchor_sym, anchor_addr))
+        dex_batch_rows = [
+            {
+                "dex_id": str(r.get("config_dex_id") or r["dex_id"]),
+                "factory": r.get("factory") or (config.get("dexes") or {}).get(
+                    str(r.get("config_dex_id") or r["dex_id"]), {}
+                ).get("factory", ""),
+                "adapter_type": r.get("adapter_type"),
+            }
+            for r in rpc_rows
+        ]
+        cache = neg_cache if neg_cache is not None else NegativeResultCache()
+        batch_results = batch_resolver.resolve_many(
+            token_addr=exotic_address,
+            anchors=anchor_pairs,
+            dex_rows=dex_batch_rows,
+            neg_cache=cache,
+            adapter_map=_DEX_ID_TO_ADAPTER,
+            fee_tiers_fn=get_dex_fee_tiers,
+        )
+        cand_by_resolve = {str(r.get("config_dex_id") or r["dex_id"]): r["dex_id"] for r in rpc_rows}
+        for (resolve_id, anchor_sym), (pool_addr, reason) in batch_results.items():
+            dex_id = cand_by_resolve.get(resolve_id, resolve_id)
+            result = "OK" if pool_addr else str(reason or "NO_POOL")
+            record_candidate_scan_attempt(
+                telemetry,
+                token_address=exotic_address,
+                dex_id=dex_id,
+                anchor=anchor_sym,
+                registry_status="configured",
+                attempted=True,
+                result=result,
+                reason=str(reason or result),
+                pool_address=pool_addr,
+            )
+            if pool_addr:
+                found += 1
+                reject_hist["CANDIDATE_SCAN_POOL_FOUND"] += 1
+            elif reason == "NO_POOL":
+                reject_hist["CANDIDATE_SCAN_NO_POOL"] += 1
+        return found
+
+    for entry in rpc_rows:
+        dex_id = entry["dex_id"]
+        status = str(entry.get("registry_status") or "unsupported")
+        resolve_id = str(entry.get("config_dex_id") or dex_id)
+        pre_reason = candidate_scan_reason(entry)
+        for anchor_sym in scan_anchors:
+            anchor_addr = _token_address_from_config(config, anchor_sym)
+            if not anchor_addr:
+                reject_hist["CANDIDATE_SCAN_ANCHOR_ADDRESS_UNKNOWN"] += 1
+                continue
+            if dry_run:
+                record_candidate_scan_attempt(
+                    telemetry,
+                    token_address=exotic_address,
+                    dex_id=dex_id,
+                    anchor=anchor_sym,
+                    registry_status=status,
+                    attempted=True,
+                    result="SKIPPED_DRY_RUN",
+                    reason="SKIPPED_DRY_RUN",
+                )
+                reject_hist["CANDIDATE_SCAN_SKIPPED_DRY_RUN"] += 1
+                continue
+            pool, reason = _resolve_via_factory(
+                chain,
+                resolve_id,
+                focus_sym,
+                anchor_sym,
+                exotic_address=exotic_address,
+                anchor_address=anchor_addr,
+                dry_run=dry_run,
+                resolver=resolver,
+                mirror_index=mirror_index,
+                config=config,
+            )
+            result = "OK" if pool else str(reason or "UNKNOWN")
+            record_candidate_scan_attempt(
+                telemetry,
+                token_address=exotic_address,
+                dex_id=dex_id,
+                anchor=anchor_sym,
+                registry_status=status,
+                attempted=True,
+                result=result,
+                reason=str(reason or result),
+                pool_address=(pool or {}).get("pool_address"),
+            )
+            if pool:
+                found += 1
+                reject_hist["CANDIDATE_SCAN_POOL_FOUND"] += 1
+            elif reason == "NO_POOL":
+                reject_hist["CANDIDATE_SCAN_NO_POOL"] += 1
+            elif reason == "UNSUPPORTED_DEX":
+                reject_hist["CANDIDATE_SCAN_UNSUPPORTED_DEX"] += 1
+            else:
+                reject_hist[f"CANDIDATE_SCAN_{reason}"] += 1
+    return found
+
+
+def _registry_venue_count(registry: Optional[Dict[str, Any]], token_addr: str) -> int:
+    tok = ((registry or {}).get("tokens") or {}).get(token_addr.lower()) or {}
+    return len(tok.get("venues") or {})
+
+
 def expand_token_neighborhood(
     *,
     chain: str,
@@ -584,9 +868,19 @@ def expand_token_neighborhood(
     resolver: Any = None,
     mirror_index: Any = None,
     external_hints_artifact: Optional[Dict[str, Any]] = None,
+    candidate_registry: Optional[Dict[str, Any]] = None,
+    candidate_rows: Optional[List[Dict[str, Any]]] = None,
+    covered_candidates: Optional[Dict[str, str]] = None,
+    scan_mode: str = "candidate_summary",
+    batch_resolver: Any = None,
+    neg_cache: Any = None,
 ) -> Dict[str, Any]:
     """Token-global neighborhood expansion (3/4-leg subgraph discovery)."""
     from discovery.pool_resolver import get_pool_resolver
+    from m8.discovery.candidate_dex_registry import (
+        candidate_dex_rows_for_scan,
+        load_candidate_dex_registry,
+    )
     from m8.discovery.mirror_index import MirrorIndex
 
     from m8.discovery.token_normalize import TOKEN_ADDRESS_UNRESOLVED, is_valid_eth_address
@@ -619,9 +913,17 @@ def expand_token_neighborhood(
 
     reject_hist: Counter = Counter()
     all_reject_rows: List[Dict[str, str]] = []
-    from m8.discovery.scan_telemetry import empty_scan_telemetry
+    from m8.discovery.scan_telemetry import (
+        empty_candidate_scan_telemetry,
+        empty_scan_telemetry,
+    )
 
     scan_telemetry = empty_scan_telemetry()
+    candidate_telemetry = empty_candidate_scan_telemetry()
+    _candidate_registry = candidate_registry or load_candidate_dex_registry()
+    _candidate_rows = candidate_rows or candidate_dex_rows_for_scan(
+        _candidate_registry, config
+    )
     hint_metrics: Dict[str, Any] = {
         "hint_tokens_checked": 1 if external_hints_artifact else 0,
         "hint_pools_seen": 0,
@@ -654,6 +956,10 @@ def expand_token_neighborhood(
         dry_run=dry_run,
         hint_metrics=hint_metrics,
     )
+    skip_factory = (
+        scan_mode == "hot_path_incremental"
+        and _registry_venue_count(registry, exotic_address) >= 2
+    )
     _active_second_venue_factory_scan(
         t_pools,
         chain=chain,
@@ -669,6 +975,28 @@ def expand_token_neighborhood(
         hint_metrics=hint_metrics,
         reject_hist=reject_hist,
         scan_telemetry=scan_telemetry,
+        scan_mode=scan_mode,
+        batch_resolver=batch_resolver,
+        neg_cache=neg_cache,
+        skip_factory_scan=skip_factory,
+    )
+    _candidate_dex_coverage_scan(
+        chain=chain,
+        exotic_address=exotic_address,
+        focus_sym=focus_sym,
+        candidate_rows=_candidate_rows,
+        dry_run=dry_run,
+        resolver=resolver,
+        mirror_index=mirror_index,
+        config=config,
+        anchor_syms=anchor_syms,
+        reject_hist=reject_hist,
+        candidate_telemetry=candidate_telemetry,
+        scan_telemetry=scan_telemetry,
+        covered_candidates=covered_candidates,
+        scan_mode=scan_mode,
+        batch_resolver=batch_resolver,
+        neg_cache=neg_cache,
     )
 
     seen_hints = int(hint_metrics.get("hint_pools_seen", 0))
@@ -904,6 +1232,7 @@ def expand_token_neighborhood(
         "venues_quoteable": len(quoteable_dexes),
         "hint_metrics": hint_metrics,
         "scan_telemetry": scan_telemetry,
+        "candidate_scan_telemetry": candidate_telemetry,
     }
 
 
@@ -1054,6 +1383,42 @@ def _resolve_via_factory(
                     "quote_smoke": "not_run",
                 }, "OK"
         return None, "NO_POOL"
+    if adapter == "algebra":
+        pool = resolver.resolve(chain, dex_id, exotic_symbol, anchor_symbol, fee=0)
+        if pool:
+            return {
+                "dex_id": dex_id,
+                "pool_address": pool.lower(),
+                "fee": 0,
+                "resolve_source": "pool_resolver",
+                "factory_verified": True,
+                "quote_smoke": "not_run",
+            }, "OK"
+        return None, "NO_POOL"
+    if adapter == "iziswap":
+        from core.rpc_urls import get_rpc_url
+        from discovery.index_factories import get_dex_fee_tiers
+        from m8.discovery.candidate_dex_registry import query_iziswap_pool
+
+        rpc_url = get_rpc_url(chain)
+        dex_cfg = ((config or {}).get("dexes") or {}).get(dex_id) or {}
+        factory = dex_cfg.get("factory", "")
+        if not factory or not rpc_url:
+            return None, "UNSUPPORTED_DEX"
+        ex_addr = (exotic_address or "").lower()
+        an_addr = (anchor_address or "").lower()
+        for fee in get_dex_fee_tiers(chain, dex_id)[:2]:
+            pool_addr = query_iziswap_pool(rpc_url, factory, ex_addr, an_addr, fee)
+            if pool_addr:
+                return {
+                    "dex_id": dex_id,
+                    "pool_address": pool_addr,
+                    "fee": fee,
+                    "resolve_source": "iziswap_factory_pool",
+                    "factory_verified": True,
+                    "quote_smoke": "not_run",
+                }, "OK"
+        return None, "NO_POOL"
 
     return None, "ADAPTER_RESOLVE_PENDING"
 
@@ -1144,6 +1509,8 @@ def _expand_batch_token_neighborhood(
     productive_dexes: Set[str],
     max_tokens: Optional[int] = None,
     external_hints_artifact: Optional[Dict[str, Any]] = None,
+    scan_mode: str = "candidate_summary",
+    progress_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Batch rolling expansion: token-neighborhood per registry token."""
     from discovery.pool_resolver import get_pool_resolver
@@ -1168,13 +1535,42 @@ def _expand_batch_token_neighborhood(
     subgraph_ready_debug: List[Dict[str, Any]] = []
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
     from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
+    from m8.discovery.candidate_dex_registry import (
+        build_registry_summary,
+        candidate_dex_rows_for_scan,
+        load_candidate_dex_registry,
+    )
+    from m8.discovery.scan_batch import (
+        ExpandProgress,
+        FactoryBatchResolver,
+        NegativeResultCache,
+        split_candidate_rows,
+    )
     from m8.discovery.scan_telemetry import (
         active_scan_coverage_rate,
+        empty_candidate_scan_telemetry,
         empty_scan_telemetry,
+        merge_candidate_scan_telemetry,
         merge_scan_telemetry,
     )
 
     batch_scan_telemetry = empty_scan_telemetry()
+    batch_candidate_telemetry = empty_candidate_scan_telemetry()
+    candidate_registry = load_candidate_dex_registry()
+    all_candidate_rows = candidate_dex_rows_for_scan(candidate_registry, config)
+    candidate_rows_for_expand, covered_candidates = split_candidate_rows(
+        all_candidate_rows, allowed_dex_ids
+    )
+    neg_cache = NegativeResultCache()
+    batch_resolver = None
+    if scan_mode != "audit_full" and not dry_run:
+        batch_resolver = FactoryBatchResolver(chain, config)
+    progress = ExpandProgress(
+        progress_path or "data/tmp/m8_cross_dex_expand_progress.json"
+    )
+    progress.data["scan_mode"] = scan_mode
+    progress.data["tokens_total"] = len(token_addrs)
+    progress.set_phase("token_neighborhood")
 
     batch_hint_metrics: Dict[str, Any] = {
         "hint_tokens_checked": 0,
@@ -1220,7 +1616,25 @@ def _expand_batch_token_neighborhood(
             resolver=resolver,
             mirror_index=mirror_index,
             external_hints_artifact=external_hints_artifact,
+            candidate_registry=candidate_registry,
+            candidate_rows=candidate_rows_for_expand,
+            covered_candidates=covered_candidates,
+            scan_mode=scan_mode,
+            batch_resolver=batch_resolver,
+            neg_cache=neg_cache,
         )
+        if idx and idx % 10 == 0:
+            rpc_stats = {}
+            if batch_resolver is not None:
+                rpc_stats = dict(batch_resolver.stats)
+                if batch_resolver._batcher is not None:
+                    rpc_stats.update(batch_resolver._batcher.stats)
+            progress.tick(
+                tokens_done=idx + 1,
+                tokens_total=len(token_addrs),
+                rpc_stats=rpc_stats,
+                extra={"neg_cache": neg_cache.stats()},
+            )
         hm = nh.get("hint_metrics") or {}
         batch_hint_metrics["hint_tokens_checked"] += int(hm.get("hint_tokens_checked", 0))
         batch_hint_metrics["hint_pools_seen"] += int(hm.get("hint_pools_seen", 0))
@@ -1240,6 +1654,9 @@ def _expand_batch_token_neighborhood(
             batch_hint_metrics.get("active_factory_second_pool_count", 0)
         ) + int(hm.get("active_factory_second_pool_count", 0))
         merge_scan_telemetry(batch_scan_telemetry, nh.get("scan_telemetry"))
+        merge_candidate_scan_telemetry(
+            batch_candidate_telemetry, nh.get("candidate_scan_telemetry")
+        )
         for k, v in (nh.get("reject_reason_histogram") or {}).items():
             reject_hist[k] += int(v or 0)
         all_reject_rows.extend(nh.get("all_reject_rows") or [])
@@ -1383,9 +1800,25 @@ def _expand_batch_token_neighborhood(
     _routes_by_origin: Counter = Counter(
         str(r.get("origin_source") or "unknown") for r in routes_admitted
     )
+    progress.set_phase("summary")
+    progress.tick(
+        tokens_done=len(token_addrs),
+        tokens_total=len(token_addrs),
+        extra={"neg_cache": neg_cache.stats(), "phase": "complete"},
+    )
     _coverage_rate = active_scan_coverage_rate(batch_scan_telemetry)
+    _candidate_summary = build_registry_summary(
+        candidate_registry,
+        candidate_telemetry=batch_candidate_telemetry,
+    )
+    _batch_stats = dict(batch_resolver.stats if batch_resolver else {})
     summary = {
         "expansion_mode": "token_neighborhood_batch",
+        "scan_mode": scan_mode,
+        "batch_resolver_stats": _batch_stats,
+        "neg_cache_stats": neg_cache.stats(),
+        "candidate_rows_rpc": len(candidate_rows_for_expand),
+        "candidate_covered_by_canonical": len(covered_candidates),
         "tokens_in": len(token_addrs),
         "pairs_in": 0,
         "subgraph_ready_tokens": subgraph_ready_count,
@@ -1442,6 +1875,19 @@ def _expand_batch_token_neighborhood(
         "active_scan_unsupported_dex_by_dex": dict(
             batch_scan_telemetry.get("active_scan_unsupported_dex_by_dex") or {}
         ),
+        "candidate_scan_expected_attempts": batch_candidate_telemetry.get(
+            "candidate_scan_expected_attempts"
+        ),
+        "candidate_scan_actual_attempts": batch_candidate_telemetry.get(
+            "candidate_scan_actual_attempts"
+        ),
+        "candidate_scan_attempted_by_dex": dict(
+            batch_candidate_telemetry.get("candidate_scan_attempted_by_dex") or {}
+        ),
+        "candidate_scan_attempted_by_anchor": dict(
+            batch_candidate_telemetry.get("candidate_scan_attempted_by_anchor") or {}
+        ),
+        **_candidate_summary,
         **distinct_lane,
     }
     return {
@@ -1454,6 +1900,11 @@ def _expand_batch_token_neighborhood(
         "subgraph_ready_debug": subgraph_ready_debug,
         "scan_telemetry": batch_scan_telemetry,
         "scan_attempt_matrix": batch_scan_telemetry.get("scan_attempt_matrix") or {},
+        "candidate_scan_telemetry": batch_candidate_telemetry,
+        "candidate_dex_attempt_matrix": batch_candidate_telemetry.get(
+            "candidate_dex_attempt_matrix"
+        )
+        or {},
         "reject_reason_histogram": dict(reject_hist),
         "same_pair_routes": same_pair_routes,
         "token_presence_routes": token_presence_routes,
@@ -1475,8 +1926,14 @@ def expand_cross_dex(
     exotic_address_filter: Optional[str] = None,
     expansion_mode: str = "pair_anchor",
     external_hints_artifact: Optional[Dict[str, Any]] = None,
+    scan_mode: str = "candidate_summary",
+    progress_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run M8.2 expansion and return artifact dict (not written)."""
+    from m8.discovery.scan_batch import SCAN_MODES
+
+    if scan_mode not in SCAN_MODES:
+        scan_mode = "candidate_summary"
     dex_rows = discovery_dexes_from_config(config)
     dex_ids_checked = [d["dex_id"] for d in dex_rows]
     allowed_dex_ids = set(dex_ids_checked)
@@ -1493,6 +1950,8 @@ def expand_cross_dex(
             productive_dexes=productive_dexes,
             max_tokens=max_pairs,
             external_hints_artifact=external_hints_artifact,
+            scan_mode=scan_mode,
+            progress_path=progress_path,
         )
 
     if expansion_mode == "token_neighborhood" and exotic_address_filter:

@@ -66,6 +66,16 @@ _DEXSCREENER_DEX_MAP: Dict[str, str] = {
     "curve": "curve_stable",
     "balancer": "balancer_vault",
     "maverick": "maverick_v2",
+    "alienbase": "alien_base_v2",
+    "alien-base": "alien_base_v2",
+    "area51": "alien_area51",
+    "quickswap": "quickswap_algebra",
+    "quickswap-v4-base": "quickswap_algebra",
+    "iziswap": "iziswap_base",
+    "izumi": "iziswap_base",
+    "hydrex": "hydrex",
+    "pancakeswap-infinity": "pancake_infinity",
+    "balancer-v3": "balancer_v3",
 }
 
 _GECKO_DEX_MAP: Dict[str, str] = {
@@ -76,6 +86,11 @@ _GECKO_DEX_MAP: Dict[str, str] = {
     "aerodrome-slipstream-base": "aerodrome_slipstream",
     "sushiswap-v3-base": "sushiswap_v3",
     "pancakeswap-v3-base": "pancakeswap_v3",
+    "alien-base": "alien_base_v2",
+    "alienbase-area51": "alien_area51",
+    "quickswap-v4-base": "quickswap_algebra",
+    "iziswap-base": "iziswap_base",
+    "hydrex-base": "hydrex",
 }
 
 _GRAPH_PROTOCOL_MAP: Dict[str, str] = {
