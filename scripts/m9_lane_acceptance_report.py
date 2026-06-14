@@ -345,15 +345,22 @@ def build_acceptance_report(
         "goal_status": "NOT_EVALUATED",
         "blockers": [],
         "metrics": {},
+        "handoff_lane": "none",
+        "handoff_ready": False,
     }
     if m8_2_report is not None:
+        handoff_lane = str(m8_2_report.get("handoff_lane") or "none")
+        handoff_ready = bool(m8_2_report.get("handoff_ready"))
         m8_2_upstream = {
             "goal_status": m8_2_report.get("goal_status"),
             "blockers": list(m8_2_report.get("blockers") or []),
             "metrics": dict(m8_2_report.get("metrics") or {}),
             "provenance": dict(m8_2_report.get("provenance") or {}),
+            "handoff_lane": handoff_lane,
+            "handoff_ready": handoff_ready,
+            "quality_blockers": list(m8_2_report.get("quality_blockers") or []),
         }
-        if m8_2_report.get("goal_status") == "BLOCKED":
+        if not handoff_ready and m8_2_report.get("goal_status") == "BLOCKED":
             upstream_blockers.append("UPSTREAM_M8_2_NOT_READY")
 
     bridge_upstream_warnings: List[str] = []
@@ -381,7 +388,7 @@ def build_acceptance_report(
         m9_goal = "NOT_EVALUATED"
 
     return {
-        "schema_version": "m9_lane_acceptance_report.3",
+        "schema_version": "m9_lane_acceptance_report.4",
         "funnel_layers": funnel_layers,
         "dex_coverage": _dex_coverage(bridge, expansion, shadow),
         "cross_mechanic_topology": _cross_mechanic_topology(bridge, shadow),

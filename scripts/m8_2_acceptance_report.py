@@ -28,6 +28,8 @@ _DEFAULT_PATHS = {
 
 _QUALITY_GATES = {
     "subgraph_ready_tokens_min": 3,
+    "mirror_topology_ready_tokens_min": 3,
+    "mirror_quote_ready_tokens_min": 1,
     "verified_second_pool_count_min": 10,
     "multi_venue_tokens_min": 14,
     "connector_routes_count_min": 1,
@@ -36,6 +38,7 @@ _QUALITY_GATES = {
 _M8_2_BLOCKERS = frozenset(
     {
         "SUBGRAPH_READY_LOW",
+        "MIRROR_READY_LOW",
         "VERIFIED_SECOND_POOL_LOW",
         "HINTS_STALE",
         "EXTERNAL_HINTS_STALE",
@@ -61,6 +64,7 @@ _COVERAGE_BLOCKERS = frozenset(
 _QUALITY_BLOCKERS = frozenset(
     {
         "SUBGRAPH_READY_LOW",
+        "MIRROR_READY_LOW",
         "VERIFIED_SECOND_POOL_LOW",
         "MULTI_VENUE_TOKENS_LOW",
         "CONNECTOR_SYNTHESIS_WEAK",
@@ -140,6 +144,10 @@ def _expansion_metrics(
         ),
         "connector_routes_count": summary.get("connector_routes_count"),
         "subgraph_ready_tokens": summary.get("subgraph_ready_tokens"),
+        "mirror_topology_ready_tokens": summary.get("mirror_topology_ready_tokens"),
+        "mirror_quote_ready_tokens": summary.get("mirror_quote_ready_tokens"),
+        "same_pair_mirror_tokens": summary.get("same_pair_mirror_tokens"),
+        "v4_event_index_coverage_rate": summary.get("v4_event_index_coverage_rate"),
         "hint_tokens_matched": summary.get("hint_tokens_matched"),
         "external_hints_enabled": summary.get("external_hints_enabled"),
         "second_pool_hints_found": summary.get("second_pool_hints_found"),
@@ -233,6 +241,26 @@ def _provenance_block(
     }
 
 
+def _mirror_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    sample = (expansion or {}).get("same_pair_mirror_ready_debug") or (
+        (expansion or {}).get("summary") or {}
+    ).get("same_pair_mirror_ready_debug") or []
+    if not sample:
+        return {"sample_count": 0, "top_missing_reasons": {}}
+    reasons: Counter[str] = Counter()
+    for row in sample:
+        reasons[str(row.get("missing_reason") or "unknown")] += 1
+    return {
+        "sample_count": len(sample),
+        "topology_ready_count": sum(
+            1 for row in sample if row.get("mirror_topology_ready")
+        ),
+        "quote_ready_count": sum(1 for row in sample if row.get("mirror_quote_ready")),
+        "top_missing_reasons": dict(reasons.most_common(8)),
+        "sample": sample[:12],
+    }
+
+
 def _subgraph_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     sample = (expansion or {}).get("subgraph_ready_debug") or (
         (expansion or {}).get("summary") or {}
@@ -261,6 +289,7 @@ def build_m8_2_acceptance_report(
     provenance = _provenance_block(expansion=expansion, sniper=sniper)
     per_source_yield = _per_source_yield(hints, expansion)
     subgraph_debug = _subgraph_debug_block(expansion)
+    mirror_debug = _mirror_debug_block(expansion)
     from m8.discovery.candidate_dex_registry import (
         build_candidate_coverage_audit,
         build_radar_metrics,
@@ -303,12 +332,22 @@ def build_m8_2_acceptance_report(
             warnings.extend(freshness["warnings"])
 
     subgraph_ready = int(metrics.get("subgraph_ready_tokens") or 0)
+    mirror_topology_ready = int(metrics.get("mirror_topology_ready_tokens") or 0)
+    mirror_quote_ready = int(metrics.get("mirror_quote_ready_tokens") or 0)
     verified_second = int(metrics.get("verified_second_pool_count") or 0)
     multi_venue = int(metrics.get("multi_venue_tokens") or 0)
     connector_routes = int(metrics.get("connector_routes_count") or 0)
 
-    if subgraph_ready < _QUALITY_GATES["subgraph_ready_tokens_min"]:
+    subgraph_lane_ready = (
+        subgraph_ready >= _QUALITY_GATES["subgraph_ready_tokens_min"]
+    )
+    mirror_lane_ready = (
+        mirror_quote_ready >= _QUALITY_GATES["mirror_quote_ready_tokens_min"]
+    )
+    if not subgraph_lane_ready:
         blockers.append("SUBGRAPH_READY_LOW")
+    if not mirror_lane_ready:
+        blockers.append("MIRROR_READY_LOW")
     if verified_second < _QUALITY_GATES["verified_second_pool_count_min"]:
         blockers.append("VERIFIED_SECOND_POOL_LOW")
     if multi_venue < _QUALITY_GATES["multi_venue_tokens_min"]:
@@ -338,10 +377,22 @@ def build_m8_2_acceptance_report(
     external_radar_blockers = sorted(
         b for b in blockers if b in _EXTERNAL_RADAR_BLOCKERS
     )
-    goal_status = "REACHED" if not blockers else "BLOCKED"
+    if mirror_lane_ready:
+        handoff_lane = "mirror_2leg"
+    elif subgraph_lane_ready:
+        handoff_lane = "subgraph_3plus"
+    else:
+        handoff_lane = "none"
+    handoff_ready = mirror_lane_ready or subgraph_lane_ready
+    hard_blockers = [
+        b
+        for b in blockers
+        if b not in _QUALITY_BLOCKERS or not handoff_ready
+    ]
+    goal_status = "REACHED" if not hard_blockers else "BLOCKED"
 
     return {
-        "schema_version": "m8_2_acceptance_report.4",
+        "schema_version": "m8_2_acceptance_report.5",
         "generated_at_utc": _iso_now(),
         "layer": "M8_2_expansion",
         "metrics": metrics,
@@ -349,6 +400,9 @@ def build_m8_2_acceptance_report(
         "provenance": provenance,
         "per_source_verified_yield": per_source_yield,
         "subgraph_ready_debug": subgraph_debug,
+        "mirror_ready_debug": mirror_debug,
+        "handoff_lane": handoff_lane,
+        "handoff_ready": handoff_ready,
         "scan_coverage": scan_coverage,
         "candidate_coverage": candidate_coverage,
         "radar_metrics": radar_metrics,

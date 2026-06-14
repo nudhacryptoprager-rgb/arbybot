@@ -405,6 +405,14 @@ class FactoryBatchResolver:
                         )
                         calls.append((Web3.to_checksum_address(factory), True, data))
                         call_keys.append((dex_id, anchor_sym, f"ve33:{stable}"))
+                elif adapter == "uniswap_v4":
+                    out[(dex_id, anchor_sym)] = (None, "V4_EVENT_INDEX_ONLY")
+                elif adapter in (
+                    "curve_stable",
+                    "balancer_stable",
+                    "maverick_v2",
+                ):
+                    out[(dex_id, anchor_sym)] = (None, "SPECIALIZED_INDEX_ONLY")
                 else:
                     out[(dex_id, anchor_sym)] = (None, "ADAPTER_RESOLVE_PENDING")
 

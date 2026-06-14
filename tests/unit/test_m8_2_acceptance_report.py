@@ -12,6 +12,9 @@ def _good_expansion_summary(**overrides):
         "verified_second_pool_count": 15,
         "connector_routes_count": 50,
         "subgraph_ready_tokens": 5,
+        "mirror_topology_ready_tokens": 12,
+        "mirror_quote_ready_tokens": 2,
+        "same_pair_mirror_tokens": 12,
         "hint_tokens_matched": 300,
         "external_hints_enabled": True,
     }
@@ -149,7 +152,11 @@ def test_stale_hints_fail_m8_2():
 
 def test_subgraph_ready_low_fails_m8_2():
     sniper, hints, expansion = _artifacts(
-        summary=_good_expansion_summary(subgraph_ready_tokens=1)
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=1,
+            mirror_quote_ready_tokens=0,
+            mirror_topology_ready_tokens=0,
+        )
     )
     report = build_m8_2_acceptance_report(
         sniper=sniper, hints=hints, expansion=expansion, strict=True
@@ -224,7 +231,10 @@ def test_m8_2_report_includes_per_source_yield_and_subgraph_debug():
 
 def test_m8_2_split_blockers():
     sniper, hints, expansion = _artifacts(
-        summary=_good_expansion_summary(subgraph_ready_tokens=1)
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=1,
+            mirror_quote_ready_tokens=0,
+        )
     )
     report = build_m8_2_acceptance_report(
         sniper=sniper, hints=hints, expansion=expansion, strict=True
@@ -241,11 +251,34 @@ def test_m8_2_split_blockers():
     )
 
 
+def test_mirror_quote_ready_unblocks_handoff_despite_subgraph_low():
+    sniper, hints, expansion = _artifacts(
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=1,
+            mirror_topology_ready_tokens=12,
+            mirror_quote_ready_tokens=2,
+            same_pair_mirror_tokens=12,
+        )
+    )
+    report = build_m8_2_acceptance_report(
+        sniper=sniper, hints=hints, expansion=expansion, strict=True
+    )
+    assert report["handoff_lane"] == "mirror_2leg"
+    assert report["handoff_ready"] is True
+    assert report["goal_status"] == "REACHED"
+    assert "SUBGRAPH_READY_LOW" in report["quality_blockers"]
+    assert "MIRROR_READY_LOW" not in report["blockers"]
+
+
 def test_m8_2_fail_sets_upstream_not_ready_on_m9():
     from scripts.m9_lane_acceptance_report import build_acceptance_report
 
     sniper, hints, expansion = _artifacts(
-        summary=_good_expansion_summary(subgraph_ready_tokens=1)
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=1,
+            mirror_quote_ready_tokens=0,
+            mirror_topology_ready_tokens=0,
+        )
     )
     m8_2 = build_m8_2_acceptance_report(
         sniper=sniper, hints=hints, expansion=expansion, strict=True
@@ -260,5 +293,34 @@ def test_m8_2_fail_sets_upstream_not_ready_on_m9():
         m8_2_report=m8_2,
     )
     assert m8_2["goal_status"] == "BLOCKED"
+    assert m8_2["handoff_ready"] is False
     assert "UPSTREAM_M8_2_NOT_READY" in m9["upstream_blockers"]
     assert "SUBGRAPH_READY_LOW" in m9["m8_2_upstream"]["blockers"]
+
+
+def test_mirror_handoff_unblocks_m9_upstream():
+    from scripts.m9_lane_acceptance_report import build_acceptance_report
+
+    sniper, hints, expansion = _artifacts(
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=1,
+            mirror_quote_ready_tokens=2,
+            mirror_topology_ready_tokens=12,
+        )
+    )
+    m8_2 = build_m8_2_acceptance_report(
+        sniper=sniper, hints=hints, expansion=expansion, strict=True
+    )
+    m9 = build_acceptance_report(
+        sniper=sniper,
+        anchor=None,
+        expansion=expansion,
+        bridge={"active_routes": [], "bridge_source_metrics": {}},
+        shadow=None,
+        rca=None,
+        m8_2_report=m8_2,
+    )
+    assert m8_2["handoff_lane"] == "mirror_2leg"
+    assert m8_2["goal_status"] == "REACHED"
+    assert "UPSTREAM_M8_2_NOT_READY" not in m9["upstream_blockers"]
+    assert m9["m8_2_upstream"]["handoff_lane"] == "mirror_2leg"

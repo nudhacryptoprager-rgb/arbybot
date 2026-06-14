@@ -542,6 +542,9 @@ def per_dex_expansion_breakdown(
         "MAVERICK_INDEX_NO_MATCH",
         "MAVERICK_INDEXED_BUT_NOT_QUOTEABLE",
         "ADAPTER_RESOLVE_PENDING",
+        "SPECIALIZED_INDEX_ONLY",
+        "SPECIALIZED_INDEX_NO_MATCH",
+        "V4_EVENT_INDEX_ONLY",
         "SKIPPED_DRY_RUN",
     })
     for row in reject_rows:

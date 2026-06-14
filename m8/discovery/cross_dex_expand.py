@@ -333,6 +333,153 @@ def subgraph_missing_reason(
     return "READY"
 
 
+_MIRROR_INDEX_NO_MATCH = frozenset(
+    {
+        "CURVE_INDEX_EMPTY",
+        "CURVE_INDEX_NO_MATCH",
+        "BALANCER_INDEX_EMPTY",
+        "BALANCER_INDEX_NO_MATCH",
+        "MAVERICK_INDEX_EMPTY",
+        "MAVERICK_INDEX_NO_MATCH",
+        "MAVERICK_INDEXED_BUT_NOT_QUOTEABLE",
+    }
+)
+
+_SPECIALIZED_INDEX_ONLY_ADAPTERS = frozenset(
+    {"curve_stable", "balancer_stable", "maverick_v2"}
+)
+
+
+def normalize_resolve_reject_reason(
+    reason: str,
+    *,
+    adapter: str = "",
+    dex_id: str = "",
+) -> str:
+    """Map legacy batch resolve reasons to M8.2 lane-specific codes."""
+    if reason in _MIRROR_INDEX_NO_MATCH:
+        return "SPECIALIZED_INDEX_NO_MATCH"
+    if reason == "ADAPTER_RESOLVE_PENDING":
+        if adapter == "uniswap_v4" or dex_id == "uniswap_v4":
+            return "V4_EVENT_INDEX_ONLY"
+        if adapter in _SPECIALIZED_INDEX_ONLY_ADAPTERS:
+            return "SPECIALIZED_INDEX_ONLY"
+    return reason
+
+
+def _record_resolve_reject(
+    reject_hist: Counter,
+    all_reject_rows: List[Dict[str, str]],
+    *,
+    dex_id: str,
+    reason: str,
+) -> str:
+    adapter = _DEX_ID_TO_ADAPTER.get(dex_id, "")
+    norm = normalize_resolve_reject_reason(reason, adapter=adapter, dex_id=dex_id)
+    all_reject_rows.append({"dex_id": dex_id, "reason": norm})
+    reject_hist[norm] += 1
+    return norm
+
+
+def _same_pair_route_quoteable(route: Dict[str, Any]) -> bool:
+    status = str(route.get("quote_smoke_status") or route.get("quote_smoke") or "")
+    upper = status.upper()
+    if not upper or upper in ("NOT_RUN", "SKIPPED_REGISTRY"):
+        return False
+    if "SKIPPED_REGISTRY" in upper:
+        return False
+    if any(upper.startswith(p) for p in ("QUOTE_OK", "OK", "PASS", "SUCCESS", "INDEXED")):
+        return True
+    return route.get("effective_depth_usd") is not None
+
+
+def mirror_missing_reason(
+    *,
+    token_seen_on_dexes: int,
+    same_pair_routes: int,
+    same_pair_dexes: int,
+    quoteable_same_pair_routes: int = 0,
+    topology_ready: bool = False,
+) -> str:
+    if token_seen_on_dexes < 2:
+        return "TOKEN_SEEN_ON_ONE_DEX"
+    if same_pair_routes < 2:
+        return "SAME_PAIR_ROUTES_LT_2"
+    if same_pair_dexes < 2:
+        return "SAME_PAIR_DEXES_LT_2"
+    if topology_ready and quoteable_same_pair_routes < 2:
+        return "SAME_PAIR_QUOTES_LT_2"
+    return "READY"
+
+
+def evaluate_mirror_readiness(
+    *,
+    token_seen_on_dexes: int,
+    same_pair_routes: int,
+    same_pair_dexes: int,
+    quoteable_same_pair_routes: int = 0,
+) -> Dict[str, Any]:
+    """M8.2 2-leg same-pair mirror gate (parallel to 3+ token subgraph_ready)."""
+    mirror_topology_ready = (
+        token_seen_on_dexes >= 2
+        and same_pair_routes >= 2
+        and same_pair_dexes >= 2
+    )
+    mirror_quote_ready = mirror_topology_ready and quoteable_same_pair_routes >= 2
+    same_pair_mirror_token = same_pair_routes >= 2 and same_pair_dexes >= 2
+    return {
+        "token_seen_on_dexes": token_seen_on_dexes,
+        "same_pair_routes": same_pair_routes,
+        "same_pair_dexes": same_pair_dexes,
+        "quoteable_same_pair_routes": quoteable_same_pair_routes,
+        "same_pair_mirror_token": same_pair_mirror_token,
+        "mirror_topology_ready": mirror_topology_ready,
+        "mirror_quote_ready": mirror_quote_ready,
+        "missing_reason": (
+            "READY"
+            if mirror_quote_ready
+            else mirror_missing_reason(
+                token_seen_on_dexes=token_seen_on_dexes,
+                same_pair_routes=same_pair_routes,
+                same_pair_dexes=same_pair_dexes,
+                quoteable_same_pair_routes=quoteable_same_pair_routes,
+                topology_ready=mirror_topology_ready,
+            )
+        ),
+    }
+
+
+def compute_v4_event_index_coverage(
+    *,
+    reject_rows: List[Dict[str, Any]],
+    routes_admitted: List[Dict[str, Any]],
+    scan_telemetry: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """V4 factory scan is index/event-only; measure hint/index resolution yield."""
+    v4_reasons = frozenset({"V4_EVENT_INDEX_ONLY", "ADAPTER_RESOLVE_PENDING"})
+    v4_attempts = int(
+        ((scan_telemetry or {}).get("active_scan_attempted_by_dex") or {}).get(
+            "uniswap_v4", 0
+        )
+    )
+    if not v4_attempts:
+        v4_attempts = sum(
+            1
+            for row in reject_rows
+            if str(row.get("dex_id") or "") == "uniswap_v4"
+            and str(row.get("reason") or "") in v4_reasons
+        )
+    v4_resolved = sum(
+        1 for route in routes_admitted if str(route.get("dex_id") or "") == "uniswap_v4"
+    )
+    rate = round(v4_resolved / v4_attempts, 4) if v4_attempts else None
+    return {
+        "v4_event_index_attempts": v4_attempts,
+        "v4_event_index_resolved": v4_resolved,
+        "v4_event_index_coverage_rate": rate,
+    }
+
+
 def evaluate_subgraph_readiness(
     *,
     token_seen_on_dexes: int,
@@ -1133,8 +1280,9 @@ def expand_token_neighborhood(
                     route_kind="token_presence",
                 )
             else:
-                all_reject_rows.append({"dex_id": dex_id, "reason": reason})
-                reject_hist[reason] += 1
+                _record_resolve_reject(
+                    reject_hist, all_reject_rows, dex_id=dex_id, reason=reason
+                )
 
         # connector-anchor bridges
         for anchor_sym in sorted(anchor_syms):
@@ -1182,11 +1330,16 @@ def expand_token_neighborhood(
                         route_kind="connector_hop",
                     )
                 elif reason not in ("NO_POOL", "SKIPPED_DRY_RUN"):
-                    all_reject_rows.append({"dex_id": dex_id, "reason": reason})
-                    if reason.endswith("NOT_QUOTEABLE"):
+                    norm = normalize_resolve_reject_reason(
+                        reason,
+                        adapter=_DEX_ID_TO_ADAPTER.get(dex_id, ""),
+                        dex_id=dex_id,
+                    )
+                    all_reject_rows.append({"dex_id": dex_id, "reason": norm})
+                    if norm.endswith("NOT_QUOTEABLE"):
                         reject_hist["CONNECTOR_ANCHOR_NOT_QUOTEABLE"] += 1
                     else:
-                        reject_hist[reason] += 1
+                        reject_hist[norm] += 1
             if not hop_found and conn_sym not in anchor_syms:
                 reject_hist["CONNECTOR_ANCHOR_NO_POOL"] += 1
 
@@ -1199,6 +1352,12 @@ def expand_token_neighborhood(
     }
     unique_token_syms.discard("")
 
+    same_pair_dexes = len(
+        {str(r.get("dex_id") or "") for r in same_pair_routes if r.get("dex_id")}
+    )
+    quoteable_same_pair = sum(
+        1 for route in same_pair_routes if _same_pair_route_quoteable(route)
+    )
     subgraph = evaluate_subgraph_readiness(
         token_seen_on_dexes=token_seen_on_dexes,
         connector_tokens=len(connectors),
@@ -1206,6 +1365,12 @@ def expand_token_neighborhood(
         unique_tokens=len(unique_token_syms),
         same_pair_routes=len(same_pair_routes),
         connector_routes=len(connector_routes),
+    )
+    mirror = evaluate_mirror_readiness(
+        token_seen_on_dexes=token_seen_on_dexes,
+        same_pair_routes=len(same_pair_routes),
+        same_pair_dexes=same_pair_dexes,
+        quoteable_same_pair_routes=quoteable_same_pair,
     )
     if not subgraph["subgraph_ready"]:
         reject_hist["SUBGRAPH_TOO_SMALL"] += 1
@@ -1227,6 +1392,7 @@ def expand_token_neighborhood(
         "all_reject_rows": all_reject_rows,
         "token_seen_on_dexes": token_seen_on_dexes,
         "subgraph": subgraph,
+        "mirror": mirror,
         "cross_mechanic": cross_mechanic,
         "cross_mechanic_routes_tagged": _cm_tagged,
         "venues_quoteable": len(quoteable_dexes),
@@ -1308,7 +1474,9 @@ def _resolve_via_factory(
                 exotic_address=exotic_addr,
                 anchor_address=anchor_addr,
             )
-        return None, "ADAPTER_RESOLVE_PENDING"
+        return None, normalize_resolve_reject_reason(
+            "ADAPTER_RESOLVE_PENDING", adapter=adapter, dex_id=dex_id
+        )
 
     if dry_run:
         return None, "SKIPPED_DRY_RUN"
@@ -1420,7 +1588,9 @@ def _resolve_via_factory(
                 }, "OK"
         return None, "NO_POOL"
 
-    return None, "ADAPTER_RESOLVE_PENDING"
+    return None, normalize_resolve_reject_reason(
+        "ADAPTER_RESOLVE_PENDING", adapter=adapter, dex_id=dex_id
+    )
 
 
 def _build_route(
@@ -1533,6 +1703,10 @@ def _expand_batch_token_neighborhood(
     subgraph_ready_count = 0
     multi_venue_subgraph_ready = 0
     subgraph_ready_debug: List[Dict[str, Any]] = []
+    mirror_topology_ready_count = 0
+    mirror_quote_ready_count = 0
+    same_pair_mirror_token_count = 0
+    mirror_ready_debug: List[Dict[str, Any]] = []
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
     from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
     from m8.discovery.candidate_dex_registry import (
@@ -1659,9 +1833,21 @@ def _expand_batch_token_neighborhood(
         )
         for k, v in (nh.get("reject_reason_histogram") or {}).items():
             reject_hist[k] += int(v or 0)
-        all_reject_rows.extend(nh.get("all_reject_rows") or [])
+        for row in nh.get("all_reject_rows") or []:
+            dex_id = str(row.get("dex_id") or "")
+            all_reject_rows.append(
+                {
+                    "dex_id": dex_id,
+                    "reason": normalize_resolve_reject_reason(
+                        str(row.get("reason") or ""),
+                        adapter=_DEX_ID_TO_ADAPTER.get(dex_id, ""),
+                        dex_id=dex_id,
+                    ),
+                }
+            )
         connector_tokens_all.update(nh.get("connector_tokens") or [])
         _sg = nh.get("subgraph") or {}
+        _mr = nh.get("mirror") or {}
         if _sg.get("subgraph_ready"):
             subgraph_ready_count += 1
         elif len(subgraph_ready_debug) < 64:
@@ -1675,6 +1861,29 @@ def _expand_batch_token_neighborhood(
                     "connector_routes": _sg.get("connector_routes"),
                     "active_routes": _sg.get("active_routes"),
                     "missing_reason": _sg.get("missing_reason"),
+                }
+            )
+        if _mr.get("same_pair_mirror_token"):
+            same_pair_mirror_token_count += 1
+        if _mr.get("mirror_topology_ready"):
+            mirror_topology_ready_count += 1
+        if _mr.get("mirror_quote_ready"):
+            mirror_quote_ready_count += 1
+        if _mr.get("same_pair_mirror_token") and len(mirror_ready_debug) < 64:
+            mirror_ready_debug.append(
+                {
+                    "token_address": addr,
+                    "token_symbol": sym,
+                    "token_seen_on_dexes": _mr.get("token_seen_on_dexes"),
+                    "same_pair_routes": _mr.get("same_pair_routes"),
+                    "same_pair_dexes": _mr.get("same_pair_dexes"),
+                    "quoteable_same_pair_routes": _mr.get(
+                        "quoteable_same_pair_routes"
+                    ),
+                    "mirror_topology_ready": _mr.get("mirror_topology_ready"),
+                    "mirror_quote_ready": _mr.get("mirror_quote_ready"),
+                    "missing_reason": _mr.get("missing_reason"),
+                    "subgraph_ready": _sg.get("subgraph_ready"),
                 }
             )
         _nh_dexes = {
@@ -1822,6 +2031,9 @@ def _expand_batch_token_neighborhood(
         "tokens_in": len(token_addrs),
         "pairs_in": 0,
         "subgraph_ready_tokens": subgraph_ready_count,
+        "mirror_topology_ready_tokens": mirror_topology_ready_count,
+        "mirror_quote_ready_tokens": mirror_quote_ready_count,
+        "same_pair_mirror_tokens": same_pair_mirror_token_count,
         "multi_venue_subgraph_ready_tokens": multi_venue_subgraph_ready,
         "multi_venue_tokens": _multi_venue_tokens,
         "dexes_checked": len(allowed_dex_ids),
@@ -1860,6 +2072,12 @@ def _expand_batch_token_neighborhood(
         "routes_rejected_not_m8_derived": len(_exploration_routes),
         "routes_by_origin_source": dict(_routes_by_origin),
         "subgraph_ready_debug_sample": subgraph_ready_debug,
+        "same_pair_mirror_ready_debug": mirror_ready_debug,
+        **compute_v4_event_index_coverage(
+            reject_rows=all_reject_rows,
+            routes_admitted=routes_admitted,
+            scan_telemetry=batch_scan_telemetry,
+        ),
         "scan_expected_attempts": batch_scan_telemetry.get("scan_expected_attempts"),
         "scan_actual_attempts": batch_scan_telemetry.get("scan_actual_attempts"),
         "active_scan_coverage_rate": _coverage_rate,

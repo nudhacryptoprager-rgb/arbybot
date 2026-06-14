@@ -1,6 +1,7 @@
 """Unit tests for M8.2 scan batch layer."""
 from __future__ import annotations
 
+from m8.discovery.cross_dex_expand import normalize_resolve_reject_reason
 from m8.discovery.scan_batch import (
     NegativeResultCache,
     split_candidate_rows,
@@ -49,3 +50,22 @@ def test_mirror_canonical_candidate_telemetry():
     )
     cell = cand["candidate_dex_attempt_matrix"]["0xabc"]["iziswap_base"]["USDC"]
     assert cell["reason"] == "covered_by_canonical_scan"
+
+
+def test_batch_lane_reason_codes():
+    assert (
+        normalize_resolve_reject_reason(
+            "ADAPTER_RESOLVE_PENDING",
+            adapter="balancer_stable",
+            dex_id="balancer_vault",
+        )
+        == "SPECIALIZED_INDEX_ONLY"
+    )
+    assert (
+        normalize_resolve_reject_reason(
+            "ADAPTER_RESOLVE_PENDING",
+            adapter="uniswap_v4",
+            dex_id="uniswap_v4",
+        )
+        == "V4_EVENT_INDEX_ONLY"
+    )

@@ -1,6 +1,6 @@
 # Status: M8.2 Cross-DEX Expansion & Mirror Handoff
 
-**Status**: **M8_2_CANDIDATE_COVERAGE_PROVEN / M8_2_QUALITY_BLOCKED** (subgraph gate only; independent of M9 economics)
+**Status**: **M8_2_SCAN_COVERAGE_PROVEN / MIRROR_READY_GATE_MISSING / SUBGRAPH_3PLUS_LOW** (not `M8_2_QUALITY_REACHED`)
 
 **Scan methodology (confirmed):**
 - Token-first expansion: **CONFIRMED** (`expand_token_neighborhood` per registry token).
@@ -8,7 +8,7 @@
 - Full per-token × dex × anchor scan coverage: **PROVEN** (`active_scan_coverage_rate=1.0`, `missing_dexes=[]`, `m8_2_scan_coverage_report` blockers=[]).
 - Candidate matrix coverage: **PROVEN** (`candidate_dex_attempt_matrix` tokens=701, `candidate_scan_coverage_rate=1.0`, `candidate_coverage` blockers=[]).
 
-`goal_status`: BLOCKED (`SUBGRAPH_READY_LOW` only)
+`goal_status`: BLOCKED (`SUBGRAPH_READY_LOW` + `MIRROR_READY_LOW`; `handoff_lane=none`, `mirror_quote_ready_tokens=0`)
 `schema_family`: cross_dex_expansion
 `execution_enabled`: false
 `kill_switch_active`: true
@@ -36,6 +36,10 @@ py -3.11 scripts/m8_2_acceptance_report.py --strict
 | `candidate_scan_actual_attempts` | — | **31545** |
 | `missing_dexes` | [] | **[]** |
 | `subgraph_ready_tokens` | ≥ 3 | **1** |
+| `mirror_topology_ready_tokens` | ≥ 3 | **11** |
+| `mirror_quote_ready_tokens` | ≥ 1 | **0** |
+| `same_pair_mirror_tokens` | — | **11** |
+| `v4_event_index_coverage_rate` | — | **1.5236** (resolved/attempts; index lane) |
 | `verified_second_pool_count` | ≥ 10 | **13** |
 | `multi_venue_tokens` | ≥ 14 | **22** |
 | `connector_routes_count` | > 0 | **67** |
@@ -43,9 +47,9 @@ py -3.11 scripts/m8_2_acceptance_report.py --strict
 | Freshness order | sniper ≤ hints ≤ expansion | **PASS** |
 
 `m8_2_scan_coverage_report` blockers: **[]** (canonical coverage PROVEN).  
-`m8_2_acceptance_report` blockers: **`SUBGRAPH_READY_LOW` only** (quality subgraph gate; `VERIFIED_SECOND_POOL_LOW` and `MULTI_VENUE_TOKENS_LOW` cleared).
+`m8_2_acceptance_report` blockers: **`SUBGRAPH_READY_LOW`** (3+/4-leg subgraph) + **`MIRROR_READY_LOW`** (2-leg quote lane; topology **11** tokens but **0** quote-ready). Coverage gates PASS.
 
-**Honest mirror verdict:** expanded universe (17 canonical DEX + 5 unsupported candidate lanes) still shows dominant `NO_POOL` on factory scan; `active_factory_second_pool_count=9` from batch multicall path. P0 configured candidates deduplicated via `covered_by_canonical_scan` where already in canonical `dex_rows`.
+**Mirror vs subgraph (honest):** `subgraph_ready` intentionally excludes anchor same-pair mirrors (T/WETH, T/USDC). Separate `mirror_topology_ready` now surfaces **11** same-pair multi-DEX tokens; `mirror_quote_ready=0` because routes carry `not_run` / `skipped_registry` quote status. Batch specialized lanes emit `SPECIALIZED_INDEX_ONLY` / `V4_EVENT_INDEX_ONLY` instead of opaque `ADAPTER_RESOLVE_PENDING`.
 
 ## Scan performance (fresh evidence)
 
