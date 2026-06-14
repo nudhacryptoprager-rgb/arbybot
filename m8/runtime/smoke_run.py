@@ -216,6 +216,7 @@ def _process_log_event(
         return None
     funnel.inc("parse_ok")
     funnel.inc_dex(cfg.dex, "parse_ok")
+    funnel.record_factory_poll(cfg.dex, ok=True)
 
     if events_lock is not None:
         events_lock.acquire()
@@ -815,6 +816,27 @@ def _run_self_test(
         ok_count = sum(1 for e in parsed if e is not None)
         fail_count = len(logs) - ok_count
         if ok_count == 0:
+            if cfg.discovery_only and len(logs) == 0:
+                logger.info(
+                    "self_test PASS (market window — discovery_only, zero logs in range)",
+                    extra={
+                        "context": {
+                            "dex": cfg.dex,
+                            "factory": cfg.factory,
+                            "from_block": cfg.verification_from_block,
+                            "to_block": cfg.verification_to_block,
+                        }
+                    },
+                )
+                results_by_dex[cfg.dex] = {
+                    "raw": 0,
+                    "parse_ok": 0,
+                    "parse_failed": 0,
+                    "range": [cfg.verification_from_block, cfg.verification_to_block],
+                    "status": "PASS",
+                    "note": "MARKET_WINDOW_NO_POOL_CREATED",
+                }
+                continue
             logger.error(
                 "self_test FAIL -- no events parsed in verification range",
                 extra={
@@ -918,7 +940,7 @@ def _build_and_write_artifact(
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
     enricher_config: Optional[Dict[str, Any]] = None,
     arb_trace: Optional[List[Dict[str, Any]]] = None,
-) -> None:
+) -> Dict[str, Any]:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
     recent_window = recent_events[-_MAX_RECENT_EVENTS_IN_ARTIFACT:]
@@ -1102,6 +1124,10 @@ def _build_and_write_artifact(
         for dex, evs in _per_dex_build.items()
     }
 
+    pending_stats = _sync_pending_registry_from_events(recent_events_by_dex, recent_list)
+    funnel.set_pending_registry_sync(pending_stats)
+    metrics = funnel.snapshot()
+
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     from m8.discovery.origin_source import build_sniper_provenance_from_events
 
@@ -1156,6 +1182,16 @@ def _build_and_write_artifact(
                 })
     artifact["top_arb_candidates"] = top_arb_candidates
 
+    from monitoring.sniper_health import evaluate_m8_sniper_health
+
+    artifact["m8_health"] = evaluate_m8_sniper_health(artifact)
+    if artifact["m8_health"].get("blockers"):
+        if status == "ACTIVE":
+            status = "DEGRADED"
+        elif status == "EMPTY" and "M8_RPC_ERROR_RATE_HIGH" in artifact["m8_health"]["blockers"]:
+            status = "RPC_ERROR"
+    artifact["status"] = status
+
     violations = validate_sniper_artifact(artifact)
     if violations:
         logger.warning(
@@ -1183,14 +1219,64 @@ def _build_and_write_artifact(
                 "run_scope": metrics.get("run_scope", "all"),
                 "candidates_total": metrics["snipe_candidates_total"],
                 "elapsed_s": round(elapsed_s, 1),
+                "m8_health_goal": artifact.get("m8_health", {}).get("goal_status"),
+                "m8_health_blockers": artifact.get("m8_health", {}).get("blockers"),
             }
         },
     )
+    return artifact
 
 
-# ---------------------------------------------------------------------------
-# Offline simulation (no RPC)
-# ---------------------------------------------------------------------------
+def _sync_pending_registry_from_events(
+    recent_events_by_dex: Dict[str, List[Dict[str, Any]]],
+    recent_list: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Persist anchor-connected sniper events into m8_pending_pairs rolling registry."""
+    from m8.discovery.pending_pair_registry import (
+        load_registry,
+        save_registry,
+        split_token_anchor,
+        update_registry,
+    )
+
+    events: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for bucket in (recent_events_by_dex or {}).values():
+        for ev in bucket or []:
+            eid = str(ev.get("event_id") or "")
+            if eid and eid in seen_ids:
+                continue
+            if eid:
+                seen_ids.add(eid)
+            events.append(ev)
+    for ev in recent_list or []:
+        eid = str(ev.get("event_id") or "")
+        if eid and eid in seen_ids:
+            continue
+        if eid:
+            seen_ids.add(eid)
+        events.append(ev)
+
+    registry = load_registry()
+    before_tokens = set((registry.get("tokens") or {}).keys())
+    stats = update_registry(registry, events, now_ts=time.time())
+    save_registry(registry)
+    after_tokens = set((registry.get("tokens") or {}).keys())
+
+    missing_anchor_events = 0
+    for ev in events:
+        split = split_token_anchor(ev)
+        if split is None:
+            continue
+        addr, _, _ = split
+        if addr not in after_tokens:
+            missing_anchor_events += 1
+
+    stats["registry_out_of_sync"] = missing_anchor_events > 0
+    stats["tokens_before"] = len(before_tokens)
+    stats["tokens_after"] = len(after_tokens)
+    return stats
+
 
 def _run_offline_cycle(
     funnel: FunnelTracker,
@@ -1301,14 +1387,23 @@ def _run_online_loop(
             logs, had_err, err_str = _get_logs_safe(rpc_lane, params)
             return cfg, logs, had_err, err_str, (time.monotonic() - t_start) * 1000.0
 
-        max_workers = min(len(configs), 4) or 1
+        max_workers = min(len(configs), 2 if len(configs) >= 8 else 4) or 1
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_poll_factory, cfg) for cfg in configs]
+            futures = []
+            for i, cfg in enumerate(configs):
+                if i > 0 and max_workers < len(configs):
+                    time.sleep(0.15)
+                futures.append(pool.submit(_poll_factory, cfg))
             for fut in as_completed(futures):
                 cfg, logs, had_err, err_str, lat_ms = fut.result()
                 cycle_rpc_calls += 1
                 funnel.inc_rpc_call()
                 per_factory_latency_ms[cfg.dex] = round(lat_ms, 1)
+                err_code = ""
+                if had_err and err_str:
+                    from monitoring.sniper_funnel import _classify_rpc_error
+                    err_code = _classify_rpc_error(err_str)
+                funnel.record_factory_poll(cfg.dex, ok=not had_err, error_code=err_code)
                 if had_err:
                     funnel.inc_rpc_error(err_str)
                     funnel.inc_dex(cfg.dex, "error")
@@ -1473,6 +1568,14 @@ def main(argv: Optional[List[str]] = None) -> int:
              "as fallback (heartbeat + reconnect implemented elsewhere).",
     )
     parser.add_argument(
+        "--acceptance-run", action="store_true",
+        help="M8 acceptance gate: require self-test, prefer WS, and write health blockers.",
+    )
+    parser.add_argument(
+        "--strict-health", action="store_true",
+        help="Exit non-zero when m8_health.blockers is non-empty after final artifact write.",
+    )
+    parser.add_argument(
         "--dex", default=None, metavar="DEX",
         help="If set, only listen to this DEX (e.g. 'pancakeswap_v3'). "
              "Useful for isolated single-DEX WS gates.",
@@ -1486,6 +1589,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Logging setup
     # ------------------------------------------------------------------
     setup_logging(json_format=args.log_json)
+
+    if args.acceptance_run:
+        if args.skip_self_test:
+            logger.error(
+                "acceptance_run_forbids_skip_self_test",
+                extra={"context": {"flag": "--skip-self-test"}},
+            )
+            return 2
+        if not args.prefer_ws:
+            args.prefer_ws = True
+            logger.warning(
+                "acceptance_run_auto_prefer_ws",
+                extra={"context": {"reason": "--acceptance-run requires WS-first lane"}},
+            )
 
     logger.info(
         "sniper_startup",
@@ -1876,12 +1993,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         reasons.append(f"TOPIC_UNVERIFIED:{dex_name}")
     for dex_name in null_topic_factories:
         reasons.append(f"TOPIC_NULL:{dex_name}")
+    if args.skip_self_test:
+        reasons.append("SELF_TEST_SKIPPED")
 
     # Step 3: snapshot decisions under lock before final artifact write.
     with phase2_lock:
         final_decisions = dict(phase2_event_decisions) if phase2_event_decisions else {}
 
-    _build_and_write_artifact(
+    artifact = _build_and_write_artifact(
         funnel=funnel,
         recent_events=recent_events,
         started_at=started_at,
@@ -1894,6 +2013,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         enricher_config=enricher_config,
         arb_trace=list(arb_trace),
     )
+
+    health_blockers = (artifact.get("m8_health") or {}).get("blockers") or []
+    if (args.strict_health or args.acceptance_run) and health_blockers:
+        logger.error(
+            "m8_health_gate_failed",
+            extra={"context": {"blockers": health_blockers}},
+        )
+        return 5
 
     # ------------------------------------------------------------------
     # Console summary

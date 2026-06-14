@@ -148,6 +148,7 @@ def _expansion_metrics(
         "mirror_quote_ready_tokens": summary.get("mirror_quote_ready_tokens"),
         "same_pair_mirror_tokens": summary.get("same_pair_mirror_tokens"),
         "v4_event_index_coverage_rate": summary.get("v4_event_index_coverage_rate"),
+        "v4_event_index_hit_rate": summary.get("v4_event_index_hit_rate"),
         "hint_tokens_matched": summary.get("hint_tokens_matched"),
         "external_hints_enabled": summary.get("external_hints_enabled"),
         "second_pool_hints_found": summary.get("second_pool_hints_found"),
@@ -314,6 +315,10 @@ def build_m8_2_acceptance_report(
         }
     )
     radar_metrics = build_radar_metrics(hints, expansion)
+    if metrics.get("candidate_scan_coverage_rate") is None:
+        metrics["candidate_scan_coverage_rate"] = candidate_coverage.get(
+            "candidate_scan_coverage_rate"
+        )
 
     blockers: List[str] = []
     warnings: List[str] = []

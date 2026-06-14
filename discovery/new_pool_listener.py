@@ -55,6 +55,7 @@ LAYOUT_VE33_POOL_CREATED = "ve33_pool_created"
 LAYOUT_VE33_PAIR_CREATED = "ve33_pair_created"
 LAYOUT_V2_PAIR_CREATED = "v2_pair_created"
 LAYOUT_V4_INITIALIZE = "v4_initialize"
+LAYOUT_ALGEBRA_POOL_CREATED = "algebra_pool_created"
 
 _KNOWN_LAYOUTS = frozenset({
     LAYOUT_V3_POOL_CREATED,
@@ -63,6 +64,7 @@ _KNOWN_LAYOUTS = frozenset({
     LAYOUT_VE33_PAIR_CREATED,
     LAYOUT_V2_PAIR_CREATED,
     LAYOUT_V4_INITIALIZE,
+    LAYOUT_ALGEBRA_POOL_CREATED,
 })
 
 # ---------------------------------------------------------------------------
@@ -640,6 +642,46 @@ def _parse_v4_initialize(
     )
 
 
+def _parse_algebra_pool_created(
+    raw_log: Dict[str, Any],
+    cfg: FactoryConfig,
+) -> Optional[NewPoolEvent]:
+    """Parse Algebra/QuickSwap ``Pool(address,address,address)`` factory event."""
+    topics = raw_log.get("topics") or []
+    if len(topics) < 3:
+        return None
+
+    token0 = _topic_to_address(topics[1])
+    token1 = _topic_to_address(topics[2])
+    data = raw_log.get("data", "0x") or "0x"
+    if len(_strip_0x(data)) < 64:
+        return None
+
+    pool = "0x" + _data_word(data, 0)[-40:].lower()
+    block_number = _parse_block_number(raw_log)
+    tx_hash = (raw_log.get("transactionHash") or "").lower()
+    log_index = _parse_log_index(raw_log)
+    event_id = make_event_id(cfg.chain, cfg.factory, tx_hash, log_index)
+    return NewPoolEvent(
+        event_id=event_id,
+        chain=cfg.chain,
+        dex=cfg.dex,
+        adapter_type=cfg.adapter_type,
+        factory=cfg.factory,
+        event_name=cfg.event_name,
+        pool=pool,
+        token0=token0,
+        token1=token1,
+        fee=0,
+        tick_spacing=None,
+        stable=None,
+        hooks=None,
+        block_number=block_number,
+        tx_hash=tx_hash,
+        log_index=log_index,
+    )
+
+
 _LAYOUT_PARSERS = {
     LAYOUT_V3_POOL_CREATED: _parse_v3_pool_created,
     LAYOUT_SLIPSTREAM_POOL_CREATED: _parse_slipstream_pool_created,
@@ -647,6 +689,7 @@ _LAYOUT_PARSERS = {
     LAYOUT_VE33_PAIR_CREATED: _parse_ve33_pair_created,
     LAYOUT_V2_PAIR_CREATED: _parse_v2_pair_created,
     LAYOUT_V4_INITIALIZE: _parse_v4_initialize,
+    LAYOUT_ALGEBRA_POOL_CREATED: _parse_algebra_pool_created,
 }
 
 

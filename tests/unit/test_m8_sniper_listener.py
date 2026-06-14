@@ -20,6 +20,7 @@ import pytest
 # Import target (must succeed without web3)
 # ---------------------------------------------------------------------------
 from discovery.new_pool_listener import (
+    LAYOUT_ALGEBRA_POOL_CREATED,
     LAYOUT_SLIPSTREAM_POOL_CREATED,
     LAYOUT_VE33_POOL_CREATED,
     LAYOUT_V2_PAIR_CREATED,
@@ -662,6 +663,7 @@ class TestLoadFactoryConfig:
                 LAYOUT_VE33_PAIR_CREATED,
                 LAYOUT_V2_PAIR_CREATED,
                 LAYOUT_V4_INITIALIZE,
+                LAYOUT_ALGEBRA_POOL_CREATED,
             ), f"Unknown layout: {cfg.log_layout}"
 
     def test_aerodrome_uses_pool_created_topic(self):
@@ -1056,10 +1058,45 @@ class TestFactoryConfigR8Extensions:
         configs = {c.dex: c for c in load_factory_config()}
         assert configs["uniswap_v2"].factory.lower() == "0x8909dc15e40173ff4699343b6eb8132c65e18ec6"
 
+    _EXPECTED_BASE_DEXES = frozenset({
+        "uniswap_v3",
+        "aerodrome_slipstream",
+        "aerodrome",
+        "pancakeswap_v3",
+        "uniswap_v4",
+        "uniswap_v2",
+        "sushiswap_v2",
+        "baseswap_v2",
+        "sushiswap_v3",
+        "alien_base_v2",
+        "alien_area51",
+        "quickswap_algebra",
+    })
+
+    def test_base_factory_dex_set(self):
+        """Regression: explicit DEX set — avoids brittle exact-count drift."""
+        configs = load_factory_config(chain_filter="base")
+        dex_names = {c.dex for c in configs}
+        assert dex_names == self._EXPECTED_BASE_DEXES
+        assert len(configs) == len(self._EXPECTED_BASE_DEXES)
+
+    def test_quickswap_algebra_discovery_lane_contract(self):
+        configs = {c.dex: c for c in load_factory_config()}
+        algebra = configs["quickswap_algebra"]
+        assert algebra.adapter_type == "algebra"
+        assert algebra.log_layout == LAYOUT_ALGEBRA_POOL_CREATED
+        assert algebra.topic0_verified is True
+        assert algebra.discovery_only is True
+        assert algebra.verification_from_block is None
+        assert algebra.verification_to_block is None
+        assert algebra.topic0 == (
+            "0x26f6a048ee9138f2c0cea2666dd3c363216d48e9db92aef21ef7e1dd9e9e4da2"
+        )
+
     def test_total_factory_count_is_six(self):
-        """Regression: exactly 9 factories after R8 + SushiSwap/BaseSwap + SushiSwap V3 additions."""
-        configs = load_factory_config()
-        assert len(configs) == 9
+        """Deprecated alias — kept for grep stability; see test_base_factory_dex_set."""
+        configs = load_factory_config(chain_filter="base")
+        assert len(configs) == 12
 
     def test_all_new_configs_have_verification_blocks(self):
         configs = {c.dex: c for c in load_factory_config()}
@@ -1171,3 +1208,31 @@ class TestClankerDiscoverySource:
         src = ClankerDiscoverySource()
         with pytest.raises(ClankerSourceError):
             src.fetch_new_pools(page=1)
+
+
+class TestParseAlgebraPoolCreated:
+    def test_valid_algebra_pool_log_parses(self):
+        log = {
+            "address": "0xc5396866754799b9720125b104ae01d935ab9c7b",
+            "topics": [
+                "0x26f6a048ee9138f2c0cea2666dd3c363216d48e9db92aef21ef7e1dd9e9e4da2",
+                _to_topic_address(TOKEN0),
+                _to_topic_address(TOKEN1),
+            ],
+            "data": "0x" + _to_data_word(POOL),
+            "blockNumber": BLOCK_HEX,
+            "transactionHash": TX_HASH,
+            "logIndex": hex(LOG_INDEX),
+        }
+        cfg = _cfg(
+            dex="quickswap_algebra",
+            adapter_type="algebra",
+            factory="0xc5396866754799b9720125b104ae01d935ab9c7b",
+            layout=LAYOUT_ALGEBRA_POOL_CREATED,
+        )
+        ev = parse_raw_log(log, cfg)
+        assert ev is not None
+        assert ev.pool == POOL.lower()
+        assert ev.token0 == TOKEN0
+        assert ev.token1 == TOKEN1
+        assert ev.dex == "quickswap_algebra"

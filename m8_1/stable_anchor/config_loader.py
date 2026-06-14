@@ -51,6 +51,8 @@ class DexCfg:
         return self.pools.get(pair_id)
 
     def __post_init__(self) -> None:
+        if not self.enabled:
+            return
         if self.adapter_type not in _VALID_ADAPTER_TYPES:
             raise ValueError(
                 f"dex {self.dex_id}: adapter_type must be in {_VALID_ADAPTER_TYPES}, "

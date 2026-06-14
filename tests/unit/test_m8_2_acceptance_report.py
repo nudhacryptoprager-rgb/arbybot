@@ -249,6 +249,7 @@ def test_m8_2_split_blockers():
         "ONCHAIN_VERIFIED",
         "STALE_HINT_RISK",
     )
+    assert report["metrics"]["candidate_scan_coverage_rate"] == 1.0
 
 
 def test_mirror_quote_ready_unblocks_handoff_despite_subgraph_low():

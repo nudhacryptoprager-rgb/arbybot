@@ -278,6 +278,11 @@ class FunnelTracker:
         self._getlogs_chunk_size: int = 0
         self._ws_provider: str = "none"
         self._http_fallback_provider: str = "unknown"
+        self._factory_poll_attempts: Dict[str, int] = {}
+        self._factory_poll_errors: Dict[str, int] = {}
+        self._factory_last_success_ts: Dict[str, float] = {}
+        self._factory_last_error_code: Dict[str, str] = {}
+        self._pending_registry_sync: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -486,6 +491,26 @@ class FunnelTracker:
             if len(self._traces) > self._max_traces:
                 self._traces = self._traces[-self._max_traces :]
 
+    def record_factory_poll(
+        self,
+        dex: str,
+        *,
+        ok: bool,
+        error_code: str = "",
+    ) -> None:
+        with self._lock:
+            self._factory_poll_attempts[dex] = self._factory_poll_attempts.get(dex, 0) + 1
+            if ok:
+                self._factory_last_success_ts[dex] = time.time()
+            else:
+                self._factory_poll_errors[dex] = self._factory_poll_errors.get(dex, 0) + 1
+                if error_code:
+                    self._factory_last_error_code[dex] = error_code
+
+    def set_pending_registry_sync(self, stats: Dict[str, Any]) -> None:
+        with self._lock:
+            self._pending_registry_sync = dict(stats)
+
     # ------------------------------------------------------------------
     # Read helpers
     # ------------------------------------------------------------------
@@ -566,6 +591,26 @@ class FunnelTracker:
                 "getlogs_chunk_size": self._getlogs_chunk_size,
                 "ws_provider": self._ws_provider,
                 "http_fallback_provider": self._http_fallback_provider,
+                "factory_error_rate_by_dex": {
+                    dex: round(
+                        self._factory_poll_errors.get(dex, 0)
+                        / max(self._factory_poll_attempts.get(dex, 0), 1),
+                        4,
+                    )
+                    for dex in sorted(
+                        set(self._factory_poll_attempts) | set(self._factory_poll_errors)
+                    )
+                },
+                "factory_last_success_ts": dict(self._factory_last_success_ts),
+                "factory_last_error_code": dict(self._factory_last_error_code),
+                "dexes_degraded": sorted(
+                    dex
+                    for dex in set(self._factory_poll_attempts) | set(self._factory_poll_errors)
+                    if self._factory_poll_errors.get(dex, 0) > 0
+                    and self._factory_poll_attempts.get(dex, 0)
+                    == self._factory_poll_errors.get(dex, 0)
+                ),
+                "pending_registry_sync": dict(self._pending_registry_sync),
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

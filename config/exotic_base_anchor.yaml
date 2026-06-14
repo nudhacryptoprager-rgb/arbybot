@@ -107,7 +107,8 @@ dexes:
     factory: "0x8c7d3063579bdb0b90997e18a770eae32e1ebb08"
     quoter: "0x2db0afd0045f3518c77ec6591a542e326befd3d7"
     fee_tiers: [400, 2000, 10000]
-    enabled: true
+    enabled: false
+    quarantine_reason: "M8.2 index-only lane — iziswap not wired in M8.1 quote_probe yet"
 
   # Curve Stable-NG on Base — factory-stable-ng factory.
   # Quote adapter: raw_http_probe.py get_dy(i,j,dx) via token_in_index/token_out_index

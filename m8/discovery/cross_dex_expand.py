@@ -455,28 +455,42 @@ def compute_v4_event_index_coverage(
     routes_admitted: List[Dict[str, Any]],
     scan_telemetry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """V4 factory scan is index/event-only; measure hint/index resolution yield."""
+    """V4 factory scan is index/event-only; measure index-lane yield vs scan attempts."""
     v4_reasons = frozenset({"V4_EVENT_INDEX_ONLY", "ADAPTER_RESOLVE_PENDING"})
-    v4_attempts = int(
+    v4_scan_attempts = int(
         ((scan_telemetry or {}).get("active_scan_attempted_by_dex") or {}).get(
             "uniswap_v4", 0
         )
     )
-    if not v4_attempts:
-        v4_attempts = sum(
+    if not v4_scan_attempts:
+        v4_scan_attempts = sum(
             1
             for row in reject_rows
             if str(row.get("dex_id") or "") == "uniswap_v4"
             and str(row.get("reason") or "") in v4_reasons
         )
-    v4_resolved = sum(
+    v4_routes_admitted = sum(
         1 for route in routes_admitted if str(route.get("dex_id") or "") == "uniswap_v4"
     )
-    rate = round(v4_resolved / v4_attempts, 4) if v4_attempts else None
+    v4_factory_scan_routes = sum(
+        1
+        for route in routes_admitted
+        if str(route.get("dex_id") or "") == "uniswap_v4"
+        and str(route.get("resolve_source") or "").startswith("active_factory_scan")
+    )
+    v4_index_resolved = max(0, v4_routes_admitted - v4_factory_scan_routes)
+    hit_rate = (
+        min(1.0, round(v4_index_resolved / v4_scan_attempts, 4))
+        if v4_scan_attempts > 0
+        else None
+    )
     return {
-        "v4_event_index_attempts": v4_attempts,
-        "v4_event_index_resolved": v4_resolved,
-        "v4_event_index_coverage_rate": rate,
+        "v4_event_index_scan_attempts": v4_scan_attempts,
+        "v4_routes_admitted": v4_routes_admitted,
+        "v4_event_index_resolved_routes": v4_index_resolved,
+        "v4_event_index_hit_rate": hit_rate,
+        # Back-compat alias (capped at 1.0; prefer v4_event_index_hit_rate).
+        "v4_event_index_coverage_rate": hit_rate,
     }
 
 
@@ -1979,6 +1993,23 @@ def _expand_batch_token_neighborhood(
         pools_found_by_dex=dict(pools_found_by_dex),
     )
     distinct_lane = evaluate_distinct_pricing_lane(routes_admitted)
+    from m8.discovery.mirror_quote_smoke import (
+        aggregate_mirror_readiness_from_routes,
+        smoke_mirror_same_pair_routes,
+    )
+
+    mirror_smoke_stats = smoke_mirror_same_pair_routes(
+        routes_admitted,
+        chain=chain,
+        config=config,
+        dry_run=dry_run,
+    )
+    (
+        mirror_topology_ready_count,
+        mirror_quote_ready_count,
+        same_pair_mirror_token_count,
+        mirror_ready_debug,
+    ) = aggregate_mirror_readiness_from_routes(routes_admitted)
     from m8.discovery.origin_source import (
         collect_m8_token_addrs,
         partition_canonical_routes,
@@ -2073,6 +2104,7 @@ def _expand_batch_token_neighborhood(
         "routes_by_origin_source": dict(_routes_by_origin),
         "subgraph_ready_debug_sample": subgraph_ready_debug,
         "same_pair_mirror_ready_debug": mirror_ready_debug,
+        "mirror_quote_smoke": mirror_smoke_stats,
         **compute_v4_event_index_coverage(
             reject_rows=all_reject_rows,
             routes_admitted=routes_admitted,

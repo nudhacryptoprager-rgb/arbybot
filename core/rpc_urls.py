@@ -276,6 +276,10 @@ def apply_productive_rpc_env(
     out[f"{prefix}_RPC_PRIMARY"] = alchemy_url
     if drpc_url:
         out[f"{prefix}_RPC_SECONDARY"] = drpc_url
+    # M8 sniper HTTP lane: Alchemy primary (reconciliation), dRPC secondary (getLogs failover).
+    out[f"{prefix}_SNIPER_RPC_PRIMARY"] = alchemy_url
+    if drpc_url:
+        out[f"{prefix}_SNIPER_RPC_SECONDARY"] = drpc_url
     out[f"{prefix}_RPC"] = alchemy_url
     out["ARBY_REQUIRE_DEDICATED_RPC"] = "1"
     out["ARBY_PROVIDER_POOL_MODE"] = "weighted"

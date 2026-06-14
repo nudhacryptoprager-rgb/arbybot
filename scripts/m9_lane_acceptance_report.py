@@ -360,7 +360,7 @@ def build_acceptance_report(
             "handoff_ready": handoff_ready,
             "quality_blockers": list(m8_2_report.get("quality_blockers") or []),
         }
-        if not handoff_ready and m8_2_report.get("goal_status") == "BLOCKED":
+        if not handoff_ready:
             upstream_blockers.append("UPSTREAM_M8_2_NOT_READY")
 
     bridge_upstream_warnings: List[str] = []

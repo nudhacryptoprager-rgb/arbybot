@@ -224,3 +224,59 @@ factories:
     # Verified 2026-05-14 via drpc (3 events in blocks 45990779-45990879).
     verification_from_block: 45990779
     verification_to_block: 45990879
+
+  # -------------------------------------------------------------------------
+  # M8.2 P0 — Alien Base V2 (UniswapV2 fork, PairCreated)
+  # Address: config/exotic_base_anchor.yaml alien_base_v2.factory
+  # -------------------------------------------------------------------------
+  - dex: alien_base_v2
+    adapter_type: uniswap_v2
+    factory: "0x3e84d913803b02a4a7f027165e8ca42c14c0fde7"
+    event_name: PairCreated
+    event_signature: "PairCreated(address,address,address,uint256)"
+    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    topic0_verified: true
+    log_layout: v2_pair_created
+    experimental: true
+    discovery_only: true
+    # Self-test range: set after on-chain probe confirms >=1 PairCreated event.
+    verification_from_block: null
+    verification_to_block: null
+
+  # -------------------------------------------------------------------------
+  # M8.2 P0 — Alien Base Area51 (UniswapV2 fork)
+  # -------------------------------------------------------------------------
+  - dex: alien_area51
+    adapter_type: uniswap_v2
+    factory: "0x2d5dd5fa7b8a1bfbdbb0916b42280208ee6de51e"
+    event_name: PairCreated
+    event_signature: "PairCreated(address,address,address,uint256)"
+    topic0: "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
+    topic0_verified: true
+    log_layout: v2_pair_created
+    experimental: true
+    discovery_only: true
+    # Self-test range: set after on-chain probe confirms >=1 PairCreated event.
+    verification_from_block: null
+    verification_to_block: null
+
+  # -------------------------------------------------------------------------
+  # M8.2 P0 — QuickSwap Algebra (Base)
+  # Event: Pool(address indexed token0, address indexed token1, address pool)
+  # topic0: keccak256("Pool(address,address,address)")
+  # -------------------------------------------------------------------------
+  - dex: quickswap_algebra
+    adapter_type: algebra
+    factory: "0xC5396866754799B9720125B104AE01d935Ab9C7b"
+    event_name: Pool
+    event_signature: "Pool(address,address,address)"
+    topic0: "0x26f6a048ee9138f2c0cea2666dd3c363216d48e9db92aef21ef7e1dd9e9e4da2"
+    topic0_verified: true
+    log_layout: algebra_pool_created
+    experimental: true
+    discovery_only: true
+    # Self-test range: set after on-chain probe confirms >=1 Pool event.
+    verification_from_block: null
+    verification_to_block: null
+
+  # iZiSwap Base: event semantics pending ABI/topic verification — hints/index lane only.

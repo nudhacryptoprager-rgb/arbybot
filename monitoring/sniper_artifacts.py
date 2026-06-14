@@ -65,12 +65,22 @@ REQUIRED_METRIC_KEYS: frozenset[str] = frozenset({
     "snipe_candidates_total",
 })
 
+# Extended funnel keys written under ``metrics`` (additive contract).
+EXTENDED_METRIC_KEYS: frozenset[str] = frozenset({
+    "factory_error_rate_by_dex",
+    "factory_last_success_ts",
+    "factory_last_error_code",
+    "dexes_degraded",
+    "pending_registry_sync",
+})
+
 # Valid status values.
 VALID_STATUSES: frozenset[str] = frozenset({
     "EMPTY",       # no events seen yet (listener not running or just started)
     "ACTIVE",      # listener running, receiving events
     "STALE",       # listener was running but freshness_s exceeded threshold
     "ERROR",       # listener encountered a fatal error
+    "DEGRADED",    # listener ran but health gate failed (RPC/WS/self-test)
     "RPC_ERROR",   # HTTP-only mode, all RPC calls failed (e.g. provider range limit)
 })
 
