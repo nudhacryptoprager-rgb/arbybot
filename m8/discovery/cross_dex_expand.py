@@ -1617,6 +1617,25 @@ def _build_route(
     t1s = pool_entry.get("token1_symbol") or pair["anchor_symbol"]
     t0a = pool_entry.get("token0_addr", "")
     t1a = pool_entry.get("token1_addr", "")
+    exotic_addr = str(
+        pair.get("exotic_address") or pair.get("focus_token_address") or ""
+    ).lower()
+    exotic_sym = pair.get("exotic_symbol") or pair.get("focus_token_symbol") or ""
+    anchor_sym = pair.get("anchor_symbol") or ""
+    from m8.discovery.mirror_quote_smoke import _BASE_ANCHOR_ADDRS, _normalize_eth_alias
+
+    if not t0a:
+        if t0s == exotic_sym and exotic_addr:
+            t0a = exotic_addr
+        elif t0s in _BASE_ANCHOR_ADDRS:
+            t0a = _BASE_ANCHOR_ADDRS[t0s]
+    if not t1a:
+        if t1s == exotic_sym and exotic_addr:
+            t1a = exotic_addr
+        elif t1s in _BASE_ANCHOR_ADDRS:
+            t1a = _BASE_ANCHOR_ADDRS[t1s]
+    t0a = _normalize_eth_alias(str(t0a or ""), str(t0s))
+    t1a = _normalize_eth_alias(str(t1a or ""), str(t1s))
     if t0s > t1s:
         t0s, t1s = t1s, t0s
         t0a, t1a = t1a, t0a

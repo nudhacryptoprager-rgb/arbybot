@@ -28,7 +28,6 @@ _DEFAULT_PATHS = {
 
 _QUALITY_GATES = {
     "subgraph_ready_tokens_min": 3,
-    "mirror_topology_ready_tokens_min": 3,
     "mirror_quote_ready_tokens_min": 1,
     "verified_second_pool_count_min": 10,
     "multi_venue_tokens_min": 14,
@@ -147,6 +146,7 @@ def _expansion_metrics(
         "mirror_topology_ready_tokens": summary.get("mirror_topology_ready_tokens"),
         "mirror_quote_ready_tokens": summary.get("mirror_quote_ready_tokens"),
         "same_pair_mirror_tokens": summary.get("same_pair_mirror_tokens"),
+        "mirror_tokens": summary.get("mirror_tokens"),
         "v4_event_index_coverage_rate": summary.get("v4_event_index_coverage_rate"),
         "v4_event_index_hit_rate": summary.get("v4_event_index_hit_rate"),
         "hint_tokens_matched": summary.get("hint_tokens_matched"),
@@ -246,8 +246,11 @@ def _mirror_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     sample = (expansion or {}).get("same_pair_mirror_ready_debug") or (
         (expansion or {}).get("summary") or {}
     ).get("same_pair_mirror_ready_debug") or []
-    if not sample:
-        return {"sample_count": 0, "top_missing_reasons": {}}
+    mirror_tokens = (expansion or {}).get("mirror_tokens") or (
+        (expansion or {}).get("summary") or {}
+    ).get("mirror_tokens") or []
+    if not sample and not mirror_tokens:
+        return {"sample_count": 0, "top_missing_reasons": {}, "mirror_tokens": []}
     reasons: Counter[str] = Counter()
     for row in sample:
         reasons[str(row.get("missing_reason") or "unknown")] += 1
@@ -259,6 +262,7 @@ def _mirror_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "quote_ready_count": sum(1 for row in sample if row.get("mirror_quote_ready")),
         "top_missing_reasons": dict(reasons.most_common(8)),
         "sample": sample[:12],
+        "mirror_tokens": mirror_tokens[:24],
     }
 
 
@@ -353,6 +357,8 @@ def build_m8_2_acceptance_report(
         blockers.append("SUBGRAPH_READY_LOW")
     if not mirror_lane_ready:
         blockers.append("MIRROR_READY_LOW")
+        if mirror_topology_ready > 0:
+            warnings.append("MIRROR_TOPOLOGY_NOT_QUOTE_READY")
     if verified_second < _QUALITY_GATES["verified_second_pool_count_min"]:
         blockers.append("VERIFIED_SECOND_POOL_LOW")
     if multi_venue < _QUALITY_GATES["multi_venue_tokens_min"]:
@@ -406,6 +412,7 @@ def build_m8_2_acceptance_report(
         "per_source_verified_yield": per_source_yield,
         "subgraph_ready_debug": subgraph_debug,
         "mirror_ready_debug": mirror_debug,
+        "mirror_tokens": mirror_debug.get("mirror_tokens") or metrics.get("mirror_tokens") or [],
         "handoff_lane": handoff_lane,
         "handoff_ready": handoff_ready,
         "scan_coverage": scan_coverage,

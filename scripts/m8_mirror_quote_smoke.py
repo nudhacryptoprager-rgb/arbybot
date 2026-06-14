@@ -27,6 +27,11 @@ def main() -> int:
     ap.add_argument("--config", default="config/exotic_base_anchor.yaml")
     ap.add_argument("--chain", default="base")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--force-retry",
+        action="store_true",
+        help="Re-run quote smoke on routes with QUOTE_FAIL / QUOTE_SKIP statuses",
+    )
     args = ap.parse_args()
 
     path = Path(args.expansion)
@@ -38,14 +43,20 @@ def main() -> int:
         chain=args.chain,
         config=config,
         dry_run=bool(args.dry_run),
+        force_retry=bool(args.force_retry),
     )
     topology, quote, same_pair, debug = aggregate_mirror_readiness_from_routes(routes)
+    from m8.discovery.mirror_quote_smoke import build_mirror_token_details
+
+    mirror_tokens = build_mirror_token_details(routes)
     summary = doc.setdefault("summary", {})
     summary["mirror_topology_ready_tokens"] = topology
     summary["mirror_quote_ready_tokens"] = quote
     summary["same_pair_mirror_tokens"] = same_pair
     summary["same_pair_mirror_ready_debug"] = debug
     summary["mirror_quote_smoke"] = smoke
+    summary["mirror_tokens"] = mirror_tokens
+    doc["mirror_tokens"] = mirror_tokens
     doc["routes_admitted"] = routes
     write_artifact(doc, path)
     print(json.dumps(smoke, indent=2))

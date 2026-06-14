@@ -5,6 +5,7 @@ from m8.discovery.cross_dex_expand import compute_v4_event_index_coverage
 from m8.discovery.mirror_quote_smoke import (
     aggregate_mirror_readiness_from_routes,
     is_same_pair_mirror_route,
+    resolve_route_token_addrs,
     smoke_mirror_same_pair_routes,
 )
 
@@ -68,3 +69,30 @@ def test_aggregate_mirror_topology_without_quote():
     assert quote == 0
     assert same_pair == 1
     assert debug[0]["missing_reason"] == "SAME_PAIR_QUOTES_LT_2"
+
+
+def test_resolve_route_token_addrs_backfills_missing_v3():
+    route = {
+        "token0": "USDC",
+        "token1": "bNODE",
+        "token0_addr": "",
+        "token1_addr": "",
+        "focus_token_symbol": "bNODE",
+        "focus_token_address": "0xf32e4ea90b9770d667f6ded4d1631a3cb029d661",
+    }
+    t0a, t1a = resolve_route_token_addrs(route)
+    assert t0a == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    assert t1a == "0xf32e4ea90b9770d667f6ded4d1631a3cb029d661"
+
+
+def test_resolve_route_token_addrs_maps_native_weth():
+    route = {
+        "token0": "TRITRI",
+        "token1": "WETH",
+        "token0_addr": "0x0b09d0cf9b5e7d7322fcaf274e9adac550d0bf18",
+        "token1_addr": "0x0000000000000000000000000000000000000000",
+        "focus_token_symbol": "TRITRI",
+        "focus_token_address": "0x0b09d0cf9b5e7d7322fcaf274e9adac550d0bf18",
+    }
+    _, t1a = resolve_route_token_addrs(route)
+    assert t1a == "0x4200000000000000000000000000000000000006"

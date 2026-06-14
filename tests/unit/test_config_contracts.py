@@ -378,6 +378,12 @@ ALLOWED_YAML_FILES = {
     "soak_60m_base.yaml",
     # M9 adapter runtime wiring — per-pool Curve/Balancer metadata registry
     "adapter_metadata.yaml",
+    # Hardcode-audit classification allowlist (check_hardcode_audit.py)
+    "hardcode_audit_allowlist.yaml",
+    # M8.2 candidate second-venue DEX registry (cross_dex_expand)
+    "m8_2_candidate_dex_registry.yaml",
+    # M9 token baseline prices/decimals registry
+    "m9_token_baselines.yaml",
 }
 
 

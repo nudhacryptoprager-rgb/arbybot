@@ -1,14 +1,8 @@
 # Status: M8.2 Cross-DEX Expansion & Mirror Handoff
 
-**Status**: **M8_2_SCAN_COVERAGE_PROVEN / MIRROR_READY_GATE_MISSING / SUBGRAPH_3PLUS_LOW** (not `M8_2_QUALITY_REACHED`)
+**Status**: **MIRROR_TOPOLOGY_FOUND / MIRROR_QUOTE_READY_BLOCKED** (not `M8_2_QUALITY_REACHED`)
 
-**Scan methodology (confirmed):**
-- Token-first expansion: **CONFIRMED** (`expand_token_neighborhood` per registry token).
-- Canonical + P0 candidate DEX in `dex_ids_checked`: **CONFIRMED** (17 DEX incl. `alien_base_v2`, `alien_area51`, `quickswap_algebra`, `iziswap_base`).
-- Full per-token × dex × anchor scan coverage: **PROVEN** (`active_scan_coverage_rate=1.0`, `missing_dexes=[]`, `m8_2_scan_coverage_report` blockers=[]).
-- Candidate matrix coverage: **PROVEN** (`candidate_dex_attempt_matrix` tokens=701, `candidate_scan_coverage_rate=1.0`, `candidate_coverage` blockers=[]).
-
-`goal_status`: BLOCKED (`SUBGRAPH_READY_LOW` + `MIRROR_READY_LOW`; `handoff_lane=none`, `mirror_quote_ready_tokens=0`)
+`goal_status`: BLOCKED (`MIRROR_READY_LOW` + `SUBGRAPH_READY_LOW` + `MULTI_VENUE_TOKENS_LOW` + `VERIFIED_SECOND_POOL_LOW`; `handoff_ready=false`, `mirror_quote_ready_tokens=0`)
 `schema_family`: cross_dex_expansion
 `execution_enabled`: false
 `kill_switch_active`: true
@@ -26,119 +20,73 @@ py -3.11 scripts/m8_2_acceptance_report.py --strict
 
 ## M8.2 Quality Gates (strict)
 
-| Gate | Threshold | Current (2026-06-11 fresh expansion) |
+| Gate | Threshold | Current (2026-06-14 fresh expansion) |
 |------|-----------|----------------------------------------:|
 | `active_scan_coverage_rate` | ≥ 0.98 | **1.0** |
 | `candidate_scan_coverage_rate` | ≥ 0.98 | **1.0** |
-| `scan_attempt_matrix` tokens | > 0 | **701** |
-| `candidate_dex_attempt_matrix` tokens | > 0 | **701** |
-| `scan_actual_attempts` | — | **55155** |
-| `candidate_scan_actual_attempts` | — | **31545** |
+| `scan_actual_attempts` | — | **15021** |
 | `missing_dexes` | [] | **[]** |
-| `subgraph_ready_tokens` | ≥ 3 | **1** |
-| `mirror_topology_ready_tokens` | ≥ 3 | **11** |
+| `subgraph_ready_tokens` | ≥ 3 | **0** |
+| `mirror_topology_ready_tokens` | ≥ 3 | **2** |
 | `mirror_quote_ready_tokens` | ≥ 1 | **0** |
-| `same_pair_mirror_tokens` | — | **11** |
-| `v4_event_index_coverage_rate` | — | **1.5236** (resolved/attempts; index lane) |
-| `verified_second_pool_count` | ≥ 10 | **13** |
-| `multi_venue_tokens` | ≥ 14 | **22** |
+| `same_pair_mirror_tokens` | — | **2** |
+| `verified_second_pool_count` | ≥ 10 | **2** |
+| `multi_venue_tokens` | ≥ 14 | **11** |
 | `connector_routes_count` | > 0 | **67** |
-| `active_factory_second_pool_count` | — | **9** |
 | Freshness order | sniper ≤ hints ≤ expansion | **PASS** |
 
 `m8_2_scan_coverage_report` blockers: **[]** (canonical coverage PROVEN).  
-`m8_2_acceptance_report` blockers: **`SUBGRAPH_READY_LOW`** (3+/4-leg subgraph) + **`MIRROR_READY_LOW`** (2-leg quote lane; topology **11** tokens but **0** quote-ready). Coverage gates PASS.
+`m8_2_acceptance_report` blockers: **`MIRROR_READY_LOW`**, **`SUBGRAPH_READY_LOW`**, **`MULTI_VENUE_TOKENS_LOW`**, **`VERIFIED_SECOND_POOL_LOW`**.
 
-**Mirror vs subgraph (honest):** `subgraph_ready` intentionally excludes anchor same-pair mirrors (T/WETH, T/USDC). Separate `mirror_topology_ready` now surfaces **11** same-pair multi-DEX tokens; `mirror_quote_ready=0` because routes carry `not_run` / `skipped_registry` quote status. Batch specialized lanes emit `SPECIALIZED_INDEX_ONLY` / `V4_EVENT_INDEX_ONLY` instead of opaque `ADAPTER_RESOLVE_PENDING`.
+**Mirror lane (honest):** topology found on **2** tokens (`bNODE`, `TRITRI`) with same-pair routes on distinct DEXes, but each has only **1** quoteable leg (`SAME_PAIR_QUOTES_LT_2`). Second legs fail on-chain (`QUOTE_FAIL_ZERO_OUT` / `QUOTE_FAIL_REVERT`), not metadata gaps. `mirror_tokens` list is now explicit in expansion + acceptance top-level.
 
-## Scan performance (fresh evidence)
+## Mirror topology tokens (quote smoke 2026-06-14)
 
-| Mode | Runtime (701 tokens) | Notes |
-|------|---------------------:|-------|
-| Serial `audit_full` (prior) | ~31m | 13 DEX, no candidate matrix |
-| `candidate_summary` + Multicall batch | **~18m** | 17 DEX, full matrices, neg-cache |
+| Token | DEX A | DEX B | Quoteable legs | Blocker |
+|-------|-------|-------|----------------|---------|
+| **bNODE** `0xf32e…d661` | aerodrome `QUOTE_OK_MIRROR_SMOKE` | uniswap_v3 `QUOTE_FAIL_ZERO_OUT` | 1/2 | `SAME_PAIR_QUOTES_LT_2` |
+| **TRITRI** `0x0b09…bf18` | uniswap_v3 `QUOTE_OK_MIRROR_SMOKE` | uniswap_v4 `QUOTE_FAIL_REVERT` | 1/2 | `SAME_PAIR_QUOTES_LT_2` |
 
-`M8_2_SCAN_PERFORMANCE_OPTIMIZED`: **REACHED** for `candidate_summary` mode (Multicall3 factory batch + candidate dedup + progress artifact). `audit_full` retained for regression.
-
-Progress artifact: `data/tmp/m8_cross_dex_expand_progress.json`  
-CLI: `--scan-mode candidate_summary` (default), `--scan-mode audit_full`, `--scan-mode hot_path_incremental`
+Failure breakdown (second legs): zero quoter output / zero on-chain liquidity (V3), V4 quoter revert + StateView liquidity=0 (V4). Not `QUOTE_CONFIG_MISSING` or `STALE_HINT` for these pools.
 
 ## Last Expansion Artifact
 
 `artifact_path`: data/runs/_rolling/m8_cross_dex_expansion_latest.json  
-`generated_at_utc`: 2026-06-11T22:19:31Z  
-`scan_mode`: candidate_summary  
-`routes_admitted_count`: 1033  
-`m8_tokens_in`: 701  
-`hint_tokens_matched`: 782  
+`generated_at_utc`: 2026-06-14T20:28:00Z  
+`routes_admitted_count`: 471  
+`m8_tokens_in`: 203  
+`hint_tokens_matched`: 220  
 `external_hints_enabled`: true  
-`hints_generated_at_utc`: 2026-06-11T20:27:09Z (fresh hint refresh)  
-`candidate_dexes_seen`: 9  
-`candidate_dexes_configured`: 4  
-`unsupported_candidate_dexes`: alien_base_v3, quickswap_v2, hydrex, pancake_infinity, balancer_v3  
-`batch_resolver_stats`: multicall_chunks=696, calls=65535, pools_found=18
+`hints_generated_at_utc`: 2026-06-14T20:10:18Z  
 
-## Provenance split (expansion routes)
+## M8 upstream (not blocker)
 
-| Origin | Count |
-|--------|------:|
-| `m8_watchlist_hint` | 782 |
-| `exploration` | 251 |
-| `canonical_routes_count` | 782 |
-| `routes_rejected_not_m8_derived` | 251 |
-
-## Hint quality (fresh hint refresh)
-
-| Status | Count (approx) |
-|--------|---------------:|
-| `HINT_STALE` | 866 |
-| Verified eligible | 165 |
-| `truth_status` | STALE_HINT_RISK |
-
-Radar stubs (`coinmarketcap_dex`, `dexpaprika`, `moralis`, `codex_defined`): **NOT_CONFIGURED** in report (`radar_provider_status`).
+M8 sniper acceptance **REACHED** (`2026-06-14T19:38:05Z`): `m8_health.goal_status=REACHED`, `ws+http_fallback`, `rpc_errors=0/108`. Blocker is M8.2 mirror **quote** quality, not M8 listener health.
 
 ## M8.2 Blockers (not M9)
 
-- `SUBGRAPH_READY_LOW` (**active**)
-- ~~`VERIFIED_SECOND_POOL_LOW`~~ (cleared: 13 ≥ 10)
-- ~~`MULTI_VENUE_TOKENS_LOW`~~ (cleared: 22 ≥ 14)
-- ~~`CANDIDATE_DEX_COVERAGE_INCOMPLETE`~~ (cleared)
+- `MIRROR_READY_LOW` (**active** — topology 2, quote-ready 0)
+- `SUBGRAPH_READY_LOW` (**active** — 0 tokens)
+- `MULTI_VENUE_TOKENS_LOW` (**active** — 11 < 14)
+- `VERIFIED_SECOND_POOL_LOW` (**active** — 2 < 10)
 
-## M8.2 Quality Improvements (code)
+## M8.2 Quality Improvements (code, this session)
 
-- **Scan modes**: `audit_full`, `candidate_summary` (default), `hot_path_incremental`
-- **Multicall3 factory batch** (`m8/discovery/scan_batch.py`) for V2/V3/Algebra/iZiSwap/ve33 reads
-- **Candidate dedup**: `covered_by_canonical_scan` — no double RPC for P0 DEX already in canonical `dex_rows`
-- **Negative-result cache** with TTL across tokens in one expansion run
-- **Progress artifact** for foreground operator visibility
-- **Candidate coverage audit v2**: rate ≥ 0.98 + unsupported `UNSUPPORTED_*` matrix + anchor histograms
-
-## Coverage Expansion Plan
-
-Purpose: increase the chance of detecting `1->2` venue transitions for M8-sniped
-tokens without weakening M8-rooted provenance or on-chain truth gates.
-
-| Priority | Target | Role | Admission rule |
-|----------|--------|------|----------------|
-| P0 | Alien Base V2 / Area51 / V3, QuickSwap V2 / Algebra, iZiSwap Base | Candidate configured DEX coverage | Config + matrix + on-chain verify; V3/V2 hint-only until factory proof |
-| P1 | Hydrex, Pancake Infinity, Balancer V3 | Distinct-pricing / emerging venue research | Hint/R&D; matrix `UNSUPPORTED_*` only |
-| Radar | DexScreener, GeckoTerminal, CMC, DexPaprika, Moralis, Codex | Non-RPC mirror discovery | Hint-only; stubs NOT_CONFIGURED until API wiring |
-
-Required report fields (present in fresh acceptance report):
-
-- `candidate_dexes_seen`, `candidate_dexes_configured`, `unsupported_candidate_dexes`
-- `mirror_source_yield_by_provider`, `api_hint_to_onchain_verified_rate`, `stale_hint_rate`
-- `truth_status`, `candidate_scan_attempted_by_anchor`
+- `resolve_route_token_addrs()` — backfill `token0_addr`/`token1_addr`, WETH native alias
+- `build_mirror_token_details()` — per-token `dex_a`/`dex_b`/`pool_a`/`pool_b`/`quote_status` in acceptance
+- V3 multi-fee-tier smoke + on-chain liquidity fallback; V4 quoter + StateView liquidity fallback
+- `m8_mirror_quote_smoke.py --force-retry` (scoped retry on failed legs only; avoid full-route blast)
+- Acceptance report top-level `mirror_tokens` + metrics
 
 ## Out of Scope for M8.2
 
 - `cycles_quoteable`, `qsr_econ`, `cycles_positive_gross` — evaluated only in `m9_lane_acceptance_report.py`
-- Bridge `graph_ready_from_expansion` proves handoff volume, not M8.2 quality REACHED
-- M9 shadow/economics: **NOT_EVALUATED** until `m8_2_acceptance_report --strict` PASS (blocked on subgraph)
+- M9 shadow/economics: **NOT_EVALUATED** until `mirror_quote_ready_tokens > 0` and `handoff_ready=true`
 
 ## Canonical Docs
 
 - `Roadmap.md`
 - `scripts/m8_2_acceptance_report.py`
+- `scripts/m8_mirror_quote_smoke.py`
 - `data/runs/_rolling/m8_cross_dex_expansion_latest.json`
 - `data/runs/_rolling/m8_external_pool_hints_latest.json`

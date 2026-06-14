@@ -22,6 +22,8 @@ _DEFAULT_SCAN_ROOTS = (
     "discovery",
     "dex",
     "m8",
+    "m8_1",
+    "m8_2",
     "m9",
     "scripts",
     "strategy",

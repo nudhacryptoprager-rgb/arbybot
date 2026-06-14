@@ -13,6 +13,7 @@ scan_exempt_paths:
   - discovery/index_factories.py
   - monitoring/sniper_honeypot.py
   - strategy/sniper_entry_decision.py
+  - scripts/archive/
   - m9/graph_arb/core_tokens_loader.py
   - m9/graph_arb/token_decimals.py
   - m9/graph_arb/token_price_fetcher.py
@@ -31,6 +32,10 @@ ALLOWED_PROTOCOL_CONSTANT:
   - path: monitoring/sniper_honeypot.py
     address: "0x000000000000000000000000000000000000dead"
     note: "Burn sentinel for honeypot FAIL"
+  - path: m8_1/stable_anchor/config_loader.py
+    note: "Zero-address sentinels for optional factory/quoter/router config defaults"
+  - path: m8_1/stable_anchor/pool_discovery.py
+    note: "Zero-address quoter placeholder in DexRoute primitive"
 
 CONFIG_REQUIRED:
   - path: m8/discovery/hint_verifier.py
@@ -89,9 +94,6 @@ CONFIG_REQUIRED:
     note: "route ingestion; addresses from artifacts"
   - path: m9/graph_arb/distinct_depth_probe.py
     migrate_to: config/adapter_metadata.yaml
-  - path: scripts/build_arb_m9_seed_inventory.py
-    migrate_to: config/
-    action: archive_candidate
   - path: scripts/check_maverick_factory.py
     action: archive
   - path: scripts/check_rpc_endpoints.py
@@ -104,8 +106,6 @@ CONFIG_REQUIRED:
     migrate_to: config/dexes.yaml
   - path: scripts/m9_curve_discovery.py
     migrate_to: config/dexes.yaml
-  - path: scripts/rpc_provider_ab_test.py
-    migrate_to: config/core_tokens.yaml
   - path: scripts/verify_anchors.py
     action: archive
   - path: scripts/verify_flashblocks.py
@@ -133,4 +133,20 @@ DELETE_OR_ARCHIVE:
   - path: scripts/probe_maverick_events2.py
     action: archived
   - path: scripts/probe_maverick_factory.py
+    action: archived
+  - path: scripts/build_arb_m9_seed_inventory.py
+    action: archived
+  - path: scripts/rpc_provider_ab_test.py
+    action: archived
+  - path: scripts/check_m8_routes.py
+    action: archived
+  - path: scripts/check_curve_depth.py
+    action: archived
+  - path: scripts/test_curve_live.py
+    action: archived
+  - path: scripts/m8_candidate_dex_smoke.py
+    action: archived
+  - path: m9/graph_arb/verify_token.py
+    action: archived
+  - path: m8_1/stable_anchor/active_routes.py
     action: archived
