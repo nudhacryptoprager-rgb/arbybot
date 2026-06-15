@@ -132,6 +132,30 @@ def _maverick_probe_fields_for_token_in(
             else row.get("token_a_in"),
             tin,
         )
+    # Pool-lane smoke often verifies only one token_in; mirror sibling probe for reverse hop.
+    if isinstance(by_tin, dict) and by_tin and tin not in by_tin:
+        for other_tin, row in by_tin.items():
+            other_tin = str(other_tin or "").lower()
+            if not other_tin or other_tin == tin:
+                continue
+            if not isinstance(row, dict):
+                continue
+            amt = row.get("maverick_pool_lane_probe_amount") or row.get("probe_amount")
+            if amt is None:
+                continue
+            sibling_tai = row.get("maverick_token_a_in_probe")
+            if sibling_tai is None:
+                sibling_tai = row.get("token_a_in")
+            flipped_tai = (not bool(sibling_tai)) if sibling_tai is not None else None
+            return (
+                int(amt),
+                int(row.get("maverick_min_quoteable_amount_raw") or amt),
+                int(row["maverick_max_quoteable_amount_raw"])
+                if row.get("maverick_max_quoteable_amount_raw") is not None
+                else None,
+                flipped_tai,
+                tin,
+            )
     probe_amt = entry.get("maverick_pool_lane_probe_amount")
     probe_tin = str(entry.get("maverick_pool_lane_token_in") or "").lower() or None
     if probe_amt is not None and (not probe_tin or probe_tin == tin):
@@ -218,7 +242,10 @@ def _resolve_decimals(
     )
 
 
-def _entry_symbol_address_map(entry: dict) -> Dict[str, str]:
+def _entry_symbol_address_map(
+    entry: dict,
+    route_index: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """Map pair_id symbols (incl. truncated hex) to validated route addresses."""
     from m9.graph_arb.core_tokens_loader import resolve_truncated_address
 
@@ -229,7 +256,10 @@ def _entry_symbol_address_map(entry: dict) -> Dict[str, str]:
         if not _is_valid_eth_address(addr) and _is_valid_eth_address(sym):
             addr = sym
         if not _is_valid_eth_address(addr):
-            resolved = resolve_truncated_address(sym) or resolve_truncated_address(str(addr))
+            resolved = (
+                resolve_truncated_address(sym, route_index=route_index)
+                or resolve_truncated_address(str(addr), route_index=route_index)
+            )
             if resolved:
                 addr = resolved
                 entry[addr_key] = resolved
@@ -254,6 +284,9 @@ def _resolve_route_token(
     decimals_cache: Optional[Dict[str, int]] = None,
     *,
     topology_probe: bool = False,
+    w3: Optional[Any] = None,
+    persist_decimals_cache: bool = True,
+    route_index: Optional[Dict[str, str]] = None,
 ) -> "tuple[Optional[TokenInfo], Optional[str]]":
     """Resolve a route leg: inventory addr fields beat polluted token_map keys."""
     from m9.graph_arb.token_decimals import (
@@ -264,7 +297,7 @@ def _resolve_route_token(
 
     if not sym:
         return None, None
-    sym_map = _entry_symbol_address_map(entry)
+    sym_map = _entry_symbol_address_map(entry, route_index=route_index)
     addr = sym_map.get(sym) or sym_map.get(sym.lower())
     if not _is_valid_eth_address(addr):
         leg = "token0" if dec_key == "token0_decimals" else "token1"
@@ -279,8 +312,8 @@ def _resolve_route_token(
             override=entry.get(dec_key),
             symbol=sym,
             cache=decimals_cache,
-            w3=None,
-            persist_cache=False,
+            w3=w3,
+            persist_cache=persist_decimals_cache,
             route=entry,
             dec_key=dec_key,
             topology_probe=topology_probe,
@@ -376,6 +409,8 @@ def build_graph_from_inventory(
     lane: str = "discovery",
     token_prices_usd: Optional["Dict[str, float]"] = None,
     diagnostic_admission_mode: Optional[str] = None,
+    w3: Optional[Any] = None,
+    persist_decimals_cache: bool = True,
 ) -> "Dict[str, Dict[str, List[GraphEdge]]]":
     """Build a directed adjacency dict from inventory active_routes.
 
@@ -435,9 +470,14 @@ def build_graph_from_inventory(
         )
         return {}
 
+    from m9.graph_arb.core_tokens_loader import build_route_address_prefix_index
     from m9.graph_arb.token_decimals import load_decimals_cache
 
     _decimals_cache = load_decimals_cache()
+    _route_prefix_index = build_route_address_prefix_index(
+        active_routes,
+        chain=str(inventory.get("chain") or "base"),
+    )
 
     # Build token lookup: symbol → TokenInfo (config), then M8 route addresses.
     token_map: Dict[str, TokenInfo] = {}
@@ -764,10 +804,16 @@ def build_graph_from_inventory(
         t0, t0_dec_status = _resolve_route_token(
             sym0, entry, token_map, cfg, "token0_decimals", _decimals_cache,
             topology_probe=_topology_probe,
+            w3=w3,
+            persist_decimals_cache=persist_decimals_cache,
+            route_index=_route_prefix_index,
         )
         t1, t1_dec_status = _resolve_route_token(
             sym1, entry, token_map, cfg, "token1_decimals", _decimals_cache,
             topology_probe=_topology_probe,
+            w3=w3,
+            persist_decimals_cache=persist_decimals_cache,
+            route_index=_route_prefix_index,
         )
         _edge_decimals_status: Optional[str] = None
         if t0_dec_status or t1_dec_status:
@@ -786,8 +832,8 @@ def build_graph_from_inventory(
 
                 _skip_extra = decimals_skip_extra(entry)
                 if t0 is None or t1 is None:
-                    _addr0 = _entry_symbol_address_map(entry).get(sym0, "")
-                    _addr1 = _entry_symbol_address_map(entry).get(sym1, "")
+                    _addr0 = _entry_symbol_address_map(entry, route_index=_route_prefix_index).get(sym0, "")
+                    _addr1 = _entry_symbol_address_map(entry, route_index=_route_prefix_index).get(sym1, "")
                     if (
                         not _topology_probe
                         and (
@@ -1208,6 +1254,16 @@ def build_graph_from_inventory(
             }
         },
     )
+    if w3 is not None and persist_decimals_cache and _decimals_cache:
+        try:
+            from m9.graph_arb.token_decimals import load_decimals_cache, save_decimals_cache
+
+            disk = load_decimals_cache()
+            merged = {**disk, **_decimals_cache}
+            if merged != disk:
+                save_decimals_cache(merged)
+        except Exception:
+            pass
     return dict(adjacency)
 
 

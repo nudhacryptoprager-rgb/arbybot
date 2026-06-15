@@ -2,15 +2,21 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_2_GRAPH_HANDOFF_REACHED / M9_QUOTE_VALIDATION_BLOCKED**
+**Current runtime line:** **M8_2_GRAPH_HANDOFF_REACHED / M9_QUOTE_LIVENESS_PROVEN / M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_RCA**
 
 ```text
-M9_QUOTE_VALIDATION_IN_PROGRESS:
-  topology: cycles_found=96 (ARBY_M9_CYCLE_LENGTHS=2,3,4)
-  quote: cycles_quoteable=0 (economics NOT_PROVEN)
-  bridge_cycles_3_4: discovery 3=60 / 4=48 (see topology diagnostic)
-  expansion_vs_bridge: full 471 routes retain 3/4 cycles; selection preserves closure
-  next_owner: quote/depth RCA (not M8.2 rollback)
+M9_QUOTE_LIVENESS_PROVEN / M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_RCA:
+  duration_fulfilled=true
+  runner_outcome=COMPLETED
+  cycles_found=1776
+  cycles_quoteable=1776
+  qsr=1.0
+  qsr_econ=0.0
+  sizes_usd=[25,100,250,500]
+  cycles_positive_gross=0
+  economics_status=NOT_PROVEN
+  next_owner=leg amount continuity + Curve/Maverick value-ratio RCA
+  next_evidence=data/tmp/m9_graph_handoff_quote_validation_10m.json
 ```
 
 | Layer | Status | Source |
@@ -18,11 +24,12 @@ M9_QUOTE_VALIDATION_IN_PROGRESS:
 | M8 / M8.1 upstream | **REACHED** | [Status_M8.md](Status_M8.md), [Status_M8_1.md](Status_M8_1.md) |
 | M8.2 handoff | **REACHED** (`graph_topology`) | [Status_M8_2.md](Status_M8_2.md) |
 | M8.2 2-leg mirror quote | **BLOCKED** (`mirror_quote_ready=0`) | M8.2 only |
-| M9 economics | **NOT_EVALUATED_AFTER_GRAPH_HANDOFF** | this file |
+| M9 economics | **NOT_PROVEN** (`cycles_positive_gross=0`) | this file |
 
 ```text
 M8_2_UPSTREAM_READY: true
-M9_ECONOMICS_STATUS: NOT_EVALUATED_AFTER_GRAPH_HANDOFF
+M9_ECONOMICS_STATUS: NOT_PROVEN
+M9_QUOTE_LIVENESS: PROVEN (qsr=1.0, cycles_quoteable=1776)
 ```
 
 ## Graph-handoff topology RCA

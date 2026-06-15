@@ -114,6 +114,22 @@ def filter_revert_pools_with_ttl(
     return all_pools, set(), False
 
 
+def _pools_from_phantom_data(data: Dict[str, Any]) -> Dict[str, str]:
+    """Map pool_address → quarantine reason for phantom feedback."""
+    out: Dict[str, str] = {}
+    for row in data.get("pools") or []:
+        pool = str(row.get("pool_address") or "").strip().lower()
+        if not pool:
+            continue
+        reason = str(
+            row.get("quarantine_reason")
+            or row.get("reject_reason")
+            or "PHANTOM_QUOTE_BPS_OVERFLOW"
+        )
+        out[pool] = reason
+    return out
+
+
 def filter_phantom_pools_with_ttl(
     data: Dict[str, Any],
     *,
@@ -126,15 +142,17 @@ def filter_phantom_pools_with_ttl(
         if ttl_hours is not None
         else float(os.environ.get("ARBY_M9_QUARANTINE_TTL_HOURS", _DEFAULT_REVERT_PHANTOM_TTL_HOURS))
     )
-    pools = {p.lower() for p in resolve_phantom_quarantine_addresses(data)}
+    pool_reasons = _pools_from_phantom_data(data)
+    pools = set(pool_reasons)
     if not pools:
         return set(), set(), False
     age_h = _parse_iso_age_hours(data.get("updated_at_utc"))
     if age_h is None and file_path is not None:
         age_h = _file_age_hours(file_path)
     ttl_expired = age_h is not None and age_h > ttl
+    permanent = _permanent_pool_set(pool_reasons)
     if ttl_expired:
-        return set(), pools, True
+        return permanent, pools - permanent, True
     return pools, set(), False
 
 
@@ -142,6 +160,7 @@ def resolve_diagnostic_quarantine_pools_fresh(
     diag: Dict[str, Any],
     *,
     max_age_hours: Optional[float] = None,
+    file_path: Optional[Path] = None,
 ) -> tuple[Set[str], bool]:
     """Diagnostic pools to exclude; second value True when artifact is stale."""
     max_age = (
@@ -156,6 +175,8 @@ def resolve_diagnostic_quarantine_pools_fresh(
     )
     ts = diag.get("run_timestamp") or diag.get("generated_at_utc") or diag.get("updated_at_utc")
     age_h = _parse_iso_age_hours(ts)
+    if age_h is None and file_path is not None:
+        age_h = _file_age_hours(file_path)
     if age_h is not None and age_h > max_age:
         return set(), True
     return resolve_diagnostic_quarantine_pools(diag), False
@@ -212,6 +233,10 @@ def build_quarantine_plan(
         if mode == "diagnostic_soft":
             hard |= rev_permanent
             soft |= rev_all - rev_permanent
+        elif rev_ttl:
+            hard |= rev_hard
+            if rev_soft:
+                breakdown["revert"]["softened_by_ttl"] = len(rev_soft)
         else:
             hard |= rev_all
 
@@ -221,18 +246,27 @@ def build_quarantine_plan(
             phantom_data, file_path=ph_path
         )
         ph_all = ph_hard | ph_soft
+        ph_permanent = _permanent_pool_set(_pools_from_phantom_data(phantom_data))
         breakdown["phantom"] = {
             "count": len(ph_all),
+            "permanent": len(ph_permanent),
             "ttl_expired": ph_ttl,
             "samples": _sample_pools(ph_all),
         }
         if mode == "diagnostic_soft":
             soft |= ph_all
+        elif ph_ttl:
+            hard |= ph_hard
+            if ph_soft:
+                breakdown["phantom"]["softened_by_ttl"] = len(ph_soft)
         else:
             hard |= ph_all
 
+    diag_path = Path(diagnostic_path) if diagnostic_path else None
     if diagnostic_data:
-        diag_pools, diag_stale = resolve_diagnostic_quarantine_pools_fresh(diagnostic_data)
+        diag_pools, diag_stale = resolve_diagnostic_quarantine_pools_fresh(
+            diagnostic_data, file_path=diag_path
+        )
         breakdown["diagnostic"] = {
             "count": len(diag_pools),
             "stale": diag_stale,

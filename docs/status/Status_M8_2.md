@@ -1,6 +1,6 @@
 # Status: M8.2 Cross-DEX Expansion & Graph Handoff
 
-**Status**: **M8_2_GRAPH_HANDOFF_REACHED / MIRROR_2LEG_QUOTE_BLOCKED**
+**Status**: **M8_2_GRAPH_HANDOFF_REACHED / M8_2_ECONOMICS_OUT_OF_SCOPE**
 
 `goal_status`: **REACHED** (handoff lane; quality blockers soft when `handoff_ready=true`)  
 `handoff_ready`: **true**  

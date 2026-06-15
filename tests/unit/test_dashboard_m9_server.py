@@ -188,7 +188,45 @@ class TestBuildM9CurrentPayload:
         from monitoring.dashboard_server import build_m9_current_payload
         payload = build_m9_current_payload(artifact={}, now_utc=_now())
         assert payload["schema_family"] == "m9_dashboard"
-        assert payload["schema_revision"] == "m9_dashboard.3"
+        assert payload["schema_revision"] == "m9_dashboard.5"
+
+    def test_operator_control_plane_present(self):
+        from monitoring.dashboard_server import build_m9_current_payload, build_m9_operator_control_plane
+
+        a = _minimal_m9_artifact(
+            cycles_quoteable=851,
+            cycles_positive_gross=0,
+            qsr_liveness=0.0,
+            qsr_econ=0.0,
+            cycles_quoteable_by_length={"2": 10, "3": 9, "4": 0},
+            scan_scope={
+                "cycles_before_quarantine": 124,
+                "cycles_after_quarantine": 34,
+                "quarantine_exclusion_breakdown": {"hard_exclude_total": 9},
+            },
+        )
+        acceptance = {
+            "operator_verdict": {
+                "verdict_labels": ["M8_2_GRAPH_HANDOFF_REACHED", "M9_QUOTE_LIVENESS_PARTIAL"],
+                "economics_claim_allowed": False,
+                "forbidden_claims": ["positive_gross"],
+            },
+            "quote_liveness_metrics": {"quote_liveness_status": "PARTIAL"},
+        }
+        payload = build_m9_current_payload(
+            artifact=a,
+            acceptance_report=acceptance,
+            now_utc=_now(),
+            file_age_s=30,
+        )
+        ocp = payload["operator_control_plane"]
+        assert ocp["do_not_claim"]["active"] is True
+        assert "2" in ocp["cycle_length_health"]
+        assert ocp["quarantine_impact"]["cycles_before"] == 124
+
+        ocp2 = build_m9_operator_control_plane(artifact=a, acceptance_report=acceptance)
+        assert ocp2["do_not_claim"]["active"] is True
+        assert "QUOTEABLE_NOT_ECONOMIC" in ocp2.get("operator_warnings", [])
 
     def test_stale_verdict_when_artifact_old(self):
         """Stale artifact must expose STALE live verdict, not PASS."""

@@ -16,7 +16,7 @@
 | M7 - Triangular Feasibility (M7.A) | [IN PROGRESS] | [Status_M7.md](Status_M7.md) |
 | M8 - New-Pool Sniping Pivot | [OPEN] | [Status_M8.md](Status_M8.md) |
 | M8.1 - Stable-Anchor Inventory & Diagnostics | [ACTIVE] | [Status_M8_1.md](Status_M8_1.md) |
-| M8.2 - Cross-DEX Expansion & Mirror Handoff | [QUALITY_BLOCKED] | [Status_M8_2.md](Status_M8_2.md) |
+| M8.2 - Cross-DEX Expansion & Mirror Handoff | [HANDOFF_REACHED] | [Status_M8_2.md](Status_M8_2.md) |
 | M9 - Graph-Arb Long-Tail Shadow Scanner | [IN PROGRESS] | [Status_M9.md](Status_M9.md) |
 
 ## Current Focus
@@ -29,9 +29,9 @@
 
 **M8.1 - Stable-Anchor Inventory & Diagnostics**: inventory layer for stable/near-peg pairs; feeds M9 graph builder. `gate_acceptance=true`, `strategy_gate_acceptance=false` (NO_STABLE_EDGE). See [Status_M8_1.md](Status_M8_1.md).
 
-**M8.2 - Cross-DEX Expansion & Mirror Handoff**: second-venue discovery, external hints, connector synthesis. Quality gates in `m8_2_acceptance_report.py`; independent of M9 economics. See [Status_M8_2.md](Status_M8_2.md).
+**M8.2 - Cross-DEX Expansion & Mirror Handoff**: graph-handoff **REACHED** (`handoff_ready=true`); mirror quote / economics remain out of scope for M8.2. Quality gates in `m8_2_acceptance_report.py`. See [Status_M8_2.md](Status_M8_2.md).
 
-**M9 - Graph-Arb Long-Tail Shadow Scanner**: smoke10 complete (6522 sweeps, 300s, duration_fulfilled=true). `QUOTE_DECODE blocker FIXED` — root cause was missing `config/exotic_base_anchor.yaml` → cfg=None → zero-address quoter → all eth_call returned `0x`. After config created: QUOTE_DECODE=0. Current blocker: `mainnet.base.org` HTTP 429 rate-limiting → circuit breaker → QUOTE_RPC_ERROR. New blocker class: PROVIDER_QUALITY_BLOCKED (need premium RPC endpoint). Topology: CYCLES_FOUND, 102 edges, 8 tokens, 4 DEXes. `qsr=0.0` (RPC endpoint blocks all quotes). Next step: soak on dRPC/Alchemy endpoint. See [Status_M9.md](Status_M9.md).
+**M9 - Graph-Arb Long-Tail Shadow Scanner**: canonical 10m graph-handoff shadow (`duration_fulfilled=true`). Quote liveness **PARTIAL**: `cycles_quoteable=851`, `qsr=0.916`, `2=10/3=9/4=0` quoteable by length. Economics **NOT_PROVEN** (`cycles_positive_gross=0`). Blockers: phantom quarantine, `decimals_unknown`, Balancer `BALANCER_UNKNOWN_REVERT`. Operator dashboard: `py -3.11 -m monitoring.dashboard_server --port 8099`. See [Status_M9.md](Status_M9.md).
 
 ## Related
 

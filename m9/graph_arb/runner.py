@@ -989,6 +989,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _cycles_before_quarantine: Optional[int] = None
     _cycles_after_quarantine: Optional[int] = None
     _discovery_cycles_found: "Optional[int]" = None
+    _discovery_cycles_by_length: "Optional[Dict[str, int]]" = None
     _depth_hard_pools: "frozenset[str]" = frozenset()
     _diag_admission_mode: Optional[str] = None
     if _lane == "productive":
@@ -1087,6 +1088,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _discovery_cycles_found = int(
                     _disc_cycle_stats.get("cycles_found_topology_total") or 0
                 )
+                _discovery_cycles_by_length = {
+                    str(k): int(v)
+                    for k, v in (_disc_cycle_stats.get("cycles_by_length") or {}).items()
+                }
                 log.info(
                     "Discovery topology reference: %d cycles before productive filters "
                     "(by_length=%s)",
@@ -1097,6 +1102,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             log.debug("Discovery topology reference skipped: %s", _disc_topo_exc)
 
     _truth_prices: Optional[Dict[str, float]] = None
+    _truth_w3: Optional[Any] = None
     try:
         from m9.graph_arb.inventory_truth import enrich_inventory_for_quote_truth
         from m9.graph_arb.route_quarantine import merge_paused_pools_from_lane_rca
@@ -1146,6 +1152,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 lane=_lane,
                 token_prices_usd=_truth_prices,
                 diagnostic_admission_mode=_diag_admission_mode,
+                w3=_truth_w3,
             )
             if _pre_adj:
                 _cycles_before_quarantine = len(
@@ -1169,6 +1176,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             lane=_lane,
             token_prices_usd=_truth_prices if _lane == "productive" else None,
             diagnostic_admission_mode=_diag_admission_mode,
+            w3=_truth_w3 if _lane == "productive" else None,
         )
     except Exception as exc:
         log.error("Failed to build graph: %s", exc)
@@ -1240,6 +1248,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
+            cycle_lengths_used=_cycle_lengths,
+            discovery_cycles_by_length=_discovery_cycles_by_length,
             depth_quarantine_skipped=_depth_quarantine_skipped,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             phantom_quarantine_skipped=_phantom_quarantine_skipped,
@@ -1432,6 +1442,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
+            cycle_lengths_used=_cycle_lengths,
+            discovery_cycles_by_length=_discovery_cycles_by_length,
             depth_quarantine_skipped=_depth_quarantine_skipped,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             phantom_quarantine_skipped=_phantom_quarantine_skipped,
@@ -1483,6 +1495,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
+            cycle_lengths_used=_cycle_lengths,
+            discovery_cycles_by_length=_discovery_cycles_by_length,
             depth_quarantine_skipped=_depth_quarantine_skipped,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             phantom_quarantine_skipped=_phantom_quarantine_skipped,
@@ -1878,6 +1892,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
             pool_quality_lane=_lane,
             discovery_cycles_found=_discovery_cycles_found,
+            cycle_lengths_used=_cycle_lengths,
+            discovery_cycles_by_length=_discovery_cycles_by_length,
             depth_quarantine_skipped=_depth_quarantine_skipped,
             revert_quarantine_skipped=_revert_quarantine_skipped,
             phantom_quarantine_skipped=_phantom_quarantine_skipped,
@@ -2095,6 +2111,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         dynamic_sizes_intent=getattr(args, "dynamic_sizes", False),
         pool_quality_lane=_lane,
         discovery_cycles_found=_discovery_cycles_found,
+        cycle_lengths_used=_cycle_lengths,
+        discovery_cycles_by_length=_discovery_cycles_by_length,
         depth_quarantine_skipped=_depth_quarantine_skipped,
         revert_quarantine_skipped=_revert_quarantine_skipped,
         phantom_quarantine_skipped=_phantom_quarantine_skipped,

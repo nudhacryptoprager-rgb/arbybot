@@ -1025,3 +1025,56 @@ class TestTopOpportunityRejectFields:
         assert opp["status"] == "CYCLE_QUOTE_FAILED"
         assert opp["reject_reason"] == "QUOTE_REVERT"
 
+
+class TestCycleLengthTelemetry:
+    """Artifact must expose cycle_lengths_used and per-length found/quoteable counts."""
+
+    def test_cycle_length_fields_from_results(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        c3 = _make_mock_cycle()
+        c3.cycle_id = "cycle_len3"
+        c2 = _make_mock_cycle()
+        c2.cycle_id = "cycle_len2"
+        c2.edges = c2.edges[:2]
+
+        qr_ok = CycleQuoteResult(
+            cycle=c3,
+            size_usd=100.0,
+            amount_in=100,
+            amount_out=99,
+            gross_bps=-10.0,
+            status="NEGATIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        qr_fail = CycleQuoteResult(
+            cycle=c2,
+            size_usd=100.0,
+            amount_in=100,
+            amount_out=0,
+            gross_bps=0.0,
+            status="CYCLE_QUOTE_FAILED",
+            reject_reason="QUOTE_REVERT",
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=10.0,
+            cycle_results=[qr_ok, qr_fail],
+            topology=_make_topology(),
+            sizes_usd=(100.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=600.0,
+            cycle_lengths_used=(2, 3, 4),
+            discovery_cycles_by_length={"2": 12, "3": 60, "4": 48},
+        )
+        assert a["cycle_lengths_used"] == [2, 3, 4]
+        assert a["cycles_found_by_length"] == {"2": 1, "3": 1}
+        assert a["cycles_quoteable_by_length"] == {"3": 1}
+        assert a["discovery_cycles_by_length"] == {"2": 12, "3": 60, "4": 48}
+

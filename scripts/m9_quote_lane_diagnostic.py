@@ -17,6 +17,25 @@ _DEFAULT_SHADOW = REPO_ROOT / "data/tmp/m9_graph_bridge_shadow_latest.json"
 _DEFAULT_OUT = REPO_ROOT / "data/tmp/m9_quote_lane_rca_latest.json"
 
 
+def _canonical_dex_id(dex_id: str, route_id: str = "") -> str:
+    """Normalize dex labels for RCA histograms."""
+    d = str(dex_id or "").strip().lower()
+    rid = str(route_id or "").lower()
+    if d in ("balancer", "balancer_vault") or "balancer" in rid:
+        return "balancer_vault"
+    if d in ("maverick", "maverick_v2") or "maverick" in rid:
+        return "maverick_v2"
+    if d in ("curve", "curve_stable") or rid.startswith("curve"):
+        return "curve_stable"
+    if d == "uniswap_v4" or "uniswap_v4" in rid:
+        return "uniswap_v4"
+    if d in ("uniswap_v3", "v3") or "uniswap_v3" in rid:
+        return "uniswap_v3"
+    if d == "aerodrome" or "aerodrome" in rid:
+        return "aerodrome"
+    return d or "unknown"
+
+
 def _adapter_family(route_id: str, edge: Dict[str, Any]) -> str:
     rid = str(route_id or edge.get("route_id") or "")
     dex = str(edge.get("dex_id") or "")
@@ -40,6 +59,227 @@ def _cycle_length_from_id(cycle_id: str) -> int:
     if len(parts) >= 2 and parts[1].isdigit():
         return int(parts[1])
     return 0
+
+
+def _cycle_length_from_id(cycle_id: str) -> int:
+    parts = str(cycle_id or "").split(":")
+    if len(parts) >= 2 and parts[1].isdigit():
+        return int(parts[1])
+    return 0
+
+
+_STABLE_PEG_SYMBOLS = frozenset(
+    {"USDC", "USDT", "DAI", "USDbC", "EURC", "crvUSD", "USDBC", "FRAX", "LUSD"}
+)
+
+
+def _is_stable_peg_symbol(sym: str) -> bool:
+    return (sym or "").strip().upper() in _STABLE_PEG_SYMBOLS
+
+
+def _enrich_leg_rows_from_artifact(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Flatten legs and backfill continuity / stable-outlier when absent."""
+    rows: List[Dict[str, Any]] = []
+    for source_key in ("top_opportunities", "top_cycles"):
+        for opp in artifact.get(source_key) or []:
+            if not isinstance(opp, dict):
+                continue
+            cid = opp.get("cycle_id")
+            size_usd = opp.get("dynamic_size_usd") or opp.get("market_size_usd")
+            spread_bps = opp.get("spread_bps")
+            legs = opp.get("legs") or []
+            prev_out = None
+            for idx, leg in enumerate(legs):
+                if not isinstance(leg, dict):
+                    continue
+                row = {
+                    **leg,
+                    "cycle_id": cid,
+                    "market_size_usd": size_usd,
+                    "cycle_spread_bps": spread_bps,
+                    "source_block": source_key,
+                    "leg_idx": leg.get("leg_idx", idx),
+                }
+                raw_in = row.get("raw_amount_in")
+                if idx > 0:
+                    row["prev_leg_out_raw"] = row.get("prev_leg_out_raw", prev_out)
+                    row["current_leg_in_raw"] = row.get("current_leg_in_raw", raw_in)
+                    if row.get("amount_continuity_ok") is None and prev_out is not None and raw_in is not None:
+                        row["amount_continuity_ok"] = int(prev_out) == int(raw_in)
+                ratio = row.get("norm_value_ratio")
+                if ratio is None:
+                    nin = row.get("norm_amount_in")
+                    nout = row.get("norm_amount_out")
+                    if nin and nout and float(nin) > 0:
+                        ratio = float(nout) / float(nin)
+                        row["norm_value_ratio"] = round(ratio, 8)
+                if ratio is not None and not row.get("stable_value_ratio_outlier"):
+                    tin = str(row.get("token_in") or "")
+                    tout = str(row.get("token_out") or "")
+                    if _is_stable_peg_symbol(tin) and _is_stable_peg_symbol(tout):
+                        if ratio < 0.5 or ratio > 2.0:
+                            row["stable_value_ratio_outlier"] = True
+                            row["sanity_gate"] = "STABLE_VALUE_RATIO_OUTLIER"
+                if row.get("raw_amount_out") is not None:
+                    prev_out = row.get("raw_amount_out")
+                rows.append(row)
+    return rows
+
+
+def _iter_quoted_cycle_rows(artifact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Flatten top_opportunities / top_cycles legs for RCA."""
+    return _enrich_leg_rows_from_artifact(artifact)
+
+
+def _build_amount_continuity_rca(artifact: Dict[str, Any]) -> Dict[str, Any]:
+    violations: List[Dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for row in _enrich_leg_rows_from_artifact(artifact):
+        if int(row.get("leg_idx") or 0) == 0:
+            continue
+        ok = row.get("amount_continuity_ok")
+        if ok is not False:
+            continue
+        key = (row.get("cycle_id"), row.get("leg_idx"))
+        if key in seen:
+            continue
+        seen.add(key)
+        violations.append(
+            {
+                "cycle_id": row.get("cycle_id"),
+                "leg_idx": row.get("leg_idx"),
+                "route_id": row.get("route_id"),
+                "dex_id": row.get("dex_id"),
+                "token_in": row.get("token_in"),
+                "token_out": row.get("token_out"),
+                "prev_leg_out_raw": row.get("prev_leg_out_raw"),
+                "current_leg_in_raw": row.get("current_leg_in_raw"),
+            }
+        )
+    return {
+        "violation_count": len(violations),
+        "violations": violations[:20],
+    }
+
+
+def _build_top_value_loss_legs(
+    artifact: Dict[str, Any],
+    inventory: Optional[Dict[str, Any]],
+    *,
+    limit: int = 15,
+) -> List[Dict[str, Any]]:
+    """Rank legs by worst normalized value ratio / stable peg breakage."""
+    route_meta: Dict[str, Dict[str, Any]] = {}
+    if inventory:
+        from m9.graph_arb.cycle_lane_prefilter import build_route_metadata_from_routes
+
+        route_meta = build_route_metadata_from_routes(
+            inventory.get("active_routes") or []
+        )
+
+    ranked: List[Dict[str, Any]] = []
+    for row in _iter_quoted_cycle_rows(artifact):
+        ratio = row.get("norm_value_ratio")
+        if ratio is None:
+            continue
+        loss_score = 1.0 - float(ratio) if float(ratio) < 1.0 else 0.0
+        pool = str(row.get("pool_address") or "").lower()
+        inv = route_meta.get(pool) or {}
+        entry = {
+            "cycle_id": row.get("cycle_id"),
+            "leg_idx": row.get("leg_idx"),
+            "route_id": row.get("route_id") or inv.get("route_id"),
+            "dex_id": row.get("dex_id") or inv.get("dex_id"),
+            "adapter_type": row.get("adapter_type"),
+            "token_in": row.get("token_in"),
+            "token_out": row.get("token_out"),
+            "token_in_addr": row.get("token_in_addr"),
+            "token_out_addr": row.get("token_out_addr"),
+            "norm_amount_in": row.get("norm_amount_in"),
+            "norm_amount_out": row.get("norm_amount_out"),
+            "norm_value_ratio": ratio,
+            "raw_amount_in": row.get("raw_amount_in"),
+            "raw_amount_out": row.get("raw_amount_out"),
+            "pool_address": row.get("pool_address"),
+            "pool_id": row.get("pool_id") or inv.get("pool_id"),
+            "amount_continuity_ok": row.get("amount_continuity_ok"),
+            "stable_value_ratio_outlier": row.get("stable_value_ratio_outlier"),
+            "sanity_gate": row.get("sanity_gate"),
+            "loss_score": round(loss_score, 6),
+            "market_size_usd": row.get("market_size_usd"),
+        }
+        ranked.append(entry)
+
+    ranked.sort(key=lambda r: (r.get("loss_score") or 0), reverse=True)
+    deduped: List[Dict[str, Any]] = []
+    seen_keys: set[tuple] = set()
+    for row in ranked:
+        key = (row.get("cycle_id"), row.get("leg_idx"), row.get("pool_address"))
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(row)
+    return deduped[:limit]
+
+
+def _build_adapter_leg_isolation(
+    artifact: Dict[str, Any],
+    inventory: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Isolate Curve USDC→USDbC and Maverick USDbC→WETH legs from quoted cycles."""
+    route_meta: Dict[str, Dict[str, Any]] = {}
+    if inventory:
+        from m9.graph_arb.cycle_lane_prefilter import build_route_metadata_from_routes
+
+        route_meta = build_route_metadata_from_routes(
+            inventory.get("active_routes") or []
+        )
+
+    curve_usdc_usdbc: List[Dict[str, Any]] = []
+    maverick_usdbc_weth: List[Dict[str, Any]] = []
+    for row in _iter_quoted_cycle_rows(artifact):
+        tin = str(row.get("token_in") or "").upper()
+        tout = str(row.get("token_out") or "").upper()
+        dex = str(row.get("dex_id") or row.get("adapter_type") or "").lower()
+        pool = str(row.get("pool_address") or "").lower()
+        inv = route_meta.get(pool) or {}
+        leg_row = {
+            "cycle_id": row.get("cycle_id"),
+            "leg_idx": row.get("leg_idx"),
+            "route_id": row.get("route_id") or inv.get("route_id"),
+            "pool_address": row.get("pool_address"),
+            "pool_id": row.get("pool_id") or inv.get("pool_id"),
+            "token_in": tin,
+            "token_out": tout,
+            "norm_amount_in": row.get("norm_amount_in"),
+            "norm_amount_out": row.get("norm_amount_out"),
+            "norm_value_ratio": row.get("norm_value_ratio"),
+            "raw_amount_in": row.get("raw_amount_in"),
+            "raw_amount_out": row.get("raw_amount_out"),
+            "amount_continuity_ok": row.get("amount_continuity_ok"),
+            "stable_value_ratio_outlier": row.get("stable_value_ratio_outlier"),
+            "curve_coin_indices": inv.get("curve_coin_indices"),
+            "balancer_assets": inv.get("balancer_assets"),
+            "maverick_token_a_in_probe": inv.get("maverick_token_a_in_probe"),
+            "maverick_pool_lane_probe_amount": inv.get("maverick_pool_lane_probe_amount"),
+            "token0_decimals": inv.get("token0_decimals"),
+            "token1_decimals": inv.get("token1_decimals"),
+        }
+        if (
+            ("curve" in dex or str(row.get("route_id") or "").startswith("curve"))
+            and tin in ("USDC",) and tout in ("USDBC", "USDbC")
+        ):
+            curve_usdc_usdbc.append(leg_row)
+        if (
+            ("maverick" in dex or str(row.get("route_id") or "").startswith("maverick"))
+            and tin in ("USDBC", "USDbC") and tout in ("WETH",)
+        ):
+            maverick_usdbc_weth.append(leg_row)
+
+    return {
+        "curve_usdc_usdbc": curve_usdc_usdbc[:10],
+        "maverick_usdbc_weth": maverick_usdbc_weth[:10],
+    }
 
 
 def _adapter_rca_from_quote_diagnostics(
@@ -310,14 +550,17 @@ def build_cycle_rca(
     edge_hist: List[Dict[str, Any]] = list(artifact.get("edge_error_histogram") or [])
 
     by_adapter: Counter[str] = Counter()
+    by_dex_id: Counter[str] = Counter()
     by_reject: Counter[str] = Counter()
     by_leg_index: Counter[int] = Counter()
     for edge in edge_hist:
         route_id = str(edge.get("route_id") or "")
         family = _adapter_family(route_id, edge)
+        dex_id = _canonical_dex_id(str(edge.get("dex_id") or ""), route_id)
         errors = edge.get("errors") or {}
         for reason, count in errors.items():
             by_adapter[family] += int(count)
+            by_dex_id[dex_id] += int(count)
             by_reject[str(reason)] += int(count)
             by_leg_index[0] += int(count)
 
@@ -326,12 +569,19 @@ def build_cycle_rca(
         if not isinstance(errors, dict):
             continue
         family = _adapter_family(str(route_id), {})
+        dex_id = _canonical_dex_id("", str(route_id))
         route_level[str(route_id)] = {str(k): int(v) for k, v in errors.items()}
         for reason, count in errors.items():
             by_adapter[family] += int(count)
+            by_dex_id[dex_id] += int(count)
             by_reject[str(reason)] += int(count)
 
-    by_cycle_length: Dict[str, int] = dict(artifact.get("cycles_by_length") or {})
+    by_cycle_length: Dict[str, int] = dict(
+        artifact.get("cycles_found_by_length") or artifact.get("cycles_by_length") or {}
+    )
+    cycles_quoteable_by_length: Dict[str, int] = dict(
+        artifact.get("cycles_quoteable_by_length") or {}
+    )
     by_adapter_family_cycles: Dict[str, int] = dict(
         artifact.get("cycles_by_adapter_family") or {}
     )
@@ -362,15 +612,17 @@ def build_cycle_rca(
                 "leg_index": idx,
                 "route_id": leg.get("route_id"),
                 "reject_reason": leg.get("reject_reason"),
+                "quote_error": leg.get("reject_reason") or leg.get("quote_error"),
                 "dex_id": leg.get("dex_id"),
                 "pool_address": pool or leg.get("pool_address"),
                 "amount_in": leg.get("raw_amount_in"),
                 "effective_depth_usd": leg.get("effective_depth_usd") or row.get(
                     "effective_depth_usd"
                 ),
+                "depth_status": leg.get("depth_status") or row.get("depth_status"),
                 "productive_quote_status": row.get("productive_quote_status"),
                 "balancer_assets_present": bool(row.get("balancer_assets")),
-                "pool_id": row.get("pool_id"),
+                "pool_id": row.get("pool_id") or leg.get("pool_id"),
                 "cycle_amount_in": leg.get("raw_amount_in"),
                 "pool_lane_probe_amount": row.get("maverick_pool_lane_probe_amount"),
                 "token_a_in_probe": row.get("maverick_token_a_in_probe"),
@@ -471,6 +723,43 @@ def build_cycle_rca(
 
     fp = graph_fingerprint(artifact)
     qsr = artifact.get("qsr")
+    qsr_liveness = artifact.get("qsr_liveness")
+    qsr_econ = artifact.get("qsr_econ")
+    discovery_by_len = dict(artifact.get("discovery_cycles_by_length") or {})
+    by_cycle_length_rca: Dict[str, Any] = {}
+    for label, key in (("2_leg", "2"), ("3_leg", "3"), ("4_leg", "4")):
+        by_cycle_length_rca[label] = {
+            "discovery_cycles": int(discovery_by_len.get(key) or 0),
+            "cycles_found_unique": int(by_cycle_length.get(key) or 0),
+            "cycles_quoteable_unique": int(cycles_quoteable_by_length.get(key) or 0),
+            "quoteability_proven": int(cycles_quoteable_by_length.get(key) or 0) > 0,
+        }
+    three_four_proven = (
+        int(cycles_quoteable_by_length.get("3") or 0) > 0
+        or int(cycles_quoteable_by_length.get("4") or 0) > 0
+    )
+    productive_lane_gap: Dict[str, Any] = {
+        "3_4_leg_quoteability_proven": three_four_proven,
+        "discovery_has_3_4_cycles": any(
+            int(discovery_by_len.get(k) or 0) > 0 for k in ("3", "4")
+        ),
+        "next_rca_focus": (
+            None
+            if three_four_proven
+            else (
+                "productive_lane_narrows_graph: discovery sees 3/4-leg cycles "
+                "but runner quotes fewer unique cycles — check quarantine, "
+                "depth-hard filter, and cycle productive prefilter"
+            )
+        ),
+    }
+    qsr_liveness_notes: List[str] = []
+    if cycles_quoteable > 0 and float(qsr or 0) > 0:
+        if qsr_liveness is not None and float(qsr_liveness or 0) == 0.0:
+            qsr_liveness_notes.append(
+                "qsr_liveness=0 with cycles_quoteable>0: liveness subset uses "
+                "size_usd<=5 only; dynamic sizing may exclude all attempts"
+            )
     per_dex_matrix: Dict[str, Any] = {}
     try:
         from m9.graph_arb.dex_quality_matrix import build_dex_quality_matrix
@@ -481,32 +770,69 @@ def build_cycle_rca(
         )
     except Exception:
         per_dex_matrix = {}
+
+    amount_continuity_rca = _build_amount_continuity_rca(artifact)
+    enriched_rows = _enrich_leg_rows_from_artifact(artifact)
+    top_value_loss_legs = _build_top_value_loss_legs(artifact, inventory)
+    adapter_leg_isolation = _build_adapter_leg_isolation(artifact, inventory)
+    stable_outlier_count = len(
+        {
+            (r.get("cycle_id"), r.get("leg_idx"))
+            for r in enriched_rows
+            if r.get("stable_value_ratio_outlier")
+        }
+    )
+
     return {
-        "schema_version": "m9_quote_lane_rca.5",
+        "schema_version": "m9_quote_lane_rca.8",
         "per_dex_funnel_matrix": per_dex_matrix.get("per_dex_funnel") or {},
         "dex_quality_matrix": per_dex_matrix.get("matrix") or {},
         "source_artifact": source_artifact or str(_DEFAULT_SHADOW),
         "source_graph_fingerprint": fp,
+        "cycle_lengths_used": artifact.get("cycle_lengths_used") or [],
+        "discovery_cycles_by_length": discovery_by_len,
         "cycles_found": cycles_found,
         "cycles_quoteable": cycles_quoteable,
         "qsr": qsr,
+        "qsr_liveness": qsr_liveness,
+        "qsr_econ": qsr_econ,
         "summary": {
             "cycles_found": cycles_found,
             "cycles_quoteable": cycles_quoteable,
+            "cycles_positive_gross": int(artifact.get("cycles_positive_gross") or 0),
             "cycles_found_vs_quoteable_gap": max(cycles_found - cycles_quoteable, 0),
+            "cycles_found_by_length": by_cycle_length,
+            "cycles_quoteable_by_length": cycles_quoteable_by_length,
+            "by_cycle_length_rca": by_cycle_length_rca,
+            "productive_lane_3_4_gap": productive_lane_gap,
             "cross_mechanic_cycles": int(cross_mechanic_cycles or 0),
             "cross_mechanic_cycles_found": cm_found,
             "cross_mechanic_cycles_quoteable": cm_quoteable,
             "phantom_quote_count": phantom_count,
             "qsr": artifact.get("qsr"),
+            "qsr_liveness": qsr_liveness,
+            "qsr_econ": qsr_econ,
+            "qsr_liveness_consistency_notes": qsr_liveness_notes,
+            "economics_status": (
+                "NOT_PROVEN"
+                if int(artifact.get("cycles_positive_gross") or 0) == 0
+                else "PARTIAL"
+            ),
+            "stable_value_ratio_outlier_legs": stable_outlier_count,
+            "amount_continuity_violations": amount_continuity_rca.get("violation_count"),
         },
+        "by_cycle_length_rca": by_cycle_length_rca,
+        "productive_lane_3_4_gap": productive_lane_gap,
         "cycle_reject_histogram": cycle_reject,
         "by_adapter_family_leg_errors": dict(by_adapter),
+        "by_dex_id_leg_errors": dict(by_dex_id),
         "by_reject_reason": dict(by_reject),
         "by_cycle_length": by_cycle_length,
+        "cycles_quoteable_by_length": cycles_quoteable_by_length,
         "cycles_by_adapter_family": by_adapter_family_cycles,
         "route_error_histogram": route_level,
         "edge_error_histogram_top": edge_hist[:25],
+        "top_20_failed_cycles": sample_failures,
         "sample_cycle_failures": sample_failures,
         "cycle_kill_leg_explanations": cycle_kill_explanations,
         "stamped_routes_in_inventory": sum(
@@ -522,6 +848,9 @@ def build_cycle_rca(
         "micro_size_policy": _build_micro_size_policy(artifact),
         "cross_mechanic_diagnostic": cm_diag,
         "root_cause_hints": root_cause_hints,
+        "amount_continuity_rca": amount_continuity_rca,
+        "top_value_loss_legs": top_value_loss_legs,
+        "adapter_leg_isolation": adapter_leg_isolation,
         "interpretation": (
             "cycles_found counts attempted cycle quotes; cycles_quoteable counts "
             "cycles with POSITIVE_GROSS or NEGATIVE_GROSS status only."

@@ -198,6 +198,185 @@ def _m9_economics_blockers(
     return sorted(set(blockers))
 
 
+def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Split quote liveness vs economics metrics; explain qsr_liveness drift."""
+    if not shadow:
+        return {}
+    cycles_quoteable = int(shadow.get("cycles_quoteable") or 0)
+    cycles_positive_gross = int(shadow.get("cycles_positive_gross") or 0)
+    qsr = shadow.get("qsr")
+    qsr_liveness = shadow.get("qsr_liveness")
+    qsr_econ = shadow.get("qsr_econ")
+
+    if cycles_quoteable == 0:
+        quote_liveness_status = "NOT_PROVEN"
+    elif cycles_positive_gross > 0:
+        quote_liveness_status = "PROVEN_WITH_POSITIVE_GROSS"
+    elif float(qsr or 0) >= 0.99:
+        quote_liveness_status = "PROVEN"
+    else:
+        quote_liveness_status = "PARTIAL"
+
+    notes: List[str] = []
+    consistent = True
+    if cycles_quoteable > 0 and float(qsr or 0) > 0:
+        if qsr_liveness is not None and float(qsr_liveness or 0) == 0.0:
+            consistent = False
+            notes.append(
+                "cycles_quoteable>0 and qsr>0 but qsr_liveness=0: "
+                "qsr_liveness counts only size_usd<=5 USD (liveness ladder); "
+                "dynamic sizing may select larger sizes (e.g. 25 USD) excluded "
+                "from the liveness subset — do not claim qsr_liveness without "
+                "checking quote_size_truth.liveness_quote_attempts."
+            )
+    if cycles_quoteable > 0 and qsr_econ is not None and float(qsr_econ or 0) == 0.0:
+        notes.append(
+            "qsr_econ=0 while cycles_quoteable>0: no economics-sized quotes "
+            "(size_usd >= economic floor) succeeded — economics NOT_PROVEN."
+        )
+
+    return {
+        "quote_liveness_status": quote_liveness_status,
+        "cycles_quoteable": cycles_quoteable,
+        "cycles_positive_gross": cycles_positive_gross,
+        "positive_gross_proven": cycles_positive_gross > 0,
+        "qsr": qsr,
+        "qsr_liveness": qsr_liveness,
+        "qsr_econ": qsr_econ,
+        "economics_status": (
+            "NOT_PROVEN" if cycles_positive_gross == 0 else "PARTIAL"
+        ),
+        "qsr_liveness_consistency": {"consistent": consistent, "notes": notes},
+        "cycles_found_by_length": shadow.get("cycles_found_by_length") or {},
+        "cycles_quoteable_by_length": shadow.get("cycles_quoteable_by_length") or {},
+        "discovery_cycles_by_length": shadow.get("discovery_cycles_by_length") or {},
+    }
+
+
+def _build_operator_verdict(
+    *,
+    shadow: Optional[Dict[str, Any]],
+    quote_liveness: Dict[str, Any],
+    m8_2_report: Optional[Dict[str, Any]],
+    bridge: Optional[Dict[str, Any]],
+    m9_blockers: List[str],
+    rca: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Operator-facing milestone verdicts; explicit economics-claim guard."""
+    handoff_ready = bool((m8_2_report or {}).get("handoff_ready"))
+    cycles_positive = int((shadow or {}).get("cycles_positive_gross") or 0)
+    qsr_econ = (shadow or {}).get("qsr_econ")
+    qsr_econ_zero = qsr_econ is not None and float(qsr_econ or 0) == 0.0
+    quoteable_by_len = quote_liveness.get("cycles_quoteable_by_length") or {}
+    four_leg = int(quoteable_by_len.get("4") or 0)
+    three_leg = int(quoteable_by_len.get("3") or 0)
+
+    if handoff_ready:
+        m8_2_label = "M8_2_GRAPH_HANDOFF_REACHED"
+    else:
+        m8_2_label = "M8_2_GRAPH_HANDOFF_NOT_REACHED"
+
+    ql_status = quote_liveness.get("quote_liveness_status") or "NOT_PROVEN"
+    cycles_quoteable = int((shadow or {}).get("cycles_quoteable") or 0)
+    shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
+    if cycles_quoteable > 0 and shadow_qsr >= 0.99:
+        m9_quote_label = "M9_QUOTE_LIVENESS_PROVEN"
+    elif ql_status == "PARTIAL":
+        m9_quote_label = "M9_QUOTE_LIVENESS_PARTIAL"
+    elif ql_status in ("PROVEN_WITH_POSITIVE_GROSS",):
+        m9_quote_label = "M9_QUOTE_LIVENESS_PROVEN"
+    else:
+        m9_quote_label = "M9_QUOTE_LIVENESS_NOT_PROVEN"
+
+    econ_status = quote_liveness.get("economics_status") or "NOT_PROVEN"
+    if econ_status == "NOT_PROVEN" and cycles_quoteable > 0 and cycles_positive == 0:
+        m9_econ_label = "M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_RCA"
+    elif econ_status == "NOT_PROVEN":
+        m9_econ_label = "M9_ECONOMICS_NOT_PROVEN"
+    else:
+        m9_econ_label = f"M9_ECONOMICS_{econ_status}"
+
+    economics_claim_allowed = cycles_positive > 0 and not qsr_econ_zero
+    forbidden_claims: List[str] = []
+    if cycles_positive == 0:
+        forbidden_claims.append("profit_ready")
+        forbidden_claims.append("positive_gross")
+    if qsr_econ_zero or cycles_positive == 0:
+        forbidden_claims.append("economics_proven")
+        forbidden_claims.append("qsr_econ_pass")
+    if four_leg == 0:
+        forbidden_claims.append("4_leg_quoteability_proven")
+    if not handoff_ready:
+        forbidden_claims.append("m8_2_handoff_complete")
+
+    bsm = (bridge or {}).get("bridge_source_metrics") or {}
+    layer_ownership: List[Dict[str, Any]] = [
+        {
+            "layer": "M8_sniper",
+            "status": (bsm.get("m8_stale") and "STALE") or "ACTIVE",
+            "blocker_owner": "M8_ARTIFACT_STALE" if bsm.get("m8_stale") else None,
+        },
+        {
+            "layer": "M8_1_anchor",
+            "status": "UPSTREAM",
+            "blocker_owner": None,
+        },
+        {
+            "layer": "M8_2_handoff",
+            "status": "REACHED" if handoff_ready else "NOT_REACHED",
+            "blocker_owner": None if handoff_ready else "M8_2",
+        },
+        {
+            "layer": "M9_topology",
+            "status": "REACHED" if int((shadow or {}).get("cycles_found") or 0) > 0 else "BLOCKED",
+            "blocker_owner": None,
+        },
+        {
+            "layer": "M9_quote",
+            "status": ql_status,
+            "blocker_owner": (
+                "M9_quote"
+                if ql_status == "NOT_PROVEN"
+                else ("M9_adapter" if four_leg == 0 and three_leg > 0 else None)
+            ),
+        },
+        {
+            "layer": "M9_economics",
+            "status": econ_status,
+            "blocker_owner": "M9_economics" if cycles_positive == 0 else None,
+        },
+    ]
+
+    primary_blocker = None
+    if not handoff_ready:
+        primary_blocker = "M8_2_handoff"
+    elif four_leg == 0 and three_leg == 0:
+        primary_blocker = "M9_topology_or_quarantine"
+    elif four_leg == 0:
+        primary_blocker = "M9_4_leg_quote"
+    elif cycles_positive == 0:
+        primary_blocker = "M9_economics"
+    elif m9_blockers:
+        primary_blocker = m9_blockers[0]
+
+    return {
+        "M8_2_HANDOFF": "REACHED" if handoff_ready else "NOT_REACHED",
+        "M9_QUOTE_LIVENESS": m9_quote_label,
+        "M9_ECONOMICS": m9_econ_label,
+        "verdict_labels": [m8_2_label, m9_quote_label, m9_econ_label],
+        "economics_claim_allowed": economics_claim_allowed,
+        "forbidden_claims": forbidden_claims,
+        "layer_ownership": layer_ownership,
+        "primary_blocker_owner": primary_blocker,
+        "qsr_semantics": {
+            "qsr": "all quote attempts success rate",
+            "qsr_liveness": "subset size_usd<=5 only; may be 0 when dynamic sizing uses larger sizes",
+            "qsr_econ": "economics-sized quotes only; 0 means economics NOT_PROVEN",
+        },
+        "rca_economics_status": (rca or {}).get("economics_status"),
+    }
+
+
 def build_acceptance_report(
     *,
     sniper: Optional[Dict[str, Any]],
@@ -304,6 +483,8 @@ def build_acceptance_report(
             "cycles_quoteable": (shadow or {}).get("cycles_quoteable"),
             "cycles_positive_gross": (shadow or {}).get("cycles_positive_gross"),
             "qsr": (shadow or {}).get("qsr"),
+            "qsr_liveness": (shadow or {}).get("qsr_liveness"),
+            "qsr_econ": (shadow or {}).get("qsr_econ"),
             "cross_mechanic_cycles": (shadow or {}).get("cross_mechanic_cycles"),
             "cross_mechanic_cycles_found": (
                 (shadow or {}).get("cross_mechanic_cycles_found")
@@ -411,9 +592,22 @@ def build_acceptance_report(
     if shadow is None and not m9_blockers:
         m9_goal = "NOT_EVALUATED"
 
+    quote_liveness = _quote_liveness_metrics(shadow)
+
+    operator_verdict = _build_operator_verdict(
+        shadow=shadow,
+        quote_liveness=quote_liveness,
+        m8_2_report=m8_2_report,
+        bridge=bridge,
+        m9_blockers=m9_blockers,
+        rca=rca,
+    )
+
     return {
-        "schema_version": "m9_lane_acceptance_report.4",
+        "schema_version": "m9_lane_acceptance_report.6",
         "funnel_layers": funnel_layers,
+        "quote_liveness_metrics": quote_liveness,
+        "operator_verdict": operator_verdict,
         "dex_coverage": _dex_coverage(bridge, expansion, shadow),
         "cross_mechanic_topology": _cross_mechanic_topology(bridge, shadow),
         "provenance": {
@@ -435,9 +629,13 @@ def build_acceptance_report(
         "m9_blockers": m9_blockers,
         "m9_quote_validation_blockers": sorted(set(m9_quote_validation_blockers)),
         "m9_economics_status": (
-            "NOT_EVALUATED_AFTER_GRAPH_HANDOFF"
-            if m8_2_report and m8_2_report.get("handoff_ready")
-            else "NOT_EVALUATED"
+            quote_liveness.get("economics_status")
+            if quote_liveness
+            else (
+                "NOT_EVALUATED_AFTER_GRAPH_HANDOFF"
+                if m8_2_report and m8_2_report.get("handoff_ready")
+                else "NOT_EVALUATED"
+            )
         ),
         "upstream_blockers": upstream_blockers,
         "bridge_upstream_warnings": bridge_upstream_warnings,

@@ -68,6 +68,52 @@ def test_revert_ttl_expired_softens_non_permanent(monkeypatch):
     assert "0xrev" in soft
 
 
+def test_production_ttl_expired_softens_non_permanent_in_plan(monkeypatch):
+    monkeypatch.setenv("ARBY_M9_DIAGNOSTIC_QUARANTINE_MODE", "production")
+    monkeypatch.setenv("ARBY_M9_QUARANTINE_TTL_HOURS", "1")
+    old = datetime.now(tz=timezone.utc).replace(year=2020).isoformat()
+    plan = build_quarantine_plan(
+        depth_hard_pools=set(),
+        revert_data={
+            "updated_at_utc": old,
+            "routes": [
+                {"pool_address": "0xperm", "quarantine_reason": "BALANCER_PAUSED"},
+                {"pool_address": "0xrev", "reject_reason": "QUOTE_REVERT"},
+            ],
+        },
+        phantom_data={
+            "updated_at_utc": old,
+            "pools": [{"pool_address": "0xphantom"}],
+        },
+    )
+    assert plan.breakdown["revert"]["ttl_expired"] is True
+    assert "0xperm" in plan.hard_exclude
+    assert "0xrev" not in plan.hard_exclude
+    assert "0xphantom" not in plan.hard_exclude
+    assert plan.breakdown["revert"].get("softened_by_ttl") == 1
+    assert plan.breakdown["phantom"].get("softened_by_ttl") == 1
+
+
+def test_phantom_ttl_expired_softens_non_permanent(monkeypatch):
+    monkeypatch.setenv("ARBY_M9_DIAGNOSTIC_QUARANTINE_MODE", "production")
+    monkeypatch.setenv("ARBY_M9_QUARANTINE_TTL_HOURS", "1")
+    old = datetime.now(tz=timezone.utc).replace(year=2020).isoformat()
+    plan = build_quarantine_plan(
+        depth_hard_pools=set(),
+        phantom_data={
+            "updated_at_utc": old,
+            "pools": [
+                {"pool_address": "0xphantom", "quarantine_reason": "PHANTOM_QUOTE_BPS_OVERFLOW"},
+                {"pool_address": "0xperm", "quarantine_reason": "BALANCER_PAUSED"},
+            ],
+        },
+    )
+    assert plan.breakdown["phantom"]["ttl_expired"] is True
+    assert "0xperm" in plan.hard_exclude
+    assert "0xphantom" not in plan.hard_exclude
+    assert plan.breakdown["phantom"].get("softened_by_ttl") == 1
+
+
 def test_stale_diagnostic_ignored():
     pools, stale = resolve_diagnostic_quarantine_pools_fresh(
         {

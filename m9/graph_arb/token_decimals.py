@@ -156,9 +156,19 @@ def resolve_decimals_with_source(
 ) -> Tuple[Optional[int], str]:
     """Return (decimals, source_tag). Source is ``fallback_unknown`` when unresolved."""
     if not is_valid_eth_address(address):
-        from m9.graph_arb.core_tokens_loader import resolve_truncated_address
+        from m9.graph_arb.core_tokens_loader import (
+            build_route_address_prefix_index,
+            resolve_truncated_address,
+        )
 
-        resolved = resolve_truncated_address(str(address or symbol))
+        route_index = None
+        if route is not None:
+            route_index = build_route_address_prefix_index(
+                [route], chain=str(route.get("chain") or "base")
+            )
+        resolved = resolve_truncated_address(
+            str(address or symbol), route_index=route_index
+        )
         if resolved:
             address = resolved
         elif topology_probe:

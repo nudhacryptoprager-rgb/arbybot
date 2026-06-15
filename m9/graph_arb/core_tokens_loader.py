@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import CONFIG_DIR, load_core_tokens, load_yaml
 
@@ -91,12 +91,70 @@ def anchor_token_addresses(chain: str = "base") -> frozenset:
     )
 
 
-def resolve_truncated_address(prefix: str, chain: str = "base") -> Optional[str]:
-    """Map ``0x833589``-style prefix to a unique full address from core_tokens."""
+def resolve_truncated_address(
+    prefix: str,
+    chain: str = "base",
+    *,
+    route_index: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Map ``0x833589``-style prefix to a unique full address.
+
+    Resolution order:
+      1. Optional ``route_index`` (inventory / bridge routes)
+      2. Unique prefix match in core_tokens + baselines
+    """
     p = (prefix or "").strip().lower()
     if not p.startswith("0x") or len(p) >= 42:
         return None
+    if route_index and p in route_index:
+        return route_index[p]
     hits = [addr for addr in address_decimals_map(chain) if addr.startswith(p)]
     if len(hits) == 1:
         return hits[0]
     return None
+
+
+def _is_full_eth_address(addr: str) -> bool:
+    a = (addr or "").strip().lower()
+    if not a.startswith("0x") or len(a) != 42 or a == "0x" + "0" * 40:
+        return False
+    try:
+        int(a[2:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def build_route_address_prefix_index(
+    routes: List[Dict[str, Any]],
+    chain: str = "base",
+) -> Dict[str, str]:
+    """Build prefix/symbol → full address map from bridge inventory routes."""
+    index: Dict[str, str] = {}
+    for route in routes or []:
+        if not isinstance(route, dict):
+            continue
+        for sym_key, addr_key in (("token0", "token0_addr"), ("token1", "token1_addr")):
+            sym = str(route.get(sym_key) or "").strip()
+            addr = str(route.get(addr_key) or "").strip().lower()
+            if not _is_full_eth_address(addr):
+                continue
+            if sym:
+                index[sym] = addr
+                index[sym.lower()] = addr
+                if sym.lower().startswith("0x") and len(sym) < 42:
+                    index[sym.lower()] = addr
+            for plen in (8, 10, 12):
+                if len(addr) >= plen:
+                    index[addr[:plen]] = addr
+        pair_id = str(route.get("pair_id") or "")
+        if "_" in pair_id:
+            sym0, sym1 = pair_id.split("_", 1)
+            for sym, addr_key in ((sym0, "token0_addr"), (sym1, "token1_addr")):
+                addr = str(route.get(addr_key) or "").strip().lower()
+                if _is_full_eth_address(addr) and sym:
+                    index[sym] = addr
+                    index[sym.lower()] = addr
+                    if sym.lower().startswith("0x") and len(sym) < 42:
+                        index[sym.lower()] = addr
+    return index

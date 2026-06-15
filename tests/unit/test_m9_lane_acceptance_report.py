@@ -125,3 +125,65 @@ def test_m9_report_upstream_m8_2_not_ready():
     assert report["upstream_blockers"] == ["UPSTREAM_M8_2_NOT_READY"]
     assert "SUBGRAPH_READY_LOW" in report["m8_2_upstream"]["blockers"]
     assert report["m9_goal_status"] == "NOT_EVALUATED"
+
+
+def test_build_acceptance_report_quote_liveness_qsr_liveness_consistency():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": [{}]},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
+        shadow={
+            "cycles_found": 368,
+            "cycles_quoteable": 368,
+            "cycles_positive_gross": 0,
+            "qsr": 1.0,
+            "qsr_liveness": 0.0,
+            "qsr_econ": 0.0,
+            "cycles_quoteable_by_length": {"2": 8},
+            "discovery_cycles_by_length": {"2": 20, "3": 60, "4": 48},
+        },
+        rca=None,
+        m8_2_report={
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+            "handoff_lane": "graph_topology",
+        },
+    )
+    qlm = report["quote_liveness_metrics"]
+    assert qlm["quote_liveness_status"] == "PROVEN"
+    assert qlm["qsr_liveness_consistency"]["consistent"] is False
+    assert qlm["economics_status"] == "NOT_PROVEN"
+    shadow_layer = next(x for x in report["funnel_layers"] if x["layer"] == "M9_shadow")
+    assert shadow_layer["qsr_liveness"] == 0.0
+
+
+def test_build_acceptance_report_operator_verdict():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": [{}]},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
+        shadow={
+            "cycles_found": 929,
+            "cycles_quoteable": 851,
+            "cycles_positive_gross": 0,
+            "qsr": 1.0,
+            "qsr_liveness": 0.0,
+            "qsr_econ": 0.0,
+            "cycles_quoteable_by_length": {"2": 10, "3": 9, "4": 0},
+        },
+        rca={"economics_status": "NOT_PROVEN"},
+        m8_2_report={
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+            "handoff_lane": "graph_topology",
+        },
+    )
+    ov = report["operator_verdict"]
+    assert ov["M8_2_HANDOFF"] == "REACHED"
+    assert ov["M9_QUOTE_LIVENESS"] == "M9_QUOTE_LIVENESS_PROVEN"
+    assert ov["M9_ECONOMICS"] == "M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_RCA"
+    assert ov["economics_claim_allowed"] is False
+    assert "positive_gross" in ov["forbidden_claims"]
+    assert report["schema_version"] == "m9_lane_acceptance_report.6"

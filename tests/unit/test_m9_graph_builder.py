@@ -928,7 +928,7 @@ m9_dex_productivity:
         config_path=str(cfg),
         lane="discovery",
     )
-    edges = adjacency.get("0x833589", {}).get("0x420000", [])
+    edges = adjacency.get("USDC", {}).get("WETH", [])
     bal_edges = [e for e in edges if e.dex_id == "balancer_vault"]
     assert bal_edges, "expected balancer edge for truncated hex pair"
     edge = bal_edges[0]
@@ -985,7 +985,7 @@ m9_dex_productivity:
         config_path=str(cfg),
         lane="discovery",
     )
-    edges = adjacency.get("0xd9aaec", {}).get("0x420000", []) or adjacency.get("0x420000", {}).get("0xd9aaec", [])
+    edges = adjacency.get("USDbC", {}).get("WETH", []) or adjacency.get("WETH", {}).get("USDbC", [])
     assert edges, "expected maverick edge for USDbC/WETH truncated pair"
     e = edges[0]
     dec_in = e.token_in_decimals
@@ -1118,3 +1118,27 @@ m9_dex_productivity:
     )
     edges = sum(len(v) for d in adjacency.values() for v in d.values())
     assert edges >= 2
+
+
+def test_maverick_probe_fields_mirror_sibling_direction():
+    from m9.graph_arb.builder import _maverick_probe_fields_for_token_in
+
+    weth = "0x4200000000000000000000000000000000000006"
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    entry = {
+        "maverick_probe_by_token_in": {
+            weth: {
+                "maverick_pool_lane_probe_amount": 10_000,
+                "maverick_min_quoteable_amount_raw": 10_000,
+                "maverick_max_quoteable_amount_raw": 10**15,
+                "maverick_token_a_in_probe": False,
+                "maverick_pool_lane_token_in": weth,
+            }
+        }
+    }
+    amt, min_raw, max_raw, tai, probe_tin = _maverick_probe_fields_for_token_in(entry, usdc)
+    assert amt == 10_000
+    assert min_raw == 10_000
+    assert max_raw == 10**15
+    assert tai is True
+    assert probe_tin == usdc

@@ -120,6 +120,11 @@ ARTIFACT_FILES = {
 SNIPER_ARTIFACT_PATH = ROLLING_DIR / "new_pool_sniper_latest.json"
 M9_ARTIFACT_PATH = ROLLING_DIR / "m9_graph_latest.json"
 M8_1_ARTIFACT_PATH = ROLLING_DIR / "m8_1_stable_anchor_latest.json"
+M9_SHADOW_HANDOFF_PATH = Path("data/tmp/m9_graph_handoff_quote_validation_10m.json")
+M9_ACCEPTANCE_PATH = Path("data/tmp/m9_lane_acceptance_report_latest.json")
+M9_RCA_PATH = Path("data/tmp/m9_quote_lane_rca_graph_handoff_latest.json")
+M9_QUARANTINE_PROBE_PATH = Path("data/tmp/m9_quarantine_cycle_probe_latest.json")
+M8_2_ACCEPTANCE_PATH = Path("data/tmp/m8_2_acceptance_report_latest.json")
 
 # E1.9.3: Discovery namespace artifacts (parallel to production)
 DISCOVERY_ARTIFACT_FILES = {
@@ -799,45 +804,28 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         """
         artifact: dict = {}
         file_age_s = None
-        if M9_ARTIFACT_PATH.is_file():
-            try:
-                with open(M9_ARTIFACT_PATH, encoding="utf-8") as fh:
-                    artifact = json.load(fh) or {}
-                try:
-                    file_age_s = max(
-                        0,
-                        int(
-                            datetime.now(timezone.utc).timestamp()
-                            - os.path.getmtime(M9_ARTIFACT_PATH)
-                        ),
-                    )
-                except OSError:
-                    file_age_s = None
-            except (json.JSONDecodeError, OSError):
-                artifact = {}
+        artifact_source = ""
+        artifact, file_age_s, artifact_source = _resolve_m9_shadow_artifact()
 
         m8_1_artifact: dict = {}
         if M8_1_ARTIFACT_PATH.is_file():
-            try:
-                with open(M8_1_ARTIFACT_PATH, encoding="utf-8") as fh:
-                    m8_1_artifact = json.load(fh) or {}
-            except (json.JSONDecodeError, OSError):
-                m8_1_artifact = {}
+            m8_1_artifact = _load_json_artifact(M8_1_ARTIFACT_PATH)
 
         sniper_artifact: dict = {}
         if SNIPER_ARTIFACT_PATH.is_file():
-            try:
-                with open(SNIPER_ARTIFACT_PATH, encoding="utf-8") as fh:
-                    sniper_artifact = json.load(fh) or {}
-            except (json.JSONDecodeError, OSError):
-                sniper_artifact = {}
+            sniper_artifact = _load_json_artifact(SNIPER_ARTIFACT_PATH)
 
         result = build_m9_current_payload(
             artifact=artifact,
             m8_1_artifact=m8_1_artifact,
             sniper_artifact=sniper_artifact,
+            acceptance_report=_load_json_artifact(M9_ACCEPTANCE_PATH),
+            rca_report=_load_json_artifact(M9_RCA_PATH),
+            quarantine_probe=_load_json_artifact(M9_QUARANTINE_PROBE_PATH),
+            m8_2_report=_load_json_artifact(M8_2_ACCEPTANCE_PATH),
             now_utc=datetime.now(timezone.utc),
             file_age_s=file_age_s,
+            artifact_source_path=artifact_source,
         )
         payload = json.dumps(result, default=str).encode("utf-8")
         self.send_response(200)
@@ -1175,20 +1163,243 @@ def _build_m8_integration_metrics(artifact: dict) -> dict:
     }
 
 
+def _load_json_artifact(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _resolve_m9_shadow_artifact() -> tuple[dict, int | None, str]:
+    """Load canonical M9 shadow artifact; prefer handoff validation path."""
+    candidates: list[Path] = []
+    env_path = os.environ.get("ARBY_DASHBOARD_M9_SHADOW_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend([M9_SHADOW_HANDOFF_PATH, M9_ARTIFACT_PATH])
+    for path in candidates:
+        if not path.is_file():
+            continue
+        data = _load_json_artifact(path)
+        if not data:
+            continue
+        age_s: int | None = None
+        try:
+            age_s = max(
+                0,
+                int(datetime.now(timezone.utc).timestamp() - os.path.getmtime(path)),
+            )
+        except OSError:
+            age_s = None
+        return data, age_s, str(path)
+    return {}, None, ""
+
+
+def build_m9_operator_control_plane(
+    *,
+    artifact: dict | None,
+    acceptance_report: dict | None = None,
+    rca_report: dict | None = None,
+    quarantine_probe: dict | None = None,
+    m8_2_report: dict | None = None,
+    file_age_s: int | None = None,
+) -> dict:
+    """Operator control-plane panels: layer ownership, claims guard, blockers."""
+    a = artifact or {}
+    acceptance = acceptance_report or {}
+    rca = rca_report or {}
+    operator = acceptance.get("operator_verdict") or {}
+    quote_liveness = acceptance.get("quote_liveness_metrics") or {}
+    scan_scope = a.get("scan_scope") or {}
+
+    cycles_positive = _safe_int(a.get("cycles_positive_gross"))
+    qsr_econ = a.get("qsr_econ")
+    qsr_econ_zero = qsr_econ is not None and float(qsr_econ or 0) == 0.0
+    economics_claim_allowed = bool(operator.get("economics_claim_allowed"))
+    if not operator:
+        economics_claim_allowed = cycles_positive > 0 and not qsr_econ_zero
+
+    forbidden = list(operator.get("forbidden_claims") or [])
+    if cycles_positive == 0 and "positive_gross" not in forbidden:
+        forbidden.append("positive_gross")
+    if qsr_econ_zero and "economics_proven" not in forbidden:
+        forbidden.append("economics_proven")
+
+    discovery_by_len = (
+        a.get("discovery_cycles_by_length")
+        or quote_liveness.get("discovery_cycles_by_length")
+        or {}
+    )
+    found_by_len = a.get("cycles_found_by_length") or quote_liveness.get("cycles_found_by_length") or {}
+    quoteable_by_len = (
+        a.get("cycles_quoteable_by_length")
+        or quote_liveness.get("cycles_quoteable_by_length")
+        or {}
+    )
+    cycle_length_health = {}
+    for leg in ("2", "3", "4"):
+        cycle_length_health[leg] = {
+            "discovery": _safe_int(discovery_by_len.get(leg)),
+            "found": _safe_int(found_by_len.get(leg)),
+            "quoteable": _safe_int(quoteable_by_len.get(leg)),
+        }
+
+    q_breakdown = scan_scope.get("quarantine_exclusion_breakdown") or {}
+    probe_modes = (quarantine_probe or {}).get("modes") or {}
+    quarantine_impact = {
+        "mode": scan_scope.get("diagnostic_quarantine_mode") or q_breakdown.get("mode"),
+        "cycles_before": _safe_int(scan_scope.get("cycles_before_quarantine")),
+        "cycles_after": _safe_int(scan_scope.get("cycles_after_quarantine")),
+        "hard_exclude_total": _safe_int(q_breakdown.get("hard_exclude_total")),
+        "depth_hard": q_breakdown.get("depth_hard") or {},
+        "revert": q_breakdown.get("revert") or {},
+        "phantom": q_breakdown.get("phantom") or {},
+        "diagnostic": q_breakdown.get("diagnostic") or {},
+        "probe_off_cycles": _safe_int(
+            (probe_modes.get("off") or {}).get("cycles_after_quarantine")
+        ),
+        "probe_production_cycles": _safe_int(
+            (probe_modes.get("production") or {}).get("cycles_after_quarantine")
+        ),
+    }
+
+    top_blockers: list[dict] = []
+    by_reject = rca.get("by_reject_reason") or acceptance.get("quote_lane_top_rejects") or {}
+    if isinstance(by_reject, dict):
+        for reason, count in sorted(by_reject.items(), key=lambda kv: int(kv[1] or 0), reverse=True)[:8]:
+            top_blockers.append({"reason": str(reason), "count": int(count or 0)})
+    hist = a.get("cycle_reject_histogram") or {}
+    if isinstance(hist, dict):
+        for reason in ("CYCLE_QUOTE_FAILED", "NEGATIVE_GROSS", "PHANTOM_QUOTE_BPS_OVERFLOW"):
+            if reason in hist and not any(b["reason"] == reason for b in top_blockers):
+                top_blockers.append({"reason": reason, "count": int(hist[reason] or 0)})
+    gb_metrics = (scan_scope.get("graph_build_metrics") or {})
+    dec_unknown = int((gb_metrics.get("edge_build_skip_histogram") or {}).get("decimals_unknown") or 0)
+    if dec_unknown:
+        top_blockers.append({"reason": "decimals_unknown", "count": dec_unknown})
+
+    by_adapter = rca.get("by_adapter_family_leg_errors") or acceptance.get("quote_lane_adapter_errors") or {}
+    if isinstance(by_adapter, dict):
+        for family, count in sorted(by_adapter.items(), key=lambda kv: int(kv[1] or 0), reverse=True)[:3]:
+            top_blockers.append(
+                {"reason": f"{family}_LEG_ERRORS", "count": int(count or 0), "owner": "M9_adapter"}
+            )
+
+    m8_stale = bool((a.get("bridge_source_metrics") or {}).get("m8_stale"))
+    handoff_ready = bool(
+        operator.get("M8_2_HANDOFF") == "REACHED"
+        or (m8_2_report or {}).get("handoff_ready")
+    )
+    cycles_quoteable = _safe_int(a.get("cycles_quoteable"))
+    quoteable_not_economic = cycles_quoteable > 0 and cycles_positive == 0
+
+    size_ladder = a.get("sizes_usd") or a.get("scan_sizes_usd") or []
+    if not size_ladder:
+        infra = a.get("infra_telemetry") or {}
+        size_ladder = infra.get("sizes_usd") or []
+    top_losing_leg = (rca.get("top_value_loss_legs") or [None])[0]
+
+    return {
+        "layer_ownership": operator.get("layer_ownership")
+        or [
+            {"layer": "M8_2_handoff", "status": "REACHED" if handoff_ready else "NOT_REACHED", "blocker_owner": None},
+            {"layer": "M9_quote", "status": quote_liveness.get("quote_liveness_status"), "blocker_owner": operator.get("primary_blocker_owner")},
+            {"layer": "M9_economics", "status": quote_liveness.get("economics_status"), "blocker_owner": "M9_economics" if cycles_positive == 0 else None},
+        ],
+        "primary_blocker_owner": operator.get("primary_blocker_owner"),
+        "verdict_labels": operator.get("verdict_labels") or [],
+        "do_not_claim": {
+            "active": not economics_claim_allowed,
+            "forbidden_claims": forbidden,
+            "banner": (
+                "DO NOT CLAIM economics / profit-ready — cycles_positive_gross=0 or qsr_econ=0"
+                if not economics_claim_allowed
+                else None
+            ),
+        },
+        "operator_warnings": [
+            w
+            for w in [
+                (
+                    "QUOTEABLE_NOT_ECONOMIC"
+                    if quoteable_not_economic
+                    else None
+                ),
+                (
+                    "STABLE_VALUE_RATIO_OUTLIER"
+                    if int(rca.get("summary", {}).get("stable_value_ratio_outlier_legs") or 0) > 0
+                    else None
+                ),
+                (
+                    "AMOUNT_CONTINUITY_VIOLATION"
+                    if int(rca.get("summary", {}).get("amount_continuity_violations") or 0) > 0
+                    else None
+                ),
+            ]
+            if w
+        ],
+        "artifact_validity": {
+            "duration_fulfilled": bool(a.get("duration_fulfilled")),
+            "runner_outcome": a.get("runner_outcome"),
+            "artifact_stale": _safe_int(file_age_s) > 600 if file_age_s is not None else None,
+        },
+        "process_state": {
+            "active_runner_expected": False,
+            "note": "Dashboard is read-only; verify M9 runner via process list",
+        },
+        "size_ladder": {
+            "sizes_usd": size_ladder,
+            "dynamic_size_enabled": (a.get("infra_telemetry") or {}).get("dynamic_size_enabled"),
+            "selected_sizes_sample": [
+                o.get("dynamic_size_usd") or o.get("market_size_usd")
+                for o in (a.get("top_opportunities") or [])[:5]
+                if isinstance(o, dict)
+            ],
+        },
+        "top_losing_leg": top_losing_leg,
+        "adapter_leg_isolation": rca.get("adapter_leg_isolation") or {},
+        "cycle_length_health": cycle_length_health,
+        "quarantine_impact": quarantine_impact,
+        "top_blockers": top_blockers[:10],
+        "qsr_semantics": operator.get("qsr_semantics")
+        or {
+            "qsr": "all quote attempts success rate",
+            "qsr_liveness": "size_usd<=5 subset only",
+            "qsr_econ": "economics-sized quotes; 0 => NOT_PROVEN",
+        },
+        "freshness": {
+            "handoff_ready": handoff_ready,
+            "m8_stale": m8_stale,
+            "duration_fulfilled": bool(a.get("duration_fulfilled")),
+            "artifact_path_hint": os.environ.get("ARBY_DASHBOARD_M9_SHADOW_PATH") or str(M9_SHADOW_HANDOFF_PATH),
+        },
+        "m8_2_handoff_status": (m8_2_report or {}).get("goal_status"),
+    }
+
+
 def build_m9_current_payload(
     *,
     artifact: dict | None,
     m8_1_artifact: dict | None = None,
     sniper_artifact: dict | None = None,
+    acceptance_report: dict | None = None,
+    rca_report: dict | None = None,
+    quarantine_probe: dict | None = None,
+    m8_2_report: dict | None = None,
     now_utc: datetime,
     file_age_s: int | None = None,
+    artifact_source_path: str = "",
 ) -> dict:
     """Build M9 graph-arb operator dashboard payload.
 
     Merges data from:
-      - m9_graph_latest.json  — M9 shadow scanner rolling artifact
+      - m9 shadow artifact (rolling or graph-handoff validation)
       - m8_1_exotic_inventory_latest.json  — M8.1 inventory summary
       - new_pool_sniper_latest.json  — M8 new-pool scout (pool count)
+      - m9_lane_acceptance_report + RCA + quarantine probe (operator control plane)
     """
     a = artifact or {}
     m8_1 = m8_1_artifact or {}
@@ -1227,6 +1438,8 @@ def build_m9_current_payload(
         "cycles_quoteable": _safe_int(a.get("cycles_quoteable")),
         "cycles_positive_gross": cycles_positive,
         "qsr": float(qsr) if qsr is not None else None,
+        "qsr_liveness": a.get("qsr_liveness"),
+        "qsr_econ": a.get("qsr_econ"),
         "p50_gross_bps": econ.get("p50_gross_bps"),
         "p90_gross_bps": econ.get("p90_gross_bps"),
         "quote_rpc_error_rate": a.get("quote_rpc_error_rate"),
@@ -1348,14 +1561,25 @@ def build_m9_current_payload(
         "runtime_gates": _rg if _rg else None,
     }
 
+    operator_control_plane = build_m9_operator_control_plane(
+        artifact=a,
+        acceptance_report=acceptance_report,
+        rca_report=rca_report,
+        quarantine_probe=quarantine_probe,
+        m8_2_report=m8_2_report,
+        file_age_s=file_age_s,
+    )
+
     return {
         "schema_family": "m9_dashboard",
-        "schema_revision": "m9_dashboard.3",
+        "schema_revision": "m9_dashboard.5",
         "now_utc": now_utc.isoformat(),
         "artifact_exists": bool(a),
+        "artifact_source_path": artifact_source_path or None,
         "artifact_age_s": file_age_s,
         "freshness_s": freshness_s,
         "generated_at_utc": generated_at,
+        "operator_control_plane": operator_control_plane,
         "m9_summary": {
             "chain": a.get("chain", "base"),
             "cycles_found": cycles_found,

@@ -375,6 +375,24 @@ def quote_cycle_sync(
             _ovf_status = STATUS_QUOTE_FAILED
             _ovf_reject = _REJECT_PHANTOM_QUOTE_BPS_OVERFLOW
         else:
+            _legs_ok = bool(leg_results) and all(l.ok for l in leg_results)
+            if _cycle_depth is None and _legs_ok:
+                # Unknown-depth probe/micro quotes can show large negative gross while
+                # every leg returned a real on-chain price — count as quoteable liveness.
+                return CycleQuoteResult(
+                    cycle=cycle,
+                    size_usd=size_usd,
+                    amount_in=initial_amount,
+                    amount_out=current_amount,
+                    gross_bps=gross_bps,
+                    status=STATUS_NEGATIVE_GROSS,
+                    reject_reason=None,
+                    leg_results=leg_results,
+                    elapsed_s=time.monotonic() - started,
+                    raw_gross_bps=round(gross_bps, 4),
+                    phantom_ceiling_bps=round(_max_reasonable_bps, 4),
+                    cycle_min_depth_usd=_cycle_depth,
+                )
             _ovf_status, _ovf_reject = oversized_reject_for_depth(
                 _cycle_depth, gross_bps=gross_bps
             )

@@ -8,7 +8,8 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from m9.graph_arb.models import CycleQuoteResult, GraphTopology
 from m9.graph_arb.pool_scorecard import (
@@ -277,6 +278,33 @@ def _build_top_opportunity(
     }
 
 
+_STABLE_PEG_SYMBOLS = frozenset(
+    {"USDC", "USDT", "DAI", "USDbC", "EURC", "crvUSD", "USDBC", "FRAX", "LUSD"}
+)
+_STABLE_VALUE_RATIO_OUTLIER_MIN = 0.5
+_STABLE_VALUE_RATIO_OUTLIER_MAX = 2.0
+
+
+def _is_stable_peg_symbol(sym: str) -> bool:
+    return (sym or "").strip().upper() in _STABLE_PEG_SYMBOLS
+
+
+def _stable_value_ratio_outlier(
+    token_in: str,
+    token_out: str,
+    norm_ratio: Optional[float],
+) -> bool:
+    """Flag stable-stable legs with implausible 1:1 value transfer."""
+    if norm_ratio is None:
+        return False
+    if not (_is_stable_peg_symbol(token_in) and _is_stable_peg_symbol(token_out)):
+        return False
+    return (
+        norm_ratio < _STABLE_VALUE_RATIO_OUTLIER_MIN
+        or norm_ratio > _STABLE_VALUE_RATIO_OUTLIER_MAX
+    )
+
+
 def _build_per_leg_rca(
     qr: CycleQuoteResult,
     route_meta_by_pool: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -284,6 +312,7 @@ def _build_per_leg_rca(
     """Build per-leg RCA list: normalized in/out amounts, implied price, pool, dex, fee."""
     cycle = qr.cycle
     result: List[Dict[str, Any]] = []
+    prev_raw_out: Optional[int] = None
     for i, edge in enumerate(cycle.edges):
         pool_lc = str(edge.pool_address or "").lower()
         inv_row = (route_meta_by_pool or {}).get(pool_lc) or {}
@@ -326,6 +355,13 @@ def _build_per_leg_rca(
             raw_out = getattr(leg_result, "amount_out", None)
             leg_data["raw_amount_in"] = raw_in
             leg_data["raw_amount_out"] = raw_out
+            if i > 0:
+                leg_data["prev_leg_out_raw"] = prev_raw_out
+                leg_data["current_leg_in_raw"] = raw_in
+                if prev_raw_out is not None and raw_in is not None:
+                    leg_data["amount_continuity_ok"] = int(raw_in) == int(prev_raw_out)
+                else:
+                    leg_data["amount_continuity_ok"] = None
             # Normalized: adjust for decimals to get human-readable amounts
             dec_in = edge.token_in_decimals
             dec_out = edge.token_out_decimals
@@ -340,6 +376,13 @@ def _build_per_leg_rca(
                     # Value change: (out - in) / in as fraction (negative = loss on this leg)
                     # Only meaningful for same-USD tokens; provided for diagnosis
                     leg_data["norm_value_ratio"] = round(norm_out / norm_in, 8)
+                    if _stable_value_ratio_outlier(
+                        edge.token_in_sym, edge.token_out_sym, norm_out / norm_in
+                    ):
+                        leg_data["stable_value_ratio_outlier"] = True
+                        leg_data["sanity_gate"] = "STABLE_VALUE_RATIO_OUTLIER"
+        if leg_result is not None and getattr(leg_result, "amount_out", None) is not None:
+            prev_raw_out = int(leg_result.amount_out)
         result.append(leg_data)
     return result
 
@@ -716,6 +759,20 @@ def _compute_layer_telemetry(
     return out
 
 
+def _unique_cycle_counts_by_length(
+    cycle_results: List[CycleQuoteResult],
+    *,
+    quoteable_only: bool = False,
+) -> Dict[str, int]:
+    """Count distinct cycle_ids per edge-length (not per quote attempt)."""
+    by_len: Dict[int, Set[str]] = defaultdict(set)
+    for qr in cycle_results:
+        if quoteable_only and qr.status not in ("POSITIVE_GROSS", "NEGATIVE_GROSS"):
+            continue
+        by_len[len(qr.cycle.edges)].add(qr.cycle.cycle_id)
+    return {str(k): len(v) for k, v in sorted(by_len.items())}
+
+
 def build_artifact(
     chain: str,
     duration_minutes: float,
@@ -797,6 +854,9 @@ def build_artifact(
     # Filled by runner after each sweep; allows tracing which endpoint served each sweep.
     active_rpc_by_sweep: "Optional[Dict[int, str]]" = None,
     spread_lifetime_block: "Optional[Dict[str, Any]]" = None,
+    # Cycle topology config + discovery reference (graph-handoff RCA)
+    cycle_lengths_used: "Optional[Tuple[int, ...]]" = None,
+    discovery_cycles_by_length: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -1278,7 +1338,19 @@ def build_artifact(
         is_not_toxic = 0 if (is_quoteable and _pfgb_sort < -500) else 1
         return (is_quoteable, is_not_toxic, qr.gross_bps)
 
-    top_cycles = sorted(cycle_results, key=_top_cycle_sort_key, reverse=True)[:10]
+    # Deduplicate by cycle_id: one row per unique cycle (best quote), not per sweep.
+    _best_by_cycle_id: Dict[str, CycleQuoteResult] = {}
+    for qr in cycle_results:
+        cid = qr.cycle.cycle_id
+        prev = _best_by_cycle_id.get(cid)
+        if prev is None or _top_cycle_sort_key(qr) > _top_cycle_sort_key(prev):
+            _best_by_cycle_id[cid] = qr
+    top_cycles = sorted(_best_by_cycle_id.values(), key=_top_cycle_sort_key, reverse=True)[:10]
+    _cycle_sweep_occurrence: Dict[str, int] = {}
+    for qr in cycle_results:
+        _cycle_sweep_occurrence[qr.cycle.cycle_id] = (
+            _cycle_sweep_occurrence.get(qr.cycle.cycle_id, 0) + 1
+        )
 
     # Step 7: toxic_pool_families — operator-visible list of pools dominating toxic cycles
     _toxic_pool_families = _compute_toxic_pool_families(cycle_results)
@@ -1343,6 +1415,12 @@ def build_artifact(
         "strategy_gate_acceptance": strategy_gate_acceptance,
         "execution_mode": execution_mode,
         "cycles_found": cycles_found,
+        "cycle_lengths_used": list(cycle_lengths_used) if cycle_lengths_used else [],
+        "cycles_found_by_length": _unique_cycle_counts_by_length(cycle_results),
+        "cycles_quoteable_by_length": _unique_cycle_counts_by_length(
+            cycle_results, quoteable_only=True
+        ),
+        "discovery_cycles_by_length": dict(discovery_cycles_by_length or {}),
         "cycles_positive_gross": cycles_positive_gross,
         "cycles_positive_gross_raw": cycles_positive_gross_raw,
         "cycles_positive_gross_quote": cycles_positive_gross_quote,
@@ -1458,8 +1536,12 @@ def build_artifact(
             for qr in top_cycles
         ],
         "top_opportunities": [
-            _build_top_opportunity(qr, _cost_profile_for_compute, route_meta_by_pool)
-            for qr in top_cycles
+            {
+                **_build_top_opportunity(qr, _cost_profile_for_compute, route_meta_by_pool),
+                "unique_cycle_rank": rank + 1,
+                "sweep_occurrence_count": _cycle_sweep_occurrence.get(qr.cycle.cycle_id, 1),
+            }
+            for rank, qr in enumerate(top_cycles)
         ],
         "toxic_pool_families": _toxic_pool_families,
         "pool_scorecards": _pool_scorecards,
