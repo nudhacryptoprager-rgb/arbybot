@@ -376,8 +376,13 @@ def _build_per_leg_rca(
                     # Value change: (out - in) / in as fraction (negative = loss on this leg)
                     # Only meaningful for same-USD tokens; provided for diagnosis
                     leg_data["norm_value_ratio"] = round(norm_out / norm_in, 8)
-                    if _stable_value_ratio_outlier(
-                        edge.token_in_sym, edge.token_out_sym, norm_out / norm_in
+                    from m9.graph_arb.cycle_sanity import (
+                        MIN_STABLE_SANITY_NORM_IN_USD,
+                        stable_value_ratio_outlier,
+                    )
+
+                    if norm_in >= MIN_STABLE_SANITY_NORM_IN_USD and stable_value_ratio_outlier(
+                        edge, leg_result
                     ):
                         leg_data["stable_value_ratio_outlier"] = True
                         leg_data["sanity_gate"] = "STABLE_VALUE_RATIO_OUTLIER"

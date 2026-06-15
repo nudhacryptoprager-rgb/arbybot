@@ -9,6 +9,7 @@ Hints are **not** M9 truth — on-chain verify happens here and in cross_dex_exp
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -121,6 +122,28 @@ def main() -> int:
         default=250,
         help="Backoff between single-venue retry passes",
     )
+    p.add_argument(
+        "--checkpoint-path",
+        default="data/tmp/m8_hint_refresh_checkpoint.json",
+        help="Resume/save progress while refreshing large watchlists",
+    )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore existing checkpoint and start from token 0",
+    )
+    p.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="Flush checkpoint every N tokens",
+    )
+    p.add_argument(
+        "--provider-timeout-s",
+        type=float,
+        default=45.0,
+        help="Per-source fetch timeout (seconds)",
+    )
     args = p.parse_args()
 
     logging.basicConfig(
@@ -192,8 +215,35 @@ def main() -> int:
 
     log.info("Refreshing hints for %d watchlist tokens", len(tokens))
 
-    timer = TimedSource()
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    checkpoint_path = Path(args.checkpoint_path)
+    hints_sidecar = checkpoint_path.with_suffix(checkpoint_path.suffix + ".hints.json")
+    start_idx = 0
     all_hints: list[PoolHint] = []
+    if not args.no_resume and checkpoint_path.is_file():
+        try:
+            ck = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            if ck.get("watchlist") == args.watchlist and ck.get("chain") == args.chain:
+                start_idx = int(ck.get("next_token_index") or 0)
+                if hints_sidecar.is_file():
+                    side = json.loads(hints_sidecar.read_text(encoding="utf-8"))
+                    all_hints = [PoolHint.from_dict(h) for h in (side.get("hints") or [])]
+                    log.info(
+                        "Resuming hint refresh from token index %d (%d hints restored)",
+                        start_idx,
+                        len(all_hints),
+                    )
+                else:
+                    log.warning(
+                        "Checkpoint at index %d but hints sidecar missing; restarting from 0",
+                        start_idx,
+                    )
+                    start_idx = 0
+        except Exception as exc:
+            log.warning("Checkpoint load failed (starting fresh): %s", exc)
+
+    timer = TimedSource()
     second_pool_hints = 0
     verification_metrics = empty_verification_metrics()
     source_pool_counts: dict[str, int] = {}
@@ -237,10 +287,21 @@ def main() -> int:
                     time.sleep(args.retry_backoff_ms / 1000.0)
             for source in sources:
                 try:
-                    batch = timer.run(
-                        f"{source}",
-                        lambda s=source, t=token: _fetch_source(s, t, chain=args.chain),
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        fut = pool.submit(
+                            lambda s=source, t=token: _fetch_source(
+                                s, t, chain=args.chain
+                            ),
+                        )
+                        batch = fut.result(timeout=max(1.0, float(args.provider_timeout_s)))
+                except FuturesTimeout:
+                    log.warning(
+                        "source=%s token=%s timed out after %.1fs",
+                        source,
+                        token[:10],
+                        args.provider_timeout_s,
                     )
+                    batch = []
                 except Exception as exc:
                     log.warning("source=%s token=%s failed: %s", source, token[:10], exc)
                     batch = []
@@ -263,11 +324,44 @@ def main() -> int:
                             second_pool_hints += 1
 
     for i, token in enumerate(tokens):
+        if i < start_idx:
+            continue
         token = token.lower()
         venue_count = _venue_count(token)
         _fetch_token_sources(token, venue_count)
+        if args.checkpoint_every and (i + 1) % int(args.checkpoint_every) == 0:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_path.write_text(
+                json.dumps(
+                    {
+                        "watchlist": args.watchlist,
+                        "chain": args.chain,
+                        "next_token_index": i + 1,
+                        "tokens_total": len(tokens),
+                        "hints_collected": len(all_hints),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            hints_sidecar.write_text(
+                json.dumps({"hints": [h.to_dict() for h in all_hints]}, indent=2),
+                encoding="utf-8",
+            )
+            log.info("Checkpoint saved at token %d/%d", i + 1, len(tokens))
         if args.sleep_ms and i + 1 < len(tokens):
             time.sleep(args.sleep_ms / 1000.0)
+
+    if checkpoint_path.is_file():
+        try:
+            checkpoint_path.unlink()
+        except OSError:
+            pass
+    if hints_sidecar.is_file():
+        try:
+            hints_sidecar.unlink()
+        except OSError:
+            pass
 
     deduped = dedupe_hints(all_hints)
     second_venue_hist: dict[str, int] = {}

@@ -673,3 +673,39 @@ class TestPhase2DecisionParam:
         art_explicit = make_sniper_artifact(phase2_decision=None)
         assert art_default["phase2_decision"] == art_explicit["phase2_decision"]
 
+
+class TestAssessSniperArtifactForM9:
+    def test_stub_active_single_placeholder_pool_not_operational(self):
+        from monitoring.sniper_artifacts import M9_SNIPER_BLOCKER, assess_sniper_artifact_for_m9
+
+        art = make_sniper_artifact(
+            status="ACTIVE",
+            metrics={
+                **make_empty_sniper_state(),
+                "pool_creation_events_seen": 1,
+            },
+            recent_events=[{"event_id": "x", "pool": "0xabc"}],
+            recent_events_by_dex={},
+        )
+        art["m8_health"] = {"goal_status": "REACHED", "blockers": []}
+        result = assess_sniper_artifact_for_m9(art)
+        assert result["operational"] is False
+        assert M9_SNIPER_BLOCKER in result["blockers"]
+
+    def test_healthy_artifact_with_m8_health_is_operational(self):
+        from monitoring.sniper_artifacts import assess_sniper_artifact_for_m9
+
+        art = make_sniper_artifact(
+            status="ACTIVE",
+            metrics={
+                **make_empty_sniper_state(),
+                "pool_creation_events_seen": 12,
+            },
+            recent_events=[{"event_id": f"e{i}", "pool": "0x" + "a" * 40} for i in range(5)],
+            recent_events_by_dex={"uniswap_v3": []},
+        )
+        art["m8_health"] = {"goal_status": "REACHED", "blockers": []}
+        result = assess_sniper_artifact_for_m9(art)
+        assert result["operational"] is True
+        assert result["blockers"] == []
+

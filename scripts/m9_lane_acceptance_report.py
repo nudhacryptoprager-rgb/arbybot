@@ -13,13 +13,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from monitoring.sniper_artifacts import M9_SNIPER_BLOCKER, assess_sniper_artifact_for_m9
+
 _DEFAULT_PATHS = {
     "sniper": REPO_ROOT / "data/runs/_rolling/new_pool_sniper_latest.json",
     "anchor": REPO_ROOT / "data/runs/_rolling/m8_1_stable_anchor_latest.json",
     "expansion": REPO_ROOT / "data/runs/_rolling/m8_cross_dex_expansion_latest.json",
-    "bridge": REPO_ROOT / "data/tmp/m9_bridge_inventory_shadow_latest.json",
-    "shadow": REPO_ROOT / "data/tmp/m9_graph_bridge_shadow_latest.json",
-    "rca": REPO_ROOT / "data/tmp/m9_quote_lane_rca_latest.json",
+    "bridge": REPO_ROOT / "data/tmp/m9_bridge_inventory_graph_handoff_latest.json",
+    "shadow": REPO_ROOT / "data/tmp/m9_graph_handoff_quote_validation_10m.json",
+    "rca": REPO_ROOT / "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json",
 }
 
 
@@ -261,6 +263,8 @@ def _build_operator_verdict(
     bridge: Optional[Dict[str, Any]],
     m9_blockers: List[str],
     rca: Optional[Dict[str, Any]],
+    sniper: Optional[Dict[str, Any]] = None,
+    sniper_assessment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Operator-facing milestone verdicts; explicit economics-claim guard."""
     handoff_ready = bool((m8_2_report or {}).get("handoff_ready"))
@@ -289,8 +293,17 @@ def _build_operator_verdict(
         m9_quote_label = "M9_QUOTE_LIVENESS_NOT_PROVEN"
 
     econ_status = quote_liveness.get("economics_status") or "NOT_PROVEN"
-    if econ_status == "NOT_PROVEN" and cycles_quoteable > 0 and cycles_positive == 0:
-        m9_econ_label = "M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_RCA"
+    rca = (shadow or {}).get("quote_lane_rca") or {}
+    continuity_violations = int(rca.get("amount_continuity_violations") or 0)
+    stable_outliers = int(rca.get("stable_value_ratio_outlier_legs") or 0)
+    if (
+        econ_status == "NOT_PROVEN"
+        and cycles_quoteable > 0
+        and (continuity_violations > 0 or stable_outliers > 0)
+    ):
+        m9_econ_label = "M9_ECONOMICS_BLOCKED_BY_AMOUNT_CONTINUITY_AND_VALUE_RATIO_RCA"
+    elif econ_status == "NOT_PROVEN" and cycles_quoteable > 0 and cycles_positive == 0:
+        m9_econ_label = "M9_ECONOMICS_NOT_PROVEN"
     elif econ_status == "NOT_PROVEN":
         m9_econ_label = "M9_ECONOMICS_NOT_PROVEN"
     else:
@@ -310,11 +323,32 @@ def _build_operator_verdict(
         forbidden_claims.append("m8_2_handoff_complete")
 
     bsm = (bridge or {}).get("bridge_source_metrics") or {}
+    _sniper_assess = sniper_assessment or assess_sniper_artifact_for_m9(sniper)
+    shadow_cycles_with_m8 = int((shadow or {}).get("cycles_with_m8_pool") or 0)
+    fresh_m8_proven = (
+        not bool(bsm.get("m8_stale"))
+        and bool(_sniper_assess.get("operational"))
+        and shadow_cycles_with_m8 > 0
+    )
+    fresh_m8_label = (
+        "FRESH_M8_PARTICIPATION_PROVEN"
+        if fresh_m8_proven
+        else "FRESH_M8_PARTICIPATION_NOT_PROVEN"
+    )
+
     layer_ownership: List[Dict[str, Any]] = [
         {
             "layer": "M8_sniper",
-            "status": (bsm.get("m8_stale") and "STALE") or "ACTIVE",
-            "blocker_owner": "M8_ARTIFACT_STALE" if bsm.get("m8_stale") else None,
+            "status": (
+                "INVALID_OR_STUB"
+                if not _sniper_assess.get("operational")
+                else ("STALE" if bsm.get("m8_stale") else "ACTIVE")
+            ),
+            "blocker_owner": (
+                M9_SNIPER_BLOCKER
+                if not _sniper_assess.get("operational")
+                else ("M8_ARTIFACT_STALE" if bsm.get("m8_stale") else None)
+            ),
         },
         {
             "layer": "M8_1_anchor",
@@ -347,8 +381,15 @@ def _build_operator_verdict(
         },
     ]
 
-    primary_blocker = None
     if not handoff_ready:
+        forbidden_claims.append("m8_2_handoff_complete")
+    if not fresh_m8_proven:
+        forbidden_claims.append("fresh_m8_participation")
+
+    primary_blocker = None
+    if not _sniper_assess.get("operational"):
+        primary_blocker = M9_SNIPER_BLOCKER
+    elif not handoff_ready:
         primary_blocker = "M8_2_handoff"
     elif four_leg == 0 and three_leg == 0:
         primary_blocker = "M9_topology_or_quarantine"
@@ -363,7 +404,10 @@ def _build_operator_verdict(
         "M8_2_HANDOFF": "REACHED" if handoff_ready else "NOT_REACHED",
         "M9_QUOTE_LIVENESS": m9_quote_label,
         "M9_ECONOMICS": m9_econ_label,
-        "verdict_labels": [m8_2_label, m9_quote_label, m9_econ_label],
+        "verdict_labels": [m8_2_label, m9_quote_label, m9_econ_label, fresh_m8_label],
+        "M9_FRESH_M8_PARTICIPATION": fresh_m8_label,
+        "m8_sniper_artifact_operational": _sniper_assess.get("operational"),
+        "m8_sniper_artifact_blockers": _sniper_assess.get("blockers") or [],
         "economics_claim_allowed": economics_claim_allowed,
         "forbidden_claims": forbidden_claims,
         "layer_ownership": layer_ownership,
@@ -392,6 +436,8 @@ def build_acceptance_report(
     exp_metrics = (expansion or {}).get("metrics") or {}
     exp_summary = (expansion or {}).get("summary") or {}
     bsm = (bridge or {}).get("bridge_source_metrics") or {}
+
+    sniper_assessment = assess_sniper_artifact_for_m9(sniper)
 
     shadow_cycles_found = int((shadow or {}).get("cycles_found") or 0)
     shadow_cycles_quoteable = int((shadow or {}).get("cycles_quoteable") or 0)
@@ -500,6 +546,11 @@ def build_acceptance_report(
             "cycles_with_m8_derived_pool": (shadow or {}).get(
                 "cycles_with_m8_derived_pool"
             ),
+            "m8_direct_cycles_found": (shadow or {}).get("m8_direct_cycles_found")
+            or (shadow or {}).get("cycles_with_direct_sniper_pool"),
+            "m8_direct_cycles_quoteable": (shadow or {}).get(
+                "m8_direct_cycles_quoteable"
+            ),
             "m8_pool_cycle_ratio": (
                 round(shadow_cycles_with_m8 / shadow_cycles_found, 4)
                 if shadow_cycles_found > 0
@@ -514,6 +565,9 @@ def build_acceptance_report(
         {
             "layer": "M8_freshness",
             "m8_stale": bsm.get("m8_stale"),
+            "m8_sniper_artifact_operational": sniper_assessment.get("operational"),
+            "m8_sniper_artifact_blockers": sniper_assessment.get("blockers"),
+            "m8_direct_routes_in_bridge": bsm.get("m8_direct_routes_in_bridge"),
             "sniper_age_seconds": bsm.get("sniper_age_seconds"),
             "sniper_generated_at_utc": bsm.get("sniper_generated_at_utc"),
             "m8_stale_threshold_seconds": bsm.get("m8_stale_threshold_seconds"),
@@ -528,6 +582,8 @@ def build_acceptance_report(
         shadow_cycles_quoteable=shadow_cycles_quoteable,
         shadow_cycles_with_m8=shadow_cycles_with_m8,
     )
+    if shadow is not None and not sniper_assessment.get("operational"):
+        m9_blockers = sorted(set([M9_SNIPER_BLOCKER] + m9_blockers))
 
     upstream_blockers: List[str] = []
     m8_2_upstream: Dict[str, Any] = {
@@ -569,6 +625,8 @@ def build_acceptance_report(
                 m9_quote_validation_blockers.append("NO_DEPTH")
 
     bridge_upstream_warnings: List[str] = []
+    if not sniper_assessment.get("operational"):
+        bridge_upstream_warnings.append(M9_SNIPER_BLOCKER)
     if int(bsm.get("graph_ready_from_m8") or 0) == 0:
         bridge_upstream_warnings.append("M8_DIRECT_INGESTION_NOT_READY")
     if bsm.get("m8_stale") and int(bsm.get("graph_ready_from_m8") or 0) > 0:
@@ -601,10 +659,13 @@ def build_acceptance_report(
         bridge=bridge,
         m9_blockers=m9_blockers,
         rca=rca,
+        sniper=sniper,
+        sniper_assessment=sniper_assessment,
     )
 
     return {
         "schema_version": "m9_lane_acceptance_report.6",
+        "m8_sniper_assessment": sniper_assessment,
         "funnel_layers": funnel_layers,
         "quote_liveness_metrics": quote_liveness,
         "operator_verdict": operator_verdict,

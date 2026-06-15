@@ -250,6 +250,18 @@ def quote_balancer_productive(
 
 # Pool-lane smoke ladder (m8.discovery.maverick_indexer.quote_smoke_maverick).
 MAVERICK_POOL_LANE_PROBE_LADDER: Tuple[int, ...] = (10_000, 1_000_000, 10**15)
+MIN_LEG0_NOTIONAL_USD: float = 1.0
+
+
+def usd_to_raw_floor(
+    size_usd: Optional[float],
+    decimals: int,
+    *,
+    min_usd: float = MIN_LEG0_NOTIONAL_USD,
+) -> int:
+    """Minimum raw token amount for at least *min_usd* notional (peg approx)."""
+    effective = max(min_usd, float(size_usd or 0))
+    return max(int(effective * (10 ** int(decimals))), 1)
 
 
 def maverick_cycle_amount_in(
@@ -258,23 +270,59 @@ def maverick_cycle_amount_in(
     pool_lane_probe_amount: Optional[int] = None,
     min_quoteable: Optional[int] = None,
     max_quoteable: Optional[int] = None,
+    leg_index: int = 0,
+    size_usd: Optional[float] = None,
+    token_in_decimals: Optional[int] = None,
 ) -> int:
-    """Prefer smallest verified pool-lane probe over USD-derived cycle size."""
-    verified: Optional[int] = None
-    if min_quoteable and int(min_quoteable) > 0:
-        verified = int(min_quoteable)
-    elif pool_lane_probe_amount and int(pool_lane_probe_amount) > 0:
-        verified = int(pool_lane_probe_amount)
-    if verified is not None:
-        chosen = verified
+    """Choose Maverick swap input for one cycle leg.
+
+    Leg 0 may bootstrap from verified pool-lane probe sizes when the USD-derived
+    amount is unusably large. Legs 1+ must use the propagated prior-leg output.
+    """
+    amount = int(cycle_amount_in)
+    if leg_index > 0:
+        chosen = amount if amount > 0 else 1
+    elif amount > 0:
+        if max_quoteable and amount > int(max_quoteable):
+            if min_quoteable and int(min_quoteable) > 0:
+                chosen = int(min_quoteable)
+            elif pool_lane_probe_amount and int(pool_lane_probe_amount) > 0:
+                chosen = int(pool_lane_probe_amount)
+            else:
+                chosen = int(max_quoteable)
+        elif (
+            min_quoteable
+            and int(min_quoteable) > 0
+            and amount > int(min_quoteable) * 1_000_000
+        ):
+            chosen = int(min_quoteable)
+        else:
+            chosen = amount
     else:
-        chosen = int(cycle_amount_in)
+        if min_quoteable and int(min_quoteable) > 0:
+            chosen = int(min_quoteable)
+        elif pool_lane_probe_amount and int(pool_lane_probe_amount) > 0:
+            chosen = int(pool_lane_probe_amount)
+        else:
+            chosen = 1
     if max_quoteable and int(max_quoteable) > 0 and chosen > int(max_quoteable):
         chosen = int(max_quoteable)
+    if leg_index == 0 and size_usd and token_in_decimals is not None:
+        usd_floor = usd_to_raw_floor(size_usd, int(token_in_decimals))
+        if max_quoteable and int(max_quoteable) > 0:
+            usd_floor = min(usd_floor, int(max_quoteable))
+        if chosen < usd_floor:
+            chosen = usd_floor
     return max(chosen, 1)
 
 
-def cap_leg_amount_in_for_edge(edge: Any, amount_in: int) -> int:
+def cap_leg_amount_in_for_edge(
+    edge: Any,
+    amount_in: int,
+    *,
+    leg_index: int = 0,
+    size_usd: Optional[float] = None,
+) -> int:
     """Per-leg amount cap before RPC (Maverick probe replay, Balancer max-in-ratio)."""
     adapter = str(getattr(edge, "adapter_type", "") or "")
     if adapter == "maverick_v2":
@@ -283,6 +331,9 @@ def cap_leg_amount_in_for_edge(edge: Any, amount_in: int) -> int:
             pool_lane_probe_amount=getattr(edge, "maverick_pool_lane_probe_amount", None),
             min_quoteable=getattr(edge, "maverick_min_quoteable_amount_raw", None),
             max_quoteable=getattr(edge, "maverick_max_quoteable_amount_raw", None),
+            leg_index=leg_index,
+            size_usd=size_usd,
+            token_in_decimals=getattr(edge, "token_in_decimals", None),
         )
     if adapter in ("balancer_stable", "balancer_weighted", "balancer_vault"):
         assets = getattr(edge, "balancer_assets", None)

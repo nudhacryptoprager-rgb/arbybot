@@ -1149,15 +1149,36 @@ def _build_m8_integration_metrics(artifact: dict) -> dict:
       graph_edges_from_m8        – edge count contributed by M8 pools
       cycles_with_m8_pool        – M9 cycles that touched an M8-sniped pool
       positive_cycles_with_m8_pool – … with positive gross spread
+      m8_direct_cycles_found     – cycles traversing a direct m8_sniper pool
+      m8_direct_cycles_quoteable – … with honest quote status
       unsupported_dex_count      – routes rejected because the DEX has no adapter
-      pending_adapter_count      – routes queued for a future adapter (e.g. V4)
+      pending_adapter_count        – routes queued for a future adapter (e.g. V4)
     """
     bsm = artifact.get("bridge_source_metrics") or {}
+    cycles_found = _safe_int(bsm.get("cycles_with_m8_pool"))
+    direct_found = _safe_int(
+        bsm.get("m8_direct_cycles_found") or bsm.get("cycles_with_direct_sniper_pool")
+    )
     return {
         "graph_ready_from_m8": _safe_int(bsm.get("graph_ready_from_m8")),
         "graph_edges_from_m8": _safe_int(bsm.get("graph_edges_from_m8")),
-        "cycles_with_m8_pool": _safe_int(bsm.get("cycles_with_m8_pool")),
+        "cycles_with_m8_pool": cycles_found,
         "positive_cycles_with_m8_pool": _safe_int(bsm.get("positive_cycles_with_m8_pool")),
+        "cycles_with_m8_derived_pool": _safe_int(bsm.get("cycles_with_m8_derived_pool")),
+        "m8_direct_routes_in_bridge": _safe_int(bsm.get("m8_direct_routes_in_bridge")),
+        "m8_direct_cycles_found": direct_found,
+        "m8_direct_cycles_quoteable": _safe_int(bsm.get("m8_direct_cycles_quoteable")),
+        "m8_derived_cycle_ratio": (
+            round(
+                _safe_int(bsm.get("cycles_with_m8_derived_pool")) / cycles_found,
+                4,
+            )
+            if cycles_found > 0
+            else None
+        ),
+        "m8_sniper_artifact_operational": bsm.get("m8_sniper_artifact_operational"),
+        "m8_sniper_artifact_blockers": bsm.get("m8_sniper_artifact_blockers") or [],
+        "m8_stale": bsm.get("m8_stale"),
         "unsupported_dex_count": _safe_int(bsm.get("unsupported_dex_count")),
         "pending_adapter_count": _safe_int(bsm.get("pending_adapter_count")),
     }
@@ -1336,6 +1357,20 @@ def build_m9_operator_control_plane(
                 (
                     "AMOUNT_CONTINUITY_VIOLATION"
                     if int(rca.get("summary", {}).get("amount_continuity_violations") or 0) > 0
+                    else None
+                ),
+                (
+                    "M8_SNIPER_ARTIFACT_INVALID_OR_STUB"
+                    if not bool(
+                        (a.get("bridge_source_metrics") or {}).get(
+                            "m8_sniper_artifact_operational", True
+                        )
+                    )
+                    else None
+                ),
+                (
+                    "M8_ARTIFACT_STALE"
+                    if m8_stale
                     else None
                 ),
             ]
@@ -1685,6 +1720,9 @@ def build_m8_current_payload(
     realizable_count = sum(1 for row in rows if row["is_realizable"])
     funnel_data = _build_m8_funnel(metrics)
     arb_economics_proven = funnel_data.get("arb_economics_proven", False)
+    from monitoring.sniper_artifacts import assess_sniper_artifact_for_m9
+
+    sniper_m9_handoff = assess_sniper_artifact_for_m9(artifact if artifact else None)
     return {
         "schema_family": "m8_dashboard",
         "schema_revision": "phase2.dashboard",
@@ -1720,6 +1758,7 @@ def build_m8_current_payload(
         "top_arb_candidates": artifact.get("top_arb_candidates") or [],
         # Warning flag: shown as banner when True (arb gate not yet passed).
         "arb_blocked_warning": not arb_economics_proven,
+        "sniper_m9_handoff": sniper_m9_handoff,
         "arb_blocked_reason": (
             None if arb_economics_proven else
             "No arb candidates with proven PnL yet. "

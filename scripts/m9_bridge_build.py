@@ -208,6 +208,18 @@ def main() -> int:
     )
     log.info("  m8_stale                 : %s", metrics["m8_stale"])
     log.info("  m8_1_stale               : %s", metrics["m8_1_stale"])
+    log.info(
+        "  m8_sniper_operational    : %s",
+        metrics.get("m8_sniper_artifact_operational"),
+    )
+    log.info(
+        "  m8_direct_routes_bridge  : %d",
+        metrics.get("m8_direct_routes_in_bridge", 0),
+    )
+    log.info(
+        "  routes_decimals_unknown  : %d",
+        metrics.get("routes_decimals_unknown", 0),
+    )
     log.info("Written: %s", args.output)
 
     # Acceptance check
@@ -270,6 +282,17 @@ def main() -> int:
         pass
 
     log.info("Bridge build: OK (graph_ready_total=%d)", metrics["graph_ready_total"])
+    try:
+        from m9.graph_arb.bridge_canonical import (
+            CANONICAL_BRIDGE_PATH,
+            sync_bridge_canonical,
+        )
+
+        if Path(args.output).resolve() == CANONICAL_BRIDGE_PATH.resolve():
+            sync_bridge_canonical(Path(args.output), metrics=metrics)
+            log.info("Canonical bridge pointer synced (graph_handoff → shadow_latest alias)")
+    except Exception as _canon_exc:
+        log.warning("WARN: bridge canonical sync skipped: %s", _canon_exc)
     return 0
 
 

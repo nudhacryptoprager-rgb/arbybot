@@ -745,6 +745,10 @@ def build_bridge_inventory(
     anchor = _load_json(anchor_path)
     base_inv = _load_json(base_inv_path)
 
+    from monitoring.sniper_artifacts import assess_sniper_artifact_for_m9
+
+    _m8_sniper_m9_assessment = assess_sniper_artifact_for_m9(sniper)
+
     # ------------------------------------------------------------------
     # Staleness detection
     # ------------------------------------------------------------------
@@ -1373,6 +1377,10 @@ def build_bridge_inventory(
         "dex_coverage_matrix": dex_coverage_matrix,
         "m8_stale": m8_stale,
         "m8_1_stale": m8_1_stale,
+        "m8_sniper_artifact_operational": _m8_sniper_m9_assessment.get(
+            "operational", False
+        ),
+        "m8_sniper_artifact_blockers": _m8_sniper_m9_assessment.get("blockers") or [],
         "sniper_age_seconds": (
             round(_sniper_age_seconds, 1) if _sniper_age_seconds is not None else None
         ),
@@ -1637,6 +1645,27 @@ def build_bridge_inventory(
                 bridge_source_metrics["graph_handoff_provenance_promoted"] = len(
                     _graph_promoted
                 )
+                _curve_promoted: List[Dict[str, Any]] = []
+                _remain_after_curve: List[Dict[str, Any]] = []
+                for _r in _exploration_routes:
+                    if str(_r.get("dex_id") or "") != "curve_stable":
+                        _remain_after_curve.append(_r)
+                        continue
+                    _prod = str(
+                        _r.get("productive_quote_status")
+                        or _r.get("quote_smoke_status")
+                        or ""
+                    )
+                    if _prod.startswith("QUOTE_OK"):
+                        _r.setdefault("origin_source", "curve_factory_discovery")
+                        _curve_promoted.append(_r)
+                    else:
+                        _remain_after_curve.append(_r)
+                _exploration_routes = _remain_after_curve
+                _canonical = _canonical + _curve_promoted
+                bridge_source_metrics["curve_active_promoted_count"] = len(
+                    _curve_promoted
+                )
             bridge_source_metrics["routes_rejected_not_m8_derived"] = len(
                 _exploration_routes
             )
@@ -1835,6 +1864,23 @@ def build_bridge_inventory(
         )
         bridge_source_metrics["expansion_handoff_routes"] = _expansion_handoff
         bridge_source_metrics["bridge_active_routes_from_handoff"] = len(final_active)
+
+    _m8_direct_routes = [
+        r for r in final_active if str(r.get("source") or "") == "m8_sniper"
+    ]
+    bridge_source_metrics["m8_direct_routes_in_bridge"] = len(_m8_direct_routes)
+    bridge_source_metrics["m8_direct_pool_count"] = len(
+        {
+            (r.get("pool_address") or "").lower()
+            for r in _m8_direct_routes
+            if r.get("pool_address")
+        }
+    )
+    bridge_source_metrics["routes_decimals_unknown"] = sum(
+        1
+        for r in final_active
+        if r.get("token0_decimals") is None or r.get("token1_decimals") is None
+    )
 
     # ------------------------------------------------------------------
     # Write output artifact

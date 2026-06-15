@@ -13,8 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-_DEFAULT_SHADOW = REPO_ROOT / "data/tmp/m9_graph_bridge_shadow_latest.json"
-_DEFAULT_OUT = REPO_ROOT / "data/tmp/m9_quote_lane_rca_latest.json"
+_DEFAULT_SHADOW = REPO_ROOT / "data/tmp/m9_graph_handoff_quote_validation_10m.json"
+_DEFAULT_OUT = REPO_ROOT / "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
+_DEFAULT_INVENTORY = REPO_ROOT / "data/tmp/m9_bridge_inventory_graph_handoff_latest.json"
 
 
 def _canonical_dex_id(dex_id: str, route_id: str = "") -> str:
@@ -935,7 +936,7 @@ def _run_cycle_rca(args: argparse.Namespace) -> int:
     artifact = json.loads(art_path.read_text(encoding="utf-8"))
     inv_path = Path(
         getattr(args, "inventory", None)
-        or REPO_ROOT / "data/tmp/m9_bridge_inventory_shadow_latest.json"
+        or _DEFAULT_INVENTORY
     )
     inventory = (
         json.loads(inv_path.read_text(encoding="utf-8")) if inv_path.exists() else None

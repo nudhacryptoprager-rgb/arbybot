@@ -36,9 +36,12 @@ _REJECT_OVERSIZED_VS_DEPTH = "OVERSIZED_VS_DEPTH"
 _REJECT_PHANTOM_QUOTE_BPS_OVERFLOW = "PHANTOM_QUOTE_BPS_OVERFLOW"
 _REJECT_TOKEN_DECIMALS_UNKNOWN = "TOKEN_DECIMALS_UNKNOWN"
 _REJECT_UNKNOWN_PRICE = "UNKNOWN_PRICE"
+_REJECT_AMOUNT_CONTINUITY_VIOLATION = "AMOUNT_CONTINUITY_VIOLATION"
+_REJECT_STABLE_VALUE_RATIO_OUTLIER = "STABLE_VALUE_RATIO_OUTLIER"
 
 STATUS_TOKEN_DECIMALS_UNKNOWN = "TOKEN_DECIMALS_UNKNOWN"
 STATUS_UNKNOWN_PRICE = "UNKNOWN_PRICE"
+STATUS_CYCLE_SANITY_FAILED = "CYCLE_SANITY_FAILED"
 
 # Depth-aware sizing (package #2): fraction of the bottleneck pool's
 # effective_depth_usd that the quote ladder is allowed to reach.  effective_depth_usd
@@ -154,6 +157,8 @@ def _probe_leg(
     rpc_url: Optional[str] = None,
     edge: Optional["GraphEdge"] = None,
     use_cache: bool = True,
+    leg_index: int = 0,
+    size_usd: Optional[float] = None,
 ) -> QuoteResult:
     """Route a single leg probe to the correct backend.
 
@@ -167,7 +172,9 @@ def _probe_leg(
     if edge is not None:
         from m9.graph_arb.productive_distinct_quote import cap_leg_amount_in_for_edge
 
-        amount_in = cap_leg_amount_in_for_edge(edge, amount_in)
+        amount_in = cap_leg_amount_in_for_edge(
+            edge, amount_in, leg_index=leg_index, size_usd=size_usd
+        )
     if use_cache and edge is not None and edge.pool_address:
         cache_key = _edge_cache_key(edge, amount_in)
         cached = edge_quote_cache.get(cache_key)
@@ -177,7 +184,9 @@ def _probe_leg(
         from m9.graph_arb.raw_http_probe import probe_quote_raw_http
         if rpc_url is None:
             raise ValueError("rpc_url is required for raw_http backend")
-        result = probe_quote_raw_http(rpc_url, route, token_in, token_out, amount_in)
+        result = probe_quote_raw_http(
+            rpc_url, route, token_in, token_out, amount_in, leg_index=leg_index
+        )
     elif quote_backend == BACKEND_ANVIL_FORK:
         # anvil_fork always routes to Anvil local fork — ignores rpc_url to avoid
         # accidentally hitting the external RPC when runner resolves BASE_RPC first.
@@ -299,7 +308,7 @@ def quote_cycle_sync(
     current_amount = initial_amount
     leg_results: List[QuoteResult] = []
 
-    for edge in cycle.edges:
+    for leg_index, edge in enumerate(cycle.edges):
         if time.monotonic() - started > timeout_s:
             return CycleQuoteResult(
                 cycle=cycle,
@@ -319,7 +328,7 @@ def quote_cycle_sync(
 
         leg_result = _probe_leg(
             w3, route, token_in, token_out, current_amount,
-            quote_backend, rpc_url, edge=edge,
+            quote_backend, rpc_url, edge=edge, leg_index=leg_index, size_usd=size_usd,
         )
         leg_results.append(leg_result)
 
@@ -336,6 +345,22 @@ def quote_cycle_sync(
                 elapsed_s=time.monotonic() - started,
             )
         current_amount = leg_result.amount_out
+
+    from m9.graph_arb.cycle_sanity import check_cycle_leg_sanity
+
+    sanity_reject = check_cycle_leg_sanity(cycle, leg_results)
+    if sanity_reject:
+        return CycleQuoteResult(
+            cycle=cycle,
+            size_usd=size_usd,
+            amount_in=initial_amount,
+            amount_out=0,
+            gross_bps=0.0,
+            status=STATUS_CYCLE_SANITY_FAILED,
+            reject_reason=sanity_reject,
+            leg_results=leg_results,
+            elapsed_s=time.monotonic() - started,
+        )
 
     # Calculate gross_bps
     if initial_amount > 0:

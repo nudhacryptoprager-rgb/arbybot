@@ -143,6 +143,8 @@ def probe_quote_raw_http(
     token_in: TokenInfo,
     token_out: TokenInfo,
     amount_in: int,
+    *,
+    leg_index: int = 0,
 ) -> QuoteResult:
     """Quote a single leg via direct JSON-RPC POST.
 
@@ -179,6 +181,7 @@ def probe_quote_raw_http(
     quote_selector: Optional[str] = None
     quote_abi_path: Optional[str] = None
     quote_pool_id: Optional[str] = None
+    reported_amount_in = amount_in
 
     try:
         rpc_throttle.acquire(n=1)  # 1 HTTP call per probe (no eth_chainId)
@@ -402,7 +405,9 @@ def probe_quote_raw_http(
                 pool_lane_probe_amount=_pool_lane_probe,
                 min_quoteable=_min_raw,
                 max_quoteable=getattr(route, "maverick_max_quoteable_amount_raw", None),
+                leg_index=leg_index,
             )
+            reported_amount_in = _effective_in
 
             def _mv_call(to: str, data: str) -> str:
                 return _eth_call_raw(rpc_url, to, data, client)
@@ -446,7 +451,7 @@ def probe_quote_raw_http(
         return QuoteResult(
             route_id=route_id,
             size_usd=0.0,
-            amount_in=amount_in,
+            amount_in=reported_amount_in,
             amount_out=amount_out,
             ok=True,
             reject_reason=None,

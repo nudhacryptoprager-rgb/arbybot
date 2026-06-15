@@ -172,6 +172,10 @@ def test_build_acceptance_report_operator_verdict():
             "qsr_liveness": 0.0,
             "qsr_econ": 0.0,
             "cycles_quoteable_by_length": {"2": 10, "3": 9, "4": 0},
+            "quote_lane_rca": {
+                "amount_continuity_violations": 2,
+                "stable_value_ratio_outlier_legs": 1,
+            },
         },
         rca={"economics_status": "NOT_PROVEN"},
         m8_2_report={
@@ -183,7 +187,9 @@ def test_build_acceptance_report_operator_verdict():
     ov = report["operator_verdict"]
     assert ov["M8_2_HANDOFF"] == "REACHED"
     assert ov["M9_QUOTE_LIVENESS"] == "M9_QUOTE_LIVENESS_PROVEN"
-    assert ov["M9_ECONOMICS"] == "M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_RCA"
+    assert ov["M9_ECONOMICS"] == "M9_ECONOMICS_BLOCKED_BY_AMOUNT_CONTINUITY_AND_VALUE_RATIO_RCA"
+    assert ov["M9_FRESH_M8_PARTICIPATION"] == "FRESH_M8_PARTICIPATION_NOT_PROVEN"
+    assert "fresh_m8_participation" in ov["forbidden_claims"]
     assert ov["economics_claim_allowed"] is False
     assert "positive_gross" in ov["forbidden_claims"]
     assert report["schema_version"] == "m9_lane_acceptance_report.6"

@@ -74,6 +74,12 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--probe-size-usd", type=float, default=100.0)
     p.add_argument("--ref-size-usd", type=float, default=2.0)
+    p.add_argument(
+        "--sleep-ms",
+        type=int,
+        default=120,
+        help="Pause between per-route depth probes (429 backoff)",
+    )
     p.add_argument("--dry-run", action="store_true", help="Probe but do not write")
     p.add_argument(
         "--force-reprobe",
@@ -158,6 +164,7 @@ def main() -> int:
         dex_quoters=dex_quoters,
         probe_size_usd=args.probe_size_usd,
         ref_size_usd=args.ref_size_usd,
+        sleep_s=max(0.0, args.sleep_ms / 1000.0),
         force_reprobe=args.force_reprobe,
     )
 

@@ -70,7 +70,37 @@ class TestProductiveDistinctQuote:
             pool_lane_probe_amount=10**15,
             min_quoteable=10_000,
             max_quoteable=10**15,
+            leg_index=0,
         ) == 10_000
+
+    def test_maverick_cycle_amount_in_preserves_propagated_inter_leg_amount(self):
+        assert maverick_cycle_amount_in(
+            1_010_498,
+            pool_lane_probe_amount=10**15,
+            min_quoteable=10**15,
+            max_quoteable=10**15,
+            leg_index=1,
+        ) == 1_010_498
+
+    def test_maverick_leg0_usd_floor_prevents_micro_probe(self):
+        # Without size_usd: thin-pool min_quoteable wins (existing behaviour).
+        assert maverick_cycle_amount_in(
+            10**18,
+            pool_lane_probe_amount=10**15,
+            min_quoteable=10_000,
+            max_quoteable=10**15,
+            leg_index=0,
+        ) == 10_000
+        # With size_usd=25 on 18-dec DAI: floor is 25e18, capped by max_quoteable.
+        assert maverick_cycle_amount_in(
+            10**15,
+            pool_lane_probe_amount=10**15,
+            min_quoteable=10**15,
+            max_quoteable=10**20,
+            leg_index=0,
+            size_usd=25.0,
+            token_in_decimals=18,
+        ) == 25 * 10**18
 
     def test_balancer_cap_amount_in_respects_vault_balance(self):
         assets = [_TOKEN_A, _TOKEN_B]

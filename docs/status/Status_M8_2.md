@@ -1,10 +1,10 @@
 # Status: M8.2 Cross-DEX Expansion & Graph Handoff
 
-**Status**: **M8_2_GRAPH_HANDOFF_REACHED / M8_2_ECONOMICS_OUT_OF_SCOPE**
+**Status**: **M8_2_GRAPH_HANDOFF_REACHED / M8_2_ECONOMICS_OUT_OF_SCOPE / external_hints_expansion_freshness=REFRESHED**
 
 `goal_status`: **REACHED** (handoff lane; quality blockers soft when `handoff_ready=true`)  
 `handoff_ready`: **true**  
-`handoff_lane`: **graph_topology**  
+`handoff_lane`: **mirror_2leg**  
 `execution_enabled`: false  
 `kill_switch_active`: true
 
@@ -18,16 +18,29 @@ M9 economics:               NOT_PROVEN
 
 M8.2 fulfilled its role: found token-neighborhood topology and passed a connected graph universe to M9. It did **not** prove 2-leg mirror quote-ready or profit.
 
+## External hints freshness (2026-06-15)
+
+```text
+external_hints_expansion_freshness: REFRESHED
+hints: 753 tokens (2026-06-15)
+expansion: 671 routes / 362 tokens (2026-06-15T16:40:35Z)
+hint_tokens_matched: 420
+graph_topology_ready_tokens: 5
+mirror_quote_ready_tokens: 3
+handoff_lane: mirror_2leg
+acceptance_blockers: SUBGRAPH_READY_LOW, VERIFIED_SECOND_POOL_LOW (soft)
+```
+
 ## Verified metrics (acceptance 2026-06-15)
 
 | Metric | Value |
 |--------|------:|
-| `graph_topology_ready_tokens` | **2** |
+| `graph_topology_ready_tokens` | **5** |
 | `connector_graph_ready_tokens` | **2** |
 | `token_presence_graph_ready_tokens` | **1** |
-| `cross_anchor_ready_tokens` | **0** |
-| `mirror_quote_ready_tokens` | **0** |
-| `mirror_topology_ready_tokens` | **2** |
+| `cross_anchor_ready_tokens` | **3** |
+| `mirror_quote_ready_tokens` | **3** |
+| `mirror_topology_ready_tokens` | **7** |
 | `economics_claim` | **false** |
 | `requires_m9_quote` | **true** |
 

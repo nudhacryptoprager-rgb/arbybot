@@ -222,21 +222,83 @@ class FactoryBatchResolver:
         self.config = config
         self._batcher = None
         self._w3 = None
+        self._rpc_urls: List[str] = []
+        self._rpc_index = 0
         self.stats: Dict[str, int] = {"multicall_chunks": 0, "calls": 0, "pools_found": 0}
 
-    def _ensure_batcher(self) -> bool:
-        if self._batcher is not None:
-            return True
+    def _resolve_rpc_urls(self) -> List[str]:
         if os.environ.get("ARBY_SKIP_RPC") == "1":
+            return []
+        from core.rpc_urls import (
+            apply_productive_rpc_env,
+            build_alchemy_ws_url,
+            get_rpc_url,
+            iter_dedicated_http_providers,
+        )
+
+        env = dict(os.environ)
+        try:
+            env = apply_productive_rpc_env(self.chain, env=env)
+        except RuntimeError:
+            pass
+        api = (env.get("ALCHEMY_API_KEY") or "").strip()
+        if api and not (env.get(f"{self.chain.upper()}_WSS") or "").strip():
+            ws = build_alchemy_ws_url(self.chain, api)
+            if ws:
+                env[f"{self.chain.upper()}_WSS"] = ws
+        os.environ.update(
+            {k: v for k, v in env.items() if k.startswith(("BASE_", "ARBITRUM_", "ARBY_")) or k == "ALCHEMY_API_KEY"}
+        )
+        urls = [url for _label, url in iter_dedicated_http_providers(self.chain, env=env)]
+        if not urls:
+            rpc = get_rpc_url(self.chain)
+            if rpc:
+                urls = [rpc]
+        return urls
+
+    def _ensure_batcher(self, rpc_index: Optional[int] = None) -> bool:
+        if self._batcher is not None and rpc_index is None:
+            return True
+        if not self._rpc_urls:
+            self._rpc_urls = self._resolve_rpc_urls()
+        if not self._rpc_urls:
             return False
-        from core.rpc_urls import get_rpc_url
         from core.multicall import MulticallBatcher
 
-        rpc = get_rpc_url(self.chain)
-        if not rpc:
-            return False
+        idx = self._rpc_index if rpc_index is None else rpc_index
+        idx %= len(self._rpc_urls)
+        rpc = self._rpc_urls[idx]
         self._batcher = MulticallBatcher(rpc)
-        return self._batcher._ensure_web3()
+        self._w3 = None
+        if not self._batcher._ensure_web3():
+            return False
+        self._rpc_index = idx
+        return True
+
+    def _execute_multicall_with_failover(
+        self, calls: List[Tuple[str, bool, bytes]]
+    ) -> List[Any]:
+        if not self._rpc_urls:
+            self._rpc_urls = self._resolve_rpc_urls()
+        if not self._rpc_urls:
+            return []
+        last_results: List[Any] = []
+        for attempt in range(len(self._rpc_urls)):
+            idx = (self._rpc_index + attempt) % len(self._rpc_urls)
+            if not self._ensure_batcher(idx):
+                continue
+            prev_429 = int((self._batcher.stats or {}).get("multicall_429", 0))  # type: ignore[union-attr]
+            last_results = self._batcher._execute_multicall(calls)  # type: ignore[union-attr]
+            cur_429 = int((self._batcher.stats or {}).get("multicall_429", 0))  # type: ignore[union-attr]
+            if last_results:
+                self._rpc_index = idx
+                return last_results
+            if cur_429 > prev_429 and attempt + 1 < len(self._rpc_urls):
+                prov = self._rpc_urls[idx].split("/")[2][:30]
+                _log.warning("Multicall 429 on %s — failing over to next RPC", prov)
+                continue
+            break
+        return last_results
 
     def _encode_v2_get_pair(self, factory: str, token_a: str, token_b: str) -> bytes:
         from web3 import Web3
@@ -420,7 +482,7 @@ class FactoryBatchResolver:
             return out
 
         self.stats["calls"] += len(calls)
-        results = self._batcher._execute_multicall(calls)  # type: ignore[union-attr]
+        results = self._execute_multicall_with_failover(calls)
         self.stats["multicall_chunks"] += 1
         if not results:
             for key in call_keys:

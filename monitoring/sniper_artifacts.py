@@ -26,10 +26,12 @@ __all__ = [
     "SCHEMA_REVISION",
     "ROLLING_ARTIFACT_PATH",
     "REQUIRED_TOP_LEVEL_FIELDS",
+    "M9_SNIPER_BLOCKER",
     "make_empty_sniper_state",
     "make_sniper_artifact",
     "write_sniper_artifact",
     "validate_sniper_artifact",
+    "assess_sniper_artifact_for_m9",
 ]
 
 # ---------------------------------------------------------------------------
@@ -293,3 +295,99 @@ def validate_sniper_artifact(artifact: Dict[str, Any]) -> List[str]:
         violations.append("'reasons' must be a list")
 
     return violations
+
+
+# ---------------------------------------------------------------------------
+# M9 handoff operational gate (detect stub/minimal sniper artifacts)
+# ---------------------------------------------------------------------------
+
+M9_SNIPER_BLOCKER = "M8_SNIPER_ARTIFACT_INVALID_OR_STUB"
+
+# Minimum hex chars (without 0x) for a real pool address on EVM chains.
+_MIN_POOL_HEX_LEN = 40
+
+
+def _is_placeholder_pool_address(pool: Optional[str]) -> bool:
+    """True when pool looks like a test stub (0xabc) rather than a full address."""
+    raw = (pool or "").strip().lower()
+    if not raw.startswith("0x"):
+        return True
+    body = raw[2:]
+    if not body:
+        return True
+    if len(body) < _MIN_POOL_HEX_LEN:
+        return True
+    return False
+
+
+def assess_sniper_artifact_for_m9(
+    artifact: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Assess whether rolling sniper artifact supports fresh M8→M9 claims.
+
+    Universal heuristics only — no pool-address allowlists.
+    Returns operational=False when schema/health/stub checks fail.
+    """
+    blockers: List[str] = []
+
+    if artifact is None:
+        return {
+            "operational": False,
+            "blockers": [M9_SNIPER_BLOCKER, "M8_SNIPER_ARTIFACT_MISSING"],
+            "m8_health_present": False,
+            "recent_events_by_dex_present": False,
+            "recent_events_count": 0,
+            "pool_creation_events_seen": 0,
+        }
+
+    schema_violations = validate_sniper_artifact(artifact)
+    if schema_violations:
+        blockers.append(M9_SNIPER_BLOCKER)
+        blockers.append("M8_SNIPER_SCHEMA_INVALID")
+
+    if "m8_health" not in artifact:
+        blockers.append("M8_SNIPER_MISSING_M8_HEALTH")
+
+    if "recent_events_by_dex" not in artifact:
+        blockers.append("M8_SNIPER_MISSING_RECENT_EVENTS_BY_DEX")
+
+    metrics = artifact.get("metrics") or {}
+    if not isinstance(metrics, dict):
+        blockers.append("M8_SNIPER_METRICS_INVALID")
+        metrics = {}
+
+    events_seen = int(metrics.get("pool_creation_events_seen") or 0)
+    recent = artifact.get("recent_events") or []
+    if not isinstance(recent, list):
+        blockers.append("M8_SNIPER_RECENT_EVENTS_INVALID")
+        recent = []
+
+    # Stub: ACTIVE listener artifact with trivial event window (e.g. single 0xabc pool).
+    status = str(artifact.get("status") or "")
+    if status == "ACTIVE" and len(recent) <= 1 and events_seen <= 1:
+        if not recent:
+            blockers.append("M8_SNIPER_STUB_MINIMAL_CONTENT")
+        else:
+            pool = recent[0].get("pool") if isinstance(recent[0], dict) else None
+            if _is_placeholder_pool_address(pool):
+                blockers.append("M8_SNIPER_STUB_PLACEHOLDER_POOL")
+
+    operational = (
+        not schema_violations
+        and "m8_health" in artifact
+        and "recent_events_by_dex" in artifact
+        and not any(b.startswith("M8_SNIPER_STUB") for b in blockers)
+        and (events_seen > 1 or len(recent) > 1)
+    )
+    if not operational:
+        blockers = sorted(set([M9_SNIPER_BLOCKER] + blockers))
+
+    return {
+        "operational": operational,
+        "blockers": sorted(set(blockers)),
+        "m8_health_present": "m8_health" in artifact,
+        "recent_events_by_dex_present": "recent_events_by_dex" in artifact,
+        "recent_events_count": len(recent),
+        "pool_creation_events_seen": events_seen,
+        "m8_health_goal_status": (artifact.get("m8_health") or {}).get("goal_status"),
+    }

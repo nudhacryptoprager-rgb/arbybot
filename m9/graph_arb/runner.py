@@ -1983,6 +1983,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 e.pool_address.lower() in _m8_direct_pool_addrs for e in qr.cycle.edges
             )
         )
+        _quoteable_statuses_m8 = frozenset({"POSITIVE_GROSS", "NEGATIVE_GROSS"})
+        _cycles_direct_quoteable = sum(
+            1
+            for qr in cycle_results
+            if qr.status in _quoteable_statuses_m8
+            and any(
+                e.pool_address.lower() in _m8_direct_pool_addrs for e in qr.cycle.edges
+            )
+        )
         _cycles_with_derived = sum(
             1
             for qr in cycle_results
@@ -2000,6 +2009,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             and any(e.pool_address.lower() in _m8_pool_addrs for e in qr.cycle.edges)
         )
         _bridge_source_metrics["cycles_with_direct_sniper_pool"] = _cycles_with_direct
+        _bridge_source_metrics["m8_direct_cycles_found"] = _cycles_with_direct
+        _bridge_source_metrics["m8_direct_cycles_quoteable"] = _cycles_direct_quoteable
         _bridge_source_metrics["cycles_with_m8_derived_pool"] = _cycles_with_derived
         _bridge_source_metrics["cycles_with_m8_pool"] = _cycles_with_m8
         _bridge_source_metrics["positive_cycles_with_m8_pool"] = _positive_cycles_with_m8
