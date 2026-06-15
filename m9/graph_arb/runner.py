@@ -573,6 +573,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         extract_inventory_stats, best_inventory_path,
     )
     from m9.graph_arb.finder import find_cycles, analyze_topology, rank_cycles
+    from m9.graph_arb.topology_diagnostic import count_cycles_by_length
     from m9.graph_arb.artifacts import build_artifact, write_artifact
 
     # Safe for minimal argparse.Namespace in gate/regression tests (no parser defaults).
@@ -1080,12 +1081,17 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 diagnostic_admission_mode=_diag_admission_mode,
             )
             if _disc_adj:
-                _discovery_cycles_found = len(
-                    find_cycles(_disc_adj, max_cycles=min(cycles_limit, 5000))
+                _disc_cycle_stats = count_cycles_by_length(
+                    _disc_adj, _cycle_lengths, max_cycles=min(cycles_limit, 5000)
+                )
+                _discovery_cycles_found = int(
+                    _disc_cycle_stats.get("cycles_found_topology_total") or 0
                 )
                 log.info(
-                    "Discovery topology reference: %d cycles before productive filters",
+                    "Discovery topology reference: %d cycles before productive filters "
+                    "(by_length=%s)",
                     _discovery_cycles_found,
+                    _disc_cycle_stats.get("cycles_by_length"),
                 )
         except Exception as _disc_topo_exc:
             log.debug("Discovery topology reference skipped: %s", _disc_topo_exc)

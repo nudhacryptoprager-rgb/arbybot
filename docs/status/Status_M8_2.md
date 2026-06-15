@@ -44,18 +44,9 @@ economics_claim           = false
 handoff_lane              = graph_topology
 ```
 
-Bridge (`--graph-handoff-only --no-registry`): **66** active routes (was 6), `graph_handoff_cycle_potential_routes=69`, `graph_handoff_provenance_promoted=60`.
+Bridge (`--graph-handoff-only --no-registry`): **285** active routes, `graph_handoff_cycle_potential_routes=288`, `handoff_lane=graph_topology`.
 
-Handoff funnel (expansion refresh, same artifact):
-
-```text
-expansion_handoff_tagged_routes: 113
-graph_handoff_universe_routes:   69
-bridge_active_routes:            66
-include: focus_ready=9, neighborhood_symbol_pair=60
-```
-
-`handoff_lane` in expansion summary: **graph_topology**
+Topology diagnostic: `scripts/m9_graph_topology_diagnostic.py` → `cycles_found_topology=28` (discovery lane, mostly 2-leg).
 
 ## Lanes
 

@@ -853,6 +853,11 @@ def build_graph_from_inventory(
                 _record_admission_skip(edge_build_skip_samples, "same_token_pair", entry)
             continue
 
+        from m9.graph_arb.node_canonical import canonical_graph_node
+
+        sym0 = canonical_graph_node(sym0, t0.address)
+        sym1 = canonical_graph_node(sym1, t1.address)
+
         edge_key_fwd = f"{route_id}>{sym0}@{sym1}"
         edge_key_rev = f"{route_id}>{sym1}@{sym0}"
 

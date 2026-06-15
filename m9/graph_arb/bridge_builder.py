@@ -422,7 +422,11 @@ def _load_cross_dex_expansion_routes(
     if graph_handoff_only:
         _universe, _funnel = select_graph_handoff_universe_routes(routes_raw, debug)
         handoff_funnel = _funnel
-        universe_keys = {_route_pool_key(r) for r in _universe if _route_pool_key(r)[0]}
+        universe_route_ids = {
+            str(r.get("route_id") or "") for r in _universe if r.get("route_id")
+        }
+    else:
+        universe_route_ids = set()
 
     routes: List[Dict[str, Any]] = []
     _graph_handoff_reject_hist: Dict[str, int] = {}
@@ -433,17 +437,20 @@ def _load_cross_dex_expansion_routes(
             )
             continue
         if graph_handoff_only:
-            if not universe_keys:
+            if not universe_route_ids:
                 _graph_handoff_reject_hist["NO_GRAPH_HANDOFF_UNIVERSE"] = (
                     _graph_handoff_reject_hist.get("NO_GRAPH_HANDOFF_UNIVERSE", 0) + 1
                 )
                 continue
-            if _route_pool_key(raw) not in universe_keys:
+            rid = str(raw.get("route_id") or "")
+            if rid not in universe_route_ids:
                 _graph_handoff_reject_hist["NOT_IN_GRAPH_HANDOFF_UNIVERSE"] = (
                     _graph_handoff_reject_hist.get("NOT_IN_GRAPH_HANDOFF_UNIVERSE", 0) + 1
                 )
                 continue
-        tagged = apply_bridge_handoff_metadata(dict(raw))
+        from m9.graph_arb.node_canonical import normalize_expansion_route_tokens
+
+        tagged = apply_bridge_handoff_metadata(normalize_expansion_route_tokens(dict(raw)))
         routes.append(tagged)
     _hint_only_dropped = len(routes_raw) - len(routes)
     summary = data.get("summary") or {}
@@ -1862,5 +1869,26 @@ def build_bridge_inventory(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output_artifact, f, ensure_ascii=False, indent=2)
+
+    if graph_handoff_only:
+        try:
+            from m9.graph_arb.topology_diagnostic import quick_cycle_count
+
+            _after_builder = quick_cycle_count(
+                str(out_path),
+                cycle_lengths=(2, 3, 4),
+                lane="discovery",
+            )
+            bridge_source_metrics["graph_handoff_cycle_potential_after_builder"] = (
+                _after_builder
+            )
+            output_artifact["graph_handoff_cycle_potential_after_builder"] = (
+                _after_builder
+            )
+            output_artifact["bridge_source_metrics"] = bridge_source_metrics
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(output_artifact, f, ensure_ascii=False, indent=2)
+        except Exception as _topo_exc:
+            bridge_source_metrics["graph_handoff_topology_error"] = str(_topo_exc)[:200]
 
     return bridge_source_metrics

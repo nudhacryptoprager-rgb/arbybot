@@ -460,6 +460,9 @@ def build_m8_2_acceptance_report(
         "graph_topology_ready_tokens": graph_topology_ready,
         "cross_anchor_ready_tokens": cross_anchor_ready,
         "connector_graph_ready_tokens": connector_graph_ready,
+        "token_presence_graph_ready_tokens": int(
+            metrics.get("token_presence_graph_ready_tokens") or 0
+        ),
         "mirror_quote_ready_tokens": mirror_quote_ready,
         "graph_handoff_cycle_potential_routes": cycle_potential,
         "handoff_funnel": metrics.get("handoff_funnel"),
@@ -510,12 +513,18 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    expansion_path = Path(args.expansion)
+    expansion_doc = _load(expansion_path)
     report = build_m8_2_acceptance_report(
         sniper=_load(Path(args.sniper)),
         hints=_load(Path(args.hints)),
-        expansion=_load(Path(args.expansion)),
+        expansion=expansion_doc,
         strict=bool(args.strict),
     )
+    if expansion_doc is not None:
+        expansion_path.write_text(
+            json.dumps(expansion_doc, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")

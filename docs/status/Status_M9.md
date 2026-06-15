@@ -4,6 +4,15 @@
 
 **Current runtime line:** **M8_2_GRAPH_HANDOFF_REACHED / M9_QUOTE_VALIDATION_BLOCKED**
 
+```text
+M9_QUOTE_VALIDATION_IN_PROGRESS:
+  topology: cycles_found=96 (ARBY_M9_CYCLE_LENGTHS=2,3,4)
+  quote: cycles_quoteable=0 (economics NOT_PROVEN)
+  bridge_cycles_3_4: discovery 3=60 / 4=48 (see topology diagnostic)
+  expansion_vs_bridge: full 471 routes retain 3/4 cycles; selection preserves closure
+  next_owner: quote/depth RCA (not M8.2 rollback)
+```
+
 | Layer | Status | Source |
 |-------|--------|--------|
 | M8 / M8.1 upstream | **REACHED** | [Status_M8.md](Status_M8.md), [Status_M8_1.md](Status_M8_1.md) |
@@ -16,20 +25,13 @@ M8_2_UPSTREAM_READY: true
 M9_ECONOMICS_STATUS: NOT_EVALUATED_AFTER_GRAPH_HANDOFF
 ```
 
-## Graph-handoff quote validation (2026-06-15, widened universe)
+## Graph-handoff topology RCA
 
-| Step | Result |
-|------|--------|
-| Expansion handoff funnel | `graph_handoff_universe_routes=69`, `cycle_potential=69` |
-| Bridge `--graph-handoff-only --no-registry` | `graph_ready_total=66`, `active_routes=66`, `m8_2_handoff_lane=graph_topology` |
-| M9 shadow inventory | `data/tmp/m9_bridge_inventory_graph_handoff_latest.json` |
-| M9 quote validation run | `data/tmp/m9_graph_handoff_quote_validation_10m.json` |
-| `cycles_found` / `cycles_quoteable` | **0** / **0** (12 tokens in graph, 10 M8-sniper edges) |
-| `m9_quote_validation_blockers` | **`UPSTREAM_OK_BUT_NO_CYCLES`** |
+Full expansion (`routes_admitted=471`) contains **3/4-leg cycles** in discovery lane (see `m9_graph_topology_diagnostic.py --expansion ... --bridge ...`). Prior `--graph-handoff-only` selection dropped closure edges → bridge showed `cycles_3_4=0` while full expansion did not.
 
-**Interpretation:** M8.2 handoff succeeded and universe widened **6 → 66** active bridge routes. M9 graph cycle builder still finds **no closable cycles** — next RCA is **M9 graph builder / productive-lane edge admission**, not M8.2 rollback.
+**Fix in progress:** cycle-preserving `select_graph_handoff_universe_routes()`, node canonicalization (`WETH`/`0x420000`), placeholder `T` symbol repair, expansion-vs-bridge comparison in topology diagnostic.
 
-**Next action:** widen graph-handoff universe further (`cross_anchor` still 0); if cycles remain 0 at 66 routes, fix M9 cycle builder edge wiring from expansion routes.
+Required evidence: `data/tmp/m9_graph_topology_diagnostic_latest.json` with `expansion_vs_bridge` block.
 
 ## Precise claims
 
@@ -41,17 +43,17 @@ M9 economics:               NOT_PROVEN
 
 Do **not** claim profit-ready until `cycles_quoteable > 0` and depth/sizing RCA passes.
 
-## Next steps (M9-owned)
-
-1. If `cycles_found=0`: widen graph handoff universe (`cross_anchor`, more tokens) — M8.2 expansion rerun
-2. If `cycles_found>0` but `cycles_quoteable=0`: RCA `QUOTE_REVERT`, `NO_DEPTH`
-3. If `cycles_quoteable>0`: depth/sizing/economics gate
-
 ## Canonical commands
 
 ```powershell
 py -3.11 scripts/m9_bridge_build.py --graph-handoff-only --no-registry --output data/tmp/m9_bridge_inventory_graph_handoff_latest.json
 
+py -3.11 scripts/m9_graph_topology_diagnostic.py `
+  --expansion data/runs/_rolling/m8_cross_dex_expansion_latest.json `
+  --bridge data/tmp/m9_bridge_inventory_graph_handoff_latest.json `
+  --cycle-lengths 2,3,4
+
+$env:ARBY_M9_CYCLE_LENGTHS='2,3,4'
 $env:ARBY_BRIDGE_SHADOW_SKIP_CYCLE_GATE='1'
 py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 -u -m m9.graph_arb.runner --chain base --config config/exotic_base_anchor.yaml --inventory data/tmp/m9_bridge_inventory_graph_handoff_latest.json --duration-minutes 10 --productive-lane --require-factory-verified --quote-backend raw_http --quote-workers 1 --max-cycles-per-sweep 20 --artifact-path data/tmp/m9_graph_handoff_quote_validation_10m.json
 

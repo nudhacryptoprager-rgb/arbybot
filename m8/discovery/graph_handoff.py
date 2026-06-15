@@ -380,9 +380,13 @@ def select_graph_handoff_universe_routes(
     graph_topology_debug: List[Dict[str, Any]],
     *,
     anchor_syms: Optional[Set[str]] = None,
+    config_path: str = "config/exotic_base_anchor.yaml",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Select expansion routes for M9 graph-handoff bridge (focus + connector closure)."""
+    """Select expansion routes preserving 3/4-leg topology cycles from full expansion."""
     from collections import Counter
+
+    from m9.graph_arb.node_canonical import normalize_expansion_route_tokens
+    from m9.graph_arb.topology_diagnostic import collect_cycle_route_ids_from_routes
 
     anchors = anchor_syms if anchor_syms is not None else anchor_symbols_for_graph()
     ready_addrs = {
@@ -390,7 +394,8 @@ def select_graph_handoff_universe_routes(
         for row in graph_topology_debug
         if row.get("graph_topology_ready")
     }
-    by_focus = _bucket_routes_by_focus(routes)
+    normalized = [normalize_expansion_route_tokens(dict(r)) for r in routes]
+    by_focus = _bucket_routes_by_focus(normalized)
     neighborhood_syms: Set[str] = set()
     connector_syms: Set[str] = set()
     for focus in ready_addrs:
@@ -407,64 +412,109 @@ def select_graph_handoff_universe_routes(
         neighborhood_syms |= nbr
         connector_syms |= conn
 
-    selected: List[Dict[str, Any]] = []
-    seen: Set[Tuple[str, str, str]] = set()
+    cycle_lengths = (2, 3, 4)
+    cycle_34_ids, cycles_34_before = collect_cycle_route_ids_from_routes(
+        normalized,
+        config_path=config_path,
+        cycle_lengths=(3, 4),
+        lane="discovery",
+    )
+    _, cycles_all_before = collect_cycle_route_ids_from_routes(
+        normalized,
+        config_path=config_path,
+        cycle_lengths=cycle_lengths,
+        lane="discovery",
+    )
+
+    route_by_id: Dict[str, Dict[str, Any]] = {
+        str(r.get("route_id") or ""): r
+        for r in normalized
+        if r.get("route_id")
+    }
+    selected_map: Dict[str, Dict[str, Any]] = {}
     include_reasons: Counter[str] = Counter()
     reject_reasons: Counter[str] = Counter()
 
-    def _try_add(route: Dict[str, Any], reason: str) -> bool:
-        key = _route_pool_key(route)
-        if key[0] and key in seen:
-            return False
-        if key[0]:
-            seen.add(key)
+    def _add(route: Dict[str, Any], reason: str) -> None:
+        rid = str(route.get("route_id") or "")
+        if not rid or rid in selected_map:
+            return
         _apply_graph_handoff_tags(route)
-        selected.append(route)
+        selected_map[rid] = route
         include_reasons[reason] += 1
-        return True
 
-    for route in routes:
+    for rid in cycle_34_ids:
+        route = route_by_id.get(rid)
+        if route:
+            _add(route, "cycle_3_4_participant")
+
+    for route in normalized:
         focus = str(
             route.get("focus_token_address") or route.get("exotic_address") or ""
         ).lower()
+        if focus in ready_addrs:
+            _add(route, "focus_graph_topology_ready")
+
+    for route in normalized:
+        if str(route.get("route_id") or "") in selected_map:
+            continue
         kind = str(route.get("expansion_route_kind") or "")
         t0 = str(route.get("token0") or "")
         t1 = str(route.get("token1") or "")
-
-        if focus in ready_addrs:
-            _try_add(route, "focus_graph_topology_ready")
-            continue
-
-        if not ready_addrs:
-            reject_reasons["NO_GRAPH_TOPOLOGY_READY_TOKENS"] += 1
-            continue
 
         if kind in ("connector_graph", _LEGACY_CONNECTOR_KIND):
             if (t0 in connector_syms and t1 in anchors) or (
                 t1 in connector_syms and t0 in anchors
             ):
-                _try_add(route, "connector_closure_x_anchor")
+                _add(route, "connector_closure_x_anchor")
                 continue
-            if t0 in connector_syms or t1 in connector_syms:
-                if t0 in anchors or t1 in anchors:
-                    _try_add(route, "connector_closure_x_anchor")
-                    continue
             reject_reasons["CONNECTOR_NOT_IN_NEIGHBORHOOD"] += 1
             continue
 
         if t0 in neighborhood_syms and t1 in neighborhood_syms:
-            _try_add(route, "neighborhood_symbol_pair")
+            _add(route, "neighborhood_symbol_pair")
             continue
         if (t0 in neighborhood_syms and t1 in anchors) or (
             t1 in neighborhood_syms and t0 in anchors
         ):
-            _try_add(route, "neighborhood_anchor_touch")
+            _add(route, "neighborhood_anchor_touch")
+            continue
+        if t0 in anchors and t1 in anchors:
+            _add(route, "anchor_anchor_closure")
             continue
 
+        rid = str(route.get("route_id") or "")
+        if rid in cycle_34_ids:
+            continue
         if route.get("requires_quote_validation"):
             reject_reasons["HANDOFF_TAGGED_OUTSIDE_UNIVERSE"] += 1
         else:
             reject_reasons["NOT_IN_GRAPH_HANDOFF_UNIVERSE"] += 1
+
+    selected = list(selected_map.values())
+    _, cycles_all_after = collect_cycle_route_ids_from_routes(
+        selected,
+        config_path=config_path,
+        cycle_lengths=cycle_lengths,
+        lane="discovery",
+    )
+    _, cycles_34_after = collect_cycle_route_ids_from_routes(
+        selected,
+        config_path=config_path,
+        cycle_lengths=(3, 4),
+        lane="discovery",
+    )
+    cycles_lost = {
+        str(k): int(cycles_all_before.get(str(k), 0))
+        - int(cycles_all_after.get(str(k), 0))
+        for k in cycle_lengths
+    }
+    cycles_lost_34 = {
+        str(k): int(cycles_34_before.get(str(k), 0))
+        - int(cycles_34_after.get(str(k), 0))
+        for k in (3, 4)
+    }
+    lost_route_ids = sorted(cycle_34_ids - set(selected_map.keys()))[:48]
 
     handoff_tagged = sum(1 for r in routes if r.get("requires_quote_validation"))
     funnel: Dict[str, Any] = {
@@ -472,7 +522,15 @@ def select_graph_handoff_universe_routes(
         "expansion_handoff_tagged_routes": handoff_tagged,
         "graph_topology_ready_tokens": len(ready_addrs),
         "graph_handoff_universe_routes": len(selected),
+        "graph_handoff_route_candidates": len(selected),
         "graph_handoff_cycle_potential_routes": len(selected),
+        "graph_handoff_cycles_by_length_before_bridge": cycles_all_before,
+        "graph_handoff_cycles_by_length_after_bridge": cycles_all_after,
+        "graph_handoff_cycles_by_length_3_4_before_bridge": cycles_34_before,
+        "graph_handoff_cycles_by_length_3_4_after_bridge": cycles_34_after,
+        "cycles_lost_by_bridge_selection": cycles_lost,
+        "cycles_lost_3_4_by_bridge_selection": cycles_lost_34,
+        "routes_causing_cycle_loss": lost_route_ids,
         "include_reason_histogram": dict(sorted(include_reasons.items())),
         "reject_reason_histogram": dict(sorted(reject_reasons.items())),
         "neighborhood_symbols": sorted(neighborhood_syms),
@@ -535,6 +593,9 @@ def refresh_graph_handoff_in_expansion_doc(doc: Dict[str, Any]) -> Dict[str, Any
     summary["graph_handoff_cycle_potential_routes"] = funnel[
         "graph_handoff_cycle_potential_routes"
     ]
+    summary["graph_handoff_cycles_by_length"] = funnel.get(
+        "graph_handoff_cycles_by_length_after_bridge"
+    )
     summary["handoff_funnel"] = funnel
     summary["handoff_lane"] = handoff_lane
     summary["handoff_ready"] = bool(mirror_ready > 0 or gt > 0)
@@ -547,6 +608,9 @@ def refresh_graph_handoff_in_expansion_doc(doc: Dict[str, Any]) -> Dict[str, Any
         "graph_handoff_cycle_potential_routes": funnel[
             "graph_handoff_cycle_potential_routes"
         ],
+        "graph_handoff_cycles_by_length": funnel.get(
+            "graph_handoff_cycles_by_length_after_bridge"
+        ),
         "handoff_lane": handoff_lane,
         "handoff_ready": summary["handoff_ready"],
         "requires_m9_quote": gt > 0,
