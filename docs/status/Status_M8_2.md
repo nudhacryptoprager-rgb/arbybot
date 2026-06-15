@@ -1,92 +1,81 @@
-# Status: M8.2 Cross-DEX Expansion & Mirror Handoff
+# Status: M8.2 Cross-DEX Expansion & Graph Handoff
 
-**Status**: **MIRROR_TOPOLOGY_FOUND / MIRROR_QUOTE_READY_BLOCKED** (not `M8_2_QUALITY_REACHED`)
+**Status**: **M8_2_GRAPH_HANDOFF_REACHED / MIRROR_2LEG_QUOTE_BLOCKED**
 
-`goal_status`: BLOCKED (`MIRROR_READY_LOW` + `SUBGRAPH_READY_LOW` + `MULTI_VENUE_TOKENS_LOW` + `VERIFIED_SECOND_POOL_LOW`; `handoff_ready=false`, `mirror_quote_ready_tokens=0`)
-`schema_family`: cross_dex_expansion
-`execution_enabled`: false
+`goal_status`: **REACHED** (handoff lane; quality blockers soft when `handoff_ready=true`)  
+`handoff_ready`: **true**  
+`handoff_lane`: **graph_topology**  
+`execution_enabled`: false  
 `kill_switch_active`: true
 
-## Role in Pipeline
+## Handoff vs economics (precise wording)
 
-M8.2 discovers second-venue pools, external hints, connector synthesis, and subgraph-ready tokens. It feeds the M9 bridge builder but does **not** own cycle quoteability or economics.
-
-Acceptance artifact: `data/tmp/m8_2_acceptance_report_latest.json`  
-Canonical command:
-
-```powershell
-py -3.11 scripts/m8_2_acceptance_report.py --strict
+```text
+M8.2 handoff readiness:     REACHED
+M8.2 economics/quote:       out of scope (M9 owns quote/sizing)
+M9 economics:               NOT_PROVEN
 ```
 
-## M8.2 Quality Gates (strict)
+M8.2 fulfilled its role: found token-neighborhood topology and passed a connected graph universe to M9. It did **not** prove 2-leg mirror quote-ready or profit.
 
-| Gate | Threshold | Current (2026-06-14 fresh expansion) |
-|------|-----------|----------------------------------------:|
-| `active_scan_coverage_rate` | ≥ 0.98 | **1.0** |
-| `candidate_scan_coverage_rate` | ≥ 0.98 | **1.0** |
-| `scan_actual_attempts` | — | **15021** |
-| `missing_dexes` | [] | **[]** |
-| `subgraph_ready_tokens` | ≥ 3 | **0** |
-| `mirror_topology_ready_tokens` | ≥ 3 | **2** |
-| `mirror_quote_ready_tokens` | ≥ 1 | **0** |
-| `same_pair_mirror_tokens` | — | **2** |
-| `verified_second_pool_count` | ≥ 10 | **2** |
-| `multi_venue_tokens` | ≥ 14 | **11** |
-| `connector_routes_count` | > 0 | **67** |
-| Freshness order | sniper ≤ hints ≤ expansion | **PASS** |
+## Verified metrics (acceptance 2026-06-15)
 
-`m8_2_scan_coverage_report` blockers: **[]** (canonical coverage PROVEN).  
-`m8_2_acceptance_report` blockers: **`MIRROR_READY_LOW`**, **`SUBGRAPH_READY_LOW`**, **`MULTI_VENUE_TOKENS_LOW`**, **`VERIFIED_SECOND_POOL_LOW`**.
+| Metric | Value |
+|--------|------:|
+| `graph_topology_ready_tokens` | **2** |
+| `connector_graph_ready_tokens` | **2** |
+| `token_presence_graph_ready_tokens` | **1** |
+| `cross_anchor_ready_tokens` | **0** |
+| `mirror_quote_ready_tokens` | **0** |
+| `mirror_topology_ready_tokens` | **2** |
+| `economics_claim` | **false** |
+| `requires_m9_quote` | **true** |
 
-**Mirror lane (honest):** topology found on **2** tokens (`bNODE`, `TRITRI`) with same-pair routes on distinct DEXes, but each has only **1** quoteable leg (`SAME_PAIR_QUOTES_LT_2`). Second legs fail on-chain (`QUOTE_FAIL_ZERO_OUT` / `QUOTE_FAIL_REVERT`), not metadata gaps. `mirror_tokens` list is now explicit in expansion + acceptance top-level.
+Artifact: `data/tmp/m8_2_acceptance_report_latest.json`  
+Expansion: `data/runs/_rolling/m8_cross_dex_expansion_latest.json`
 
-## Mirror topology tokens (quote smoke 2026-06-14)
+## Handoff route contract
 
-| Token | DEX A | DEX B | Quoteable legs | Blocker |
-|-------|-------|-------|----------------|---------|
-| **bNODE** `0xf32e…d661` | aerodrome `QUOTE_OK_MIRROR_SMOKE` | uniswap_v3 `QUOTE_FAIL_ZERO_OUT` | 1/2 | `SAME_PAIR_QUOTES_LT_2` |
-| **TRITRI** `0x0b09…bf18` | uniswap_v3 `QUOTE_OK_MIRROR_SMOKE` | uniswap_v4 `QUOTE_FAIL_REVERT` | 1/2 | `SAME_PAIR_QUOTES_LT_2` |
+All routes in graph-topology universe carry:
 
-Failure breakdown (second legs): zero quoter output / zero on-chain liquidity (V3), V4 quoter revert + StateView liquidity=0 (V4). Not `QUOTE_CONFIG_MISSING` or `STALE_HINT` for these pools.
+```text
+requires_quote_validation = true
+economics_claim           = false
+handoff_lane              = graph_topology
+```
 
-## Last Expansion Artifact
+Bridge (`--graph-handoff-only --no-registry`): **66** active routes (was 6), `graph_handoff_cycle_potential_routes=69`, `graph_handoff_provenance_promoted=60`.
 
-`artifact_path`: data/runs/_rolling/m8_cross_dex_expansion_latest.json  
-`generated_at_utc`: 2026-06-14T20:28:00Z  
-`routes_admitted_count`: 471  
-`m8_tokens_in`: 203  
-`hint_tokens_matched`: 220  
-`external_hints_enabled`: true  
-`hints_generated_at_utc`: 2026-06-14T20:10:18Z  
+Handoff funnel (expansion refresh, same artifact):
 
-## M8 upstream (not blocker)
+```text
+expansion_handoff_tagged_routes: 113
+graph_handoff_universe_routes:   69
+bridge_active_routes:            66
+include: focus_ready=9, neighborhood_symbol_pair=60
+```
 
-M8 sniper acceptance **REACHED** (`2026-06-14T19:38:05Z`): `m8_health.goal_status=REACHED`, `ws+http_fallback`, `rpc_errors=0/108`. Blocker is M8.2 mirror **quote** quality, not M8 listener health.
+`handoff_lane` in expansion summary: **graph_topology**
 
-## M8.2 Blockers (not M9)
+## Lanes
 
-- `MIRROR_READY_LOW` (**active** — topology 2, quote-ready 0)
-- `SUBGRAPH_READY_LOW` (**active** — 0 tokens)
-- `MULTI_VENUE_TOKENS_LOW` (**active** — 11 < 14)
-- `VERIFIED_SECOND_POOL_LOW` (**active** — 2 < 10)
+| Lane | Status |
+|------|--------|
+| `same_pair_mirror` (2-leg quote) | topology 2, quote-ready **0** |
+| `graph_topology` (3/4-leg handoff) | **2 tokens ready** |
+| `cross_anchor_mirror` | **0** (next expansion target) |
+| `connector_graph` | **2** (primary useful signal) |
 
-## M8.2 Quality Improvements (code, this session)
+## Next owner
 
-- `resolve_route_token_addrs()` — backfill `token0_addr`/`token1_addr`, WETH native alias
-- `build_mirror_token_details()` — per-token `dex_a`/`dex_b`/`pool_a`/`pool_b`/`quote_status` in acceptance
-- V3 multi-fee-tier smoke + on-chain liquidity fallback; V4 quoter + StateView liquidity fallback
-- `m8_mirror_quote_smoke.py --force-retry` (scoped retry on failed legs only; avoid full-route blast)
-- Acceptance report top-level `mirror_tokens` + metrics
+**M9 quote validation** — not production economics claim.
 
-## Out of Scope for M8.2
+```powershell
+py -3.11 scripts/m9_bridge_build.py --graph-handoff-only --no-registry --output data/tmp/m9_bridge_inventory_graph_handoff_latest.json
+py -3.11 scripts/m9_lane_acceptance_report.py --m8-2-report data/tmp/m8_2_acceptance_report_latest.json
+```
 
-- `cycles_quoteable`, `qsr_econ`, `cycles_positive_gross` — evaluated only in `m9_lane_acceptance_report.py`
-- M9 shadow/economics: **NOT_EVALUATED** until `mirror_quote_ready_tokens > 0` and `handoff_ready=true`
+## Out of scope
 
-## Canonical Docs
-
-- `Roadmap.md`
-- `scripts/m8_2_acceptance_report.py`
-- `scripts/m8_mirror_quote_smoke.py`
-- `data/runs/_rolling/m8_cross_dex_expansion_latest.json`
-- `data/runs/_rolling/m8_external_pool_hints_latest.json`
+- `cycles_positive_gross`, `qsr_econ` — M9 only after quote validation
+- Do **not** label `M8_2_PROFIT_READY` or `QUALITY_REACHED` while `mirror_quote_ready_tokens=0` unless graph handoff also false

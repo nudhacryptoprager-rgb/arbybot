@@ -1386,6 +1386,19 @@ def expand_token_neighborhood(
         same_pair_dexes=same_pair_dexes,
         quoteable_same_pair_routes=quoteable_same_pair,
     )
+    from m8.discovery.graph_handoff import evaluate_token_graph_handoff
+
+    graph_handoff = evaluate_token_graph_handoff(
+        focus_symbol=focus_sym,
+        focus_address=exotic_address,
+        token_seen_on_dexes=token_seen_on_dexes,
+        unique_tokens=len(unique_token_syms),
+        active_routes=len(routes_admitted),
+        same_pair_routes=same_pair_routes,
+        token_presence_routes=token_presence_routes,
+        connector_routes=connector_routes,
+        anchor_syms=anchor_syms,
+    )
     if not subgraph["subgraph_ready"]:
         reject_hist["SUBGRAPH_TOO_SMALL"] += 1
 
@@ -1407,6 +1420,7 @@ def expand_token_neighborhood(
         "token_seen_on_dexes": token_seen_on_dexes,
         "subgraph": subgraph,
         "mirror": mirror,
+        "graph_handoff": graph_handoff,
         "cross_mechanic": cross_mechanic,
         "cross_mechanic_routes_tagged": _cm_tagged,
         "venues_quoteable": len(quoteable_dexes),
@@ -2029,6 +2043,15 @@ def _expand_batch_token_neighborhood(
         same_pair_mirror_token_count,
         mirror_ready_debug,
     ) = aggregate_mirror_readiness_from_routes(routes_admitted)
+    from m8.discovery.graph_handoff import aggregate_graph_handoff_from_routes
+
+    (
+        graph_topology_ready_count,
+        cross_anchor_ready_count,
+        token_presence_graph_ready_count,
+        connector_graph_ready_count,
+        graph_topology_debug,
+    ) = aggregate_graph_handoff_from_routes(routes_admitted)
     from m8.discovery.origin_source import (
         collect_m8_token_addrs,
         partition_canonical_routes,
@@ -2084,6 +2107,16 @@ def _expand_batch_token_neighborhood(
         "mirror_topology_ready_tokens": mirror_topology_ready_count,
         "mirror_quote_ready_tokens": mirror_quote_ready_count,
         "same_pair_mirror_tokens": same_pair_mirror_token_count,
+        "graph_topology_ready_tokens": graph_topology_ready_count,
+        "cross_anchor_ready_tokens": cross_anchor_ready_count,
+        "token_presence_graph_ready_tokens": token_presence_graph_ready_count,
+        "connector_graph_ready_tokens": connector_graph_ready_count,
+        "two_leg_mirror_ready_tokens": mirror_quote_ready_count,
+        "graph_handoff_ready_tokens": graph_topology_ready_count,
+        "handoff_ready": (
+            mirror_quote_ready_count > 0 or graph_topology_ready_count > 0
+        ),
+        "graph_topology_ready_debug": graph_topology_debug,
         "multi_venue_subgraph_ready_tokens": multi_venue_subgraph_ready,
         "multi_venue_tokens": _multi_venue_tokens,
         "dexes_checked": len(allowed_dex_ids),
@@ -2159,13 +2192,37 @@ def _expand_batch_token_neighborhood(
         **_candidate_summary,
         **distinct_lane,
     }
-    return {
+    handoff_ready = (
+        mirror_quote_ready_count > 0 or graph_topology_ready_count > 0
+    )
+    if mirror_quote_ready_count > 0:
+        _handoff_lane = "mirror_2leg"
+    elif graph_topology_ready_count > 0:
+        _handoff_lane = "graph_topology"
+    else:
+        _handoff_lane = "none"
+    summary["handoff_lane"] = _handoff_lane
+    artifact = {
         "schema_version": SCHEMA_VERSION,
         "generated_at_utc": _iso_now(),
         "chain": chain,
         "config_path": None,
         "input_registry_path": None,
         "summary": summary,
+        "graph_handoff": {
+            "graph_topology_ready_tokens": graph_topology_ready_count,
+            "cross_anchor_ready_tokens": cross_anchor_ready_count,
+            "token_presence_graph_ready_tokens": token_presence_graph_ready_count,
+            "connector_graph_ready_tokens": connector_graph_ready_count,
+            "two_leg_mirror_ready_tokens": mirror_quote_ready_count,
+            "graph_handoff_ready_tokens": graph_topology_ready_count,
+            "handoff_lane": _handoff_lane,
+            "handoff_ready": handoff_ready,
+            "requires_m9_quote": graph_topology_ready_count > 0,
+            "economics_claim": False,
+        },
+        "handoff_ready": handoff_ready,
+        "handoff_lane": _handoff_lane,
         "subgraph_ready_debug": subgraph_ready_debug,
         "scan_telemetry": batch_scan_telemetry,
         "scan_attempt_matrix": batch_scan_telemetry.get("scan_attempt_matrix") or {},
@@ -2182,6 +2239,10 @@ def _expand_batch_token_neighborhood(
         "tokens": [],
         "routes_admitted": routes_admitted,
     }
+    from m8.discovery.graph_handoff import refresh_graph_handoff_in_expansion_doc
+
+    refresh_graph_handoff_in_expansion_doc(artifact)
+    return artifact
 
 
 def expand_cross_dex(

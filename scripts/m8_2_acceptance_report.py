@@ -26,9 +26,12 @@ _DEFAULT_PATHS = {
     "expansion": REPO_ROOT / "data/runs/_rolling/m8_cross_dex_expansion_latest.json",
 }
 
+_GRAPH_HANDOFF_CYCLE_POTENTIAL_MIN = 12
+
 _QUALITY_GATES = {
     "subgraph_ready_tokens_min": 3,
     "mirror_quote_ready_tokens_min": 1,
+    "graph_topology_ready_tokens_min": 1,
     "verified_second_pool_count_min": 10,
     "multi_venue_tokens_min": 14,
     "connector_routes_count_min": 1,
@@ -38,6 +41,7 @@ _M8_2_BLOCKERS = frozenset(
     {
         "SUBGRAPH_READY_LOW",
         "MIRROR_READY_LOW",
+        "GRAPH_TOPOLOGY_READY_LOW",
         "VERIFIED_SECOND_POOL_LOW",
         "HINTS_STALE",
         "EXTERNAL_HINTS_STALE",
@@ -64,6 +68,7 @@ _QUALITY_BLOCKERS = frozenset(
     {
         "SUBGRAPH_READY_LOW",
         "MIRROR_READY_LOW",
+        "GRAPH_TOPOLOGY_READY_LOW",
         "VERIFIED_SECOND_POOL_LOW",
         "MULTI_VENUE_TOKENS_LOW",
         "CONNECTOR_SYNTHESIS_WEAK",
@@ -146,6 +151,24 @@ def _expansion_metrics(
         "mirror_topology_ready_tokens": summary.get("mirror_topology_ready_tokens"),
         "mirror_quote_ready_tokens": summary.get("mirror_quote_ready_tokens"),
         "same_pair_mirror_tokens": summary.get("same_pair_mirror_tokens"),
+        "graph_topology_ready_tokens": summary.get("graph_topology_ready_tokens"),
+        "cross_anchor_ready_tokens": summary.get("cross_anchor_ready_tokens"),
+        "token_presence_graph_ready_tokens": summary.get(
+            "token_presence_graph_ready_tokens"
+        ),
+        "connector_graph_ready_tokens": summary.get("connector_graph_ready_tokens"),
+        "two_leg_mirror_ready_tokens": summary.get("two_leg_mirror_ready_tokens"),
+        "graph_handoff_ready_tokens": summary.get("graph_handoff_ready_tokens"),
+        "graph_handoff_cycle_potential_routes": summary.get(
+            "graph_handoff_cycle_potential_routes"
+        )
+        or (expansion or {}).get("graph_handoff", {}).get(
+            "graph_handoff_cycle_potential_routes"
+        ),
+        "handoff_lane": summary.get("handoff_lane")
+        or (expansion or {}).get("handoff_lane"),
+        "handoff_funnel": summary.get("handoff_funnel")
+        or (expansion or {}).get("graph_handoff", {}).get("handoff_funnel"),
         "mirror_tokens": summary.get("mirror_tokens"),
         "v4_event_index_coverage_rate": summary.get("v4_event_index_coverage_rate"),
         "v4_event_index_hit_rate": summary.get("v4_event_index_hit_rate"),
@@ -289,6 +312,10 @@ def build_m8_2_acceptance_report(
     expansion: Optional[Dict[str, Any]],
     strict: bool = True,
 ) -> Dict[str, Any]:
+    if expansion is not None:
+        from m8.discovery.graph_handoff import refresh_graph_handoff_in_expansion_doc
+
+        refresh_graph_handoff_in_expansion_doc(expansion)
     metrics = _expansion_metrics(expansion)
     freshness = _freshness_block(sniper=sniper, hints=hints, expansion=expansion)
     provenance = _provenance_block(expansion=expansion, sniper=sniper)
@@ -343,9 +370,13 @@ def build_m8_2_acceptance_report(
     subgraph_ready = int(metrics.get("subgraph_ready_tokens") or 0)
     mirror_topology_ready = int(metrics.get("mirror_topology_ready_tokens") or 0)
     mirror_quote_ready = int(metrics.get("mirror_quote_ready_tokens") or 0)
+    graph_topology_ready = int(metrics.get("graph_topology_ready_tokens") or 0)
+    cross_anchor_ready = int(metrics.get("cross_anchor_ready_tokens") or 0)
+    connector_graph_ready = int(metrics.get("connector_graph_ready_tokens") or 0)
     verified_second = int(metrics.get("verified_second_pool_count") or 0)
     multi_venue = int(metrics.get("multi_venue_tokens") or 0)
     connector_routes = int(metrics.get("connector_routes_count") or 0)
+    cycle_potential = int(metrics.get("graph_handoff_cycle_potential_routes") or 0)
 
     subgraph_lane_ready = (
         subgraph_ready >= _QUALITY_GATES["subgraph_ready_tokens_min"]
@@ -353,12 +384,19 @@ def build_m8_2_acceptance_report(
     mirror_lane_ready = (
         mirror_quote_ready >= _QUALITY_GATES["mirror_quote_ready_tokens_min"]
     )
+    graph_topology_lane_ready = (
+        graph_topology_ready >= _QUALITY_GATES["graph_topology_ready_tokens_min"]
+    )
     if not subgraph_lane_ready:
         blockers.append("SUBGRAPH_READY_LOW")
     if not mirror_lane_ready:
         blockers.append("MIRROR_READY_LOW")
         if mirror_topology_ready > 0:
             warnings.append("MIRROR_TOPOLOGY_NOT_QUOTE_READY")
+    if not graph_topology_lane_ready:
+        blockers.append("GRAPH_TOPOLOGY_READY_LOW")
+        if cross_anchor_ready > 0 or connector_graph_ready > 0:
+            warnings.append("GRAPH_PARTIAL_TOPOLOGY_ONLY")
     if verified_second < _QUALITY_GATES["verified_second_pool_count_min"]:
         blockers.append("VERIFIED_SECOND_POOL_LOW")
     if multi_venue < _QUALITY_GATES["multi_venue_tokens_min"]:
@@ -390,11 +428,24 @@ def build_m8_2_acceptance_report(
     )
     if mirror_lane_ready:
         handoff_lane = "mirror_2leg"
+    elif graph_topology_lane_ready:
+        handoff_lane = "graph_topology"
     elif subgraph_lane_ready:
         handoff_lane = "subgraph_3plus"
     else:
         handoff_lane = "none"
-    handoff_ready = mirror_lane_ready or subgraph_lane_ready
+    handoff_ready = (
+        mirror_lane_ready or graph_topology_lane_ready or subgraph_lane_ready
+    )
+    if handoff_ready and cycle_potential < _GRAPH_HANDOFF_CYCLE_POTENTIAL_MIN:
+        warnings.append("GRAPH_HANDOFF_CYCLE_POTENTIAL_LOW")
+    m9_handoff_status = {
+        "two_leg_mirror_ready": mirror_lane_ready,
+        "graph_handoff_ready": graph_topology_lane_ready,
+        "m9_quote_ready": False,
+        "economics_claim": False,
+        "requires_m9_quote": graph_topology_lane_ready or mirror_lane_ready,
+    }
     hard_blockers = [
         b
         for b in blockers
@@ -403,18 +454,30 @@ def build_m8_2_acceptance_report(
     goal_status = "REACHED" if not hard_blockers else "BLOCKED"
 
     return {
-        "schema_version": "m8_2_acceptance_report.5",
+        "schema_version": "m8_2_acceptance_report.6",
         "generated_at_utc": _iso_now(),
         "layer": "M8_2_expansion",
+        "graph_topology_ready_tokens": graph_topology_ready,
+        "cross_anchor_ready_tokens": cross_anchor_ready,
+        "connector_graph_ready_tokens": connector_graph_ready,
+        "mirror_quote_ready_tokens": mirror_quote_ready,
+        "graph_handoff_cycle_potential_routes": cycle_potential,
+        "handoff_funnel": metrics.get("handoff_funnel"),
         "metrics": metrics,
         "freshness": freshness,
         "provenance": provenance,
         "per_source_verified_yield": per_source_yield,
         "subgraph_ready_debug": subgraph_debug,
         "mirror_ready_debug": mirror_debug,
+        "graph_topology_ready_debug": (
+            (expansion or {}).get("summary", {}).get("graph_topology_ready_debug")
+            or (expansion or {}).get("graph_handoff", {}).get("graph_topology_ready_debug")
+            or []
+        ),
         "mirror_tokens": mirror_debug.get("mirror_tokens") or metrics.get("mirror_tokens") or [],
         "handoff_lane": handoff_lane,
         "handoff_ready": handoff_ready,
+        "m9_handoff_status": m9_handoff_status,
         "scan_coverage": scan_coverage,
         "candidate_coverage": candidate_coverage,
         "radar_metrics": radar_metrics,

@@ -299,6 +299,64 @@ def test_m8_2_fail_sets_upstream_not_ready_on_m9():
     assert "SUBGRAPH_READY_LOW" in m9["m8_2_upstream"]["blockers"]
 
 
+def test_graph_topology_handoff_unblocks_despite_mirror_quote_zero():
+    from scripts.m9_lane_acceptance_report import build_acceptance_report
+
+    sniper, hints, expansion = _artifacts(
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=0,
+            mirror_quote_ready_tokens=0,
+            mirror_topology_ready_tokens=2,
+            graph_topology_ready_tokens=0,
+        )
+    )
+    expansion["routes_admitted"] = [
+        {
+            "dex_id": "uniswap_v3",
+            "token0": "FOO",
+            "token1": "WETH",
+            "focus_token_symbol": "FOO",
+            "focus_token_address": "0xabc123456789012345678901234567890123456",
+            "exotic_address": "0xabc123456789012345678901234567890123456",
+            "expansion_route_kind": "same_pair_mirror",
+            "pool_address": "0x1111111111111111111111111111111111111111",
+            "origin_source": "m8_watchlist_hint",
+            "matched_m8_token": True,
+            "factory_verified": True,
+        },
+        {
+            "dex_id": "aerodrome",
+            "token0": "FOO",
+            "token1": "USDC",
+            "focus_token_symbol": "FOO",
+            "focus_token_address": "0xabc123456789012345678901234567890123456",
+            "exotic_address": "0xabc123456789012345678901234567890123456",
+            "expansion_route_kind": "same_pair_mirror",
+            "pool_address": "0x2222222222222222222222222222222222222222",
+            "origin_source": "m8_watchlist_hint",
+            "matched_m8_token": True,
+            "factory_verified": True,
+        },
+    ]
+    m8_2 = build_m8_2_acceptance_report(
+        sniper=sniper, hints=hints, expansion=expansion, strict=True
+    )
+    m9 = build_acceptance_report(
+        sniper=sniper,
+        anchor=None,
+        expansion=expansion,
+        bridge={"active_routes": [], "bridge_source_metrics": {}},
+        shadow=None,
+        rca=None,
+        m8_2_report=m8_2,
+    )
+    assert m8_2["handoff_lane"] == "graph_topology"
+    assert m8_2["handoff_ready"] is True
+    assert m8_2["m9_handoff_status"]["graph_handoff_ready"] is True
+    assert m8_2["m9_handoff_status"]["two_leg_mirror_ready"] is False
+    assert "UPSTREAM_M8_2_NOT_READY" not in m9["upstream_blockers"]
+
+
 def test_mirror_handoff_unblocks_m9_upstream():
     from scripts.m9_lane_acceptance_report import build_acceptance_report
 

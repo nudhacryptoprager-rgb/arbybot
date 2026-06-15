@@ -256,6 +256,14 @@ def build_acceptance_report(
             "routes_admitted_count": exp_summary.get("routes_admitted_count"),
             "connector_routes_count": exp_summary.get("connector_routes_count"),
             "subgraph_ready_tokens": exp_summary.get("subgraph_ready_tokens"),
+            "graph_topology_ready_tokens": exp_summary.get(
+                "graph_topology_ready_tokens"
+            ),
+            "connector_graph_ready_tokens": exp_summary.get(
+                "connector_graph_ready_tokens"
+            ),
+            "mirror_quote_ready_tokens": exp_summary.get("mirror_quote_ready_tokens"),
+            "handoff_ready": exp_summary.get("handoff_ready"),
             "verified_second_pool_count": exp_summary.get(
                 "verified_second_pool_count"
             ),
@@ -363,6 +371,22 @@ def build_acceptance_report(
         if not handoff_ready:
             upstream_blockers.append("UPSTREAM_M8_2_NOT_READY")
 
+    m9_quote_validation_blockers: List[str] = []
+    if m8_2_report and m8_2_report.get("handoff_ready") and shadow is not None:
+        if shadow_cycles_found == 0:
+            m9_quote_validation_blockers.append("UPSTREAM_OK_BUT_NO_CYCLES")
+        elif shadow_cycles_quoteable == 0:
+            m9_quote_validation_blockers.append("NO_QUOTEABLE_CYCLES")
+        if int((shadow or {}).get("cycles_positive_gross") or 0) == 0 and shadow_cycles_found > 0:
+            m9_quote_validation_blockers.append("NO_POSITIVE_GROSS")
+    if rca:
+        top = (rca.get("top_reject_reasons") or rca.get("reject_histogram") or {})
+        if isinstance(top, dict):
+            if int(top.get("QUOTE_REVERT") or top.get("quote_revert") or 0) > 0:
+                m9_quote_validation_blockers.append("QUOTE_REVERT")
+            if int(top.get("NO_DEPTH") or top.get("OVERSIZED_VS_DEPTH") or 0) > 0:
+                m9_quote_validation_blockers.append("NO_DEPTH")
+
     bridge_upstream_warnings: List[str] = []
     if int(bsm.get("graph_ready_from_m8") or 0) == 0:
         bridge_upstream_warnings.append("M8_DIRECT_INGESTION_NOT_READY")
@@ -409,6 +433,12 @@ def build_acceptance_report(
         "quote_lane_adapter_errors": (rca or {}).get("by_adapter_family_leg_errors"),
         "m8_2_upstream": m8_2_upstream,
         "m9_blockers": m9_blockers,
+        "m9_quote_validation_blockers": sorted(set(m9_quote_validation_blockers)),
+        "m9_economics_status": (
+            "NOT_EVALUATED_AFTER_GRAPH_HANDOFF"
+            if m8_2_report and m8_2_report.get("handoff_ready")
+            else "NOT_EVALUATED"
+        ),
         "upstream_blockers": upstream_blockers,
         "bridge_upstream_warnings": bridge_upstream_warnings,
         "blockers": blockers,

@@ -104,6 +104,15 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--graph-handoff-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Merge only M8.2 expansion routes from graph_topology_ready focus tokens "
+            "(requires_quote_validation; no M8.2 economics claim)"
+        ),
+    )
+    p.add_argument(
         "--no-enforce-m8-provenance",
         action="store_true",
         default=False,
@@ -145,6 +154,7 @@ def main() -> int:
         registry_ttl_seconds=args.registry_ttl_seconds,
         expansion_path=(None if args.no_expansion else args.expansion or None),
         include_expansion_duplicates_for_shadow=args.include_expansion_duplicates_for_shadow,
+        graph_handoff_only=bool(args.graph_handoff_only),
         enforce_m8_provenance=not args.no_enforce_m8_provenance,
         watchlist_path=args.watchlist,
     )

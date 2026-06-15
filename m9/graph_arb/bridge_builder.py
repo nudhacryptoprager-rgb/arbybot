@@ -24,7 +24,7 @@ import os
 from collections import Counter as _Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dex.adapters.uniswap_v4 import is_safe_v4_hook as _is_safe_v4_hook
 
@@ -377,6 +377,7 @@ def _load_cross_dex_expansion_routes(
     expansion_path: str = _DEFAULT_CROSS_DEX_EXPANSION,
     chain: str = "base",
     max_age_seconds: float = 48 * 3600,
+    graph_handoff_only: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Load M8.2 cross-DEX expansion routes_admitted from rolling artifact."""
     from datetime import timezone as _tz
@@ -404,16 +405,67 @@ def _load_cross_dex_expansion_routes(
         except Exception:
             pass
     from m8.discovery.pool_hints import route_bridge_eligible
+    from m8.discovery.graph_handoff import (
+        apply_bridge_handoff_metadata,
+        refresh_graph_handoff_in_expansion_doc,
+        select_graph_handoff_universe_routes,
+        _route_pool_key,
+    )
 
-    routes = [
-        r for r in (data.get("routes_admitted") or []) if route_bridge_eligible(r)
-    ]
-    _hint_only_dropped = len(data.get("routes_admitted") or []) - len(routes)
+    refresh_graph_handoff_in_expansion_doc(data)
+    summary = data.get("summary") or {}
+    debug = list(summary.get("graph_topology_ready_debug") or [])
+    handoff_funnel = dict(summary.get("handoff_funnel") or {})
+
+    routes_raw = data.get("routes_admitted") or []
+    universe_keys: Set[Tuple[str, str, str]] = set()
+    if graph_handoff_only:
+        _universe, _funnel = select_graph_handoff_universe_routes(routes_raw, debug)
+        handoff_funnel = _funnel
+        universe_keys = {_route_pool_key(r) for r in _universe if _route_pool_key(r)[0]}
+
+    routes: List[Dict[str, Any]] = []
+    _graph_handoff_reject_hist: Dict[str, int] = {}
+    for raw in routes_raw:
+        if not route_bridge_eligible(raw):
+            _graph_handoff_reject_hist["HINT_ONLY_NOT_BRIDGE_ELIGIBLE"] = (
+                _graph_handoff_reject_hist.get("HINT_ONLY_NOT_BRIDGE_ELIGIBLE", 0) + 1
+            )
+            continue
+        if graph_handoff_only:
+            if not universe_keys:
+                _graph_handoff_reject_hist["NO_GRAPH_HANDOFF_UNIVERSE"] = (
+                    _graph_handoff_reject_hist.get("NO_GRAPH_HANDOFF_UNIVERSE", 0) + 1
+                )
+                continue
+            if _route_pool_key(raw) not in universe_keys:
+                _graph_handoff_reject_hist["NOT_IN_GRAPH_HANDOFF_UNIVERSE"] = (
+                    _graph_handoff_reject_hist.get("NOT_IN_GRAPH_HANDOFF_UNIVERSE", 0) + 1
+                )
+                continue
+        tagged = apply_bridge_handoff_metadata(dict(raw))
+        routes.append(tagged)
+    _hint_only_dropped = len(routes_raw) - len(routes)
     summary = data.get("summary") or {}
     return routes, {
         "reject_reason_histogram": data.get("reject_reason_histogram") or {},
         "multi_venue_tokens": summary.get("multi_venue_tokens", 0),
         "subgraph_ready_tokens": summary.get("subgraph_ready_tokens", 0),
+        "graph_topology_ready_tokens": summary.get("graph_topology_ready_tokens", 0),
+        "cross_anchor_ready_tokens": summary.get("cross_anchor_ready_tokens", 0),
+        "connector_graph_ready_tokens": summary.get("connector_graph_ready_tokens", 0),
+        "graph_handoff_ready_tokens": summary.get("graph_handoff_ready_tokens", 0),
+        "handoff_ready": summary.get("handoff_ready", False),
+        "handoff_lane": summary.get("handoff_lane") or data.get("handoff_lane"),
+        "graph_handoff_cycle_potential_routes": handoff_funnel.get(
+            "graph_handoff_cycle_potential_routes",
+            summary.get("graph_handoff_cycle_potential_routes", 0),
+        ),
+        "graph_handoff_universe_routes": handoff_funnel.get(
+            "graph_handoff_universe_routes", len(routes) if graph_handoff_only else 0
+        ),
+        "handoff_funnel": handoff_funnel,
+        "graph_handoff_bridge_reject_histogram": _graph_handoff_reject_hist,
         "connector_routes_count": summary.get("connector_routes_count", 0),
         "verified_second_pool_count": summary.get("verified_second_pool_count", 0),
         "routes_admitted_count": summary.get("routes_admitted_count", 0),
@@ -650,6 +702,7 @@ def build_bridge_inventory(
     registry_path: Optional[str] = None,
     registry_ttl_seconds: Optional[float] = None,
     include_expansion_duplicates_for_shadow: bool = False,
+    graph_handoff_only: bool = False,
     enforce_m8_provenance: bool = False,
     watchlist_path: Optional[str] = "data/tmp/m8_token_watchlist_latest.json",
 ) -> Dict[str, Any]:
@@ -1075,7 +1128,7 @@ def build_bridge_inventory(
     _expansion_meta: Dict[str, Any] = {}
     if expansion_path:
         _expansion_routes, _expansion_meta = _load_cross_dex_expansion_routes(
-            expansion_path, chain="base"
+            expansion_path, chain="base", graph_handoff_only=graph_handoff_only
         )
         _expansion_existing = set(base_pool_addrs) | {
             r["pool_address"].lower()
@@ -1359,6 +1412,18 @@ def build_bridge_inventory(
         "curve_discovery_admitted_count": _curve_discovery_count,
         "curve_discovery_count": _curve_discovery_count,
         "graph_ready_from_expansion": len(_expansion_routes),
+        "m8_2_handoff_ready": _expansion_meta.get("handoff_ready"),
+        "m8_2_handoff_lane": _expansion_meta.get("handoff_lane"),
+        "graph_handoff_universe_routes": _expansion_meta.get(
+            "graph_handoff_universe_routes"
+        ),
+        "graph_handoff_cycle_potential_routes": _expansion_meta.get(
+            "graph_handoff_cycle_potential_routes"
+        ),
+        "expansion_handoff_funnel": _expansion_meta.get("handoff_funnel"),
+        "graph_handoff_bridge_reject_histogram": _expansion_meta.get(
+            "graph_handoff_bridge_reject_histogram"
+        ),
         "expansion_routes_raw_input": _expansion_meta.get(
             "expansion_routes_raw_input", len(_expansion_routes)
         ),
@@ -1548,6 +1613,23 @@ def build_bridge_inventory(
             _canonical, _exploration_routes = partition_canonical_routes(
                 final_active, _m8_token_addrs
             )
+            if graph_handoff_only:
+                _graph_promoted: List[Dict[str, Any]] = []
+                _remain_exploration: List[Dict[str, Any]] = []
+                for _r in _exploration_routes:
+                    if str(_r.get("handoff_lane") or "") == "graph_topology" or (
+                        _r.get("requires_quote_validation")
+                        and str(_r.get("source") or "") == "m8_cross_dex_expansion"
+                    ):
+                        _r.setdefault("origin_source", "m8_watchlist_hint")
+                        _graph_promoted.append(_r)
+                    else:
+                        _remain_exploration.append(_r)
+                _exploration_routes = _remain_exploration
+                _canonical = _canonical + _graph_promoted
+                bridge_source_metrics["graph_handoff_provenance_promoted"] = len(
+                    _graph_promoted
+                )
             bridge_source_metrics["routes_rejected_not_m8_derived"] = len(
                 _exploration_routes
             )
@@ -1712,12 +1794,49 @@ def build_bridge_inventory(
         except Exception:
             pass
 
+    if graph_handoff_only and _expansion_meta:
+        from m8.discovery.graph_handoff import compute_expansion_to_bridge_funnel
+
+        _expansion_handoff = int(
+            _expansion_meta.get("graph_handoff_universe_routes")
+            or (_expansion_meta.get("handoff_funnel") or {}).get(
+                "graph_handoff_universe_routes"
+            )
+            or 0
+        )
+        _bridge_reject = dict(
+            _expansion_meta.get("graph_handoff_bridge_reject_histogram") or {}
+        )
+        _dedupe_loss = max(
+            0,
+            int(_expansion_meta.get("expansion_routes_raw_input") or 0)
+            - int(_expansion_meta.get("expansion_routes_after_dedupe") or 0),
+        )
+        if _dedupe_loss:
+            _bridge_reject["BRIDGE_DEDUPE_EXISTING_POOL"] = (
+                _bridge_reject.get("BRIDGE_DEDUPE_EXISTING_POOL", 0) + _dedupe_loss
+            )
+        bridge_source_metrics["expansion_to_bridge_funnel"] = (
+            compute_expansion_to_bridge_funnel(
+                expansion_funnel=_expansion_meta.get("handoff_funnel") or {},
+                bridge_input_routes=int(
+                    _expansion_meta.get("expansion_routes_raw_input") or 0
+                ),
+                bridge_active_routes=len(final_active),
+                bridge_reject_histogram=_bridge_reject,
+            )
+        )
+        bridge_source_metrics["expansion_handoff_routes"] = _expansion_handoff
+        bridge_source_metrics["bridge_active_routes_from_handoff"] = len(final_active)
+
     # ------------------------------------------------------------------
     # Write output artifact
     # ------------------------------------------------------------------
     output_artifact: Dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,
         "generated_at_utc": _iso_now(),
+        "m8_2_handoff_ready": bridge_source_metrics.get("m8_2_handoff_ready"),
+        "m8_2_handoff_lane": bridge_source_metrics.get("m8_2_handoff_lane"),
         "bridge_source_metrics": bridge_source_metrics,
         "source_inventory": base_inv_path if base_inv else None,
         "total_candidates": len(base_active) + len(m8_new_routes),
