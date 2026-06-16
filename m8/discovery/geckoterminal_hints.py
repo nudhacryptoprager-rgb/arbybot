@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from m8.discovery.clanker_source import GECKOTERMINAL_BASE_URL
 from m8.discovery.pool_hints import PoolHint, normalize_dex_id, normalize_pool_identity
+from m8.discovery.radar_layer import RADAR_REASON_NEW_POOL, stamp_radar_reason
 
 _DEFAULT_TIMEOUT_S = 12.0
 
@@ -131,7 +132,7 @@ def _pool_item_to_hint(
         fee=_safe_int(attrs.get("fee_tier")),
         tick_spacing=_safe_int(attrs.get("tick_spacing")),
     )
-    return normalize_pool_identity(hint)
+    return stamp_radar_reason(normalize_pool_identity(hint))
 
 
 def _safe_int(v: Any) -> Optional[int]:
@@ -179,6 +180,7 @@ def fetch_new_pools_backfill(
             hint.focus_token = focus
             hint.raw = dict(hint.raw or {})
             hint.raw["backfill_mode"] = "new_pools"
+            hint.radar_reason = RADAR_REASON_NEW_POOL
             hints.append(hint)
             seen_pools.add(ident)
     return hints

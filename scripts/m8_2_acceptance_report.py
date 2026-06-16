@@ -23,6 +23,7 @@ from m8.discovery.origin_source import (  # noqa: E402
 _DEFAULT_PATHS = {
     "sniper": REPO_ROOT / "data/runs/_rolling/new_pool_sniper_latest.json",
     "hints": REPO_ROOT / "data/runs/_rolling/m8_external_pool_hints_latest.json",
+    "radar": REPO_ROOT / "data/runs/_rolling/m8_radar_pool_candidates_latest.json",
     "expansion": REPO_ROOT / "data/runs/_rolling/m8_cross_dex_expansion_latest.json",
 }
 
@@ -310,6 +311,7 @@ def build_m8_2_acceptance_report(
     sniper: Optional[Dict[str, Any]],
     hints: Optional[Dict[str, Any]],
     expansion: Optional[Dict[str, Any]],
+    radar: Optional[Dict[str, Any]] = None,
     strict: bool = True,
 ) -> Dict[str, Any]:
     if expansion is not None:
@@ -346,6 +348,13 @@ def build_m8_2_acceptance_report(
         }
     )
     radar_metrics = build_radar_metrics(hints, expansion)
+    from m8.discovery.radar_layer import build_radar_funnel
+
+    radar_funnel = build_radar_funnel(
+        radar=radar, hints=hints, expansion=expansion
+    )
+    if expansion is not None and expansion.get("summary"):
+        expansion["summary"]["radar_funnel"] = radar_funnel
     if metrics.get("candidate_scan_coverage_rate") is None:
         metrics["candidate_scan_coverage_rate"] = candidate_coverage.get(
             "candidate_scan_coverage_rate"
@@ -484,6 +493,7 @@ def build_m8_2_acceptance_report(
         "scan_coverage": scan_coverage,
         "candidate_coverage": candidate_coverage,
         "radar_metrics": radar_metrics,
+        "radar_funnel": radar_funnel,
         "coverage_blockers": coverage_blockers,
         "quality_blockers": quality_blockers,
         "external_radar_blockers": external_radar_blockers,
@@ -500,6 +510,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="M8.2 mirror/subgraph/handoff acceptance")
     ap.add_argument("--sniper", default=str(_DEFAULT_PATHS["sniper"]))
     ap.add_argument("--hints", default=str(_DEFAULT_PATHS["hints"]))
+    ap.add_argument("--radar", default=str(_DEFAULT_PATHS["radar"]))
     ap.add_argument("--expansion", default=str(_DEFAULT_PATHS["expansion"]))
     ap.add_argument(
         "--output",
@@ -519,6 +530,7 @@ def main() -> int:
         sniper=_load(Path(args.sniper)),
         hints=_load(Path(args.hints)),
         expansion=expansion_doc,
+        radar=_load(Path(args.radar)),
         strict=bool(args.strict),
     )
     if expansion_doc is not None:

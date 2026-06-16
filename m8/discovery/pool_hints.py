@@ -143,6 +143,7 @@ class PoolHint:
     tick_spacing: Optional[int] = None
     hooks: Optional[str] = None
     verify_method: str = ""
+    radar_reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -174,6 +175,7 @@ class PoolHint:
             ),
             hooks=data.get("hooks"),
             verify_method=str(data.get("verify_method") or ""),
+            radar_reason=str(data.get("radar_reason") or ""),
         )
         return normalize_pool_identity(h)
 
@@ -202,6 +204,8 @@ def normalize_dex_id(source: str, raw_dex_id: str) -> Optional[str]:
         return _GRAPH_PROTOCOL_MAP.get(key) or key
     if source == "thegraph_token_api":
         return _GRAPH_TOKEN_API_MAP.get(key) or key
+    if source == "coingecko_onchain":
+        return key.replace("-", "_")
     return key.replace("-", "_")
 
 

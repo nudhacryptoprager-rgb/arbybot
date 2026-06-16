@@ -11,7 +11,7 @@ _log = logging.getLogger(__name__)
 NOT_CONFIGURED = "NOT_CONFIGURED"
 
 _RADAR_STUB_PROVIDERS = frozenset(
-    {"coinmarketcap_dex", "dexpaprika", "moralis", "codex_defined"}
+    {"coinmarketcap_dex", "dexpaprika", "moralis", "codex_defined", "coingecko_onchain"}
 )
 
 

@@ -26,6 +26,7 @@ _SOURCE_FETCHERS = {
     "geckoterminal": "m8.discovery.geckoterminal_hints",
     "thegraph": "m8.discovery.graph_hints",
     "thegraph_token_api": "m8.discovery.thegraph_token_api_hints",
+    "coingecko_onchain": "m8.discovery.coingecko_onchain_hints",
     "coinmarketcap_dex": "m8.discovery.radar_providers",
     "dexpaprika": "m8.discovery.radar_providers",
     "moralis": "m8.discovery.radar_providers",
@@ -45,6 +46,8 @@ def _fetch_source(source: str, token: str, *, chain: str):
 
     mod = importlib.import_module(_SOURCE_FETCHERS[source])
     if source == "geckoterminal":
+        return mod.fetch_token_pool_hints(token, chain=chain)
+    if source == "coingecko_onchain":
         return mod.fetch_token_pool_hints(token, chain=chain)
     if source in _RADAR_FETCH_FN:
         return getattr(mod, _RADAR_FETCH_FN[source])(token, chain=chain)
@@ -97,6 +100,48 @@ def main() -> int:
         default=3,
         help="Pages of GeckoTerminal new_pools when --new-pools-backfill",
     )
+    p.add_argument(
+        "--radar-output",
+        default="data/runs/_rolling/m8_radar_pool_candidates_latest.json",
+        help="Raw radar candidates artifact (hint-only, no canonical claims)",
+    )
+    p.add_argument(
+        "--skip-route-liveness",
+        action="store_true",
+        help="Skip 0x/1inch/Uniswap external_route_liveness probes",
+    )
+    p.add_argument(
+        "--skip-defillama-weights",
+        action="store_true",
+        help="Skip DeFiLlama DEX scan-order weights",
+    )
+    p.add_argument(
+        "--fetch-async",
+        action="store_true",
+        default=os.environ.get("ARBY_HINT_FETCH_ASYNC", "0").strip().lower()
+        in ("1", "true", "yes"),
+        help="Fetch all sources per token in parallel",
+    )
+    p.add_argument(
+        "--verify-async-workers",
+        type=int,
+        default=int(os.environ.get("ARBY_HINT_VERIFY_ASYNC_WORKERS", "4")),
+        help="Parallel on-chain verify workers per token batch",
+    )
+    p.add_argument(
+        "--use-multicall",
+        action="store_true",
+        default=os.environ.get("ARBY_HINT_USE_MULTICALL", "0").strip().lower()
+        in ("1", "true", "yes"),
+        help="Parallel bytecode pre-pass (thread pool eth_getCode; not aggregate3 verify)",
+    )
+    p.add_argument(
+        "--ws-head",
+        action="store_true",
+        default=os.environ.get("ARBY_HINT_WS_HEAD", "0").strip().lower()
+        in ("1", "true", "yes"),
+        help="Pin verify context to latest WS newHeads block",
+    )
     p.add_argument("--verbose", action="store_true")
     p.add_argument(
         "--retry-single-venue",
@@ -144,13 +189,76 @@ def main() -> int:
         default=45.0,
         help="Per-source fetch timeout (seconds)",
     )
+    p.add_argument(
+        "--radar-fast",
+        action="store_true",
+        help="DexScreener-only fast radar (verify none, low sleep, no single-venue retry)",
+    )
+    p.add_argument(
+        "--load-radar-input",
+        default=None,
+        help="Load candidates from radar artifact; skip fetch (use with verify subset)",
+    )
+    p.add_argument(
+        "--verify-subset-only",
+        action="store_true",
+        help="With --load-radar-input: verify only multi-venue / signal subset",
+    )
+    p.add_argument(
+        "--token-subset-file",
+        default=None,
+        help="JSON list of token addresses to fetch (secondary/fallback lane)",
+    )
+    p.add_argument(
+        "--pipeline-mode",
+        default="full",
+        choices=("full", "radar_fast", "verify_subset", "secondary", "audit_nightly"),
+        help="Operational pipeline mode label for metrics",
+    )
     args = p.parse_args()
+
+    if args.radar_fast:
+        args.sources = "dexscreener"
+        args.verify_mode = "none"
+        args.pipeline_mode = "radar_fast"
+        if args.sleep_ms == 120:
+            args.sleep_ms = 20
+        args.retry_single_venue = False
+        args.fetch_async = True
+        args.skip_route_liveness = True
+        args.skip_defillama_weights = True
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    import json
+    from pathlib import Path
+
+    from m8.discovery.hint_refresh_lock import (
+        acquire_hint_refresh_lock,
+        release_hint_refresh_lock,
+    )
+
+    try:
+        acquire_hint_refresh_lock(
+            checkpoint_path=args.checkpoint_path,
+            output_path=args.output,
+            chain=args.chain,
+            sources=[s.strip() for s in args.sources.split(",") if s.strip()],
+        )
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        return 3
+
+    try:
+        return _run_hint_refresh(args)
+    finally:
+        release_hint_refresh_lock(args.checkpoint_path)
+
+
+def _run_hint_refresh(args: argparse.Namespace) -> int:
     import json
     from pathlib import Path
 
@@ -213,9 +321,31 @@ def main() -> int:
     if not args.exploration:
         tokens = sorted(tokens, key=lambda t: (_venue_count(t), t))
 
-    log.info("Refreshing hints for %d watchlist tokens", len(tokens))
+    if args.token_subset_file:
+        subset_path = Path(args.token_subset_file)
+        if subset_path.is_file():
+            subset_doc = json.loads(subset_path.read_text(encoding="utf-8"))
+            if isinstance(subset_doc, list):
+                tokens = [str(t).lower() for t in subset_doc]
+            else:
+                tokens = [str(t).lower() for t in (subset_doc.get("tokens") or [])]
+            if args.max_tokens is not None:
+                tokens = tokens[: args.max_tokens]
+            log.info("Token subset file: %d tokens", len(tokens))
 
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    log.info(
+        "Refreshing hints for %d watchlist tokens (pipeline=%s)",
+        len(tokens),
+        args.pipeline_mode,
+    )
+
+    from m8.discovery.radar_fast_pipeline import ProviderTiming
+
+    provider_timing: dict[str, ProviderTiming] = {
+        s: ProviderTiming() for s in sources
+    }
+
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 
     checkpoint_path = Path(args.checkpoint_path)
     hints_sidecar = checkpoint_path.with_suffix(checkpoint_path.suffix + ".hints.json")
@@ -249,6 +379,120 @@ def main() -> int:
     source_pool_counts: dict[str, int] = {}
     per_source_verified_yield: dict[str, int] = {}
     single_venue_retries = 0
+    raw_radar_hints: list[PoolHint] = []
+
+    defillama_weights: dict = {}
+    if not args.skip_defillama_weights:
+        from m8.discovery.defillama_dex_priority import fetch_dex_priority_weights
+
+        t0 = time.monotonic()
+        defillama_weights = fetch_dex_priority_weights(args.chain)
+        timer.latency_s["defillama_dex_priority"] = round(time.monotonic() - t0, 4)
+
+    route_liveness: list = []
+    if not args.skip_route_liveness:
+        from m8.discovery.external_route_liveness import run_external_route_liveness_probes
+
+        t0 = time.monotonic()
+        route_liveness = run_external_route_liveness_probes(
+            chain=args.chain,
+            timeout_s=min(8.0, float(args.provider_timeout_s)),
+        )
+        timer.latency_s["external_route_liveness"] = round(time.monotonic() - t0, 4)
+
+    verify_block: int | None = None
+    if args.ws_head:
+        from m8.discovery.hint_verify_batch import pin_block_from_ws
+
+        verify_block = pin_block_from_ws(args.chain)
+        if verify_block is not None:
+            os.environ["ARBY_HINT_VERIFY_BLOCK"] = str(verify_block)
+            log.info("WS head pinned for verify: block=%s", verify_block)
+        else:
+            log.warning("WS head pin failed; continuing without pinned block")
+
+    def _verify_batch(batch: list[PoolHint]) -> list[PoolHint]:
+        if verify_mode == "none" or not batch:
+            return batch
+        if args.verify_async_workers > 1 or args.use_multicall:
+            from m8.discovery.hint_verify_batch import verify_hints_async
+
+            return verify_hints_async(
+                batch,
+                chain=args.chain,
+                verify_mode=verify_mode,
+                metrics=verification_metrics,
+                workers=max(1, int(args.verify_async_workers)),
+                use_multicall=bool(args.use_multicall),
+                block_num=verify_block,
+            )
+        return [
+            verify_hint_onchain(
+                h,
+                chain=args.chain,
+                verify_mode=verify_mode,
+                metrics=verification_metrics,
+            )
+            for h in batch
+        ]
+
+    if args.load_radar_input:
+        from m8.discovery.radar_fast_pipeline import (
+            build_verify_subset_tokens,
+            filter_hints_for_tokens,
+            pipeline_metrics,
+        )
+
+        radar_doc = json.loads(Path(args.load_radar_input).read_text(encoding="utf-8"))
+        raw_hints = [PoolHint.from_dict(h) for h in (radar_doc.get("candidates") or [])]
+        subset = build_verify_subset_tokens(raw_hints)
+        verify_hints = (
+            filter_hints_for_tokens(raw_hints, subset)
+            if args.verify_subset_only
+            else list(raw_hints)
+        )
+        log.info(
+            "Verify-from-radar: candidates=%d subset_tokens=%d verify_hints=%d",
+            len(raw_hints),
+            len(subset),
+            len(verify_hints),
+        )
+        verified = _verify_batch(verify_hints)
+        all_hints = dedupe_hints(verified)
+        for h in all_hints:
+            if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
+                per_source_verified_yield[h.source] = int(
+                    per_source_verified_yield.get(h.source, 0)
+                ) + 1
+        pipe_m = pipeline_metrics(
+            radar_fast_tokens=len(tokens),
+            radar_candidates=len(raw_hints),
+            verify_subset_size=len(subset),
+            verified_count=sum(
+                1 for h in all_hints if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES
+            ),
+            provider_timing=provider_timing,
+            verified_yield_by_source=per_source_verified_yield,
+        )
+        metrics = {
+            "hint_tokens_checked": len(tokens),
+            "pipeline_mode": args.pipeline_mode,
+            **pipe_m,
+            "verify_mode": verify_mode,
+            "fetch_async": bool(args.fetch_async),
+            "use_multicall": bool(args.use_multicall),
+            "bytecode_parallel_prepass": bool(args.use_multicall),
+            "ws_head_block": verify_block,
+        }
+        artifact = build_artifact(
+            chain=args.chain,
+            sources=sources,
+            hints=all_hints,
+            metrics=metrics,
+        )
+        write_hints_artifact(artifact, args.output)
+        log.info("Written %s verified=%d", args.output, pipe_m.get("verified_yield"))
+        return 0
 
     if args.new_pools_backfill:
         from m8.discovery.geckoterminal_hints import fetch_new_pools_backfill
@@ -263,17 +507,45 @@ def main() -> int:
         timer.latency_s["geckoterminal_new_pools"] = round(time.monotonic() - t0, 4)
         log.info("new_pools_backfill pools=%d", len(backfill))
         for h in backfill:
-            if verify_mode != "none":
-                h = verify_hint_onchain(
-                    h,
-                    chain=args.chain,
-                    verify_mode=verify_mode,
-                    metrics=verification_metrics,
-                )
+            raw_radar_hints.append(PoolHint.from_dict(h.to_dict()))
+        verified_backfill = _verify_batch(backfill)
+        for h in verified_backfill:
             all_hints.append(h)
             source_pool_counts["geckoterminal_new_pools"] = (
                 int(source_pool_counts.get("geckoterminal_new_pools", 0)) + 1
             )
+
+    def _fetch_one_source(source: str, token: str) -> list[PoolHint]:
+        t0 = time.monotonic()
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(
+                    lambda s=source, t=token: _fetch_source(s, t, chain=args.chain),
+                )
+                out = list(fut.result(timeout=max(1.0, float(args.provider_timeout_s))))
+            provider_timing[source].record(time.monotonic() - t0)
+            if source == "dexscreener":
+                from m8.discovery.dexscreener_hints import last_fetch_timing
+
+                ft = last_fetch_timing()
+                if ft.get("error"):
+                    provider_timing[source].record(0, error=True)
+            return out
+        except FuturesTimeout:
+            provider_timing[source].record(
+                time.monotonic() - t0, timeout=True
+            )
+            log.warning(
+                "source=%s token=%s timed out after %.1fs",
+                source,
+                token[:10],
+                args.provider_timeout_s,
+            )
+            return []
+        except Exception as exc:
+            provider_timing[source].record(time.monotonic() - t0, error=True)
+            log.warning("source=%s token=%s failed: %s", source, token[:10], exc)
+            return []
 
     def _fetch_token_sources(token: str, venue_count: int) -> None:
         nonlocal second_pool_hints, single_venue_retries
@@ -285,43 +557,42 @@ def main() -> int:
                 single_venue_retries += 1
                 if args.retry_backoff_ms:
                     time.sleep(args.retry_backoff_ms / 1000.0)
-            for source in sources:
-                try:
-                    with ThreadPoolExecutor(max_workers=1) as pool:
-                        fut = pool.submit(
-                            lambda s=source, t=token: _fetch_source(
-                                s, t, chain=args.chain
-                            ),
-                        )
-                        batch = fut.result(timeout=max(1.0, float(args.provider_timeout_s)))
-                except FuturesTimeout:
-                    log.warning(
-                        "source=%s token=%s timed out after %.1fs",
-                        source,
-                        token[:10],
-                        args.provider_timeout_s,
-                    )
-                    batch = []
-                except Exception as exc:
-                    log.warning("source=%s token=%s failed: %s", source, token[:10], exc)
-                    batch = []
-                for h in batch:
-                    h.focus_token = token
-                    if verify_mode != "none":
-                        h = verify_hint_onchain(
-                            h,
-                            chain=args.chain,
-                            verify_mode=verify_mode,
-                            metrics=verification_metrics,
-                        )
-                    all_hints.append(h)
-                    source_pool_counts[source] = int(source_pool_counts.get(source, 0)) + 1
-                    if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
-                        per_source_verified_yield[h.source] = int(
-                            per_source_verified_yield.get(h.source, 0)
+            token_batch: list[PoolHint] = []
+            if args.fetch_async and len(sources) > 1:
+                with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+                    futs = {
+                        pool.submit(_fetch_one_source, source, token): source
+                        for source in sources
+                    }
+                    for fut in as_completed(futs):
+                        source = futs[fut]
+                        batch = fut.result()
+                        for h in batch:
+                            raw_radar_hints.append(PoolHint.from_dict(h.to_dict()))
+                            h.focus_token = token
+                            token_batch.append(h)
+                            source_pool_counts[source] = int(
+                                source_pool_counts.get(source, 0)
+                            ) + 1
+            else:
+                for source in sources:
+                    batch = _fetch_one_source(source, token)
+                    for h in batch:
+                        raw_radar_hints.append(PoolHint.from_dict(h.to_dict()))
+                        h.focus_token = token
+                        token_batch.append(h)
+                        source_pool_counts[source] = int(
+                            source_pool_counts.get(source, 0)
                         ) + 1
-                        if venue_count < 2:
-                            second_pool_hints += 1
+            verified = _verify_batch(token_batch)
+            for h in verified:
+                all_hints.append(h)
+                if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
+                    per_source_verified_yield[h.source] = int(
+                        per_source_verified_yield.get(h.source, 0)
+                    ) + 1
+                    if venue_count < 2:
+                        second_pool_hints += 1
 
     for i, token in enumerate(tokens):
         if i < start_idx:
@@ -369,7 +640,50 @@ def main() -> int:
         if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
             second_venue_hist[h.source] = int(second_venue_hist.get(h.source, 0)) + 1
 
+    from m8.discovery.radar_layer import (
+        build_radar_candidates_artifact,
+        write_radar_candidates_artifact,
+    )
+    from m8.discovery.radar_fast_pipeline import build_verify_subset_tokens, pipeline_metrics
     from m8.discovery.radar_providers import radar_provider_metrics
+
+    subset_size = len(build_verify_subset_tokens(deduped))
+    pipe_m = pipeline_metrics(
+        radar_fast_tokens=len(tokens),
+        radar_candidates=len(raw_radar_hints) or len(deduped),
+        verify_subset_size=subset_size,
+        verified_count=sum(
+            1 for h in deduped if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES
+        ),
+        provider_timing=provider_timing,
+        verified_yield_by_source=per_source_verified_yield,
+    )
+
+    radar_artifact = build_radar_candidates_artifact(
+        chain=args.chain,
+        sources=sources + (["geckoterminal_new_pools"] if args.new_pools_backfill else []),
+        hints=raw_radar_hints,
+        metrics={
+            "hint_tokens_checked": len(tokens),
+            "defillama_dex_scan_weights": defillama_weights.get("dex_scan_weights") or {},
+            "defillama_status": defillama_weights.get("status"),
+            "external_route_liveness": route_liveness,
+        },
+    )
+    write_radar_candidates_artifact(radar_artifact, args.radar_output)
+    log.info(
+        "Radar candidates written %s pools=%d",
+        args.radar_output,
+        radar_artifact["metrics"].get("candidates_total", 0),
+    )
+
+    if args.pipeline_mode == "radar_fast" or (
+        args.radar_fast and verify_mode == "none"
+    ):
+        log.info(
+            "Radar-fast complete: skipping canonical hints write (verify phase required)"
+        )
+        return 0
 
     radar_metrics = radar_provider_metrics(
         source_pool_counts,
@@ -386,7 +700,21 @@ def main() -> int:
         "single_venue_retry_passes": single_venue_retries,
         "second_venue_source": second_venue_hist,
         "verify_mode": verify_mode,
+        "pipeline_mode": args.pipeline_mode,
+        **pipe_m,
+        "fetch_async": bool(args.fetch_async),
+        "verify_async_workers": int(args.verify_async_workers),
+        "bytecode_parallel_prepass": bool(args.use_multicall),
+        "use_multicall": bool(args.use_multicall),
+        "use_multicall_note": (
+            "legacy alias; parallel eth_getCode pre-pass, not full aggregate3 verify"
+        ),
+        "ws_head_block": verify_block,
         "new_pools_backfill": bool(args.new_pools_backfill),
+        "radar_candidates_path": args.radar_output,
+        "radar_reason_counts": radar_artifact["metrics"].get("radar_reason_counts") or {},
+        "defillama_dex_scan_weights": defillama_weights.get("dex_scan_weights") or {},
+        "external_route_liveness": route_liveness,
         **radar_metrics,
         **verification_metrics,
     }

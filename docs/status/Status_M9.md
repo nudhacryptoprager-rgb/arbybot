@@ -2,7 +2,24 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M9_VERIFICATION_SHADOW_COMPLETED / QUOTE_LIVENESS_PARTIAL / SANITY_IMPROVED_NOT_ZERO / ECONOMICS_NOT_PROVEN**
+**Current runtime line:** **M9_POST_M82_TWO_PHASE_SHADOW / QUOTE_LIVENESS_PARTIAL / SANITY_IMPROVED_NOT_ZERO / ECONOMICS_NOT_PROVEN**
+
+```text
+M9_POST_M82_TWO_PHASE_SHADOW (2026-06-16, after DexScreener-first two-phase M8.2 refresh):
+  duration_fulfilled=true
+  run_timestamp=2026-06-16T08:59:32Z
+  elapsed_s=569
+  bridge=m9_bridge_inventory_graph_handoff_latest.json (graph_ready_total=210)
+  cycles_found=808
+  cycles_quoteable=73
+  cycles_positive_gross=0
+  cycle_reject_histogram=STABLE_VALUE_RATIO_OUTLIER:246 NEGATIVE_GROSS:73 CYCLE_QUOTE_FAILED:33 AMOUNT_CONTINUITY_VIOLATION:7 QUOTE_FAILED:2
+  m8_stale=true (sniper not refreshed this session)
+  primary_blocker=NO_POSITIVE_GROSS + residual sanity rejects
+  upstream=M8.2 handoff_ready=true after fresh hints+expansion (verified_yield=37)
+```
+
+Prior verification shadow (2026-06-15, pre-M8.2-two-phase):
 
 ```text
 M9_VERIFICATION_SHADOW_COMPLETED (post-fix reshadow, 2026-06-15):

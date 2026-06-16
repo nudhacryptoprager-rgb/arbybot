@@ -213,7 +213,8 @@ token-first second-venue discovery. Hints **не** потрапляють у M9 
 | DexScreener | `m8/discovery/dexscreener_hints.py` | token → pairs |
 | GeckoTerminal | `m8/discovery/geckoterminal_hints.py` | token→pools + new_pools |
 | The Graph | `discovery/graph_client.py` + `m8/discovery/graph_hints.py` | token pool queries |
-| Refresh CLI | `scripts/m8_external_pool_hint_refresh.py` | watchlist → rolling artifact |
+| Two-phase refresh CLI | `scripts/m8_radar_two_phase_refresh.py` | DexScreener radar → selective verify → secondary/fallback |
+| Low-level refresh CLI | `scripts/m8_external_pool_hint_refresh.py` | watchlist/subset → rolling artifact |
 | Rolling artifact | `data/runs/_rolling/m8_external_pool_hints_latest.json` | єдиний canonical hints JSON |
 | M8.2 merge | `cross_dex_expand.py --external-hints` | registry → MirrorIndex → hints → verify |
 | M9 gate | `bridge_builder.py` | відкидає `hint_status=HINT_ONLY` |
@@ -233,11 +234,18 @@ address; `eth_getCode` давав false `verified=0`. Fixed in `hint_verifier.py
 **Примітка:** `subgraph_ready` у M8.2 = локальна mini-graph готовність (≥2 venues,
 connectors, routes), **не** інтеграція з The Graph API.
 
-**Команди:**
+**Default operator command (M8.2 radar refresh):**
 ```powershell
-py -3.11 scripts/m8_external_pool_hint_refresh.py --chain base --sources dexscreener,geckoterminal,thegraph --watchlist data/tmp/m8_token_watchlist_latest.json
-py -3.11 scripts/m8_cross_dex_expand.py --expansion-mode token_neighborhood --external-hints data/runs/_rolling/m8_external_pool_hints_latest.json
+py -3.11 scripts/m8_radar_two_phase_refresh.py --max-tokens 753 --skip-coingecko
+
+py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m8_cross_dex_expand.py --chain base --expansion-mode token_neighborhood --external-hints data/runs/_rolling/m8_external_pool_hints_latest.json --scan-mode candidate_summary --progress data/tmp/m8_cross_dex_expand_progress.json
+
+py -3.11 scripts/m8_2_acceptance_report.py --strict
 ```
+
+Legacy full multi-source refresh is audit-only. It must not replace the
+DexScreener-first default unless an A/B report proves higher on-chain verified
+yield per provider cost.
 
 Runtime acceptance: `verified_second_pool_count > 0` на full watchlist regen; expansion
 має `hint_tokens_matched`, `eligible_hint_routes`, `hint_registry_overlap_tokens`;
@@ -269,11 +277,49 @@ production/economics claim.
 Use external APIs as recall amplifiers, not as truth:
 
 - DexScreener: primary token-pairs radar for fresh token mirrors.
-- GeckoTerminal / CoinGecko new pools: second-pool discovery and stale-hint comparison.
+- GeckoTerminal / The Graph token API: secondary/audit lanes for tokens DexScreener missed or marked weak.
+- CoinGecko Onchain: fallback/canary only; never default full refresh.
 - CoinMarketCap DEX API: additional pair/liquidity/security metadata when available.
 - DexPaprika: broad DEX/token/pool/swap radar.
 - Moralis: token-pair/liquidity enrichment.
 - Codex/Defined: optional real-time token/pool radar if access is available.
+
+Operational details live in
+[`docs/m8/M8_2_RADAR_REFRESH_PIPELINE.md`](../m8/M8_2_RADAR_REFRESH_PIPELINE.md).
+
+Default pipeline:
+
+```text
+radar_fast:
+  source = DexScreener
+  verify = none
+  output = m8_radar_pool_candidates_latest.json
+
+verify_subset:
+  input = radar candidates with multi-venue / new_pool / liquidity signal
+  verify = specialized on-chain
+  output = m8_external_pool_hints_latest.json
+
+secondary:
+  sources = GeckoTerminal, The Graph token API
+  input = tokens DexScreener missed or weak
+
+fallback:
+  source = CoinGecko Onchain
+  input = small canary or failed/stale subset only
+```
+
+Speed flags are allowed only as accelerators:
+
+```text
+--fetch-async              parallel provider fetch inside a token
+--ws-head                  pin verify context to latest WS head
+--use-multicall            batch/pre-pass RPC checks before specialized verify
+--verify-async-workers N   bounded parallel on-chain verify
+```
+
+These flags do not change truth semantics: hints become canonical only after
+on-chain verification and expansion freshness is valid.
 
 ### Truth contract
 
@@ -310,6 +356,9 @@ Coverage expansion is reached only when:
 3. `m8_2_acceptance_report.py --strict` continues to separate coverage blockers
    from quality blockers.
 4. M9 remains `NOT_EVALUATED` until M8.2 strict quality gates pass.
+5. Hint refresh is newer than M8/M8.1 inputs and expansion is newer than hints.
+   If hints are newer than expansion, `EXPANSION_FRESHNESS_ORDER_VIOLATION` is
+   expected and M9 must not run from mixed evidence.
 
 ## 0j) Productive quote sync gate for distinct-pricing lanes
 

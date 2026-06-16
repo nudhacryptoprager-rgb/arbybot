@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from m8.discovery.dexscreener_cache import get_cached_pairs, set_cached_pairs
 from m8.discovery.pool_hints import PoolHint, normalize_dex_id
+from m8.discovery.radar_layer import stamp_radar_reason
 
 DEXSCREENER_BASE = "https://api.dexscreener.com/latest/dex/tokens"
 _DEFAULT_TIMEOUT_S = 12.0
+_last_fetch_timing: Dict[str, float] = {}
+
+
+def last_fetch_timing() -> Dict[str, float]:
+    return dict(_last_fetch_timing)
 
 
 def _get_json(url: str, *, timeout_s: float = _DEFAULT_TIMEOUT_S) -> Dict[str, Any]:
@@ -29,25 +37,46 @@ def fetch_token_hints(
     *,
     chain: str = "base",
     timeout_s: float = _DEFAULT_TIMEOUT_S,
+    use_cache: bool = True,
+    cache_hot: bool = True,
 ) -> List[PoolHint]:
     """Fetch pairs for *token_address* from DexScreener API."""
+    global _last_fetch_timing
     addr = (token_address or "").lower().strip()
     if not addr.startswith("0x"):
         return []
-    url = f"{DEXSCREENER_BASE}/{addr}"
-    try:
-        data = _get_json(url, timeout_s=timeout_s)
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError):
-        return []
-
-    pairs = data.get("pairs") or []
+    t0 = time.monotonic()
+    pairs: List[Dict[str, Any]] = []
+    cache_hit = False
+    if use_cache:
+        cached = get_cached_pairs(addr, hot=cache_hot)
+        if cached is not None:
+            pairs = cached
+            cache_hit = True
+    if not cache_hit:
+        url = f"{DEXSCREENER_BASE}/{addr}"
+        try:
+            data = _get_json(url, timeout_s=timeout_s)
+            pairs = [p for p in (data.get("pairs") or []) if isinstance(p, dict)]
+            if use_cache:
+                set_cached_pairs(addr, pairs)
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError):
+            _last_fetch_timing = {
+                "latency_s": round(time.monotonic() - t0, 4),
+                "cache_hit": False,
+                "error": 1.0,
+            }
+            return []
     hints: List[PoolHint] = []
     for pair in pairs:
-        if not isinstance(pair, dict):
-            continue
         hint = _pair_to_hint(pair, chain=chain, focus_token=addr)
         if hint:
             hints.append(hint)
+    _last_fetch_timing = {
+        "latency_s": round(time.monotonic() - t0, 4),
+        "cache_hit": float(cache_hit),
+        "pair_count": float(len(pairs)),
+    }
     return hints
 
 
@@ -100,7 +129,7 @@ def _pair_to_hint(
         confidence += 0.05
     if txn_count >= 10:
         confidence += 0.05
-    return PoolHint(
+    hint = PoolHint(
         source="dexscreener",
         chain=chain,
         dex_id=dex_id,
@@ -114,6 +143,7 @@ def _pair_to_hint(
         raw={"dexId": raw_dex, "pair": pair, "txns_h24": txn_count},
         focus_token=focus_token,
     )
+    return stamp_radar_reason(hint)
 
 
 def _safe_float(v: Any) -> Optional[float]:
