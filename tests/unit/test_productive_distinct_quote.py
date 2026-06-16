@@ -82,6 +82,16 @@ class TestProductiveDistinctQuote:
             leg_index=1,
         ) == 1_010_498
 
+    def test_maverick_leg_gt_zero_does_not_cap_to_max_quoteable(self):
+        """Continuity-invariant: leg>0 must not silently shrink to probe size."""
+        assert maverick_cycle_amount_in(
+            11837802819199971,
+            pool_lane_probe_amount=10**15,
+            min_quoteable=10**15,
+            max_quoteable=10**15,
+            leg_index=1,
+        ) == 11837802819199971
+
     def test_maverick_leg0_usd_floor_prevents_micro_probe(self):
         # Without size_usd: thin-pool min_quoteable wins (existing behaviour).
         assert maverick_cycle_amount_in(

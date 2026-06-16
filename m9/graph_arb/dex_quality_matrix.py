@@ -173,7 +173,9 @@ def _econ_floor_usd(shadow: Optional[Dict[str, Any]]) -> float:
         cost = (shadow or {}).get("cost_model") or {}
         return float(economic_size_floor_usd(**cost) if isinstance(cost, dict) else economic_size_floor_usd())
     except Exception:
-        return 25.0
+        from m9.graph_arb.size_truth import economic_size_floor_usd
+
+        return float(economic_size_floor_usd())
 
 
 def _per_dex_cycle_funnel(shadow: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, int]]:

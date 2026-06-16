@@ -1567,6 +1567,10 @@ def build_bridge_inventory(
         bridge_source_metrics.update(
             stamp_productive_quote_status_from_artifacts(final_active)
         )
+        from m9.graph_arb.leg_capacity import route_probe_direction_status
+
+        for _pr in final_active:
+            _pr["probe_direction_status"] = route_probe_direction_status(_pr)
         bridge_source_metrics["discovery_quoteable_by_dex"] = quoteable_by_dex(
             final_active, field="quote_smoke_status"
         )
@@ -1766,10 +1770,13 @@ def build_bridge_inventory(
             "no",
         ):
             try:
-                from core.rpc_urls import resolve_rpc_http
+                from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
                 from web3 import Web3
 
-                _rpc = resolve_rpc_http("base")
+                _rpc, _, _ = resolve_rpc_http(
+                    chain_id=_CHAIN_KEY_TO_ID.get("base", 8453),
+                    network="base",
+                )
                 if _rpc:
                     _dec_w3 = Web3(Web3.HTTPProvider(_rpc, request_kwargs={"timeout": 8}))
             except Exception as _w3_exc:
@@ -1881,6 +1888,21 @@ def build_bridge_inventory(
         for r in final_active
         if r.get("token0_decimals") is None or r.get("token1_decimals") is None
     )
+
+    try:
+        from m9.graph_arb.depth_telemetry import pre_shadow_bridge_blockers
+
+        _pre_shadow = pre_shadow_bridge_blockers(
+            depth_known_rate_value=bridge_source_metrics.get("depth_known_rate"),
+            routes_decimals_unknown=int(
+                bridge_source_metrics.get("routes_decimals_unknown") or 0
+            ),
+            active_route_count=len(final_active),
+        )
+        if _pre_shadow:
+            bridge_source_metrics["pre_shadow_blockers"] = _pre_shadow
+    except Exception:
+        pass
 
     # ------------------------------------------------------------------
     # Write output artifact

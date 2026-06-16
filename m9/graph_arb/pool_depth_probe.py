@@ -320,8 +320,14 @@ def probe_pool_depth(
     if adapter_type in _VE33_ADAPTER_TYPES or adapter_type in _V2_FORK_ADAPTER_TYPES:
         if not quoter or quoter == "0x" + "0" * 40:
             quoter = pool_address
+    if adapter_type == "maverick_v2" and pool_address:
+        quoter = pool_address
 
-    if not quoter or quoter == "0x" + "0" * 40:
+    if (
+        adapter_type
+        not in ("maverick_v2", "balancer_vault", "balancer_stable", "balancer_weighted")
+        and (not quoter or quoter == "0x" + "0" * 40)
+    ):
         result["probe_error"] = "NO_QUOTER"
         return result
 
@@ -634,6 +640,54 @@ def probe_route_marginal_depth(
 
     def _quote(amount_in: int) -> Optional[int]:
         try:
+            if adapter_type == "maverick_v2":
+                if not pool_address:
+                    return None
+                from m9.graph_arb.productive_distinct_quote import quote_maverick_productive
+
+                token_a = str(
+                    route.get("token_a") or route.get("token_a_address") or ""
+                ).lower()
+                token_in = anchor_addr.lower()
+                token_a_in = bool(token_a and token_in == token_a)
+
+                def _eth_call_mav(to: str, data: str) -> str:
+                    return _raw_eth_call(rpc_url, to, data)
+
+                amount_out, _gas, _dbg = quote_maverick_productive(
+                    _eth_call_mav,
+                    pool_address=pool_address,
+                    amount_in=int(amount_in),
+                    token_a_in=token_a_in,
+                    token_in=token_in,
+                    token_a=token_a or None,
+                )
+                return int(amount_out) if amount_out else None
+            if adapter_type in (
+                "balancer_vault",
+                "balancer_stable",
+                "balancer_weighted",
+            ):
+                pool_id = route.get("pool_id")
+                assets = route.get("balancer_assets")
+                if not pool_id or not assets:
+                    return None
+                from m9.graph_arb.productive_distinct_quote import quote_balancer_productive
+
+                def _eth_call_bal(to: str, data: str) -> str:
+                    return _raw_eth_call(rpc_url, to, data)
+
+                amount_out, _dbg = quote_balancer_productive(
+                    _eth_call_bal,
+                    pool_id=str(pool_id),
+                    token_in=anchor_addr,
+                    token_out=exotic_addr,
+                    amount_in=int(amount_in),
+                    all_assets=list(assets),
+                    balances=list(route.get("balancer_balances") or []),
+                    rpc_url=rpc_url,
+                )
+                return int(amount_out) if amount_out else None
             if adapter_type in _VE33_ADAPTER_TYPES:
                 target = quoter or pool_address
                 if not target:
@@ -688,6 +742,9 @@ def probe_route_marginal_depth(
         adapter_type not in _VE33_ADAPTER_TYPES
         and adapter_type not in _V2_FORK_ADAPTER_TYPES
         and adapter_type != "uniswap_v4"
+        and adapter_type != "maverick_v2"
+        and adapter_type
+        not in ("balancer_vault", "balancer_stable", "balancer_weighted")
         and not quoter
     ):
         result["probe_error"] = "NO_QUOTER"

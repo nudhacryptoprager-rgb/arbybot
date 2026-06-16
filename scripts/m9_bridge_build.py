@@ -123,6 +123,12 @@ def _parse_args() -> argparse.Namespace:
         default="data/tmp/m8_token_watchlist_latest.json",
         help="M8 token watchlist for provenance matching",
     )
+    p.add_argument(
+        "--strict-pre-shadow",
+        action="store_true",
+        default=False,
+        help="Fail when depth/decimals enrichment pre-shadow blockers are present",
+    )
     return p.parse_args()
 
 
@@ -280,6 +286,16 @@ def main() -> int:
                 )
     except Exception:
         pass
+
+    _pre_shadow = metrics.get("pre_shadow_blockers") or []
+    if _pre_shadow:
+        log.warning(
+            "WARN: pre_shadow_blockers=%s — run decimals/depth enrichment before shadow",
+            _pre_shadow,
+        )
+        if args.strict_pre_shadow:
+            log.error("FAIL: strict_pre_shadow gate blocked bridge handoff")
+            return 1
 
     log.info("Bridge build: OK (graph_ready_total=%d)", metrics["graph_ready_total"])
     try:

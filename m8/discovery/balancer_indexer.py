@@ -379,7 +379,14 @@ def quote_smoke_balancer(
                     for contour, target in targets:
                         try:
                             result = eth_call(rpc_url, target, hex_data)
-                            _delta_in, delta_out = _decode_query_batch_swap(result)
+                            assets_lc = [str(a).lower() for a in assets]
+                            asset_in_index = assets_lc.index(token_in.lower())
+                            asset_out_index = assets_lc.index(token_out.lower())
+                            _delta_in, delta_out = _decode_query_batch_swap(
+                                result,
+                                asset_in_index=asset_in_index,
+                                asset_out_index=asset_out_index,
+                            )
                             if abs(delta_out) > 0:
                                 _append_quote_debug(
                                     debug_rows,

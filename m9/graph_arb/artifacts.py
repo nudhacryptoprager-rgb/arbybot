@@ -66,6 +66,16 @@ _BLOCKER_PROVIDER_QUALITY = "PROVIDER_QUALITY_BLOCKED"
 _BLOCKER_INVENTORY_ANCHOR = "INVENTORY_TOO_ANCHOR_HEAVY"
 _BLOCKER_MARKET = "MARKET_NO_POSITIVE_GROSS"
 
+_LOSS_QUOTE_FAILED = "QUOTE_FAILED"
+_LOSS_TOXIC = "TOXIC_ROUTE_PRICE_IMPACT"
+_LOSS_UNFAVORABLE = "UNFAVORABLE_PRICES"
+_LOSS_FEE_DRAG = "FEE_DRAG"
+_LOSS_POSITIVE = "POSITIVE"
+_LOSS_ZERO_OR_SUPPRESSED = "ZERO_OR_SUPPRESSED"
+_LOSS_SANITY_SUPPRESSED = "SANITY_SUPPRESSED"
+_LOSS_INSTRUMENTATION = "INSTRUMENTATION_BLOCKED"
+_LOSS_DEPTH_UNRESOLVED = "DEPTH_UNRESOLVED"
+
 # Infra / quote-quality status (distinct from economics verdict)
 _INFRA_NOT_RUN = "NOT_RUN"
 _INFRA_OK = "OK"
@@ -168,6 +178,31 @@ def _build_cycle_summary(
     }
 
 
+def _classify_cycle_loss_reason(qr: CycleQuoteResult) -> str:
+    """Diagnostic loss bucket; zero/sanity-suppressed cycles are not POSITIVE."""
+    if qr.status == "LEG_CAPACITY_REJECT":
+        return _LOSS_INSTRUMENTATION
+    if qr.status == "DEPTH_UNRESOLVED":
+        return _LOSS_DEPTH_UNRESOLVED
+    if qr.status == "CYCLE_SANITY_FAILED":
+        if (qr.reject_reason or "") == "AMOUNT_CONTINUITY_VIOLATION":
+            return _LOSS_INSTRUMENTATION
+        return _LOSS_SANITY_SUPPRESSED
+    if qr.status in ("CYCLE_QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "QUOTE_FAILED"):
+        return _LOSS_QUOTE_FAILED
+    fee_drag = qr.cycle.total_fee_bps
+    pre_fee_gross_bps = round(qr.gross_bps + fee_drag, 4)
+    if pre_fee_gross_bps < -500:
+        return _LOSS_TOXIC
+    if pre_fee_gross_bps < 0:
+        return _LOSS_UNFAVORABLE
+    if qr.gross_bps < 0:
+        return _LOSS_FEE_DRAG
+    if qr.gross_bps == 0:
+        return _LOSS_ZERO_OR_SUPPRESSED
+    return _LOSS_POSITIVE
+
+
 def _build_top_opportunity(
     qr: CycleQuoteResult,
     cost_profile: "Optional[Dict[str, Any]]" = None,
@@ -233,15 +268,8 @@ def _build_top_opportunity(
     factory_verified = all(e.factory_verified for e in cycle.edges)
     fee_tiers_bps = [round(e.fee_bps, 4) for e in cycle.edges]
     # loss_reason: decompose why gross <= 0
-    if qr.status in ("CYCLE_QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "QUOTE_FAILED"):
-        loss_reason: Optional[str] = "QUOTE_FAILED"
-    elif pre_fee_gross_bps < -500:
-        loss_reason = "TOXIC_ROUTE_PRICE_IMPACT"  # catastrophic: prices alone -500+ bps off
-    elif pre_fee_gross_bps < 0:
-        loss_reason = "UNFAVORABLE_PRICES"  # prices don't support arb even before fees
-    elif spread_bps < 0:
-        loss_reason = "FEE_DRAG"  # prices would support arb but fees exceed the gross
-    else:
+    loss_reason = _classify_cycle_loss_reason(qr)
+    if loss_reason == _LOSS_POSITIVE:
         loss_reason = None
 
     from m9.graph_arb.depth_telemetry import opportunity_depth_fields
@@ -386,6 +414,11 @@ def _build_per_leg_rca(
                     ):
                         leg_data["stable_value_ratio_outlier"] = True
                         leg_data["sanity_gate"] = "STABLE_VALUE_RATIO_OUTLIER"
+                    else:
+                        from m9.graph_arb.stable_quote_guard import anchor_value_ratio_warning
+
+                        if anchor_value_ratio_warning(edge, leg_result):
+                            leg_data["anchor_value_ratio_warning"] = True
         if leg_result is not None and getattr(leg_result, "amount_out", None) is not None:
             prev_raw_out = int(leg_result.amount_out)
         result.append(leg_data)
@@ -1031,6 +1064,7 @@ def build_artifact(
         economic_size_floor_usd,
         is_econ_size,
         is_liveness_size,
+        quote_size_truth_metrics,
     )
 
     _cp = _cost_profile_for_compute or {}
@@ -1265,24 +1299,22 @@ def build_artifact(
     # Loss reason histogram across all cycle_results (Step 6 — root cause breakdown)
     _loss_reason_histogram: Dict[str, int] = {}
     _toxic_route_count = 0
+    _toxic_denominator = 0
     for _qr in cycle_results:
-        _fee_drag = _qr.cycle.total_fee_bps
-        _pfgb = round(_qr.gross_bps + _fee_drag, 4)
-        if _qr.status in ("CYCLE_QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "QUOTE_FAILED"):
-            _lr = "QUOTE_FAILED"
-        elif _pfgb < -500:
-            _lr = "TOXIC_ROUTE_PRICE_IMPACT"
-            _toxic_route_count += 1
-        elif _pfgb < 0:
-            _lr = "UNFAVORABLE_PRICES"
-        elif _qr.gross_bps < 0:
-            _lr = "FEE_DRAG"
-        else:
-            _lr = "POSITIVE"
+        _lr = _classify_cycle_loss_reason(_qr)
         _loss_reason_histogram[_lr] = _loss_reason_histogram.get(_lr, 0) + 1
+        from m9.graph_arb.depth_telemetry import exclude_from_toxic_economics_denominator
+
+        if not exclude_from_toxic_economics_denominator(_qr):
+            _toxic_denominator += 1
+            if _lr == _LOSS_TOXIC:
+                _toxic_route_count += 1
     economics_metrics["loss_reason_histogram"] = _loss_reason_histogram
     economics_metrics["toxic_route_count"] = _toxic_route_count
-    if cycles_quoteable > 0:
+    economics_metrics["toxic_route_denominator"] = _toxic_denominator
+    if _toxic_denominator > 0:
+        economics_metrics["toxic_route_rate"] = round(_toxic_route_count / _toxic_denominator, 4)
+    elif cycles_quoteable > 0:
         economics_metrics["toxic_route_rate"] = round(_toxic_route_count / cycles_quoteable, 4)
     economics_metrics["cost_model_applied"] = _cost_profile_for_compute is not None
     economics_metrics["router_sim_eligible_after_cost"] = cycles_router_sim_eligible
@@ -1450,12 +1482,11 @@ def build_artifact(
         "qsr": round(qsr, 4),
         "qsr_liveness": round(qsr_liveness, 4),
         "qsr_econ": round(qsr_econ, 4),
-        "quote_size_truth": {
-            "liveness_max_size_usd": LIVENESS_MAX_SIZE_USD,
-            "economic_size_floor_usd": _econ_floor_usd,
-            "liveness_quote_attempts": len(_liveness_results),
-            "econ_quote_attempts": len(_econ_results),
-        },
+        "quote_size_truth": quote_size_truth_metrics(
+            cycle_results,
+            econ_floor_usd=_econ_floor_usd,
+            liveness_max_size_usd=LIVENESS_MAX_SIZE_USD,
+        ),
         "oversized_vs_depth_count": oversized_vs_depth_count,
         "oversized_vs_measured_depth_count": oversized_vs_measured_depth_count,
         "oversized_vs_unknown_depth_fallback_count": oversized_vs_unknown_depth_fallback_count,

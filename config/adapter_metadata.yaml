@@ -148,6 +148,7 @@ curve:
 
       "0xd4e59bfd7bce4a5bc1ee12ea930c7495831d6aef":
         pool_kind: "stable"
+        probe_status: "TOXIC_STABLE_POOL"
         coin_indices:
           USDbC: 0
           USDC: 1
@@ -258,6 +259,14 @@ balancer:
         assets:
           - "0x4ea71a20e655794051d1ee8b6e4a3269b13ccacc"  # AaveUSDC
           - "0xca5d8f8a8d49439357d3cf46ca2e720702f132b8"  # GYD
+
+      # WETH / USDC GyroE — verified via expansion handoff + queryBatchSwap RCA
+      "0x97a3ece859d9c1c41e225fbd6f10359dae7a73c9000200000000000000000202":
+        pool_kind: "gyroe"
+        pool_address: "0x97a3ece859d9c1c41e225fbd6f10359dae7a73c9"
+        assets:
+          - "0x4200000000000000000000000000000000000006"  # WETH
+          - "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"  # USDC
 
 # ---------------------------------------------------------------------------
 # Maverick V2

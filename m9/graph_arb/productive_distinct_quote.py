@@ -185,6 +185,15 @@ def quote_balancer_productive(
     if vault_assets:
         all_assets = vault_assets
         balances = vault_balances
+    assets_lc = [str(a).lower() for a in (all_assets or [])]
+    token_in_lc = str(token_in).lower()
+    token_out_lc = str(token_out).lower()
+    try:
+        asset_in_index = assets_lc.index(token_in_lc)
+        asset_out_index = assets_lc.index(token_out_lc)
+    except ValueError:
+        asset_in_index = 0
+        asset_out_index = 1
     amount_in = balancer_cap_amount_in(
         amount_in,
         token_in,
@@ -234,8 +243,20 @@ def quote_balancer_productive(
             }
             try:
                 result = eth_call(target, hex_data)
-                _delta_in, delta_out = _decode_query_batch_swap(result)
+                _delta_in, delta_out = _decode_query_batch_swap(
+                    result,
+                    asset_in_index=asset_in_index,
+                    asset_out_index=asset_out_index,
+                )
                 amount_out = abs(delta_out)
+                if amount_out > 0 and _delta_in <= 0:
+                    last_debug = {
+                        **debug,
+                        "status": "BALANCER_ZERO_IN_DELTA",
+                        "delta_in": _delta_in,
+                        "delta_out": delta_out,
+                    }
+                    continue
                 if amount_out > 0:
                     debug["status"] = "QUOTE_OK_BALANCER"
                     return amount_out, debug
@@ -281,8 +302,15 @@ def maverick_cycle_amount_in(
     """
     amount = int(cycle_amount_in)
     if leg_index > 0:
-        chosen = amount if amount > 0 else 1
-    elif amount > 0:
+        # Continuity-invariant (Principle A): a non-first leg MUST consume exactly
+        # the previous leg's output. We never silently re-cap a propagated amount
+        # to a probe/max-quoteable size — doing so manufactures a fake
+        # AMOUNT_CONTINUITY_VIOLATION (or a phantom ~-99% loss) that is an
+        # instrumentation artifact, not a market signal. Capacity overflow is
+        # surfaced separately via ``leg_amount_exceeds_pool_capacity`` and the
+        # cycle is rejected honestly instead of quoted at the wrong size.
+        return max(amount if amount > 0 else 1, 1)
+    if amount > 0:
         if max_quoteable and amount > int(max_quoteable):
             if min_quoteable and int(min_quoteable) > 0:
                 chosen = int(min_quoteable)
@@ -323,30 +351,12 @@ def cap_leg_amount_in_for_edge(
     leg_index: int = 0,
     size_usd: Optional[float] = None,
 ) -> int:
-    """Per-leg amount cap before RPC (Maverick probe replay, Balancer max-in-ratio)."""
-    adapter = str(getattr(edge, "adapter_type", "") or "")
-    if adapter == "maverick_v2":
-        return maverick_cycle_amount_in(
-            amount_in,
-            pool_lane_probe_amount=getattr(edge, "maverick_pool_lane_probe_amount", None),
-            min_quoteable=getattr(edge, "maverick_min_quoteable_amount_raw", None),
-            max_quoteable=getattr(edge, "maverick_max_quoteable_amount_raw", None),
-            leg_index=leg_index,
-            size_usd=size_usd,
-            token_in_decimals=getattr(edge, "token_in_decimals", None),
-        )
-    if adapter in ("balancer_stable", "balancer_weighted", "balancer_vault"):
-        assets = getattr(edge, "balancer_assets", None)
-        balances = getattr(edge, "balancer_balances", None)
-        token_in = getattr(edge, "token_in_addr", None)
-        if assets and balances and token_in:
-            return balancer_cap_amount_in(
-                int(amount_in),
-                str(token_in).lower(),
-                assets=list(assets),
-                balances=list(balances),
-            )
-    return int(amount_in)
+    """Per-leg amount cap before RPC — delegates to ``leg_capacity`` contract."""
+    from m9.graph_arb.leg_capacity import cap_leg_amount_in_for_edge as _resolve_cap
+
+    return _resolve_cap(
+        edge, amount_in, leg_index=leg_index, size_usd=size_usd
+    )
 
 
 def _maverick_probe_amounts(

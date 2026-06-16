@@ -133,6 +133,18 @@ class TestDecodeQueryBatchSwap:
         d_in, d_out = _decode_query_batch_swap(resp)
         assert abs(d_out) == abs(delta1)
 
+    def test_asset_index_mapping_usdc_in_weth_out(self):
+        """When USDC is index 1 and WETH index 0, decode must not swap deltas."""
+        delta_weth = -(5 * 10 ** 14)
+        delta_usdc = 180 * 10 ** 6
+        resp = self._make_deltas_response(delta_weth, delta_usdc)
+        d_in, d_out = _decode_query_batch_swap(
+            resp, asset_in_index=1, asset_out_index=0
+        )
+        assert d_in == delta_usdc
+        assert d_out == delta_weth
+        assert abs(d_out) == 5 * 10 ** 14
+
     def test_too_short_response_raises(self):
         with pytest.raises(QuoteError):
             _decode_query_batch_swap("0x" + "00" * 10)

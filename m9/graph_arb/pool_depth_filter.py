@@ -22,7 +22,11 @@ _DEFAULT_QUARANTINE_PATH = "data/quarantine/m9_pool_depth_quarantine.json"
 
 # Placeholder addresses used in the quarantine file before depth probe fills them
 _PLACEHOLDER_PREFIXES = {"0x000000000000000000000000000000000000000"}
-_SOFT_QUARANTINE_REASONS = {"TOXIC_PRICE_IMPACT", "LOW_EFFECTIVE_DEPTH"}
+_SOFT_QUARANTINE_REASONS = {
+    "TOXIC_PRICE_IMPACT",
+    "LOW_EFFECTIVE_DEPTH",
+    "TOXIC_STABLE_POOL",
+}
 
 
 def load_quarantined_pool_addresses(

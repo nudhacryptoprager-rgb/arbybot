@@ -158,6 +158,29 @@ def test_build_acceptance_report_quote_liveness_qsr_liveness_consistency():
     assert shadow_layer["qsr_liveness"] == 0.0
 
 
+def test_build_acceptance_report_value_ratio_rca_blocker():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": [{}]},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
+        shadow={
+            "cycles_found": 455,
+            "cycles_quoteable": 97,
+            "cycles_positive_gross": 0,
+            "qsr": 0.92,
+            "qsr_econ": 0.92,
+            "economics_metrics": {"toxic_route_rate": 1.0},
+            "discovery_cycles_by_length": {"2": 30, "3": 96, "4": 568},
+            "cycles_quoteable_by_length": {"2": 20, "3": 77, "4": 0},
+        },
+        rca={"summary": {"stable_value_ratio_outlier_legs": 10}},
+        m8_2_report={"goal_status": "REACHED", "handoff_ready": True},
+    )
+    assert "VALUE_RATIO_RCA_NOT_CLEAN" in report["m9_blockers"]
+    assert "FOUR_LEG_PRODUCTIVE_COVERAGE_ZERO" in report["m9_blockers"]
+
+
 def test_build_acceptance_report_operator_verdict():
     report = build_acceptance_report(
         sniper={"status": "ACTIVE", "metrics": {}, "recent_events": [{}]},

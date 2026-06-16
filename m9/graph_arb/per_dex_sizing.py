@@ -102,7 +102,14 @@ def cap_sizes_to_depth_per_family(
 
 
 _PRODUCTIVE_DISTINCT_MICRO_CAP_USD: float = 0.05
-_PRODUCTIVE_MEASURED_ECON_FLOOR_USD: float = 25.0
+
+
+def _economics_floor_usd(cost_profile: Optional[Dict[str, float]] = None) -> float:
+    from m9.graph_arb.size_truth import economic_size_floor_usd
+
+    if cost_profile:
+        return float(economic_size_floor_usd(**cost_profile))
+    return float(economic_size_floor_usd())
 
 
 def _edge_as_route_dict(edge: Any) -> Dict[str, Any]:
@@ -156,6 +163,8 @@ def productive_cycle_size_usd_cap(
     cycle: Any,
     size_usd: float,
     token_price_usd: Optional[Dict[str, float]] = None,
+    *,
+    cost_profile: Optional[Dict[str, float]] = None,
 ) -> float:
     """Return the USD notional allowed for this cycle quote.
 
@@ -165,8 +174,9 @@ def productive_cycle_size_usd_cap(
     quote either proves real size or fails honestly.
     """
     _ = token_price_usd
+    econ_floor = _economics_floor_usd(cost_profile)
     if _cycle_has_sane_measured_depth(cycle):
-        return max(float(size_usd), _PRODUCTIVE_MEASURED_ECON_FLOOR_USD)
+        return float(size_usd)
     if _cycle_has_measured_depth(cycle):
         return float(size_usd)
     edges = getattr(cycle, "edges", ()) or ()
@@ -182,7 +192,7 @@ def productive_cycle_size_usd_cap(
 
             if is_topology_probe_mode():
                 return min(float(size_usd), _PRODUCTIVE_DISTINCT_MICRO_CAP_USD)
-            return max(float(size_usd), _PRODUCTIVE_MEASURED_ECON_FLOOR_USD)
+            return max(float(size_usd), econ_floor)
     return float(size_usd)
 
 

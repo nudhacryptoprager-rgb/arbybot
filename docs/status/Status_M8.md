@@ -18,9 +18,7 @@
    `m8_health.goal_status=REACHED`, `rpc_errors=0/108`, `listener_mode=ws+http_fallback`,
    `ws_connected=true`, `ws_events_seen=253`, `snipe_candidates_total=266`, `parse_failed=0`,
    providers `alchemy`/`drpc`, all 12 factories with `factory_last_success_ts`.
-2. **M8.2 handoff BLOCKED** — fresh expansion `2026-06-14T20:28:00Z`; acceptance blockers:
-   `MIRROR_READY_LOW`, `MULTI_VENUE_TOKENS_LOW`, `SUBGRAPH_READY_LOW`, `VERIFIED_SECOND_POOL_LOW`.
-   Scan coverage `1.0` (PROVEN); `handoff_ready=false`.
+2. **M8.2 handoff** — canonical status in [Status_M8_2.md](Status_M8_2.md): `handoff_ready=true` (2026-06-16 fresh two-phase radar + expansion). M8.2 quality blockers (`SUBGRAPH_READY_LOW`, `VERIFIED_SECOND_POOL_LOW`) remain soft; economics/quote are M9-owned.
 3. Phase 2 24h paper soak not yet completed.
 4. Real execution stays BLOCKED until Phase 2 evidence green and kill_switch flipped explicitly.
 

@@ -154,10 +154,15 @@ def _encode_query_batch_swap(
     return bytes.fromhex(raw)
 
 
-def _decode_query_batch_swap(hex_result: str) -> Tuple[int, int]:
+def _decode_query_batch_swap(
+    hex_result: str,
+    *,
+    asset_in_index: int = 0,
+    asset_out_index: int = 1,
+) -> Tuple[int, int]:
     """Decode ``queryBatchSwap`` response: int256[] deltas.
 
-    Returns ``(delta_in, delta_out)`` where:
+    Returns ``(delta_in, delta_out)`` for the requested asset indices where:
     - delta_in  > 0 (token sent into Vault — positive = vault receives)
     - delta_out < 0 (token sent out of Vault — negative = vault sends)
 
@@ -169,25 +174,29 @@ def _decode_query_batch_swap(hex_result: str) -> Tuple[int, int]:
             code=ErrorCode.QUOTE_REVERT,
             message=f"Balancer queryBatchSwap response too short: {len(raw)} chars",
         )
-    # Response is: int256[] = offset(32) + length(32) + elements...
-    # offset to array data
-    arr_offset = int(raw[:64], 16) * 2  # convert byte offset → hex-char offset
+    arr_offset = int(raw[:64], 16) * 2
     arr_len = int(raw[arr_offset:arr_offset + 64], 16)
     if arr_len < 2:
         raise QuoteError(
             code=ErrorCode.QUOTE_REVERT,
             message=f"Balancer queryBatchSwap returned {arr_len} deltas, expected >=2",
         )
-    delta0_hex = raw[arr_offset + 64: arr_offset + 128]
-    delta1_hex = raw[arr_offset + 128: arr_offset + 192]
-    delta0 = int(delta0_hex, 16)
-    delta1 = int(delta1_hex, 16)
-    # Sign-extend from int256
-    if delta0 >= 2 ** 255:
-        delta0 -= 2 ** 256
-    if delta1 >= 2 ** 255:
-        delta1 -= 2 ** 256
-    return delta0, delta1
+    deltas: list[int] = []
+    for i in range(arr_len):
+        delta_hex = raw[arr_offset + 64 * (i + 1): arr_offset + 64 * (i + 2)]
+        delta = int(delta_hex, 16)
+        if delta >= 2 ** 255:
+            delta -= 2 ** 256
+        deltas.append(delta)
+    if asset_in_index >= len(deltas) or asset_out_index >= len(deltas):
+        raise QuoteError(
+            code=ErrorCode.QUOTE_REVERT,
+            message=(
+                f"Balancer queryBatchSwap asset index out of range: "
+                f"in={asset_in_index} out={asset_out_index} len={len(deltas)}"
+            ),
+        )
+    return deltas[asset_in_index], deltas[asset_out_index]
 
 
 class BalancerVaultAdapter:

@@ -866,6 +866,13 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 _bsm.get("m8_stale"),
                 _bsm.get("m8_1_stale"),
             )
+            _pre_shadow = _bsm.get("pre_shadow_blockers") or []
+            if _pre_shadow:
+                log.warning(
+                    "Pre-shadow blockers present in bridge inventory: %s "
+                    "(run m9_enrich_bridge_decimals/depth before trusting economics shadow)",
+                    _pre_shadow,
+                )
         # Extract M8 pool addresses for cycle participation tracking
         _m8_direct_pool_addrs = frozenset(
             r.get("pool_address", "").lower()

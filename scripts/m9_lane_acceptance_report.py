@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-layer M8→M8.1→M8.2→M9 bridge acceptance report from rolling artifacts."""
+"""Per-layer M8->M8.1->M8.2->M9 bridge acceptance report from rolling artifacts."""
 from __future__ import annotations
 
 import argparse
@@ -145,6 +145,7 @@ def _m9_economics_blockers(
     shadow_cycles_found: int,
     shadow_cycles_quoteable: int,
     shadow_cycles_with_m8: int,
+    quote_liveness: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """M9-only blockers: graph/cycle/quote/economics (not M8.2 hint/mirror quality)."""
     blockers: List[str] = []
@@ -164,6 +165,34 @@ def _m9_economics_blockers(
         blockers.append("DEPTH_UNKNOWN")
 
     rca_summary = (rca or {}).get("summary") or {}
+    shadow_rca = (shadow or {}).get("quote_lane_rca") or {}
+    stable_outliers = int(
+        rca_summary.get("stable_value_ratio_outlier_legs")
+        or shadow_rca.get("stable_value_ratio_outlier_legs")
+        or 0
+    )
+    econ_metrics = (shadow or {}).get("economics_metrics") or {}
+    toxic_rate = econ_metrics.get("toxic_route_rate")
+    if toxic_rate is None:
+        toxic_rate = rca_summary.get("toxic_route_rate")
+    if shadow_cycles_quoteable > 0 and toxic_rate is not None:
+        if float(toxic_rate) >= 1.0:
+            blockers.append("VALUE_RATIO_RCA_NOT_CLEAN")
+        elif float(toxic_rate) >= 0.9 and stable_outliers > 0:
+            blockers.append("VALUE_RATIO_RCA_NOT_CLEAN")
+    elif shadow_cycles_quoteable > 0 and stable_outliers > 0:
+        blockers.append("VALUE_RATIO_RCA_NOT_CLEAN")
+
+    ql = quote_liveness or {}
+    disc_by_len = ql.get("discovery_cycles_by_length") or (
+        (shadow or {}).get("discovery_cycles_by_length") or {}
+    )
+    quote_by_len = ql.get("cycles_quoteable_by_length") or (
+        (shadow or {}).get("cycles_quoteable_by_length") or {}
+    )
+    if int(disc_by_len.get("4") or 0) > 0 and int(quote_by_len.get("4") or 0) == 0:
+        blockers.append("FOUR_LEG_PRODUCTIVE_COVERAGE_ZERO")
+
     top_reject = str(
         rca_summary.get("top_reject")
         or rca_summary.get("dominant_reject")
@@ -228,13 +257,13 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                 "cycles_quoteable>0 and qsr>0 but qsr_liveness=0: "
                 "qsr_liveness counts only size_usd<=5 USD (liveness ladder); "
                 "dynamic sizing may select larger sizes (e.g. 25 USD) excluded "
-                "from the liveness subset — do not claim qsr_liveness without "
+                "from the liveness subset - do not claim qsr_liveness without "
                 "checking quote_size_truth.liveness_quote_attempts."
             )
     if cycles_quoteable > 0 and qsr_econ is not None and float(qsr_econ or 0) == 0.0:
         notes.append(
             "qsr_econ=0 while cycles_quoteable>0: no economics-sized quotes "
-            "(size_usd >= economic floor) succeeded — economics NOT_PROVEN."
+            "(size_usd >= economic floor) succeeded - economics NOT_PROVEN."
         )
 
     return {
@@ -302,6 +331,12 @@ def _build_operator_verdict(
         and (continuity_violations > 0 or stable_outliers > 0)
     ):
         m9_econ_label = "M9_ECONOMICS_BLOCKED_BY_AMOUNT_CONTINUITY_AND_VALUE_RATIO_RCA"
+    elif (
+        econ_status == "NOT_PROVEN"
+        and cycles_quoteable > 0
+        and "VALUE_RATIO_RCA_NOT_CLEAN" in m9_blockers
+    ):
+        m9_econ_label = "M9_ECONOMICS_BLOCKED_BY_VALUE_RATIO_AND_ADAPTER_RCA"
     elif econ_status == "NOT_PROVEN" and cycles_quoteable > 0 and cycles_positive == 0:
         m9_econ_label = "M9_ECONOMICS_NOT_PROVEN"
     elif econ_status == "NOT_PROVEN":
@@ -575,12 +610,15 @@ def build_acceptance_report(
         },
     ]
 
+    quote_liveness = _quote_liveness_metrics(shadow)
+
     m9_blockers = _m9_economics_blockers(
         shadow=shadow,
         rca=rca,
         shadow_cycles_found=shadow_cycles_found,
         shadow_cycles_quoteable=shadow_cycles_quoteable,
         shadow_cycles_with_m8=shadow_cycles_with_m8,
+        quote_liveness=quote_liveness,
     )
     if shadow is not None and not sniper_assessment.get("operational"):
         m9_blockers = sorted(set([M9_SNIPER_BLOCKER] + m9_blockers))
@@ -650,8 +688,6 @@ def build_acceptance_report(
     if shadow is None and not m9_blockers:
         m9_goal = "NOT_EVALUATED"
 
-    quote_liveness = _quote_liveness_metrics(shadow)
-
     operator_verdict = _build_operator_verdict(
         shadow=shadow,
         quote_liveness=quote_liveness,
@@ -707,7 +743,7 @@ def build_acceptance_report(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="M8→M9 per-layer acceptance report")
+    ap = argparse.ArgumentParser(description="M8->M9 per-layer acceptance report")
     ap.add_argument("--sniper", default=str(_DEFAULT_PATHS["sniper"]))
     ap.add_argument("--anchor", default=str(_DEFAULT_PATHS["anchor"]))
     ap.add_argument("--expansion", default=str(_DEFAULT_PATHS["expansion"]))

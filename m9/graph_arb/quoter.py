@@ -38,6 +38,10 @@ _REJECT_TOKEN_DECIMALS_UNKNOWN = "TOKEN_DECIMALS_UNKNOWN"
 _REJECT_UNKNOWN_PRICE = "UNKNOWN_PRICE"
 _REJECT_AMOUNT_CONTINUITY_VIOLATION = "AMOUNT_CONTINUITY_VIOLATION"
 _REJECT_STABLE_VALUE_RATIO_OUTLIER = "STABLE_VALUE_RATIO_OUTLIER"
+_REJECT_LEG_AMOUNT_EXCEEDS_POOL_CAPACITY = "LEG_AMOUNT_EXCEEDS_POOL_CAPACITY"
+_REJECT_ONE_DIRECTION_ONLY = "ONE_DIRECTION_ONLY"
+
+STATUS_LEG_CAPACITY_REJECT = "LEG_CAPACITY_REJECT"
 
 STATUS_TOKEN_DECIMALS_UNKNOWN = "TOKEN_DECIMALS_UNKNOWN"
 STATUS_UNKNOWN_PRICE = "UNKNOWN_PRICE"
@@ -170,11 +174,24 @@ def _probe_leg(
     # Cache read (only when we have a stable pool address to key on)
     cache_key: Optional[_EdgeKey] = None
     if edge is not None:
-        from m9.graph_arb.productive_distinct_quote import cap_leg_amount_in_for_edge
+        from m9.graph_arb.leg_capacity import resolve_leg_amount_in
 
-        amount_in = cap_leg_amount_in_for_edge(
+        amount_in, capacity_reject = resolve_leg_amount_in(
             edge, amount_in, leg_index=leg_index, size_usd=size_usd
         )
+        if capacity_reject:
+            from m8_1.stable_anchor.quote_probe import QuoteResult
+
+            return QuoteResult(
+                route_id=getattr(route, "dex_id", "") or "",
+                size_usd=float(size_usd or 0.0),
+                amount_in=int(amount_in),
+                amount_out=0,
+                ok=False,
+                reject_reason=capacity_reject,
+                gas_estimate=None,
+                raw_error=capacity_reject,
+            )
     if use_cache and edge is not None and edge.pool_address:
         cache_key = _edge_cache_key(edge, amount_in)
         cached = edge_quote_cache.get(cache_key)
@@ -333,6 +350,23 @@ def quote_cycle_sync(
         leg_results.append(leg_result)
 
         if not leg_result.ok:
+            _cap_reject = getattr(leg_result, "reject_reason", None) or ""
+            if _cap_reject in (
+                _REJECT_LEG_AMOUNT_EXCEEDS_POOL_CAPACITY,
+                _REJECT_ONE_DIRECTION_ONLY,
+                "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN",
+            ):
+                return CycleQuoteResult(
+                    cycle=cycle,
+                    size_usd=size_usd,
+                    amount_in=initial_amount,
+                    amount_out=0,
+                    gross_bps=0.0,
+                    status=STATUS_LEG_CAPACITY_REJECT,
+                    reject_reason=_cap_reject,
+                    leg_results=leg_results,
+                    elapsed_s=time.monotonic() - started,
+                )
             return CycleQuoteResult(
                 cycle=cycle,
                 size_usd=size_usd,
@@ -521,6 +555,8 @@ def quote_cycle_dynamic_sync(
             candidates = tuple(sorted(set(candidates) | {_econ_floor_usd}))
     else:
         cycle_depth = None
+        if depth_aware and not any(s >= _econ_floor_usd for s in candidates):
+            candidates = tuple(sorted(set(candidates) | {_econ_floor_usd}))
 
     try:
         from m9.graph_arb.per_dex_sizing import productive_cycle_size_usd_cap

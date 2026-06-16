@@ -448,6 +448,33 @@ def probe_quote_raw_http(
                 quote_abi_path=quote_abi_path,
                 quote_pool_id=quote_pool_id,
             )
+
+        from m9.graph_arb.stable_quote_guard import reject_toxic_stable_quote
+
+        _toxic = reject_toxic_stable_quote(
+            amount_in=int(reported_amount_in),
+            amount_out=int(amount_out),
+            token_in_decimals=token_in.decimals,
+            token_out_decimals=token_out.decimals,
+            token_in_sym=token_in.symbol,
+            token_out_sym=token_out.symbol,
+        )
+        if _toxic:
+            return QuoteResult(
+                route_id=route_id,
+                size_usd=0.0,
+                amount_in=reported_amount_in,
+                amount_out=0,
+                ok=False,
+                reject_reason=_toxic,
+                gas_estimate=gas_est,
+                raw_error=f"stable_ratio_outlier pool={route.quoter}",
+                quote_target=quote_target,
+                quote_selector=quote_selector,
+                quote_abi_path=quote_abi_path,
+                quote_pool_id=quote_pool_id,
+            )
+
         return QuoteResult(
             route_id=route_id,
             size_usd=0.0,
@@ -499,7 +526,11 @@ def probe_quote_raw_http(
             or "empty/short result" in err_str.lower()
         ):
             if route.adapter_type == "maverick_v2":
-                reject = "MAVERICK_NO_LIQUIDITY"
+                _max_raw = getattr(route, "maverick_max_quoteable_amount_raw", None)
+                if _max_raw and int(amount_in) > int(_max_raw):
+                    reject = "MAVERICK_PROBE_AMOUNT_OUT_OF_RANGE"
+                else:
+                    reject = "MAVERICK_NO_LIQUIDITY"
             else:
                 reject = "QUOTE_REVERT"
         elif reject == "QUOTE_RPC_ERROR" and (

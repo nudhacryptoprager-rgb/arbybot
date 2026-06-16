@@ -32,6 +32,7 @@ _CURVE_FACTORY_DISCOVERY_SCHEMA = "m9_curve_discovery.1"
 _QUOTE_OK_PROBE_PREFIXES = ("QUOTE_OK",)
 # Factory enumeration supplies coin_indices only; quoting requires indices probe.
 DISCOVERY_UNPROBED = "DISCOVERY_UNPROBED"
+_TOXIC_CURVE_PROBE_PREFIXES = ("TOXIC_STABLE",)
 
 
 def _curve_probe_is_quotable(probe_status: Optional[str]) -> bool:
@@ -39,6 +40,8 @@ def _curve_probe_is_quotable(probe_status: Optional[str]) -> bool:
     if probe_status is None:
         return True
     if probe_status == DISCOVERY_UNPROBED:
+        return False
+    if any(str(probe_status).startswith(p) for p in _TOXIC_CURVE_PROBE_PREFIXES):
         return False
     return any(probe_status.startswith(p) for p in _QUOTE_OK_PROBE_PREFIXES)
 

@@ -31,7 +31,7 @@
 
 **M8.2 - Cross-DEX Expansion & Mirror Handoff**: graph-handoff **REACHED** (`handoff_ready=true`); mirror quote / economics remain out of scope for M8.2. Quality gates in `m8_2_acceptance_report.py`. See [Status_M8_2.md](Status_M8_2.md).
 
-**M9 - Graph-Arb Long-Tail Shadow Scanner**: canonical 10m graph-handoff shadow (`duration_fulfilled=true`). Quote liveness **PARTIAL**: `cycles_quoteable=851`, `qsr=0.916`, `2=10/3=9/4=0` quoteable by length. Economics **NOT_PROVEN** (`cycles_positive_gross=0`). Blockers: phantom quarantine, `decimals_unknown`, Balancer `BALANCER_UNKNOWN_REVERT`. Operator dashboard: `py -3.11 -m monitoring.dashboard_server --port 8099`. See [Status_M9.md](Status_M9.md).
+**M9 - Graph-Arb Long-Tail Shadow Scanner**: economics-size instrumentation fixed (`econ_quote_attempts=514`, `below_econ_quote_attempts=0`, histogram `$180` only). Quote liveness **PARTIAL**: `cycles_quoteable=102`, `qsr_econ=0.9144`. Economics **NOT_PROVEN** (`cycles_positive_gross=0`; honest `MARKET_NO_POSITIVE_GROSS` at `$180`). Blockers: `depth_known_rate` low, `decimals_unknown`, `STABLE_VALUE_RATIO_OUTLIER`. Operator dashboard: `py -3.11 -m monitoring.dashboard_server --port 8099`. See [Status_M9.md](Status_M9.md).
 
 ## Related
 

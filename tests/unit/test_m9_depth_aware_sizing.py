@@ -132,6 +132,10 @@ class TestDynamicDepthAware:
 
     def test_no_depth_uses_full_ladder(self, monkeypatch):
         quoted = self._patch_quote(monkeypatch)
+        monkeypatch.setattr(
+            "m9.graph_arb.size_truth.economic_size_floor_usd",
+            lambda **_: 180.0,
+        )
         cyc = _cycle()  # no depth
         res = quote_cycle_dynamic_sync(
             cyc, (50.0, 100.0, 500.0), w3=None,
@@ -139,6 +143,43 @@ class TestDynamicDepthAware:
         assert quoted == [50.0, 100.0, 500.0]
         assert res.depth_capped is False
         assert res.cycle_min_depth_usd is None
+
+    def test_unknown_depth_distinct_cycle_quotes_economics_floor(self, monkeypatch):
+        from dataclasses import replace
+
+        quoted: list[float] = []
+
+        def _fake(cycle_arg, size_usd, *_a, **_k):
+            quoted.append(size_usd)
+            from m9.graph_arb.models import CycleQuoteResult
+            return CycleQuoteResult(
+                cycle=cycle_arg, size_usd=size_usd,
+                amount_in=int(size_usd), amount_out=int(size_usd * 1.01),
+                gross_bps=100.0, status="POSITIVE_GROSS", reject_reason=None,
+                leg_results=[], elapsed_s=0.01,
+            )
+
+        monkeypatch.setattr(quoter, "quote_cycle_sync", _fake)
+        monkeypatch.setattr(
+            "m9.graph_arb.size_truth.economic_size_floor_usd",
+            lambda **_: 180.0,
+        )
+        mav = replace(
+            _edge("A", _ADDR_A, "B", _ADDR_B, _POOL1),
+            dex_id="maverick_v2",
+            adapter_type="maverick_v2",
+            route_id="maverick_v2:p1@0",
+        )
+        cyc = GraphCycle(edges=(
+            mav,
+            _edge("B", _ADDR_B, "C", _ADDR_C, _POOL2),
+            _edge("C", _ADDR_C, "A", _ADDR_A, _POOL3),
+        ))
+        res = quote_cycle_dynamic_sync(
+            cyc, (25.0, 100.0, 250.0, 500.0), w3=None,
+        )
+        assert 180.0 in quoted
+        assert res.size_usd >= 180.0
 
     def test_depth_aware_disabled(self, monkeypatch):
         quoted = self._patch_quote(monkeypatch)

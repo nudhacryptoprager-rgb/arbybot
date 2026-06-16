@@ -8,6 +8,7 @@ DEPTH_STATUS_UNKNOWN = "UNKNOWN"
 DEPTH_STATUS_FALLBACK_CAPPED = "FALLBACK_CAPPED"
 DEPTH_STATUS_MEASURED_TOO_THIN = "MEASURED_TOO_THIN"
 DEPTH_STATUS_LOWER_BOUND = "LOWER_BOUND_AT_MAX_PROBE"
+DEPTH_STATUS_UNRESOLVED = "DEPTH_UNRESOLVED"
 
 REJECT_DEPTH_BELOW_ECONOMICS_FLOOR = "DEPTH_BELOW_ECONOMICS_FLOOR"
 
@@ -171,3 +172,45 @@ def economics_blocked_by_depth_telemetry(
     threshold: float = ECONOMICS_DEPTH_KNOWN_RATE_MIN,
 ) -> bool:
     return depth_known_rate_value < threshold
+
+
+def economics_quote_depth_resolved(cycle: Any) -> bool:
+    """True when the cycle bottleneck has measured or ladder-bounded depth.
+
+    Cycles with only UNKNOWN depth must not be classified as market-toxic when
+    quoted at the economics floor — that negative is an instrumentation artifact.
+    """
+    status = classify_cycle_depth_status(cycle)
+    return status not in (DEPTH_STATUS_UNKNOWN, DEPTH_STATUS_UNRESOLVED)
+
+
+def exclude_from_toxic_economics_denominator(qr: Any) -> bool:
+    """Cycles that should not inflate toxic_route_rate or market-negative buckets."""
+    from m9.graph_arb.leg_capacity import CAPACITY_INSTRUMENTATION_REJECTS
+
+    if qr.status in ("LEG_CAPACITY_REJECT", "DEPTH_UNRESOLVED", "DEPTH_BELOW_ECONOMICS_FLOOR"):
+        return True
+    if (qr.reject_reason or "") in CAPACITY_INSTRUMENTATION_REJECTS:
+        return True
+    if qr.status == "CYCLE_SANITY_FAILED" and (
+        qr.reject_reason or ""
+    ) in ("AMOUNT_CONTINUITY_VIOLATION",):
+        return True
+    return False
+
+
+def pre_shadow_bridge_blockers(
+    *,
+    depth_known_rate_value: Optional[float],
+    routes_decimals_unknown: int = 0,
+    active_route_count: int = 0,
+    depth_threshold: float = ECONOMICS_DEPTH_KNOWN_RATE_MIN,
+    decimals_unknown_max: int = 50,
+) -> List[str]:
+    """Blockers that must be cleared before a productive M9 shadow run."""
+    blockers: List[str] = []
+    if depth_known_rate_value is not None and depth_known_rate_value < depth_threshold:
+        blockers.append("DEPTH_ENRICHMENT_REQUIRED")
+    if active_route_count > 0 and routes_decimals_unknown > decimals_unknown_max:
+        blockers.append("DECIMALS_ENRICHMENT_REQUIRED")
+    return blockers

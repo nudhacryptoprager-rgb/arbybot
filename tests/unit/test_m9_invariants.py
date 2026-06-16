@@ -404,6 +404,43 @@ class TestEconomicsMetricsInvariant:
         hist = art["economics_metrics"]["loss_reason_histogram"]
         assert hist.get("FEE_DRAG", 0) == 1
 
+    def test_zero_gross_not_classified_positive(self):
+        cycle = _make_cycle(factory_verified=True)
+        qr = _make_qr(cycle, gross_bps=0.0)
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        hist = art["economics_metrics"]["loss_reason_histogram"]
+        assert hist.get("ZERO_OR_SUPPRESSED", 0) == 1
+        assert hist.get("POSITIVE", 0) == 0
+
+    def test_sanity_failed_classified_sanity_suppressed(self):
+        from m9.graph_arb.models import CycleQuoteResult
+
+        cycle = _make_cycle(factory_verified=True)
+        qr = CycleQuoteResult(
+            cycle=cycle,
+            size_usd=1.0,
+            amount_in=0,
+            amount_out=0,
+            gross_bps=0.0,
+            status="CYCLE_SANITY_FAILED",
+            reject_reason="STABLE_VALUE_RATIO_OUTLIER",
+            leg_results=[],
+            elapsed_s=0.01,
+        )
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        hist = art["economics_metrics"]["loss_reason_histogram"]
+        assert hist.get("SANITY_SUPPRESSED", 0) == 1
+        assert hist.get("POSITIVE", 0) == 0
+
+    def test_quote_size_truth_histogram_fields_present(self):
+        cycle = _make_cycle(factory_verified=True)
+        qr = _make_qr(cycle, gross_bps=-10.0)
+        art = build_artifact(**_base_kwargs(cycle_results=[qr]))
+        qst = art["quote_size_truth"]
+        assert "attempted_size_usd_histogram" in qst
+        assert "selected_size_usd_histogram" in qst
+        assert "below_econ_quote_attempts" in qst
+
     def test_top_opportunity_loss_reason_toxic_for_catastrophic_spread(self):
         """top_opportunities[0].loss_reason == TOXIC_ROUTE_PRICE_IMPACT for -9000 bps."""
         cycle = _make_cycle(factory_verified=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from m9.graph_arb.models import GraphEdge
 from m9.graph_arb.per_dex_sizing import productive_cycle_size_usd_cap
+from m9.graph_arb.size_truth import economic_size_floor_usd
 
 
 def _edge(adapter: str, pool_char: str = "a") -> GraphEdge:
@@ -29,12 +30,13 @@ def _edge(adapter: str, pool_char: str = "a") -> GraphEdge:
 
 def test_productive_cycle_size_usd_cap_distinct_without_depth_uses_economics_floor(monkeypatch):
     monkeypatch.delenv("ARBY_M9_DIAGNOSTIC_ADMISSION_MODE", raising=False)
+    floor = economic_size_floor_usd()
 
     class _Cycle:
         min_effective_depth_usd = None
         edges = (_edge("maverick_v2"), _edge("uniswap_v3", "b"))
 
-    assert productive_cycle_size_usd_cap(_Cycle(), 1.0, {}) == 25.0
+    assert productive_cycle_size_usd_cap(_Cycle(), 1.0, {}) == floor
 
 
 def test_productive_cycle_size_usd_cap_distinct_without_depth_topology_probe(monkeypatch):
@@ -68,4 +70,4 @@ def test_productive_cycle_size_usd_floor_for_sane_measured_depth():
         min_effective_depth_usd = 5000.0
         edges = (_Edge("maverick_v2", "a", 5000.0), _Edge("uniswap_v3", "b", 8000.0))
 
-    assert productive_cycle_size_usd_cap(_Cycle(), 1.0, {}) == 25.0
+    assert productive_cycle_size_usd_cap(_Cycle(), 1.0, {}) == 1.0
