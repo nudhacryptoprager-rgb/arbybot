@@ -241,12 +241,49 @@ scan_params:
   cycle_lengths: [3, 4]                       # no 2-leg until bridge multi-venue proves route_qsr
 
 cost_model:
-  default_profile: default
+  # Active profile: ARBY_M9_ECONOMICS_PROFILE overrides default_profile at runtime.
+  default_profile: production_conservative
+  economics_profiles:
+    production_conservative:
+      profit_claim_allowed: true
+      role: production
+    base_realistic:
+      profit_claim_allowed: true
+      role: production
+      profit_claim_mode: runtime_conditional
+    diagnostic_near_econ:
+      profit_claim_allowed: false
+      role: diagnostic
   profiles:
     default:
       gas_usd: 0.05
       l1_fee_usd: 0.01
       slippage_bps: 5.0
+      target_net_bps: 10.0
+      safety_factor: 1.5
+      min_floor_usd: 25.0
+    production_conservative:
+      gas_usd: 0.05
+      l1_fee_usd: 0.01
+      slippage_bps: 5.0
+      target_net_bps: 10.0
+      safety_factor: 1.5
+      min_floor_usd: 25.0
+    base_realistic:
+      gas_usd: 0.05
+      l1_fee_usd: 0.01
+      slippage_bps: 5.0
+      target_net_bps: 13.0
+      safety_factor: 0.85
+      min_floor_usd: 25.0
+    diagnostic_near_econ:
+      gas_usd: 0.05
+      l1_fee_usd: 0.01
+      slippage_bps: 5.0
+      target_net_bps: 8.0
+      safety_factor: 1.0
+      min_floor_usd: 25.0
+      economics_floor_usd: 25.0
   gas_mode_default: static
   paper_haircut: 0.0
   slippage_mode_default: static

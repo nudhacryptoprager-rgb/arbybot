@@ -729,12 +729,13 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 log.warning("Invalid ARBY_M9_CYCLE_LENGTHS=%r", _env_cycle_lengths)
         _cost_model = _cfg_raw.get("cost_model") or None
         if _cost_model:
-            _profile = (_cost_model.get("profiles") or {}).get(
-                _cost_model.get("default_profile", "default"), {}
-            )
+            from m9.graph_arb.size_truth import resolve_active_economics_profile_name
+
+            _active_profile = resolve_active_economics_profile_name(_cost_model)
+            _profile = (_cost_model.get("profiles") or {}).get(_active_profile, {})
             log.info(
                 "Cost model loaded: profile=%s gas_usd=%.4f l1_fee_usd=%.4f slippage_bps=%.2f",
-                _cost_model.get("default_profile", "default"),
+                _active_profile,
                 _profile.get("gas_usd", 0.05),
                 _profile.get("l1_fee_usd", 0.01),
                 _profile.get("slippage_bps", 5.0),

@@ -425,11 +425,27 @@ def _build_per_leg_rca(
     return result
 
 
+def _normalize_cycle_reject_key(qr: CycleQuoteResult) -> str:
+    """Map instrumentation failures to stable histogram keys (not market-toxic)."""
+    from m9.graph_arb.depth_telemetry import exclude_from_toxic_economics_denominator
+
+    if qr.status == "LEG_CAPACITY_REJECT" and qr.reject_reason:
+        return str(qr.reject_reason)
+    if exclude_from_toxic_economics_denominator(qr):
+        if (qr.reject_reason or "") == "AMOUNT_CONTINUITY_VIOLATION":
+            return "INSTRUMENTATION_BLOCKED__AMOUNT_CONTINUITY"
+        if qr.status == "CYCLE_SANITY_FAILED":
+            return f"INSTRUMENTATION_BLOCKED__{qr.reject_reason or qr.status}"
+        if qr.reject_reason:
+            return str(qr.reject_reason)
+    return qr.reject_reason if qr.reject_reason else qr.status
+
+
 def _compute_cycle_reject_histogram(cycle_results: List[CycleQuoteResult]) -> Dict[str, int]:
     """Count cycle outcomes by reject_reason or status."""
     histogram: Dict[str, int] = {}
     for qr in cycle_results:
-        key = qr.reject_reason if qr.reject_reason else qr.status
+        key = _normalize_cycle_reject_key(qr)
         histogram[key] = histogram.get(key, 0) + 1
     return histogram
 
@@ -451,6 +467,10 @@ def _compute_toxic_pool_families(
     """
     pool_stats: Dict[str, Dict[str, Any]] = {}
     for qr in cycle_results:
+        from m9.graph_arb.depth_telemetry import exclude_from_toxic_economics_denominator
+
+        if exclude_from_toxic_economics_denominator(qr):
+            continue
         fee_drag = qr.cycle.total_fee_bps
         # OVERSIZED_VS_DEPTH and phantom cycles zero out gross_bps and stash the
         # real (extreme) spread in raw_gross_bps. Use that pre-zeroing value so the
@@ -944,7 +964,9 @@ def build_artifact(
     # and the top-level estimated_cost_bps field.
     _cost_profile_for_compute: Optional[Dict[str, Any]] = None
     if cost_model:
-        _profile_name = cost_model.get("default_profile", "default")
+        from m9.graph_arb.size_truth import resolve_active_economics_profile_name
+
+        _profile_name = resolve_active_economics_profile_name(cost_model)
         _cost_profile_for_compute = (cost_model.get("profiles") or {}).get(_profile_name) or {}
 
     # Cost-aware helper: returns cost-adjusted net bps when cost profile is available,
@@ -1061,22 +1083,23 @@ def build_artifact(
 
     from m9.graph_arb.size_truth import (
         LIVENESS_MAX_SIZE_USD,
-        economic_size_floor_usd,
+        active_economics_floor_usd,
         is_econ_size,
         is_liveness_size,
         quote_size_truth_metrics,
     )
 
-    _cp = _cost_profile_for_compute or {}
-    _econ_floor_usd = economic_size_floor_usd(
-        gas_usd=float(_cp.get("gas_usd", 0.05)),
-        l1_fee_usd=float(_cp.get("l1_fee_usd", 0.01)),
-        slippage_bps=float(_cp.get("slippage_bps", 5.0)),
-    )
+    _econ_floor_usd = active_economics_floor_usd(cost_model) if cost_model else 180.0
+    from m9.graph_arb.cycle_capacity import is_econ_rpc_quote_attempt
+    from m9.graph_arb.size_truth import economics_profile_context
+
     _liveness_results = [qr for qr in cycle_results if is_liveness_size(qr.size_usd)]
     _econ_results = [qr for qr in cycle_results if is_econ_size(qr.size_usd, _econ_floor_usd)]
+    _econ_rpc_results = [
+        qr for qr in _econ_results if is_econ_rpc_quote_attempt(qr, _econ_floor_usd)
+    ]
     qsr_liveness = _qsr_for_subset(_liveness_results)
-    qsr_econ = _qsr_for_subset(_econ_results)
+    qsr_econ = _qsr_for_subset(_econ_rpc_results)
     oversized_vs_depth_count = sum(
         1
         for qr in cycle_results
@@ -1312,6 +1335,12 @@ def build_artifact(
     economics_metrics["loss_reason_histogram"] = _loss_reason_histogram
     economics_metrics["toxic_route_count"] = _toxic_route_count
     economics_metrics["toxic_route_denominator"] = _toxic_denominator
+    _instrumentation_count = _loss_reason_histogram.get(_LOSS_INSTRUMENTATION, 0)
+    economics_metrics["instrumentation_blocked_count"] = _instrumentation_count
+    if cycles_quoteable > 0:
+        economics_metrics["instrumentation_blocked_rate"] = round(
+            _instrumentation_count / cycles_quoteable, 4
+        )
     if _toxic_denominator > 0:
         economics_metrics["toxic_route_rate"] = round(_toxic_route_count / _toxic_denominator, 4)
     elif cycles_quoteable > 0:
@@ -1482,6 +1511,17 @@ def build_artifact(
         "qsr": round(qsr, 4),
         "qsr_liveness": round(qsr_liveness, 4),
         "qsr_econ": round(qsr_econ, 4),
+        "economic_size_floor_usd": _econ_floor_usd,
+        "active_economics_profile": (
+            economics_profile_context(cost_model=cost_model).get(
+                "active_economics_profile"
+            )
+            if cost_model
+            else None
+        ),
+        "economics_profile_context": (
+            economics_profile_context(cost_model=cost_model) if cost_model else {}
+        ),
         "quote_size_truth": quote_size_truth_metrics(
             cycle_results,
             econ_floor_usd=_econ_floor_usd,

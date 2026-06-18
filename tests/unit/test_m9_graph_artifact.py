@@ -437,6 +437,36 @@ class TestM9GraphArtifactBuilder:
         assert hist.get("NEGATIVE_GROSS") == 1
         assert hist.get("QUOTE_REVERT") == 1
 
+    def test_cycle_reject_histogram_maps_continuity_to_instrumentation(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle,
+            size_usd=180.0,
+            amount_in=1000,
+            amount_out=0,
+            gross_bps=0.0,
+            status="LEG_CAPACITY_REJECT",
+            reject_reason="LEG_AMOUNT_EXCEEDS_POOL_CAPACITY",
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[qr],
+            topology=_make_topology(),
+            sizes_usd=(180.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+        )
+        hist = a["cycle_reject_histogram"]
+        assert hist.get("LEG_AMOUNT_EXCEEDS_POOL_CAPACITY") == 1
+        assert a["economics_metrics"].get("instrumentation_blocked_count") == 1
+
     def test_write_and_read_artifact(self, tmp_path):
         from m9.graph_arb.artifacts import build_artifact, write_artifact
         out = str(tmp_path / "m9_test.json")

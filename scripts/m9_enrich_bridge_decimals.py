@@ -26,6 +26,16 @@ def main() -> int:
     p.add_argument("--chain", default="base")
     p.add_argument("--config", default="config/exotic_base_anchor.yaml")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument(
+        "--route-ids-file",
+        default=None,
+        help="JSON file with route_ids list (e.g. m9_capacity_enrichment_targets_latest.json)",
+    )
+    p.add_argument(
+        "--from-capacity-diagnostic",
+        default=None,
+        help="Capacity diagnostic JSON; enrich only enrichment_targets.route_ids",
+    )
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -49,6 +59,22 @@ def main() -> int:
     routes = list(doc.get("active_routes") or [])
     exploration = list(doc.get("exploration_routes") or [])
     all_routes = routes + exploration
+
+    target_ids: set[str] | None = None
+    if args.from_capacity_diagnostic:
+        cap_doc = json.loads(Path(args.from_capacity_diagnostic).read_text(encoding="utf-8"))
+        targets = cap_doc.get("enrichment_targets") or cap_doc
+        target_ids = {str(r) for r in (targets.get("route_ids") or [])}
+    elif args.route_ids_file:
+        rid_doc = json.loads(Path(args.route_ids_file).read_text(encoding="utf-8"))
+        if isinstance(rid_doc, list):
+            target_ids = {str(r) for r in rid_doc}
+        else:
+            targets = rid_doc.get("enrichment_targets") or rid_doc
+            target_ids = {str(r) for r in (targets.get("route_ids") or [])}
+    if target_ids is not None:
+        all_routes = [r for r in all_routes if str(r.get("route_id") or "") in target_ids]
+        log.info("Targeted decimals enrichment: route_ids=%d matched_routes=%d", len(target_ids), len(all_routes))
     if not all_routes:
         log.error("No routes to enrich")
         return 1

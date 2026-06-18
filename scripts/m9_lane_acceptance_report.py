@@ -138,6 +138,28 @@ def _cross_mechanic_topology(
     }
 
 
+def _economics_profile_context_for_report(
+    *,
+    shadow: Optional[Dict[str, Any]],
+    capacity_metrics: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    import os
+
+    from m9.graph_arb.size_truth import economics_profile_context
+
+    profile_name = (
+        (shadow or {}).get("active_economics_profile")
+        or (shadow or {}).get("economics_profile")
+        or ((shadow or {}).get("economics_profile_context") or {}).get(
+            "active_economics_profile"
+        )
+        or (capacity_metrics or {}).get("active_economics_profile")
+        or os.environ.get("ARBY_M9_ECONOMICS_PROFILE")
+        or "production_conservative"
+    )
+    return economics_profile_context(profile_name=profile_name, shadow=shadow)
+
+
 def _m9_economics_blockers(
     *,
     shadow: Optional[Dict[str, Any]],
@@ -146,21 +168,49 @@ def _m9_economics_blockers(
     shadow_cycles_quoteable: int,
     shadow_cycles_with_m8: int,
     quote_liveness: Optional[Dict[str, Any]] = None,
+    bridge: Optional[Dict[str, Any]] = None,
+    capacity_metrics: Optional[Dict[str, Any]] = None,
+    economics_profile: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """M9-only blockers: graph/cycle/quote/economics (not M8.2 hint/mirror quality)."""
     blockers: List[str] = []
+    eprof = economics_profile or {}
+    profile_role = str(eprof.get("role") or "production")
+    claim_status = str(eprof.get("profit_claim_status") or "runtime_conditional")
+    active_profile = str(eprof.get("active_economics_profile") or "production_conservative")
     shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
     qsr_econ = (shadow or {}).get("qsr_econ")
     depth_known = (shadow or {}).get("depth_aware_known_rate")
+    cycles_positive = int((shadow or {}).get("cycles_positive_gross") or 0)
+    qst = (shadow or {}).get("quote_size_truth") or {}
+    econ_rpc = int(qst.get("econ_rpc_quote_attempts") or 0)
+    econ_gate = qst.get("econ_gate_attempts")
 
     if shadow_cycles_found > 0 and shadow_cycles_quoteable == 0:
         blockers.append("NO_QUOTEABLE_CYCLES")
-    if int((shadow or {}).get("cycles_positive_gross") or 0) == 0 and shadow_cycles_found > 0:
-        blockers.append("NO_POSITIVE_GROSS")
+    if (
+        shadow_cycles_found > 0
+        and cycles_positive == 0
+        and profile_role != "diagnostic"
+    ):
+        if (
+            active_profile == "base_realistic"
+            and str(eprof.get("profit_claim_mode") or "") == "runtime_conditional"
+            and int(econ_rpc or 0) == 0
+        ):
+            blockers.append("BASE_REALISTIC_RUNTIME_PROOF_PENDING")
+        else:
+            blockers.append("NO_POSITIVE_GROSS")
     if shadow_cycles_found > 0 and shadow_qsr == 0.0:
         blockers.append("QSR_ZERO")
     if shadow_cycles_found > 0 and qsr_econ is not None and float(qsr_econ) == 0.0:
         blockers.append("QSR_ECON_ZERO")
+    if shadow_cycles_found > 0 and econ_rpc == 0 and qst:
+        blockers.append("ECON_RPC_QUOTES_ZERO")
+    if shadow_cycles_found > 0 and int(econ_gate or 0) > 0 and int(econ_rpc or 0) == 0:
+        blockers.append("ECON_RPC_QUOTE_NOT_ATTEMPTED")
+        if active_profile == "base_realistic":
+            blockers.append("BASE_REALISTIC_ADMISSION_OR_CAPACITY_GATE")
     if shadow_cycles_found > 0 and depth_known is not None and float(depth_known) == 0.0:
         blockers.append("DEPTH_UNKNOWN")
 
@@ -173,13 +223,24 @@ def _m9_economics_blockers(
     )
     econ_metrics = (shadow or {}).get("economics_metrics") or {}
     toxic_rate = econ_metrics.get("toxic_route_rate")
+    toxic_denominator = int(econ_metrics.get("toxic_route_denominator") or 0)
     if toxic_rate is None:
         toxic_rate = rca_summary.get("toxic_route_rate")
-    if shadow_cycles_quoteable > 0 and toxic_rate is not None:
+    reject_hist = (shadow or {}).get("cycle_reject_histogram") or {}
+    continuity_count = int(
+        reject_hist.get("AMOUNT_CONTINUITY_VIOLATION", 0)
+        + reject_hist.get("INSTRUMENTATION_BLOCKED__AMOUNT_CONTINUITY", 0)
+    )
+    instrumentation_count = int(econ_metrics.get("instrumentation_blocked_count") or 0)
+    if continuity_count > 0 or instrumentation_count > 0:
+        blockers.append("CONTINUITY_INSTRUMENTATION_NOT_CLEAN")
+    if shadow_cycles_quoteable > 0 and toxic_rate is not None and toxic_denominator > 0:
         if float(toxic_rate) >= 1.0:
             blockers.append("VALUE_RATIO_RCA_NOT_CLEAN")
         elif float(toxic_rate) >= 0.9 and stable_outliers > 0:
             blockers.append("VALUE_RATIO_RCA_NOT_CLEAN")
+    elif shadow_cycles_quoteable > 0 and toxic_rate is not None and toxic_denominator == 0:
+        pass  # all quoteable cycles are instrumentation — not a market-toxic verdict
     elif shadow_cycles_quoteable > 0 and stable_outliers > 0:
         blockers.append("VALUE_RATIO_RCA_NOT_CLEAN")
 
@@ -213,6 +274,19 @@ def _m9_economics_blockers(
     if phantom_count > 0:
         blockers.append("PHANTOM_QUOTE_PRESENT")
 
+    bsm = (bridge or {}).get("bridge_source_metrics") or {}
+    missing_lanes = list(bsm.get("missing_distinct_pricing_lanes") or [])
+    productive_curve = int(bsm.get("productive_curve_quoteable_routes") or 0)
+    if "curve" in missing_lanes or productive_curve == 0:
+        blockers.append("CURVE_PRODUCTIVE_LANE_INCOMPLETE")
+
+    decimals_unknown = int(bsm.get("routes_decimals_unknown") or 0)
+    if decimals_unknown > 50:
+        blockers.append("DECIMALS_ENRICHMENT_REQUIRED")
+    depth_known = bsm.get("depth_known_rate")
+    if depth_known is not None and float(depth_known) < 0.5:
+        blockers.append("DEPTH_ENRICHMENT_REQUIRED")
+
     cm_found = int(
         (shadow or {}).get("cross_mechanic_cycles_found")
         or (shadow or {}).get("cross_mechanic_cycles")
@@ -226,6 +300,20 @@ def _m9_economics_blockers(
     elif cm_quoteable == 0 and cm_found > 0:
         blockers.append("NO_CROSS_MECHANIC_CYCLES_QUOTEABLE")
 
+    cap = capacity_metrics or {}
+    cycles_total_cap = int(cap.get("cycles_total") or 0)
+    cycles_at_prod = int(
+        cap.get("cycles_at_production_floor")
+        or cap.get("cycles_at_econ_floor")
+        or 0
+    )
+    near_econ = int(cap.get("near_econ_cycles_count") or 0)
+    if cycles_total_cap > 0 and cycles_at_prod == 0:
+        blockers.append("NO_ECON_CAPACITY_CYCLES_AT_PRODUCTION_FLOOR")
+        blockers.append("NO_ECON_CAPACITY_CYCLES")
+    if near_econ > 0 and cycles_at_prod == 0:
+        blockers.append("NEAR_ECON_CAPACITY_ONLY")
+
     return sorted(set(blockers))
 
 
@@ -235,9 +323,11 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         return {}
     cycles_quoteable = int(shadow.get("cycles_quoteable") or 0)
     cycles_positive_gross = int(shadow.get("cycles_positive_gross") or 0)
+    shadow_cycles_found = int(shadow.get("cycles_found") or 0)
     qsr = shadow.get("qsr")
     qsr_liveness = shadow.get("qsr_liveness")
     qsr_econ = shadow.get("qsr_econ")
+    qst = shadow.get("quote_size_truth") or {}
 
     if cycles_quoteable == 0:
         quote_liveness_status = "NOT_PROVEN"
@@ -265,6 +355,14 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "qsr_econ=0 while cycles_quoteable>0: no economics-sized quotes "
             "(size_usd >= economic floor) succeeded - economics NOT_PROVEN."
         )
+    econ_gate = qst.get("econ_gate_attempts")
+    econ_rpc = qst.get("econ_rpc_quote_attempts")
+    if shadow_cycles_found > 0 and econ_gate is not None and int(econ_gate) > 0:
+        if econ_rpc is not None and int(econ_rpc) == 0:
+            notes.append(
+                "econ_gate_attempts>0 but econ_rpc_quote_attempts=0: sizing/depth "
+                "gate blocked all economics RPC quotes (not a market QSR success)."
+            )
 
     return {
         "quote_liveness_status": quote_liveness_status,
@@ -465,6 +563,7 @@ def build_acceptance_report(
     shadow: Optional[Dict[str, Any]],
     rca: Optional[Dict[str, Any]],
     m8_2_report: Optional[Dict[str, Any]] = None,
+    capacity_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     sniper_metrics = (sniper or {}).get("metrics") or {}
     anchor_metrics = (anchor or {}).get("metrics") or {}
@@ -611,6 +710,10 @@ def build_acceptance_report(
     ]
 
     quote_liveness = _quote_liveness_metrics(shadow)
+    economics_profile_ctx = _economics_profile_context_for_report(
+        shadow=shadow,
+        capacity_metrics=capacity_metrics,
+    )
 
     m9_blockers = _m9_economics_blockers(
         shadow=shadow,
@@ -619,6 +722,9 @@ def build_acceptance_report(
         shadow_cycles_quoteable=shadow_cycles_quoteable,
         shadow_cycles_with_m8=shadow_cycles_with_m8,
         quote_liveness=quote_liveness,
+        bridge=bridge,
+        capacity_metrics=capacity_metrics,
+        economics_profile=economics_profile_ctx,
     )
     if shadow is not None and not sniper_assessment.get("operational"):
         m9_blockers = sorted(set([M9_SNIPER_BLOCKER] + m9_blockers))
@@ -720,6 +826,8 @@ def build_acceptance_report(
         },
         "exploration_routes_sample": exploration_sample,
         "quote_lane_rca_summary": (rca or {}).get("summary"),
+        "capacity_cycle_metrics": capacity_metrics or {},
+        "economics_profile_context": economics_profile_ctx,
         "quote_lane_top_rejects": (rca or {}).get("by_reject_reason"),
         "quote_lane_adapter_errors": (rca or {}).get("by_adapter_family_leg_errors"),
         "m8_2_upstream": m8_2_upstream,
@@ -756,6 +864,11 @@ def main() -> int:
         help="M8.2 acceptance report (mirror/subgraph/handoff gates)",
     )
     ap.add_argument(
+        "--capacity",
+        default=str(REPO_ROOT / "data/tmp/m9_capacity_cycle_diagnostic_latest.json"),
+        help="Usable-capacity cycle diagnostic artifact",
+    )
+    ap.add_argument(
         "--output",
         default=str(REPO_ROOT / "data/tmp/m9_lane_acceptance_report_latest.json"),
     )
@@ -763,6 +876,8 @@ def main() -> int:
 
     m8_2_path = Path(args.m8_2_report)
     m8_2_report = _load(m8_2_path) if m8_2_path.exists() else None
+    capacity_path = Path(args.capacity)
+    capacity_metrics = _load(capacity_path) if capacity_path.exists() else None
 
     report = build_acceptance_report(
         sniper=_load(Path(args.sniper)),
@@ -772,6 +887,7 @@ def main() -> int:
         shadow=_load(Path(args.shadow)),
         rca=_load(Path(args.rca)),
         m8_2_report=m8_2_report,
+        capacity_metrics=capacity_metrics,
     )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

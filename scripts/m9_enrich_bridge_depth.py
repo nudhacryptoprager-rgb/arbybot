@@ -99,6 +99,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument("--verbose", action="store_true")
+    p.add_argument(
+        "--route-ids-file",
+        default=None,
+        help="JSON file with route_ids list for targeted depth enrichment",
+    )
+    p.add_argument(
+        "--from-capacity-diagnostic",
+        default=None,
+        help="Capacity diagnostic JSON; probe only enrichment_targets.route_ids",
+    )
     return p.parse_args()
 
 
@@ -150,6 +160,25 @@ def main() -> int:
         inventory = json.load(fh)
 
     routes = inventory.get("active_routes", [])
+    target_ids: set[str] | None = None
+    if args.from_capacity_diagnostic:
+        cap_doc = json.loads(Path(args.from_capacity_diagnostic).read_text(encoding="utf-8"))
+        targets = cap_doc.get("enrichment_targets") or cap_doc
+        target_ids = {str(r) for r in (targets.get("route_ids") or [])}
+    elif args.route_ids_file:
+        rid_doc = json.loads(Path(args.route_ids_file).read_text(encoding="utf-8"))
+        if isinstance(rid_doc, list):
+            target_ids = {str(r) for r in rid_doc}
+        else:
+            targets = rid_doc.get("enrichment_targets") or rid_doc
+            target_ids = {str(r) for r in (targets.get("route_ids") or [])}
+    if target_ids is not None:
+        routes = [r for r in routes if str(r.get("route_id") or "") in target_ids]
+        log.info(
+            "Targeted depth enrichment: route_ids=%d matched_routes=%d",
+            len(target_ids),
+            len(routes),
+        )
     dex_quoters = _load_dex_quoters(args.dexes, args.chain)
     log.info(
         "Enriching %d active routes (quoters loaded: %d) at $%.0f, force_reprobe=%s...",

@@ -25,6 +25,7 @@ def test_build_acceptance_report_blockers_when_m8_not_ready():
             "cycles_positive_gross": 0,
             "cross_mechanic_cycles": 0,
             "qsr": 0.1,
+            "active_economics_profile": "production_conservative",
         },
         rca=None,
     )
@@ -117,7 +118,15 @@ def test_m9_report_upstream_m8_2_not_ready():
         sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
         anchor=None,
         expansion={"summary": {"subgraph_ready_tokens": 1}},
-        bridge={"active_routes": [], "bridge_source_metrics": {}},
+        bridge={
+            "active_routes": [],
+            "bridge_source_metrics": {
+                "productive_curve_quoteable_routes": 1,
+                "missing_distinct_pricing_lanes": [],
+                "depth_known_rate": 0.9,
+                "routes_decimals_unknown": 0,
+            },
+        },
         shadow=None,
         rca=None,
         m8_2_report=m8_2,
@@ -170,7 +179,10 @@ def test_build_acceptance_report_value_ratio_rca_blocker():
             "cycles_positive_gross": 0,
             "qsr": 0.92,
             "qsr_econ": 0.92,
-            "economics_metrics": {"toxic_route_rate": 1.0},
+            "economics_metrics": {
+                "toxic_route_rate": 1.0,
+                "toxic_route_denominator": 97,
+            },
             "discovery_cycles_by_length": {"2": 30, "3": 96, "4": 568},
             "cycles_quoteable_by_length": {"2": 20, "3": 77, "4": 0},
         },

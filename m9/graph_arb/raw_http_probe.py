@@ -400,13 +400,19 @@ def probe_quote_raw_http(
 
             from m9.graph_arb.productive_distinct_quote import maverick_cycle_amount_in
 
-            _effective_in = maverick_cycle_amount_in(
-                amount_in,
-                pool_lane_probe_amount=_pool_lane_probe,
-                min_quoteable=_min_raw,
-                max_quoteable=getattr(route, "maverick_max_quoteable_amount_raw", None),
-                leg_index=leg_index,
-            )
+            # Continuity-invariant: leg>0 amount was already resolved in quoter._probe_leg.
+            if leg_index > 0:
+                _effective_in = int(amount_in)
+            else:
+                _effective_in = maverick_cycle_amount_in(
+                    amount_in,
+                    pool_lane_probe_amount=_pool_lane_probe,
+                    min_quoteable=_min_raw,
+                    max_quoteable=getattr(route, "maverick_max_quoteable_amount_raw", None),
+                    leg_index=0,
+                    size_usd=getattr(route, "_cycle_size_usd", None),
+                    token_in_decimals=token_in.decimals,
+                )
             reported_amount_in = _effective_in
 
             def _mv_call(to: str, data: str) -> str:

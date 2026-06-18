@@ -343,6 +343,22 @@ def quote_cycle_sync(
         token_in = _make_token_info(edge.token_in_sym, edge.token_in_addr, edge.token_in_decimals)
         token_out = _make_token_info(edge.token_out_sym, edge.token_out_addr, edge.token_out_decimals)
 
+        # Runtime continuity invariant (leg N in == leg N-1 out) before RPC.
+        if leg_index > 0 and leg_results:
+            _prev_out = getattr(leg_results[-1], "amount_out", None)
+            if _prev_out is not None and int(_prev_out) != int(current_amount):
+                return CycleQuoteResult(
+                    cycle=cycle,
+                    size_usd=size_usd,
+                    amount_in=initial_amount,
+                    amount_out=0,
+                    gross_bps=0.0,
+                    status=STATUS_LEG_CAPACITY_REJECT,
+                    reject_reason=_REJECT_AMOUNT_CONTINUITY_VIOLATION,
+                    leg_results=leg_results,
+                    elapsed_s=time.monotonic() - started,
+                )
+
         leg_result = _probe_leg(
             w3, route, token_in, token_out, current_amount,
             quote_backend, rpc_url, edge=edge, leg_index=leg_index, size_usd=size_usd,
@@ -384,6 +400,18 @@ def quote_cycle_sync(
 
     sanity_reject = check_cycle_leg_sanity(cycle, leg_results)
     if sanity_reject:
+        if sanity_reject == _REJECT_AMOUNT_CONTINUITY_VIOLATION:
+            return CycleQuoteResult(
+                cycle=cycle,
+                size_usd=size_usd,
+                amount_in=initial_amount,
+                amount_out=0,
+                gross_bps=0.0,
+                status=STATUS_LEG_CAPACITY_REJECT,
+                reject_reason=_REJECT_AMOUNT_CONTINUITY_VIOLATION,
+                leg_results=leg_results,
+                elapsed_s=time.monotonic() - started,
+            )
         return CycleQuoteResult(
             cycle=cycle,
             size_usd=size_usd,
@@ -514,20 +542,19 @@ def quote_cycle_dynamic_sync(
         candidates = (1000.0,)
 
     from m9.graph_arb.depth_telemetry import REJECT_DEPTH_BELOW_ECONOMICS_FLOOR
-    from m9.graph_arb.size_truth import economic_size_floor_usd
+    from m9.graph_arb.size_truth import active_economics_floor_usd
 
     cycle_depth = cycle.min_effective_depth_usd if depth_aware else None
     depth_capped = False
-    _econ_floor_usd = economic_size_floor_usd()
+    _econ_floor_usd = active_economics_floor_usd()
     if isinstance(cycle_depth, (int, float)) and not isinstance(cycle_depth, bool) and cycle_depth > 0:
         try:
-            from m9.graph_arb.per_dex_sizing import (
-                bottleneck_depth_fraction,
-                cap_sizes_to_depth_per_family,
-            )
+            from m9.graph_arb.cycle_capacity import cycle_bottleneck_usable_capacity_usd
+            from m9.graph_arb.per_dex_sizing import cap_sizes_to_depth_per_family
 
-            _frac = bottleneck_depth_fraction(cycle.edges)
-            _depth_cap_usd = float(cycle_depth) * _frac
+            _depth_cap_usd = cycle_bottleneck_usable_capacity_usd(cycle)
+            if _depth_cap_usd is None:
+                _depth_cap_usd = 0.0
             if _depth_cap_usd < _econ_floor_usd:
                 return CycleQuoteResult(
                     cycle=cycle,
