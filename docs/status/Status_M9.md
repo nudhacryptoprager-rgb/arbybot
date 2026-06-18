@@ -1,8 +1,17 @@
 ﻿# Status: M9 Graph-Arb Long-Tail Shadow Scanner
 
-**Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
+**Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_2_HANDOFF_REACHED / M9_QUOTE_LIVENESS_PARTIAL / M9_ECON_SIZE_ATTEMPTED / ECONOMICS_BLOCKED_BY_VALUE_RATIO_AND_ADAPTER_RCA**
+**Current runtime line:** **M8_2_HANDOFF_REACHED / M8_3_DECIMALS_REGISTRY_REQUIRED / M9_ADMISSION_OR_CAPACITY_GATE**
+
+```text
+primary upstream blocker: M8_3_DECIMALS_REGISTRY_REQUIRED
+M9 economics should not be re-claimed until M8.3 strict acceptance passes.
+downstream admission: BASE_REALISTIC_ADMISSION_OR_CAPACITY_GATE (econ_rpc=0)
+production @ $180: blocked (cycles_at_production_floor=0)
+
+Decimals authority: consume `m8_3_token_metadata_registry_latest.json` via `m9_bridge_build.py --metadata-registry` or `m9_enrich_bridge_decimals.py` (M8.3 apply only; no standalone M9 decimals authority).
+```
 
 ```text
 M9_ECON_SIZE_SHADOW (2026-06-16, post adapter RCA fixes):
@@ -157,7 +166,16 @@ $env:ARBY_M9_CYCLE_LENGTHS='2,3,4'
 $env:ARBY_BRIDGE_SHADOW_SKIP_CYCLE_GATE='1'
 py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 -u -m m9.graph_arb.runner --chain base --config config/exotic_base_anchor.yaml --inventory data/tmp/m9_bridge_inventory_graph_handoff_latest.json --duration-minutes 10 --productive-lane --require-factory-verified --quote-backend raw_http --quote-workers 1 --max-cycles-per-sweep 20 --artifact-path data/tmp/m9_graph_handoff_quote_validation_10m.json
 
-py -3.11 scripts/m9_enrich_bridge_decimals.py --inventory data/tmp/m9_bridge_inventory_graph_handoff_latest.json
+py -3.11 scripts/m9_bridge_build.py `
+  --graph-handoff-only --no-registry `
+  --metadata-registry data/runs/_rolling/m8_3_token_metadata_registry_latest.json `
+  --output data/tmp/m9_bridge_inventory_graph_handoff_latest.json
+
+# Optional missing-only fallback after bridge build (M8.3 consumption, not M9 authority):
+py -3.11 scripts/m9_enrich_bridge_decimals.py `
+  --inventory data/tmp/m9_bridge_inventory_graph_handoff_latest.json `
+  --metadata-registry data/runs/_rolling/m8_3_token_metadata_registry_latest.json `
+  --legacy-missing-only-fallback
 
 py -3.11 scripts/m9_enrich_bridge_depth.py --inventory data/tmp/m9_bridge_inventory_graph_handoff_latest.json --sleep-ms 150
 

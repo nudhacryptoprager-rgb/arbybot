@@ -131,7 +131,10 @@ def test_m9_report_upstream_m8_2_not_ready():
         rca=None,
         m8_2_report=m8_2,
     )
-    assert report["upstream_blockers"] == ["UPSTREAM_M8_2_NOT_READY"]
+    assert report["upstream_blockers"] == [
+        "UPSTREAM_M8_2_NOT_READY",
+        "UPSTREAM_M8_3_NOT_READY",
+    ]
     assert "SUBGRAPH_READY_LOW" in report["m8_2_upstream"]["blockers"]
     assert report["m9_goal_status"] == "NOT_EVALUATED"
 
@@ -228,3 +231,31 @@ def test_build_acceptance_report_operator_verdict():
     assert ov["economics_claim_allowed"] is False
     assert "positive_gross" in ov["forbidden_claims"]
     assert report["schema_version"] == "m9_lane_acceptance_report.6"
+
+
+def test_m8_3_upstream_blocked_when_registry_not_ready(tmp_path):
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v1","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.5}}}',
+        encoding="utf-8",
+    )
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "active_routes": [],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 1,
+                "m8_3_registry_applied": {"applied_legs": 10},
+            },
+        },
+        shadow=None,
+        rca=None,
+        m8_2_report={"goal_status": "REACHED", "handoff_ready": True},
+        m8_3_registry_path=str(registry_path),
+    )
+    assert "UPSTREAM_M8_3_NOT_READY" in report["upstream_blockers"]
+    assert "DECIMALS_ENRICHMENT_REQUIRED" not in report["m9_blockers"]

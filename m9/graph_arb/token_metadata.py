@@ -107,9 +107,10 @@ def enrich_route_token_metadata(
 
 
 def is_economics_grade_metadata(route: Dict[str, Any]) -> bool:
-    """True when both legs have ERC20 or core_config decimals source."""
-    ok_sources = {DECIMALS_SOURCE_ERC20, DECIMALS_SOURCE_CORE_CONFIG, "known_address"}
+    """True when both legs have economics-grade decimals (M8.3-aware)."""
+    from m9.graph_arb.token_decimals import is_economics_grade_decimals_source
+
     return (
-        str(route.get("token0_decimals_source")) in ok_sources
-        and str(route.get("token1_decimals_source")) in ok_sources
+        is_economics_grade_decimals_source(route.get("token0_decimals_source"))
+        and is_economics_grade_decimals_source(route.get("token1_decimals_source"))
     )

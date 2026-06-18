@@ -129,6 +129,11 @@ def _parse_args() -> argparse.Namespace:
         default=False,
         help="Fail when depth/decimals enrichment pre-shadow blockers are present",
     )
+    p.add_argument(
+        "--metadata-registry",
+        default="data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+        help="M8.3 token metadata registry applied during bridge build",
+    )
     return p.parse_args()
 
 
@@ -163,6 +168,7 @@ def main() -> int:
         graph_handoff_only=bool(args.graph_handoff_only),
         enforce_m8_provenance=not args.no_enforce_m8_provenance,
         watchlist_path=args.watchlist,
+        metadata_registry_path=args.metadata_registry,
     )
 
     log.info("Bridge funnel:")

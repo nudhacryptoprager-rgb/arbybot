@@ -712,6 +712,7 @@ def build_bridge_inventory(
     graph_handoff_only: bool = False,
     enforce_m8_provenance: bool = False,
     watchlist_path: Optional[str] = "data/tmp/m8_token_watchlist_latest.json",
+    metadata_registry_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the M9 bridge inventory from M8/M8.1 sources + base depth inventory.
 
@@ -1751,54 +1752,77 @@ def build_bridge_inventory(
         bridge_source_metrics["hard_quarantine_error"] = str(_hq_exc)[:200]
 
     # ------------------------------------------------------------------
-    # Quote-size truth: propagate token decimals on every active route
+    # Token metadata: M8.3 registry authority (legacy fallback disabled by default)
     # ------------------------------------------------------------------
     try:
-        from m8_1.stable_anchor.config_loader import load_config as _load_m8_cfg
-        from m9.graph_arb.token_decimals import load_decimals_cache
-        from m9.graph_arb.token_metadata import enrich_route_token_metadata, validate_route_token_addresses
+        from m9.graph_arb.token_metadata import validate_route_token_addresses
 
-        _cfg_for_dec = None
-        _cfg_candidate = base_inv_path or "config/exotic_base_anchor.yaml"
-        if _cfg_candidate and Path(_cfg_candidate).exists():
-            _cfg_for_dec = _load_m8_cfg(_cfg_candidate)
-        _dec_cache = load_decimals_cache()
-        _dec_w3 = None
-        if os.environ.get("ARBY_BRIDGE_ENRICH_DECIMALS_ONCHAIN", "1").strip().lower() not in (
-            "0",
-            "false",
-            "no",
-        ):
-            try:
-                from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
-                from web3 import Web3
-
-                _rpc, _, _ = resolve_rpc_http(
-                    chain_id=_CHAIN_KEY_TO_ID.get("base", 8453),
-                    network="base",
-                )
-                if _rpc:
-                    _dec_w3 = Web3(Web3.HTTPProvider(_rpc, request_kwargs={"timeout": 8}))
-            except Exception as _w3_exc:
-                bridge_source_metrics["decimals_w3_error"] = str(_w3_exc)[:120]
         _malformed_dropped = 0
         _metadata_reject_hist: Dict[str, int] = {}
         _dec_src_hist: Dict[str, int] = {}
         _kept_active: List[Dict[str, Any]] = []
+
+        if metadata_registry_path:
+            from m8.metadata.registry import apply_registry_to_routes, load_registry
+
+            _m83 = load_registry(metadata_registry_path)
+            if _m83:
+                _applied = apply_registry_to_routes(final_active, _m83)
+                bridge_source_metrics["m8_3_registry_path"] = metadata_registry_path
+                bridge_source_metrics["m8_3_registry_applied"] = _applied
+            else:
+                bridge_source_metrics["m8_3_registry_missing"] = metadata_registry_path
+        elif os.environ.get("ARBY_BRIDGE_LEGACY_DECIMALS", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            from m8_1.stable_anchor.config_loader import load_config as _load_m8_cfg
+            from m9.graph_arb.token_decimals import load_decimals_cache
+            from m9.graph_arb.token_metadata import enrich_route_token_metadata
+
+            _cfg_for_dec = None
+            _cfg_candidate = base_inv_path or "config/exotic_base_anchor.yaml"
+            if _cfg_candidate and Path(_cfg_candidate).exists():
+                _cfg_for_dec = _load_m8_cfg(_cfg_candidate)
+            _dec_cache = load_decimals_cache()
+            _dec_w3 = None
+            if os.environ.get("ARBY_BRIDGE_ENRICH_DECIMALS_ONCHAIN", "0").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                try:
+                    from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+                    from web3 import Web3
+
+                    _rpc, _, _ = resolve_rpc_http(
+                        chain_id=_CHAIN_KEY_TO_ID.get("base", 8453),
+                        network="base",
+                    )
+                    if _rpc:
+                        _dec_w3 = Web3(Web3.HTTPProvider(_rpc, request_kwargs={"timeout": 8}))
+                except Exception as _w3_exc:
+                    bridge_source_metrics["decimals_w3_error"] = str(_w3_exc)[:120]
+            for _dr in final_active:
+                enrich_route_token_metadata(
+                    _dr,
+                    cfg=_cfg_for_dec,
+                    cache=_dec_cache,
+                    w3=_dec_w3,
+                    chain="base",
+                    topology_probe=False,
+                )
+            bridge_source_metrics["legacy_decimals_enrichment"] = True
+        else:
+            bridge_source_metrics["m8_3_registry_required"] = True
+
         for _dr in final_active:
             _rej = validate_route_token_addresses(_dr)
             if _rej:
                 _malformed_dropped += 1
                 _metadata_reject_hist[_rej] = _metadata_reject_hist.get(_rej, 0) + 1
                 continue
-            enrich_route_token_metadata(
-                _dr,
-                cfg=_cfg_for_dec,
-                cache=_dec_cache,
-                w3=_dec_w3,
-                chain="base",
-                topology_probe=False,
-            )
             for _sk in ("token0_decimals_source", "token1_decimals_source"):
                 _src = _dr.get(_sk)
                 if _src:

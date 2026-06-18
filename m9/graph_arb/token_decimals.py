@@ -36,6 +36,8 @@ DECIMALS_SOURCE_CACHE = "cache"
 DECIMALS_SOURCE_FALLBACK_UNKNOWN = "fallback_unknown"
 DECIMALS_SOURCE_TOPOLOGY_PROBE = "topology_probe_fallback"
 
+M8_3_DECIMALS_SOURCE_PREFIX = "m8_3_"
+
 DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC = "UNKNOWN_DIAGNOSTIC"
 TOPOLOGY_PROBE_DECIMALS_FALLBACK = 18
 
@@ -270,6 +272,10 @@ def decimals_skip_extra(entry: Dict[str, Any], w3: Any = None) -> Dict[str, Any]
     return extra
 
 
+def is_m8_3_decimals_source(source: Optional[str]) -> bool:
+    return str(source or "").startswith(M8_3_DECIMALS_SOURCE_PREFIX)
+
+
 def enrich_route_decimals(
     route: Dict[str, Any],
     cfg: Optional[M8_1Config] = None,
@@ -278,6 +284,8 @@ def enrich_route_decimals(
     *,
     topology_probe: bool = False,
     persist_cache: bool = False,
+    missing_only: bool = False,
+    preserve_m8_3: bool = True,
 ) -> Dict[str, Any]:
     """Set decimals + ``token*_decimals_source`` on a bridge route dict."""
     sources: List[str] = []
@@ -285,6 +293,15 @@ def enrich_route_decimals(
         ("token0", "token0_addr", "token0_decimals"),
         ("token1", "token1_addr", "token1_decimals"),
     ):
+        src_key = dec_key.replace("_decimals", "_decimals_source")
+        if preserve_m8_3 and is_m8_3_decimals_source(route.get(src_key)):
+            if route.get(dec_key) is not None:
+                sources.append(str(route.get(src_key)))
+            continue
+        if missing_only and route.get(dec_key) is not None:
+            if route.get(src_key):
+                sources.append(str(route.get(src_key)))
+            continue
         addr = route.get(addr_key) or ""
         if not is_valid_eth_address(addr):
             field_sym = route.get(sym_key) or ""
@@ -323,6 +340,8 @@ def enrich_routes_decimals(
     w3: Any = None,
     topology_probe: bool = False,
     persist_cache: bool = True,
+    missing_only: bool = False,
+    preserve_m8_3: bool = True,
 ) -> Dict[str, int]:
     """Enrich all routes; return histogram of decimals sources used."""
     hist: Dict[str, int] = {}
@@ -336,6 +355,8 @@ def enrich_routes_decimals(
             w3=w3,
             topology_probe=topology_probe,
             persist_cache=persist_cache,
+            missing_only=missing_only,
+            preserve_m8_3=preserve_m8_3,
         )
         for key in ("token0_decimals_source", "token1_decimals_source"):
             src = route.get(key)
@@ -352,11 +373,23 @@ def enrich_routes_decimals(
 
 
 def is_economics_grade_decimals_source(source: Optional[str]) -> bool:
-    """ERC20-confirmed or core config only — hints/fallbacks excluded from economics."""
+    """Economics-grade decimals: core/on-chain or M8.3-verified provenance."""
+    if is_m8_3_decimals_source(source):
+        inner = str(source)[len(M8_3_DECIMALS_SOURCE_PREFIX) :]
+        return inner in (
+            DECIMALS_SOURCE_ERC20,
+            DECIMALS_SOURCE_CORE_CONFIG,
+            DECIMALS_SOURCE_KNOWN_ADDRESS,
+            DECIMALS_SOURCE_ROUTE_OVERRIDE,
+            "m8_sniper_erc20",
+            "registry_cache",
+            "core_config",
+            "known_address",
+            "erc20_call",
+        )
     return source in (
         DECIMALS_SOURCE_ERC20,
         DECIMALS_SOURCE_CORE_CONFIG,
         DECIMALS_SOURCE_KNOWN_ADDRESS,
         DECIMALS_SOURCE_ROUTE_OVERRIDE,
-        DECIMALS_SOURCE_CACHE,
     )

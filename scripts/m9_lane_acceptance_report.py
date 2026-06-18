@@ -564,6 +564,7 @@ def build_acceptance_report(
     rca: Optional[Dict[str, Any]],
     m8_2_report: Optional[Dict[str, Any]] = None,
     capacity_metrics: Optional[Dict[str, Any]] = None,
+    m8_3_registry_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     sniper_metrics = (sniper or {}).get("metrics") or {}
     anchor_metrics = (anchor or {}).get("metrics") or {}
@@ -752,6 +753,24 @@ def build_acceptance_report(
         if not handoff_ready:
             upstream_blockers.append("UPSTREAM_M8_2_NOT_READY")
 
+    from m8.metadata.acceptance import evaluate_m8_3_acceptance, is_m8_3_ready
+    from m8.metadata.registry import DEFAULT_REGISTRY_PATH, load_registry
+
+    m8_3_registry = load_registry(
+        m8_3_registry_path or str(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    )
+    m8_3_acceptance = evaluate_m8_3_acceptance(m8_3_registry, strict=True)
+    m8_3_upstream = {
+        "goal_status": m8_3_acceptance.get("goal_status"),
+        "blockers": list(m8_3_acceptance.get("m8_3_blockers") or []),
+        "gate_results": dict(m8_3_acceptance.get("gate_results") or {}),
+        "registry_present": m8_3_registry is not None,
+        "generated_at_utc": (m8_3_registry or {}).get("generated_at_utc"),
+    }
+    if not is_m8_3_ready(m8_3_acceptance):
+        upstream_blockers.append("UPSTREAM_M8_3_NOT_READY")
+        m9_blockers = [b for b in m9_blockers if b != "DECIMALS_ENRICHMENT_REQUIRED"]
+
     m9_quote_validation_blockers: List[str] = []
     if m8_2_report and m8_2_report.get("handoff_ready") and shadow is not None:
         if shadow_cycles_found == 0:
@@ -831,6 +850,7 @@ def build_acceptance_report(
         "quote_lane_top_rejects": (rca or {}).get("by_reject_reason"),
         "quote_lane_adapter_errors": (rca or {}).get("by_adapter_family_leg_errors"),
         "m8_2_upstream": m8_2_upstream,
+        "m8_3_upstream": m8_3_upstream,
         "m9_blockers": m9_blockers,
         "m9_quote_validation_blockers": sorted(set(m9_quote_validation_blockers)),
         "m9_economics_status": (
@@ -869,6 +889,11 @@ def main() -> int:
         help="Usable-capacity cycle diagnostic artifact",
     )
     ap.add_argument(
+        "--m8-3-registry",
+        default=str(REPO_ROOT / "data/runs/_rolling/m8_3_token_metadata_registry_latest.json"),
+        help="M8.3 token metadata registry for upstream gate",
+    )
+    ap.add_argument(
         "--output",
         default=str(REPO_ROOT / "data/tmp/m9_lane_acceptance_report_latest.json"),
     )
@@ -888,12 +913,14 @@ def main() -> int:
         rca=_load(Path(args.rca)),
         m8_2_report=m8_2_report,
         capacity_metrics=capacity_metrics,
+        m8_3_registry_path=args.m8_3_registry,
     )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report["funnel_layers"], indent=2))
     print("m8_2_upstream:", report["m8_2_upstream"].get("goal_status"))
+    print("m8_3_upstream:", report["m8_3_upstream"].get("goal_status"))
     print("m9_blockers:", report["m9_blockers"])
     print("upstream_blockers:", report["upstream_blockers"])
     print("blockers:", report["blockers"])

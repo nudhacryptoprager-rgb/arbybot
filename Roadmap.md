@@ -541,6 +541,28 @@ long-tail token sources та route hints, які потім переходять
 
 ---
 
+### Milestone 8.3 — Token Metadata Registry & Decimals Service (METADATA_LAYER)
+
+**Роль:** `M8_3` — metadata-quality шар між M8.2 graph handoff і M9 economics. Не discovery, не profit lane.
+
+**Що має робити M8.3:**
+- зібрати всі token addresses з M8 / M8.1 / M8.2 / bridge inventory;
+- нормалізувати `decimals`, `symbol`, `name` з явним `source` і `economics_grade`;
+- видавати rolling artifact `m8_3_token_metadata_registry_latest.json`;
+- блокувати M9 economics, якщо cycle-participating decimals coverage нижче порогу (`UPSTREAM_M8_3_NOT_READY`).
+
+**Що M8.3 не має робити:**
+- шукати дзеркала або нові пули (це M8.2);
+- рахувати profit / quote economics (це M9);
+- приймати external API decimals як economics-grade без on-chain verify.
+
+**Acceptance / Done:**
+- strict gates: `cycle_participating_decimals_known_rate >= 0.95`, `decimals_conflict_count = 0`;
+- `m9_enrich_bridge_decimals.py` читає M8.3 registry перед direct ERC20;
+- M9 acceptance показує `UPSTREAM_M8_3_NOT_READY`, а не змішує metadata gap з market economics.
+
+---
+
 ### Milestone 9 — M9_GRAPH_LONG_TAIL_SHADOW (ACTIVE_SHADOW_STRATEGY)
 
 > **Це поточний головний стратегічний етап.**
@@ -556,6 +578,7 @@ long-tail token sources та route hints, які потім переходять
 **Канонічні input layers для M9:**
 - `M8` → new-pool listener, fresh pool hints, factory events;
 - `M8_1` → verified inventory, route health, active routes, size diagnostics;
+- `M8_3` → token metadata registry, economics-grade decimals validation;
 - `M7` → simulation backend patterns, provider / WS / Anvil lessons;
 - `config/*` → declared anchors, supported adapters, core execution constraints.
 

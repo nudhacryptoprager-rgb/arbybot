@@ -31,7 +31,7 @@ Operational contract: [M8_2_RADAR_REFRESH_PIPELINE.md](../m8/M8_2_RADAR_REFRESH_
 
 ```text
 M8.2 handoff readiness:     REACHED
-M8.2 economics/quote:       out of scope (M9 owns quote/sizing)
+M8.2 economics/quote:       out of scope (M8.3 metadata + M9 quote/sizing)
 M9 economics:               NOT_PROVEN
 ```
 
