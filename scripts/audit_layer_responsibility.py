@@ -93,6 +93,34 @@ def run_audit(*, strict: bool = True) -> dict:
                 }
             )
 
+    # M8.3 dex workers: route metadata only — no quote/economics/depth admission
+    _dex_forbidden = re.compile(
+        r"economic_size_floor|pre_shadow_bridge_blockers|from m9\.graph_arb\.(runner|quoter|pool_depth_probe|cycle_capacity|bridge_builder)"
+    )
+    for path in (REPO / "m8" / "metadata" / "dex").glob("*.py"):
+        if path.name in ("__init__.py", "base.py", "erc20.py"):
+            continue
+        rel = str(path.relative_to(REPO)).replace("\\", "/")
+        text = path.read_text(encoding="utf-8")
+        if _dex_forbidden.search(text):
+            violations.append(
+                {
+                    "rule_id": "M83_DEX_WORKER_FORBIDDEN_QUOTE_ECON",
+                    "path": rel,
+                    "lines": [],
+                    "message": "M8.3 dex worker must not import quote/economics/depth admission",
+                }
+            )
+        if "save_registry(" in text:
+            violations.append(
+                {
+                    "rule_id": "M83_DEX_WORKER_REGISTRY_WRITE",
+                    "path": rel,
+                    "lines": [],
+                    "message": "M8.3 dex workers must not write canonical registry",
+                }
+            )
+
     ok = not violations
     return {"ok": ok, "violations": violations, "strict": strict}
 

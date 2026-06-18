@@ -153,5 +153,5 @@ def test_m8_3_build_registry_route_coverage():
         ]
     }
     doc = build_token_metadata_registry(bridge=bridge)
-    assert doc["schema_version"] == "m8_3_token_metadata_registry_v1"
+    assert doc["schema_version"] == "m8_3_token_metadata_registry_v2"
     assert doc["route_coverage"]["active_routes"]["routes_count"] == 1

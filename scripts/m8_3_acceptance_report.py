@@ -53,7 +53,8 @@ def main() -> int:
     if diag:
         print(f"top_missing_cycle_tokens: {len(diag.get('top_missing_cycle_tokens') or [])}")
         print(f"missing_by_error_code: {diag.get('missing_by_error_code')}")
-        print(f"missing_by_source: {diag.get('missing_by_source')}")
+        print(f"tasks_assigned: {diag.get('tasks_assigned')}")
+        print(f"per_dex_route_metadata_ready: {diag.get('per_dex_route_metadata_ready')}")
     print(f"written: {out.resolve()}")
 
     if args.strict and report.get("goal_status") != "REACHED":

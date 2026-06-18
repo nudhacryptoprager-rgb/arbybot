@@ -9,7 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "m8_3_token_metadata_registry_v1"
+SCHEMA_VERSION = "m8_3_token_metadata_registry_v2"
+SCHEMA_VERSION_LEGACY = "m8_3_token_metadata_registry_v1"
 DEFAULT_REGISTRY_PATH = "data/runs/_rolling/m8_3_token_metadata_registry_latest.json"
 
 SOURCE_CORE_CONFIG = "core_config"
@@ -30,6 +31,9 @@ ECONOMICS_GRADE_UNRESOLVED = "unresolved"
 ERROR_DECIMALS_UNRESOLVED = "DECIMALS_UNRESOLVED"
 ERROR_ERC20_DECIMALS_REVERT = "ERC20_DECIMALS_REVERT"
 ERROR_DECIMALS_CONFLICT = "DECIMALS_CONFLICT"
+ERROR_NO_CODE = "NO_CODE"
+ERROR_NON_ERC20 = "NON_ERC20"
+ERROR_PROBE_CAP_EXHAUSTED = "PROBE_CAP_EXHAUSTED"
 
 _ECONOMICS_SOURCES = frozenset(
     {
@@ -474,8 +478,28 @@ def build_token_metadata_registry(
     w3: Any = None,
     onchain_unresolved_only: bool = True,
     max_onchain_probes: Optional[int] = None,
+    with_dex_workers: bool = False,
+    task_mode: str = "legacy",
 ) -> Dict[str, Any]:
     """Build rolling M8.3 registry artifact."""
+    if task_mode == "aggregated" or with_dex_workers:
+        from m8.metadata.aggregator import build_aggregated_registry
+
+        return build_aggregated_registry(
+            chain=chain,
+            bridge=bridge,
+            expansion=expansion,
+            sniper=sniper,
+            anchor=anchor,
+            external_hints=external_hints,
+            prior_registry=prior_registry,
+            capacity=capacity,
+            cfg=cfg,
+            w3=w3,
+            onchain_unresolved_only=onchain_unresolved_only,
+            max_onchain_probes=max_onchain_probes,
+            with_dex_workers=True,
+        )
     addrs = collect_token_addresses(
         bridge=bridge,
         expansion=expansion,
@@ -485,7 +509,8 @@ def build_token_metadata_registry(
     )
     registry_cache: Dict[str, Dict[str, Any]] = {}
     if prior_registry:
-        for addr, row in (prior_registry.get("tokens") or {}).items():
+        prior_rows = (prior_registry.get("token_registry") or prior_registry.get("tokens") or {})
+        for addr, row in prior_rows.items():
             if isinstance(row, dict) and row.get("decimals") is not None:
                 if _verified_registry_cache_row(row):
                     registry_cache[str(addr).lower()] = row
@@ -563,6 +588,7 @@ def build_token_metadata_registry(
         "scope": "M8.3_token_metadata_registry",
         "truth_boundary": "on_chain_verified_required_for_economics_grade",
         "authority_contract": "m8_3_single_source_after_handoff",
+        "token_registry": tokens,
         "tokens": tokens,
         "coverage": {
             "all_tokens_count": len(tokens),
@@ -602,7 +628,9 @@ def apply_registry_to_route(
     economics_only: bool = False,
 ) -> Dict[str, Any]:
     """Apply M8.3 registry decimals to one bridge route."""
-    tokens = registry.get("tokens") or registry
+    from m8.metadata.aggregator import get_token_registry
+
+    tokens = get_token_registry(registry)
     for addr_key, dec_key, src_key, sym_key in (
         ("token0_addr", "token0_decimals", "token0_decimals_source", "token0"),
         ("token1_addr", "token1_decimals", "token1_decimals_source", "token1"),

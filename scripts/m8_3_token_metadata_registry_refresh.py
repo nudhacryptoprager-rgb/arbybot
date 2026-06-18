@@ -48,6 +48,18 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--skip-onchain", action="store_true")
     ap.add_argument("--max-onchain-probes", type=int, default=500)
+    ap.add_argument(
+        "--task-mode",
+        choices=("legacy", "aggregated"),
+        default="aggregated",
+        help="legacy=token-only builder; aggregated=root aggregator + dex workers",
+    )
+    ap.add_argument(
+        "--with-dex-workers",
+        action="store_true",
+        help="Run per-DEX route metadata workers (default when task-mode=aggregated)",
+    )
+    ap.add_argument("--no-dex-workers", action="store_true", help="Disable dex route workers")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -79,6 +91,7 @@ def main() -> int:
         except Exception as exc:
             log.warning("On-chain probes disabled: %s", exc)
 
+    with_dex = (args.with_dex_workers or args.task_mode == "aggregated") and not args.no_dex_workers
     doc = build_token_metadata_registry(
         chain=args.chain,
         bridge=bridge,
@@ -91,6 +104,8 @@ def main() -> int:
         cfg=cfg,
         w3=w3,
         max_onchain_probes=args.max_onchain_probes,
+        task_mode=args.task_mode,
+        with_dex_workers=with_dex,
     )
 
     cov = doc.get("coverage") or {}
@@ -106,6 +121,13 @@ def main() -> int:
     log.info(
         "cycle_participating economics_grade_known_rate=%.4f",
         float(cycle.get("economics_grade_known_rate") or 0.0),
+    )
+    dex_cov = (doc.get("dex_route_metadata") or {}).get("coverage") or {}
+    cycle_dex = dex_cov.get("cycle_participating_routes") or {}
+    log.info(
+        "cycle_participating dex_route_metadata_ready_rate=%.4f routes=%s",
+        float(cycle_dex.get("dex_metadata_ready_rate") or 0.0),
+        cycle_dex.get("routes_count"),
     )
 
     print(json.dumps({"coverage": cov, "route_coverage": rc}, indent=2))

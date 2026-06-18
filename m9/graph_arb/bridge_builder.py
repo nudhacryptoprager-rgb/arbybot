@@ -1770,6 +1770,7 @@ def build_bridge_inventory(
                 _applied = apply_registry_to_routes(final_active, _m83)
                 bridge_source_metrics["m8_3_registry_path"] = metadata_registry_path
                 bridge_source_metrics["m8_3_registry_applied"] = _applied
+                bridge_source_metrics["m8_3_authority_applied"] = True
             else:
                 bridge_source_metrics["m8_3_registry_missing"] = metadata_registry_path
         elif os.environ.get("ARBY_BRIDGE_LEGACY_DECIMALS", "").strip().lower() in (

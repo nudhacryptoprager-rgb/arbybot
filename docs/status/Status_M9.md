@@ -11,6 +11,8 @@ downstream admission: BASE_REALISTIC_ADMISSION_OR_CAPACITY_GATE (econ_rpc=0)
 production @ $180: blocked (cycles_at_production_floor=0)
 
 Decimals authority: consume `m8_3_token_metadata_registry_latest.json` via `m9_bridge_build.py --metadata-registry` or `m9_enrich_bridge_decimals.py` (M8.3 apply only; no standalone M9 decimals authority).
+
+M8.3 upstream must provide **token_registry** (decimals) **and** **dex_route_metadata** (Balancer token order, Curve coin indices, Maverick direction capacity, V4 PoolKey/hooks) before M9 can claim quote-correct economics. Bridge sets `m8_3_authority_applied=true` when registry consumed.
 ```
 
 ```text

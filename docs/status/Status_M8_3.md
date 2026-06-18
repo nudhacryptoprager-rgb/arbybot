@@ -35,7 +35,21 @@ M9 economics:               blocked until M8.3 strict acceptance PASS
 
 - `data/runs/_rolling/m8_3_token_metadata_registry_latest.json`
 
-Schema: `m8_3_token_metadata_registry_v1` with per-token `decimals`, `symbol`, `name`, `source`, `economics_grade`, `error_code`.
+Schema: `m8_3_token_metadata_registry_v2` (v1 accepted for read). Sections: `token_registry`, `dex_route_metadata`, `task_funnel`, `per_dex_worker_metrics`, `authority_contract`.
+
+## Aggregated metadata authority (M8_3_AGGREGATED_METADATA_AUTHORITY)
+
+```text
+m8/metadata/aggregator.py     root scheduler + merge (sole writer)
+m8/metadata/registry.py       token_registry writer (decimals authority)
+m8/metadata/dex/*.py          per-DEX route/pool metadata workers (no token write)
+```
+
+Refresh:
+
+```powershell
+py -3.11 scripts/m8_3_token_metadata_registry_refresh.py --chain base --task-mode aggregated --with-dex-workers
+```
 
 ## Resolution precedence
 
