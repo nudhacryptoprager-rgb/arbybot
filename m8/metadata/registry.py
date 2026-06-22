@@ -661,7 +661,43 @@ def apply_registry_to_route(
             route["decimals_status"] = "m8_3_economics_grade"
         else:
             route["decimals_status"] = "resolved"
+
+    _apply_m8_3_preflight_metadata(route, registry)
     return route
+
+
+def _apply_m8_3_preflight_metadata(route: Dict[str, Any], registry: Dict[str, Any]) -> None:
+    """Stamp M8.3 risk/dex/pool identity onto route without recomputing."""
+    from m8.metadata.aggregator import (
+        get_dex_route_metadata,
+        get_pool_identity_metadata,
+        get_token_risk_metadata,
+    )
+    from m8.metadata.dex.base import route_id_of
+
+    rid = route_id_of(route)
+    dex_row = get_dex_route_metadata(registry).get(rid)
+    pool_row = get_pool_identity_metadata(registry).get(rid)
+    if dex_row:
+        route["m8_3_dex_route_metadata"] = dex_row.get("metadata") or {}
+        route["m8_3_dex_metadata_ready"] = bool(dex_row.get("ready"))
+        route["m8_3_dex_worker_id"] = dex_row.get("worker_id")
+    if pool_row:
+        route["m8_3_pool_identity"] = pool_row
+
+    leg_risk: Dict[str, Any] = {}
+    for leg, addr_key in (("token0", "token0_addr"), ("token1", "token1_addr")):
+        addr = route.get(addr_key)
+        if not is_valid_eth_address(addr):
+            continue
+        risk = get_token_risk_metadata(registry).get(str(addr).lower())
+        if risk:
+            leg_risk[leg] = risk
+            route[f"{leg}_behavior_flags"] = risk.get("token_behavior_flags")
+            route[f"{leg}_non_erc20_reason"] = risk.get("non_erc20_reason")
+    if leg_risk:
+        route["m8_3_token_risk"] = leg_risk
+        route["m8_3_preflight_applied"] = True
 
 
 def apply_registry_to_routes(

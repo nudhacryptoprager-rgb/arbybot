@@ -2,17 +2,11 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_2_HANDOFF_REACHED / M8_3_DECIMALS_REGISTRY_REQUIRED / M9_ADMISSION_OR_CAPACITY_GATE**
+**Current runtime line:** **M8_2_HANDOFF_REACHED / M8_3_STRICT_PASS / M9_ADMISSION_OR_CAPACITY_GATE**
 
 ```text
-primary upstream blocker: M8_3_DECIMALS_REGISTRY_REQUIRED
-M9 economics should not be re-claimed until M8.3 strict acceptance passes.
-downstream admission: BASE_REALISTIC_ADMISSION_OR_CAPACITY_GATE (econ_rpc=0)
-production @ $180: blocked (cycles_at_production_floor=0)
-
-Decimals authority: consume `m8_3_token_metadata_registry_latest.json` via `m9_bridge_build.py --metadata-registry` or `m9_enrich_bridge_decimals.py` (M8.3 apply only; no standalone M9 decimals authority).
-
-M8.3 upstream must provide **token_registry** (decimals) **and** **dex_route_metadata** (Balancer token order, Curve coin indices, Maverick direction capacity, V4 PoolKey/hooks) before M9 can claim quote-correct economics. Bridge sets `m8_3_authority_applied=true` when registry consumed.
+M8.3 upstream: REACHED. M9 **consumes** M8.3 token/dex/risk/pool-identity preflight via `--metadata-registry`.
+M9 remains owner of depth, quote, sizing, economics — no direct metadata probing when M8.3 authority applied.
 ```
 
 ```text

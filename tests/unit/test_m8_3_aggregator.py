@@ -90,7 +90,12 @@ def test_worker_diagnostics_in_acceptance():
         w3=None,
     )
     report = evaluate_m8_3_acceptance(doc, strict=False)
+    assert "risk_metadata_warnings" in report
+    assert report["risk_metadata_warnings"].get("warning_only") is True
+    assert "pool_identity_gates" in report
     diag = report["diagnostics"]
     assert "tasks_assigned" in diag
     assert "worker_error_histogram" in diag
     assert "per_dex_route_metadata_ready" in diag
+    assert "token_task_funnel" in diag
+    assert "dex_route_task_funnel" in diag

@@ -8,6 +8,7 @@ from m8.metadata.registry import SCHEMA_VERSION, SCHEMA_VERSION_LEGACY
 
 CYCLE_PARTICIPATING_DECIMALS_MIN = 0.95
 DEX_ROUTE_METADATA_READY_MIN = 0.95
+POOL_IDENTITY_VERIFIED_MIN = 0.95
 _VALID_SCHEMAS = frozenset({SCHEMA_VERSION, SCHEMA_VERSION_LEGACY})
 _M8_3_BLOCKERS = frozenset(
     {
@@ -18,6 +19,8 @@ _M8_3_BLOCKERS = frozenset(
         "M8_3_REGISTRY_SCHEMA_INVALID",
         "M8_3_DEX_ROUTE_METADATA_LOW",
         "M8_3_ECON_CAPACITY_DEX_METADATA_MISSING",
+        "M8_3_POOL_IDENTITY_LOW",
+        "M8_3_ECON_CAPACITY_POOL_IDENTITY_MISSING",
     }
 )
 
@@ -28,6 +31,7 @@ def evaluate_m8_3_acceptance(
     strict: bool = False,
     cycle_participating_min: float = CYCLE_PARTICIPATING_DECIMALS_MIN,
     dex_route_metadata_min: float = DEX_ROUTE_METADATA_READY_MIN,
+    pool_identity_min: float = POOL_IDENTITY_VERIFIED_MIN,
 ) -> Dict[str, Any]:
     """Evaluate M8.3 registry against strict gates."""
     blockers: List[str] = []
@@ -40,6 +44,8 @@ def evaluate_m8_3_acceptance(
             "gate_results": {},
             "token_metadata_gates": {},
             "dex_route_metadata_gates": {},
+            "risk_metadata_warnings": {},
+            "pool_identity_gates": {},
         }
 
     if registry.get("schema_version") not in _VALID_SCHEMAS:
@@ -74,6 +80,19 @@ def evaluate_m8_3_acceptance(
     if econ_dex.get("routes_count", 0) > 0 and econ_dex_rate < dex_route_metadata_min:
         blockers.append("M8_3_ECON_CAPACITY_DEX_METADATA_MISSING")
 
+    pool_cov = (registry.get("pool_identity_metadata") or {}).get("coverage") or {}
+    cycle_pool = pool_cov.get("cycle_participating_routes") or {}
+    cycle_pool_rate = float(cycle_pool.get("pool_identity_verified_rate") or 0.0)
+    if cycle_pool.get("routes_count", 0) > 0 and cycle_pool_rate < pool_identity_min:
+        blockers.append("M8_3_POOL_IDENTITY_LOW")
+
+    econ_pool = pool_cov.get("econ_capacity_routes") or {}
+    econ_pool_rate = float(econ_pool.get("pool_identity_verified_rate") or 0.0)
+    if econ_pool.get("routes_count", 0) > 0 and econ_pool_rate < pool_identity_min:
+        blockers.append("M8_3_ECON_CAPACITY_POOL_IDENTITY_MISSING")
+
+    risk_metadata_warnings = _build_risk_metadata_warnings(registry)
+
     goal = "REACHED" if not blockers else "BLOCKED"
     if strict and blockers:
         goal = "BLOCKED"
@@ -93,6 +112,11 @@ def evaluate_m8_3_acceptance(
         "dex_routes_tracked": int(coverage.get("dex_routes_tracked") or 0),
         "dex_routes_ready": int(coverage.get("dex_routes_ready") or 0),
     }
+    pool_identity_gates = {
+        "cycle_participating_pool_identity_verified_rate": cycle_pool_rate,
+        "econ_capacity_pool_identity_verified_rate": econ_pool_rate,
+        "pool_identity_min_required": pool_identity_min,
+    }
 
     return {
         "goal_status": goal,
@@ -109,7 +133,48 @@ def evaluate_m8_3_acceptance(
         },
         "token_metadata_gates": token_metadata_gates,
         "dex_route_metadata_gates": dex_route_metadata_gates,
+        "risk_metadata_warnings": risk_metadata_warnings,
+        "pool_identity_gates": pool_identity_gates,
         "diagnostics": diagnostics,
+    }
+
+
+def _build_risk_metadata_warnings(registry: Dict[str, Any]) -> Dict[str, Any]:
+    """Warning-only risk summary; NON_ERC20 out of cycle scope is not a strict gate."""
+    from m8.metadata.aggregator import get_token_risk_metadata
+    from m8.metadata.token_risk import risk_warnings_for_token
+
+    cycle_addrs = set(
+        (registry.get("route_coverage") or {})
+        .get("cycle_participating_routes", {})
+        .get("token_addrs")
+        or []
+    )
+    risks = get_token_risk_metadata(registry)
+    non_erc20_in_cycle = 0
+    non_erc20_out_of_scope = 0
+    proxy_count = 0
+    behavior_counts: Counter[str] = Counter()
+
+    for addr, row in risks.items():
+        if row.get("proxy_detected"):
+            proxy_count += 1
+        reason = row.get("non_erc20_reason")
+        if reason:
+            if addr in cycle_addrs:
+                non_erc20_in_cycle += 1
+            else:
+                non_erc20_out_of_scope += 1
+        for w in risk_warnings_for_token(row):
+            if w not in ("NO_CODE", "NON_ERC20", "ERC20_DECIMALS_REVERT"):
+                behavior_counts[w] += 1
+
+    return {
+        "warning_only": True,
+        "non_erc20_in_cycle_count": non_erc20_in_cycle,
+        "non_erc20_out_of_scope_count": non_erc20_out_of_scope,
+        "proxy_detected_count": proxy_count,
+        "behavior_flag_counts": dict(sorted(behavior_counts.items())),
     }
 
 
@@ -121,7 +186,13 @@ def build_m8_3_diagnostics(registry: Dict[str, Any]) -> Dict[str, Any]:
     tokens = get_token_registry(registry)
     missing_by_error: Counter[str] = Counter()
     missing_by_source: Counter[str] = Counter()
-    top_missing_tokens: List[Dict[str, Any]] = []
+    top_missing_all_tokens: List[Dict[str, Any]] = []
+    cycle_token_addrs = set(
+        (registry.get("route_coverage") or {})
+        .get("cycle_participating_routes", {})
+        .get("token_addrs")
+        or []
+    )
 
     for addr, row in tokens.items():
         if is_economics_grade_entry(row):
@@ -131,13 +202,32 @@ def build_m8_3_diagnostics(registry: Dict[str, Any]) -> Dict[str, Any]:
         wid = str(row.get("worker_id") or "erc20_token")
         missing_by_error[err] += 1
         missing_by_source[src] += 1
-        if len(top_missing_tokens) < 20:
-            top_missing_tokens.append(
+        if len(top_missing_all_tokens) < 20:
+            top_missing_all_tokens.append(
                 {
                     "address": addr,
                     "source": src,
                     "worker_id": wid,
                     "error_code": err,
+                    "economics_grade": row.get("economics_grade"),
+                }
+            )
+
+    top_missing_cycle_tokens: List[Dict[str, Any]] = []
+    if cycle_token_addrs:
+        for addr, row in tokens.items():
+            if addr not in cycle_token_addrs:
+                continue
+            if is_economics_grade_entry(row):
+                continue
+            if len(top_missing_cycle_tokens) >= 20:
+                break
+            top_missing_cycle_tokens.append(
+                {
+                    "address": addr,
+                    "source": str(row.get("source") or "unresolved"),
+                    "worker_id": str(row.get("worker_id") or "erc20_token"),
+                    "error_code": str(row.get("error_code") or "DECIMALS_UNRESOLVED"),
                     "economics_grade": row.get("economics_grade"),
                 }
             )
@@ -153,7 +243,8 @@ def build_m8_3_diagnostics(registry: Dict[str, Any]) -> Dict[str, Any]:
     worker_diag = build_m8_3_worker_diagnostics(registry)
 
     return {
-        "top_missing_cycle_tokens": top_missing_tokens,
+        "top_missing_all_tokens": top_missing_all_tokens,
+        "top_missing_cycle_tokens": top_missing_cycle_tokens,
         "top_missing_capacity_routes": top_missing_capacity_routes,
         "missing_by_source": dict(sorted(missing_by_source.items())),
         "missing_by_error_code": dict(sorted(missing_by_error.items())),

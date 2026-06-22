@@ -143,6 +143,18 @@ def build_aggregated_registry(
             )
         )
 
+    from m8.metadata.token_risk import build_token_risk_metadata
+
+    token_risk_metadata: Dict[str, Dict[str, Any]] = {}
+    for addr, entry in token_results.items():
+        token_risk_metadata[addr] = build_token_risk_metadata(
+            addr,
+            w3=w3,
+            code_length=entry.get("code_length"),
+            error_code=entry.get("error_code"),
+            decimals_resolved=entry.get("decimals") is not None,
+        )
+
     all_routes = list((bridge or {}).get("active_routes") or []) + list(
         (bridge or {}).get("exploration_routes") or []
     )
@@ -150,9 +162,12 @@ def build_aggregated_registry(
     dex_by_route: Dict[str, Dict[str, Any]] = {}
     per_worker_metrics: Dict[str, Dict[str, Any]] = {}
     dex_route_results: List[DexRouteMetadataResult] = []
-    tasks_assigned = len(sorted_addrs)
-    tasks_completed = sum(1 for t in token_results.values() if t.get("decimals") is not None)
-    tasks_failed = len(sorted_addrs) - tasks_completed
+    token_tasks_assigned = len(sorted_addrs)
+    token_tasks_completed = sum(1 for t in token_results.values() if t.get("decimals") is not None)
+    token_tasks_failed = token_tasks_assigned - token_tasks_completed
+    dex_tasks_assigned = 0
+    dex_tasks_completed = 0
+    dex_tasks_failed = 0
 
     if with_dex_workers:
         workers = all_dex_workers()
@@ -169,27 +184,36 @@ def build_aggregated_registry(
             task = worker.build_task(route, scope=scope)
             if task is None:
                 continue
-            tasks_assigned += 1
+            dex_tasks_assigned += 1
             result = worker.process(task, w3=w3)
             dex_route_results.append(result)
             dex_by_route[rid] = _dex_result_to_dict(result)
             wm = per_worker_metrics.setdefault(
                 result.worker_id,
-                {"assigned": 0, "completed": 0, "failed": 0, "errors": {}},
+                {"assigned": 0, "completed": 0, "failed": 0, "errors": {}, "failure_samples": []},
             )
             wm["assigned"] += 1
             if result.ready:
                 wm["completed"] += 1
-                tasks_completed += 1
+                dex_tasks_completed += 1
             else:
                 wm["failed"] += 1
-                tasks_failed += 1
+                dex_tasks_failed += 1
                 if result.error_code:
                     err_hist = wm["errors"]
                     err_hist[str(result.error_code)] = err_hist.get(str(result.error_code), 0) + 1
                     worker_errors[str(result.error_code)] += 1
+                samples = wm.setdefault("failure_samples", [])
+                if len(samples) < 5:
+                    samples.append(_worker_failure_sample(result))
 
     dex_route_coverage = _dex_route_coverage(all_routes, dex_by_route, scopes)
+
+    from m8.metadata.pool_identity import build_pool_identity_metadata
+
+    pool_identity_metadata = build_pool_identity_metadata(
+        all_routes, dex_by_route, scopes=scopes
+    )
     conflict_count = sum(
         1 for t in token_results.values() if t.get("error_code") == "DECIMALS_CONFLICT"
     )
@@ -205,8 +229,20 @@ def build_aggregated_registry(
         scope: {
             **_route_coverage_metrics(all_routes, token_results, route_ids=ids if ids else None),
             "route_ids": sorted(ids) if ids else [],
+            "token_addrs": sorted(_scope_token_addrs(all_routes, ids)),
         }
         for scope, ids in scopes.items()
+    }
+
+    token_task_funnel = {
+        "tasks_assigned": token_tasks_assigned,
+        "tasks_completed": token_tasks_completed,
+        "tasks_failed": token_tasks_failed,
+    }
+    dex_route_task_funnel = {
+        "tasks_assigned": dex_tasks_assigned,
+        "tasks_completed": dex_tasks_completed,
+        "tasks_failed": dex_tasks_failed,
     }
 
     return {
@@ -217,18 +253,23 @@ def build_aggregated_registry(
         "truth_boundary": "on_chain_verified_required_for_economics_grade",
         "authority_contract": AUTHORITY_CONTRACT,
         "task_mode": "aggregated" if with_dex_workers else "token_only",
+        "preflight_contract": "metadata_risk_pool_identity_v1",
         "token_registry": token_results,
         "tokens": token_results,
+        "token_risk_metadata": {"by_address": token_risk_metadata},
         "dex_route_metadata": {
             "by_route_id": dex_by_route,
             "coverage": dex_route_coverage,
         },
+        "pool_identity_metadata": pool_identity_metadata,
         "task_funnel": {
-            "tasks_assigned": tasks_assigned,
-            "tasks_completed": tasks_completed,
-            "tasks_failed": tasks_failed,
-            "token_tasks": len(sorted_addrs),
-            "dex_route_tasks": len(dex_by_route),
+            "tasks_assigned": token_tasks_assigned + dex_tasks_assigned,
+            "tasks_completed": token_tasks_completed + dex_tasks_completed,
+            "tasks_failed": token_tasks_failed + dex_tasks_failed,
+            "token_tasks": token_tasks_assigned,
+            "dex_route_tasks": dex_tasks_assigned,
+            "token_task_funnel": token_task_funnel,
+            "dex_route_task_funnel": dex_route_task_funnel,
         },
         "per_dex_worker_metrics": per_worker_metrics,
         "authority_decisions_sample": token_decisions[:50],
@@ -257,11 +298,45 @@ def get_dex_route_metadata(doc: Dict[str, Any]) -> Dict[str, Any]:
     return dict((doc.get("dex_route_metadata") or {}).get("by_route_id") or {})
 
 
+def get_token_risk_metadata(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return dict((doc.get("token_risk_metadata") or {}).get("by_address") or {})
+
+
+def get_pool_identity_metadata(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return dict((doc.get("pool_identity_metadata") or {}).get("by_route_id") or {})
+
+
 def _route_scope_for_id(rid: str, scopes: Dict[str, Set[str]]) -> str:
     for scope, ids in scopes.items():
         if rid in ids:
             return scope
     return "all_routes"
+
+
+def _scope_token_addrs(routes: List[Dict[str, Any]], route_ids: Optional[Set[str]]) -> Set[str]:
+    out: Set[str] = set()
+    for route in routes:
+        if route_ids is not None and route_id_of(route) not in route_ids:
+            continue
+        for key in ("token0_addr", "token1_addr"):
+            addr = route.get(key)
+            if is_valid_eth_address(addr):
+                out.add(str(addr).lower())
+    return out
+
+
+def _worker_failure_sample(result: DexRouteMetadataResult) -> Dict[str, Any]:
+    meta = result.metadata or {}
+    sample: Dict[str, Any] = {
+        "route_id": result.route_id,
+        "missing_fields": list(result.missing_fields or []),
+        "error_code": result.error_code,
+    }
+    if result.worker_id == "maverick":
+        sample["has_probe_by_token_in"] = meta.get("has_probe_by_token_in")
+        sample["can_infer_token_a_b"] = meta.get("can_infer_token_a_b")
+        sample["token_pair_source"] = meta.get("token_pair_source")
+    return sample
 
 
 def _dex_result_to_dict(result: DexRouteMetadataResult) -> Dict[str, Any]:
@@ -300,18 +375,23 @@ def build_m8_3_worker_diagnostics(registry: Dict[str, Any]) -> Dict[str, Any]:
     per_worker = registry.get("per_dex_worker_metrics") or {}
     funnel = registry.get("task_funnel") or {}
     top_missing_by_worker: Dict[str, List[str]] = {}
+    worker_failure_samples: Dict[str, List[Dict[str, Any]]] = {}
     for wid, metrics in per_worker.items():
         if int(metrics.get("failed") or 0) > 0:
             top_missing_by_worker[wid] = list((metrics.get("errors") or {}).keys())[:10]
+            worker_failure_samples[wid] = list(metrics.get("failure_samples") or [])[:5]
 
     dex_meta = registry.get("dex_route_metadata") or {}
     dex_cov = dex_meta.get("coverage") or {}
     return {
         "top_missing_by_worker": top_missing_by_worker,
+        "worker_failure_samples": worker_failure_samples,
         "worker_error_histogram": _worker_error_histogram(registry),
         "tasks_assigned": funnel.get("tasks_assigned"),
         "tasks_completed": funnel.get("tasks_completed"),
         "tasks_failed": funnel.get("tasks_failed"),
+        "token_task_funnel": funnel.get("token_task_funnel"),
+        "dex_route_task_funnel": funnel.get("dex_route_task_funnel"),
         "per_dex_route_metadata_ready": {
             scope: row.get("dex_metadata_ready_rate")
             for scope, row in dex_cov.items()

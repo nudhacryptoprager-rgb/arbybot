@@ -52,9 +52,18 @@ def main() -> int:
     diag = report.get("diagnostics") or {}
     if diag:
         print(f"top_missing_cycle_tokens: {len(diag.get('top_missing_cycle_tokens') or [])}")
+        print(f"top_missing_all_tokens: {len(diag.get('top_missing_all_tokens') or [])}")
         print(f"missing_by_error_code: {diag.get('missing_by_error_code')}")
-        print(f"tasks_assigned: {diag.get('tasks_assigned')}")
-        print(f"per_dex_route_metadata_ready: {diag.get('per_dex_route_metadata_ready')}")
+        print(f"token_task_funnel: {diag.get('token_task_funnel')}")
+        print(f"dex_route_task_funnel: {diag.get('dex_route_task_funnel')}")
+        print(f"worker_failure_samples: {list((diag.get('worker_failure_samples') or {}).keys())}")
+
+    risk = report.get("risk_metadata_warnings") or {}
+    if risk:
+        print(f"risk_metadata_warnings: non_erc20_out_of_scope={risk.get('non_erc20_out_of_scope_count')}")
+    pool_g = report.get("pool_identity_gates") or {}
+    if pool_g:
+        print(f"pool_identity_cycle_rate: {pool_g.get('cycle_participating_pool_identity_verified_rate')}")
     print(f"written: {out.resolve()}")
 
     if args.strict and report.get("goal_status") != "REACHED":

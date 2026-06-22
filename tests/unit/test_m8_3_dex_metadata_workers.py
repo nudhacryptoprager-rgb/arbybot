@@ -61,6 +61,78 @@ def test_maverick_worker_direction_metadata():
     result = _route_task(MaverickDexWorker(), route)
     assert result.ready is True
     assert result.metadata["direction_support"] == "directional"
+    assert result.metadata["token_pair_source"] == "explicit"
+
+
+def test_maverick_worker_probe_inference():
+    route = {
+        "route_id": "mav_probe",
+        "adapter_type": "maverick_v2",
+        "pool_address": "0x" + "f" * 40,
+        "token0_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "token1_addr": "0x4200000000000000000000000000000000000006",
+        "maverick_probe_by_token_in": {
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {
+                "maverick_token_a_in_probe": True,
+                "maverick_min_quoteable_amount_raw": 1000,
+            }
+        },
+    }
+    result = _route_task(MaverickDexWorker(), route)
+    assert result.ready is True
+    assert result.metadata["token_a"] == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    assert result.metadata["token_b"] == "0x4200000000000000000000000000000000000006"
+    assert result.metadata["token_pair_source"] == "probe_inference"
+
+
+def test_maverick_worker_blocked_without_probe_or_explicit():
+    route = {
+        "route_id": "mav_blocked",
+        "adapter_type": "maverick_v2",
+        "pool_address": "0x" + "1" * 40,
+        "token0_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "token1_addr": "0x4200000000000000000000000000000000000006",
+    }
+    result = _route_task(MaverickDexWorker(), route)
+    assert result.ready is False
+    assert "token_a_address" in result.missing_fields
+
+
+def test_maverick_worker_ambiguous_probe_blocked():
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    weth = "0x4200000000000000000000000000000000000006"
+    route = {
+        "route_id": "mav_amb",
+        "adapter_type": "maverick_v2",
+        "pool_address": "0x" + "2" * 40,
+        "token0_addr": usdc,
+        "token1_addr": weth,
+        "maverick_probe_by_token_in": {
+            usdc: {"maverick_token_a_in_probe": True},
+            weth: {"maverick_token_a_in_probe": True},
+        },
+    }
+    result = _route_task(MaverickDexWorker(), route)
+    assert result.ready is False
+    assert "token_a_b_ambiguous" in result.missing_fields
+
+
+def test_maverick_infer_from_probe_helper():
+    from m8.metadata.dex.maverick import infer_maverick_token_pair_from_probe
+
+    res = infer_maverick_token_pair_from_probe(
+        {
+            "token0_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "token1_addr": "0x4200000000000000000000000000000000000006",
+            "maverick_probe_by_token_in": {
+                "0x4200000000000000000000000000000000000006": {
+                    "maverick_token_a_in_probe": False,
+                }
+            },
+        }
+    )
+    assert res.can_infer is True
+    assert res.token_a == "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 
 
 def test_curve_worker_coin_indices():

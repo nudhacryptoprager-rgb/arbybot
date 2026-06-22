@@ -1,6 +1,15 @@
 # Status: M8.3 Token Metadata Registry & Decimals Service
 
-**Status**: **M8_3_METADATA_REGISTRY_PENDING / M8_3_NOT_AUTHORITATIVE_YET**
+**Status**: **M8_3_STRICT_PASS / AUTHORITY_WIRED / METADATA_PREFLIGHT_EXPANDED**
+
+```text
+goal_status: REACHED (m8_3_acceptance_report.py --strict)
+token_metadata_gates: PASS (cycle scope)
+dex_route_metadata_gates: PASS (197/197)
+pool_identity_gates: PASS for cycle/econ scope
+risk_metadata: warning-only (NON_ERC20 out-of-scope not a strict gate)
+preflight_sections: token_risk_metadata, pool_identity_metadata, dex_route_metadata
+```
 
 ```text
 scope: token decimals/symbol/name validation for M9 economics

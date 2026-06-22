@@ -23,11 +23,16 @@ class BalancerDexWorker(DexMetadataWorker):
         meta = {
             "pool_address": route.get("pool_address"),
             "pool_id": route.get("pool_id"),
+            "vault": route.get("balancer_vault") or route.get("vault"),
+            "tokens_order": token_order,
             "token_order": token_order,
             "rate_providers": route.get("rate_providers") or route.get("balancer_rate_providers"),
+            "scaling_factors": route.get("scaling_factors") or route.get("balancer_scaling_factors"),
             "paused": route.get("paused") or route.get("balancer_paused"),
             "weights": route.get("weights") or route.get("balancer_weights"),
+            "pool_type": route.get("pool_kind") or route.get("balancer_pool_kind") or route.get("adapter_type"),
             "pool_kind": route.get("pool_kind") or route.get("balancer_pool_kind"),
+            "specialization": route.get("balancer_specialization"),
         }
         ready = not missing and len(token_order) >= 2
         return self._result(

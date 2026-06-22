@@ -8,7 +8,7 @@
 | **M8** | new-pool discovery, sniper events, factory hints | config anchors | economics sizing, decimals authority, depth probes | `new_pool_sniper_latest.json` | sniper operational |
 | **M8.1** | stable-anchor inventory, route health diagnostics | M8 hints, config | profit claims, token metadata authority | `m8_1_stable_anchor_latest.json` | anchor pass rate |
 | **M8.2** | cross-DEX expansion, graph topology handoff | M8/M8.1, external hints (hint-only) | economics, depth authority, decimals authority | `m8_cross_dex_expansion_latest.json` | `m8_2_acceptance_report.py` |
-| **M8.3** | token metadata registry (decimals/symbol/name) + DEX route/pool metadata via root aggregator | M8/M8.1/M8.2 routes, core config, on-chain ERC20 | pool discovery, quote economics, depth | `m8_3_token_metadata_registry_latest.json` | `m8_3_acceptance_report.py --strict` |
+| **M8.3** | token metadata + DEX route metadata + risk/pool-identity preflight | M8/M8.1/M8.2 routes, core config, on-chain ERC20 | pool discovery, quote economics, depth, profit | `m8_3_token_metadata_registry_latest.json` | `m8_3_acceptance_report.py --strict` |
 | **M9** | graph build, depth enrich, quote/economics shadow | M8.3 registry (consume only), M8.2 handoff bridge | token metadata authority, on-chain decimals overwrite of M8.3 | `m9_graph_*.json`, bridge inventory | `m9_lane_acceptance_report.py` |
 
 ## M8.3 authority contract
