@@ -37,7 +37,11 @@ def test_aggregated_registry_schema_sections():
     assert "token_registry" in doc
     assert "dex_route_metadata" in doc
     assert "task_funnel" in doc
-    assert "per_dex_worker_metrics" in doc
+    assert "token_execution_preflight" in doc
+    assert "token_risk_flags" in doc
+    assert "proxy_metadata" in doc
+    assert doc["preflight_contract"] == "metadata_risk_pool_identity_v2"
+    assert "unsupported_metadata_workers" in doc
     tokens = get_token_registry(doc)
     assert len(tokens) >= 2
     dex = doc["dex_route_metadata"]["by_route_id"]
@@ -73,6 +77,38 @@ def test_aggregated_acceptance_split_gates():
     assert report["token_metadata_gates"]["cycle_participating_token_metadata_rate"] == 0.96
 
 
+def test_aggregator_registry_refresh_no_fee_on_transfer_for_standard_erc20():
+    from unittest.mock import MagicMock
+
+    from m8.metadata.aggregator import build_aggregated_registry
+
+    w3 = MagicMock()
+    code = bytes.fromhex("63a9059cbb" + "00" * 12 + "63095ea7b3" + "00" * 12)
+    w3.eth.get_code.return_value = code
+    w3.to_checksum_address.side_effect = lambda a: a
+
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    doc = build_aggregated_registry(
+        bridge={
+            "active_routes": [
+                {
+                    "route_id": "r1",
+                    "adapter_type": "uniswap_v3",
+                    "token0_addr": usdc,
+                    "token1_addr": "0x4200000000000000000000000000000000000006",
+                    "pool_address": "0x" + "1" * 40,
+                    "fee": 500,
+                }
+            ]
+        },
+        with_dex_workers=False,
+        w3=w3,
+        onchain_unresolved_only=False,
+    )
+    flags = (doc.get("token_risk_flags") or {}).get("by_address") or {}
+    assert flags.get(usdc.lower(), {}).get("fee_on_transfer_suspected") is False
+
+
 def test_worker_diagnostics_in_acceptance():
     doc = build_aggregated_registry(
         bridge={
@@ -90,8 +126,9 @@ def test_worker_diagnostics_in_acceptance():
         w3=None,
     )
     report = evaluate_m8_3_acceptance(doc, strict=False)
+    assert "token_risk_warnings" in report
+    assert report["token_risk_warnings"].get("warning_only") is True
     assert "risk_metadata_warnings" in report
-    assert report["risk_metadata_warnings"].get("warning_only") is True
     assert "pool_identity_gates" in report
     diag = report["diagnostics"]
     assert "tasks_assigned" in diag

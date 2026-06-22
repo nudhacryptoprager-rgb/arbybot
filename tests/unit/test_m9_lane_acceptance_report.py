@@ -108,12 +108,19 @@ def test_build_acceptance_report_quote_blockers():
     assert "M8_EXPLORATION_ROUTES_PARTITIONED" not in report["m9_blockers"]
 
 
-def test_m9_report_upstream_m8_2_not_ready():
+def test_m9_report_upstream_m8_2_not_ready(tmp_path):
     m8_2 = {
         "goal_status": "BLOCKED",
         "blockers": ["SUBGRAPH_READY_LOW"],
         "metrics": {"subgraph_ready_tokens": 1},
     }
+    bad_registry = tmp_path / "m8_3_blocked.json"
+    bad_registry.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.5}}}',
+        encoding="utf-8",
+    )
     report = build_acceptance_report(
         sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
         anchor=None,
@@ -130,6 +137,7 @@ def test_m9_report_upstream_m8_2_not_ready():
         shadow=None,
         rca=None,
         m8_2_report=m8_2,
+        m8_3_registry_path=str(bad_registry),
     )
     assert report["upstream_blockers"] == [
         "UPSTREAM_M8_2_NOT_READY",

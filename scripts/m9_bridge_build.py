@@ -176,6 +176,14 @@ def main() -> int:
     log.info("  token_verified_count     : %d", metrics["token_verified_count"])
     log.info("  anchor_connected_count   : %d", metrics["anchor_connected_count"])
     log.info("  cross_dex_seen_count     : %d", metrics["cross_dex_seen_count"])
+    log.info(
+        "  active_factory_verified_routes: %d (operator primary)",
+        metrics.get("active_factory_verified_routes", 0),
+    )
+    log.info(
+        "  base_inventory_factory_verified_count: %d (legacy base-inv only)",
+        metrics.get("base_inventory_factory_verified_count", metrics["factory_verified_count"]),
+    )
     log.info("  factory_verified_count   : %d", metrics["factory_verified_count"])
     log.info("  depth_ok_count           : %d", metrics["depth_ok_count"])
     log.info("  graph_ready_from_m8      : %d", metrics["graph_ready_from_m8"])
@@ -232,6 +240,15 @@ def main() -> int:
         "  routes_decimals_unknown  : %d",
         metrics.get("routes_decimals_unknown", 0),
     )
+    cap = metrics.get("route_capacity_histogram") or {}
+    if cap:
+        log.info(
+            "  route_capacity_histogram : gte_25=%s gte_63_75=%s gte_180=%s active=%s",
+            cap.get("routes_effective_depth_gte_25"),
+            cap.get("routes_effective_depth_gte_63_75"),
+            cap.get("routes_effective_depth_gte_180"),
+            cap.get("active_routes"),
+        )
     log.info("Written: %s", args.output)
 
     # Acceptance check

@@ -58,9 +58,12 @@ def main() -> int:
         print(f"dex_route_task_funnel: {diag.get('dex_route_task_funnel')}")
         print(f"worker_failure_samples: {list((diag.get('worker_failure_samples') or {}).keys())}")
 
-    risk = report.get("risk_metadata_warnings") or {}
+    risk = report.get("token_risk_warnings") or report.get("risk_metadata_warnings") or {}
     if risk:
-        print(f"risk_metadata_warnings: non_erc20_out_of_scope={risk.get('non_erc20_out_of_scope_count')}")
+        print(f"token_risk_warnings: non_erc20_out_of_scope={risk.get('non_erc20_out_of_scope_count')}")
+    unsupported = (report.get("gate_results") or {}).get("unsupported_metadata_workers") or {}
+    if unsupported:
+        print(f"unsupported_metadata_workers: cycle={len(unsupported.get('cycle_participating_routes') or [])}")
     pool_g = report.get("pool_identity_gates") or {}
     if pool_g:
         print(f"pool_identity_cycle_rate: {pool_g.get('cycle_participating_pool_identity_verified_rate')}")

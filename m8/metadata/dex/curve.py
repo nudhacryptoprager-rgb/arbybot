@@ -20,9 +20,11 @@ class CurveDexWorker(DexMetadataWorker):
         underlying = route.get("underlying_coins") or route.get("curve_underlying")
         wrapped = route.get("wrapped_coins") or route.get("curve_wrapped")
         rates = route.get("curve_rates") or route.get("rates")
+        coins = list(coin_indices.keys()) if isinstance(coin_indices, dict) else route.get("coins") or []
         meta = {
             "pool_address": route.get("pool_address"),
             "pool_type": route.get("curve_pool_type") or route.get("adapter_type"),
+            "coins": coins,
             "coin_indices": dict(coin_indices) if isinstance(coin_indices, dict) else {},
             "underlying_indices": route.get("underlying_indices") or route.get("curve_underlying_indices"),
             "underlying_coins": underlying,
@@ -34,6 +36,7 @@ class CurveDexWorker(DexMetadataWorker):
             "fee": route.get("fee") or route.get("curve_fee"),
             "admin_fee": route.get("admin_fee") or route.get("curve_admin_fee"),
             "stable": route.get("stable"),
+            "factory_verified": route.get("factory_verified"),
         }
         ready = not missing
         return self._result(

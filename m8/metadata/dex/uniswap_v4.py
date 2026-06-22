@@ -31,24 +31,29 @@ class UniswapV4DexWorker(DexMetadataWorker):
         hooks_safe = _hooks_class(hooks)
         c0 = route.get("token0_addr")
         c1 = route.get("token1_addr")
+        fee = route.get("fee")
         meta = {
             "pool_key": {
                 "currency0": c0,
                 "currency1": c1,
-                "fee": route.get("fee"),
+                "fee": fee,
                 "tick_spacing": route.get("tick_spacing"),
                 "hooks": hooks,
             },
             "currency0": c0,
             "currency1": c1,
-            "fee": route.get("fee"),
+            "fee": fee,
             "tick_spacing": route.get("tick_spacing"),
             "hooks": hooks,
             "hooks_class": hooks_safe,
+            "hook_permissions": route.get("hook_permissions") or route.get("v4_hook_permissions"),
+            "dynamic_fee_flag": bool(route.get("dynamic_fee") or route.get("v4_dynamic_fee")),
             "native_alias": native_alias,
             "native_alias_normalized": native_alias or "none",
             "direction_support": "bidirectional",
             "pool_address": route.get("pool_address"),
+            "factory_verified": route.get("factory_verified"),
+            "init_state_available": bool(route.get("pool_address") and c0 and c1 and fee is not None),
         }
         ready = not missing and hooks_safe != "unknown_unsafe"
         err = None if ready else ("DEX_ROUTE_METADATA_PARTIAL" if missing else "DEX_ROUTE_METADATA_MISSING")

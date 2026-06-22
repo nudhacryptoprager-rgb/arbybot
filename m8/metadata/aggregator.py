@@ -143,17 +143,24 @@ def build_aggregated_registry(
             )
         )
 
-    from m8.metadata.token_risk import build_token_risk_metadata
+    from m8.metadata.token_risk import build_token_preflight_bundle
 
+    token_execution_preflight: Dict[str, Dict[str, Any]] = {}
+    token_risk_flags_map: Dict[str, Dict[str, bool]] = {}
+    proxy_metadata_map: Dict[str, Dict[str, Any]] = {}
     token_risk_metadata: Dict[str, Dict[str, Any]] = {}
     for addr, entry in token_results.items():
-        token_risk_metadata[addr] = build_token_risk_metadata(
+        bundle = build_token_preflight_bundle(
             addr,
             w3=w3,
             code_length=entry.get("code_length"),
             error_code=entry.get("error_code"),
             decimals_resolved=entry.get("decimals") is not None,
         )
+        token_execution_preflight[addr] = bundle["token_execution_preflight"]
+        token_risk_flags_map[addr] = bundle["token_risk_flags"]
+        proxy_metadata_map[addr] = bundle["proxy_metadata"]
+        token_risk_metadata[addr] = bundle["token_risk_metadata"]
 
     all_routes = list((bridge or {}).get("active_routes") or []) + list(
         (bridge or {}).get("exploration_routes") or []
@@ -172,6 +179,7 @@ def build_aggregated_registry(
     if with_dex_workers:
         workers = all_dex_workers()
         seen_routes: Set[str] = set()
+        routes_without_worker: Set[str] = set()
         for route in all_routes:
             rid = route_id_of(route)
             if not rid or rid in seen_routes:
@@ -179,10 +187,12 @@ def build_aggregated_registry(
             seen_routes.add(rid)
             worker = assign_route_worker(route, workers)
             if worker is None:
+                routes_without_worker.add(rid)
                 continue
             scope = _route_scope_for_id(rid, scopes)
             task = worker.build_task(route, scope=scope)
             if task is None:
+                routes_without_worker.add(rid)
                 continue
             dex_tasks_assigned += 1
             result = worker.process(task, w3=w3)
@@ -213,6 +223,9 @@ def build_aggregated_registry(
 
     pool_identity_metadata = build_pool_identity_metadata(
         all_routes, dex_by_route, scopes=scopes
+    )
+    unsupported_metadata_workers = _unsupported_metadata_workers(
+        all_routes, dex_by_route, routes_without_worker if with_dex_workers else set(), scopes
     )
     conflict_count = sum(
         1 for t in token_results.values() if t.get("error_code") == "DECIMALS_CONFLICT"
@@ -253,15 +266,19 @@ def build_aggregated_registry(
         "truth_boundary": "on_chain_verified_required_for_economics_grade",
         "authority_contract": AUTHORITY_CONTRACT,
         "task_mode": "aggregated" if with_dex_workers else "token_only",
-        "preflight_contract": "metadata_risk_pool_identity_v1",
+        "preflight_contract": "metadata_risk_pool_identity_v2",
         "token_registry": token_results,
         "tokens": token_results,
+        "token_execution_preflight": {"by_address": token_execution_preflight},
+        "token_risk_flags": {"by_address": token_risk_flags_map},
+        "proxy_metadata": {"by_address": proxy_metadata_map},
         "token_risk_metadata": {"by_address": token_risk_metadata},
         "dex_route_metadata": {
             "by_route_id": dex_by_route,
             "coverage": dex_route_coverage,
         },
         "pool_identity_metadata": pool_identity_metadata,
+        "unsupported_metadata_workers": unsupported_metadata_workers,
         "task_funnel": {
             "tasks_assigned": token_tasks_assigned + dex_tasks_assigned,
             "tasks_completed": token_tasks_completed + dex_tasks_completed,
@@ -298,8 +315,50 @@ def get_dex_route_metadata(doc: Dict[str, Any]) -> Dict[str, Any]:
     return dict((doc.get("dex_route_metadata") or {}).get("by_route_id") or {})
 
 
+def _unsupported_metadata_workers(
+    routes: List[Dict[str, Any]],
+    dex_by_route: Dict[str, Dict[str, Any]],
+    routes_without_worker: Set[str],
+    scopes: Dict[str, Set[str]],
+) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
+    for scope in ("cycle_participating_routes", "econ_capacity_routes"):
+        ids = scopes.get(scope) or set()
+        if not ids:
+            out[scope] = []
+            continue
+        bad: List[str] = []
+        for route in routes:
+            rid = route_id_of(route)
+            if rid not in ids:
+                continue
+            if rid in routes_without_worker:
+                bad.append(rid)
+                continue
+            row = dex_by_route.get(rid)
+            if not row or not row.get("ready"):
+                bad.append(rid)
+        out[scope] = sorted(bad)
+    return out
+
+
+def get_token_execution_preflight(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return dict((doc.get("token_execution_preflight") or {}).get("by_address") or {})
+
+
+def get_token_risk_flags(doc: Dict[str, Any]) -> Dict[str, Dict[str, bool]]:
+    return dict((doc.get("token_risk_flags") or {}).get("by_address") or {})
+
+
+def get_proxy_metadata(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return dict((doc.get("proxy_metadata") or {}).get("by_address") or {})
+
+
 def get_token_risk_metadata(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    return dict((doc.get("token_risk_metadata") or {}).get("by_address") or {})
+    legacy = (doc.get("token_risk_metadata") or {}).get("by_address")
+    if legacy:
+        return dict(legacy)
+    return get_token_registry(doc)
 
 
 def get_pool_identity_metadata(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:

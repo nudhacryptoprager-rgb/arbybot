@@ -34,11 +34,21 @@ def build_pool_identity_entry(
         and adapter not in ("unknown", "")
     )
 
+    factory_verified = route.get("factory_verified")
+    factory_source = (
+        route.get("factory")
+        or route.get("factory_address")
+        or route.get("dex_id")
+        or dex_meta.get("factory_source")
+    )
+
     return {
         "route_id": rid,
         "pool_address": route.get("pool_address"),
         "pool_id": route.get("pool_id") or dex_meta.get("pool_id"),
-        "factory_verified": route.get("factory_verified"),
+        "factory_verified": factory_verified,
+        "factory_source": factory_source,
+        "created_from_supported_factory": factory_verified is True,
         "pool_type": adapter,
         "pool_code_hash": route.get("pool_code_hash"),
         "creation_block": route.get("creation_block") or route.get("block_number"),

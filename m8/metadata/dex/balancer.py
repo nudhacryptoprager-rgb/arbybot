@@ -33,6 +33,7 @@ class BalancerDexWorker(DexMetadataWorker):
             "pool_type": route.get("pool_kind") or route.get("balancer_pool_kind") or route.get("adapter_type"),
             "pool_kind": route.get("pool_kind") or route.get("balancer_pool_kind"),
             "specialization": route.get("balancer_specialization"),
+            "factory_verified": route.get("factory_verified"),
         }
         ready = not missing and len(token_order) >= 2
         return self._result(

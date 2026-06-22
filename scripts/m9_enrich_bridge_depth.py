@@ -226,6 +226,16 @@ def main() -> int:
     metrics["v4_depth_skipped_unsupported"] = counts["skipped_v4"]
     metrics["multicall_saved_calls_estimate"] = counts.get("multicall_saved_calls_estimate", 0)
     try:
+        from m9.graph_arb.bridge_builder import _route_capacity_histogram
+
+        metrics["route_capacity_histogram"] = _route_capacity_histogram(routes)
+        log.info(
+            "route_capacity_histogram: %s",
+            metrics["route_capacity_histogram"],
+        )
+    except Exception:
+        pass
+    try:
         from m9.graph_arb.pool_quality import annotate_routes_pool_quality
 
         metrics["pool_quality_histogram"] = annotate_routes_pool_quality(routes)

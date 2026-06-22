@@ -1,14 +1,11 @@
 # Status: M8.3 Token Metadata Registry & Decimals Service
 
-**Status**: **M8_3_STRICT_PASS / AUTHORITY_WIRED / METADATA_PREFLIGHT_EXPANDED**
+**Status**: **M8_3_STRICT_PASS / AUTHORITY_WIRED / RISK_HEURISTICS_CODE_FIXED**
 
 ```text
 goal_status: REACHED (m8_3_acceptance_report.py --strict)
-token_metadata_gates: PASS (cycle scope)
-dex_route_metadata_gates: PASS (197/197)
-pool_identity_gates: PASS for cycle/econ scope
-risk_metadata: warning-only (NON_ERC20 out-of-scope not a strict gate)
-preflight_sections: token_risk_metadata, pool_identity_metadata, dex_route_metadata
+registry_refresh: fee_on_transfer_suspected collapsed after PUSH4 heuristic fix
+risk_heuristics: PUSH4-aware; no transfer/transferFrom in fee-on-transfer flag
 ```
 
 ```text
@@ -98,9 +95,9 @@ py -3.11 scripts/m9_enrich_bridge_decimals.py `
 ## Current evidence line
 
 ```text
-goal_status: BLOCKED (pending first strict acceptance PASS on live bridge)
-primary_gap: long-tail token decimals unresolved without M8.3 registry refresh
-downstream: M9 must surface UPSTREAM_M8_3_NOT_READY, not mix with MARKET_NO_POSITIVE_GROSS
+goal_status: REACHED (m8_3_acceptance_report.py --strict)
+registry_refresh: fee_on_transfer_suspected collapsed after PUSH4 heuristic fix
+bridge_consumption: m8_3_authority_applied, routes_decimals_unknown=0 on graph-handoff rebuild
 ```
 
 `execution_enabled`: false  

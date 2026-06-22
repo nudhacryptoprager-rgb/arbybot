@@ -1100,6 +1100,13 @@ def build_artifact(
     ]
     qsr_liveness = _qsr_for_subset(_liveness_results)
     qsr_econ = _qsr_for_subset(_econ_rpc_results)
+    _qst_metrics = quote_size_truth_metrics(
+        cycle_results,
+        econ_floor_usd=_econ_floor_usd,
+        liveness_max_size_usd=LIVENESS_MAX_SIZE_USD,
+    )
+    _econ_gate_attempts = int(_qst_metrics.get("econ_gate_attempts") or 0)
+    _econ_rpc_attempts = int(_qst_metrics.get("econ_rpc_quote_attempts") or 0)
     oversized_vs_depth_count = sum(
         1
         for qr in cycle_results
@@ -1262,6 +1269,12 @@ def build_artifact(
     # Economics discovery metrics (Funnel economics signal quality)
     quoted_gross = [qr.gross_bps for qr in cycle_results if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS")]
     cycles_quoteable = len(quoted_gross)
+    econ_quote_attempt_rate = (
+        round(_econ_gate_attempts / cycles_found, 4) if cycles_found else 0.0
+    )
+    econ_quote_success_rate = (
+        round(qsr_econ, 4) if cycles_quoteable > 0 and _econ_rpc_attempts > 0 else 0.0
+    )
     near_breakeven_count = sum(1 for bps in quoted_gross if bps >= _ROUTER_SIM_BPS_FLOOR)
     positive_gross_rate = (
         cycles_positive_gross / cycles_quoteable if cycles_quoteable else 0.0
@@ -1511,6 +1524,8 @@ def build_artifact(
         "qsr": round(qsr, 4),
         "qsr_liveness": round(qsr_liveness, 4),
         "qsr_econ": round(qsr_econ, 4),
+        "econ_quote_attempt_rate": econ_quote_attempt_rate,
+        "econ_quote_success_rate": econ_quote_success_rate,
         "economic_size_floor_usd": _econ_floor_usd,
         "active_economics_profile": (
             economics_profile_context(cost_model=cost_model).get(
@@ -1522,11 +1537,7 @@ def build_artifact(
         "economics_profile_context": (
             economics_profile_context(cost_model=cost_model) if cost_model else {}
         ),
-        "quote_size_truth": quote_size_truth_metrics(
-            cycle_results,
-            econ_floor_usd=_econ_floor_usd,
-            liveness_max_size_usd=LIVENESS_MAX_SIZE_USD,
-        ),
+        "quote_size_truth": _qst_metrics,
         "oversized_vs_depth_count": oversized_vs_depth_count,
         "oversized_vs_measured_depth_count": oversized_vs_measured_depth_count,
         "oversized_vs_unknown_depth_fallback_count": oversized_vs_unknown_depth_fallback_count,

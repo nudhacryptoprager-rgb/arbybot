@@ -281,8 +281,11 @@ def _m9_economics_blockers(
         blockers.append("CURVE_PRODUCTIVE_LANE_INCOMPLETE")
 
     decimals_unknown = int(bsm.get("routes_decimals_unknown") or 0)
-    if decimals_unknown > 50:
+    m8_3_authority = bool(bsm.get("m8_3_authority_applied"))
+    if decimals_unknown > 50 and not m8_3_authority:
         blockers.append("DECIMALS_ENRICHMENT_REQUIRED")
+    elif decimals_unknown == 0 and m8_3_authority:
+        pass  # M8.3 authority satisfied; never surface stale decimals blocker
     depth_known = bsm.get("depth_known_rate")
     if depth_known is not None and float(depth_known) < 0.5:
         blockers.append("DEPTH_ENRICHMENT_REQUIRED")
@@ -327,6 +330,8 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     qsr = shadow.get("qsr")
     qsr_liveness = shadow.get("qsr_liveness")
     qsr_econ = shadow.get("qsr_econ")
+    econ_quote_attempt_rate = shadow.get("econ_quote_attempt_rate")
+    econ_quote_success_rate = shadow.get("econ_quote_success_rate")
     qst = shadow.get("quote_size_truth") or {}
 
     if cycles_quoteable == 0:
@@ -350,6 +355,11 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
                 "from the liveness subset - do not claim qsr_liveness without "
                 "checking quote_size_truth.liveness_quote_attempts."
             )
+    if cycles_quoteable == 0 and qsr_econ is not None and float(qsr_econ or 0) > 0:
+        notes.append(
+            "qsr_econ>0 with cycles_quoteable=0: leg-level econ RPC subset only; "
+            "use econ_quote_success_rate for cycle-level economics proof."
+        )
     if cycles_quoteable > 0 and qsr_econ is not None and float(qsr_econ or 0) == 0.0:
         notes.append(
             "qsr_econ=0 while cycles_quoteable>0: no economics-sized quotes "
@@ -372,6 +382,8 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "qsr": qsr,
         "qsr_liveness": qsr_liveness,
         "qsr_econ": qsr_econ,
+        "econ_quote_attempt_rate": econ_quote_attempt_rate,
+        "econ_quote_success_rate": econ_quote_success_rate,
         "economics_status": (
             "NOT_PROVEN" if cycles_positive_gross == 0 else "PARTIAL"
         ),
@@ -657,6 +669,10 @@ def build_acceptance_report(
                 for r in (bridge or {}).get("exploration_routes") or []
                 if r.get("cross_mechanic")
             ),
+            "active_factory_verified_routes": bsm.get("active_factory_verified_routes"),
+            "routes_decimals_unknown": bsm.get("routes_decimals_unknown"),
+            "m8_3_authority_applied": bsm.get("m8_3_authority_applied"),
+            "route_capacity_histogram": bsm.get("route_capacity_histogram"),
         },
         {
             "layer": "M9_shadow",
@@ -666,6 +682,8 @@ def build_acceptance_report(
             "qsr": (shadow or {}).get("qsr"),
             "qsr_liveness": (shadow or {}).get("qsr_liveness"),
             "qsr_econ": (shadow or {}).get("qsr_econ"),
+            "econ_quote_attempt_rate": (shadow or {}).get("econ_quote_attempt_rate"),
+            "econ_quote_success_rate": (shadow or {}).get("econ_quote_success_rate"),
             "cross_mechanic_cycles": (shadow or {}).get("cross_mechanic_cycles"),
             "cross_mechanic_cycles_found": (
                 (shadow or {}).get("cross_mechanic_cycles_found")
@@ -769,6 +787,7 @@ def build_acceptance_report(
     }
     if not is_m8_3_ready(m8_3_acceptance):
         upstream_blockers.append("UPSTREAM_M8_3_NOT_READY")
+    elif int(bsm.get("routes_decimals_unknown") or 0) == 0:
         m9_blockers = [b for b in m9_blockers if b != "DECIMALS_ENRICHMENT_REQUIRED"]
 
     m9_quote_validation_blockers: List[str] = []

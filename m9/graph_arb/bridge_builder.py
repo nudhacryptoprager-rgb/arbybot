@@ -156,6 +156,24 @@ def _filter_curve_routes_productive_admission(
         "curve_productive_admission_filtered": curve_filtered,
     }
 
+def _route_capacity_histogram(
+    routes: List[Dict[str, Any]],
+    *,
+    thresholds: Tuple[float, ...] = (25.0, 63.75, 180.0),
+) -> Dict[str, int]:
+    """Count active routes meeting effective_depth_usd floors."""
+    out: Dict[str, int] = {"active_routes": len(routes)}
+    for threshold in thresholds:
+        key = f"routes_effective_depth_gte_{str(threshold).replace('.', '_')}"
+        out[key] = sum(
+            1
+            for r in routes
+            if r.get("effective_depth_usd") is not None
+            and float(r.get("effective_depth_usd") or 0) >= threshold
+        )
+    return out
+
+
 _SCHEMA_VERSION = "m9_bridge_inventory.1"
 
 
@@ -936,10 +954,13 @@ def build_bridge_inventory(
         r.get("pool_address", "").lower() for r in base_active if r.get("pool_address")
     )
     _curve_discovery_admitted: List[Dict] = []
+    _curve_discovery_skipped_duplicate: int = 0
     for _dr in _disc_routes:
-        if _dr.get("pool_address", "").lower() not in _base_active_addrs_disc:
-            base_active = list(base_active) + [_dr]
-            _curve_discovery_admitted.append(_dr)
+        if _dr.get("pool_address", "").lower() in _base_active_addrs_disc:
+            _curve_discovery_skipped_duplicate += 1
+            continue
+        base_active = list(base_active) + [_dr]
+        _curve_discovery_admitted.append(_dr)
     _curve_discovery_count: int = len(_curve_discovery_admitted)
 
     # ------------------------------------------------------------------
@@ -978,11 +999,12 @@ def build_bridge_inventory(
                 _metadata_seeded_routes.append(_ssr)
     _metadata_seeded_count: int = len(_metadata_seeded_routes)
 
-    # factory_verified_count counts routes from base inventory (not metadata seeds)
+    # factory_verified_count: legacy name — base-inventory scope only (pre-M8 merge)
     factory_verified_count = sum(
         1 for r in base_active
         if r.get("factory_verified") and r.get("source") != "adapter_metadata"
     )
+    base_inventory_factory_verified_count = factory_verified_count
     depth_ok_count = sum(1 for r in base_active if r.get("depth_probe_ok"))
 
     anchor_in_base = [
@@ -1368,6 +1390,7 @@ def build_bridge_inventory(
         "anchor_connected_count": len(anchor_connected_events),
         "cross_dex_seen_count": cross_dex_seen_count,
         "factory_verified_count": factory_verified_count,
+        "base_inventory_factory_verified_count": base_inventory_factory_verified_count,
         "depth_ok_count": depth_ok_count,
         "anchor_connected_from_base": anchor_connected_from_base,
         "graph_ready_from_m8": graph_ready_from_m8,
@@ -1426,6 +1449,7 @@ def build_bridge_inventory(
         # Curve factory discovery (production path, no seed flag required)
         "curve_discovery_artifact_loaded_count": _curve_discovery_artifact_loaded_count,
         "curve_discovery_admitted_count": _curve_discovery_count,
+        "curve_discovery_skipped_duplicate_count": _curve_discovery_skipped_duplicate,
         "curve_discovery_count": _curve_discovery_count,
         "graph_ready_from_expansion": len(_expansion_routes),
         "m8_2_handoff_ready": _expansion_meta.get("handoff_ready"),
@@ -1549,7 +1573,8 @@ def build_bridge_inventory(
         "yes",
     ):
         final_active, _curve_adm = _filter_curve_routes_productive_admission(
-            final_active
+            final_active,
+            curve_pool_indices_path=os.environ.get("ARBY_CURVE_POOL_INDICES") or None,
         )
         bridge_source_metrics.update(_curve_adm)
     try:
@@ -1862,6 +1887,8 @@ def build_bridge_inventory(
         except Exception:
             pass
 
+    bridge_source_metrics["route_capacity_histogram"] = _route_capacity_histogram(final_active)
+
     if graph_handoff_only and _expansion_meta:
         from m8.discovery.graph_handoff import compute_expansion_to_bridge_funnel
 
@@ -1913,6 +1940,17 @@ def build_bridge_inventory(
         for r in final_active
         if r.get("token0_decimals") is None or r.get("token1_decimals") is None
     )
+    bridge_source_metrics["active_factory_verified_routes"] = sum(
+        1 for r in final_active if r.get("factory_verified")
+    )
+    bridge_source_metrics["m8_3_pool_identity_factory_verified_routes"] = sum(
+        1
+        for r in final_active
+        if (r.get("m8_3_pool_identity") or {}).get("factory_verified")
+    )
+    bridge_source_metrics["m8_3_preflight_applied_routes"] = sum(
+        1 for r in final_active if r.get("m8_3_preflight_applied")
+    )
 
     try:
         from m9.graph_arb.depth_telemetry import pre_shadow_bridge_blockers
@@ -1923,6 +1961,9 @@ def build_bridge_inventory(
                 bridge_source_metrics.get("routes_decimals_unknown") or 0
             ),
             active_route_count=len(final_active),
+            m8_3_authority_applied=bool(
+                bridge_source_metrics.get("m8_3_authority_applied")
+            ),
         )
         if _pre_shadow:
             bridge_source_metrics["pre_shadow_blockers"] = _pre_shadow

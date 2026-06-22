@@ -1435,8 +1435,8 @@ class TestCurveDiscoveryContract:
 
     def test_discovery_deduplicates_by_pool_address(self, tmp_path):
         """Discovered pool already in base_active must not be added again."""
-        # Use pool address that matches a base inventory pool
-        base_pool_addr = "0xpool0000"  # _make_base_inv generates pool0000..poolNNNN
+        # Use pool address that matches _make_base_inv (0xaaa...aa00 for i=0)
+        base_pool_addr = f"0x{'a' * 38}00"
         disc = self._make_discovery_artifact(n_pools=1)
         # Override pool_address to clash with base
         disc["discovered_pools"][0]["pool_address"] = base_pool_addr
@@ -1446,6 +1446,7 @@ class TestCurveDiscoveryContract:
         assert metrics["curve_discovery_count"] == 0, (
             "Duplicate pool_address must not be re-admitted from discovery"
         )
+        assert metrics.get("curve_discovery_skipped_duplicate_count", 0) >= 1
         assert metrics["graph_ready_total"] == n_base
 
     def test_curve_discovery_count_always_in_metrics(self, tmp_path):
@@ -1500,13 +1501,17 @@ class TestCurveProductiveAdmission:
     def test_unprobed_curve_route_filtered_from_active_routes(self, tmp_path, monkeypatch):
         from m9.graph_arb.bridge_builder import build_bridge_inventory
 
+        from datetime import datetime, timezone
+
         disc = tmp_path / "curve_disc.json"
         pool_addr = "0xdeadbeef000000000000000000000000000001"
         disc.write_text(
             json.dumps(
                 {
                     "schema_version": "m9_curve_discovery.1",
-                    "generated_at_utc": "2026-06-10T12:00:00Z",
+                    "generated_at_utc": datetime.now(tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
                     "chain": "base",
                     "factory_address": "0xd2002373543ce3527023c75e7518c274a51ce712",
                     "discovered_pools": [

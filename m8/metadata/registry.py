@@ -671,6 +671,9 @@ def _apply_m8_3_preflight_metadata(route: Dict[str, Any], registry: Dict[str, An
     from m8.metadata.aggregator import (
         get_dex_route_metadata,
         get_pool_identity_metadata,
+        get_proxy_metadata,
+        get_token_execution_preflight,
+        get_token_risk_flags,
         get_token_risk_metadata,
     )
     from m8.metadata.dex.base import route_id_of
@@ -685,18 +688,36 @@ def _apply_m8_3_preflight_metadata(route: Dict[str, Any], registry: Dict[str, An
     if pool_row:
         route["m8_3_pool_identity"] = pool_row
 
+    execution_preflight = get_token_execution_preflight(registry)
+    risk_flags = get_token_risk_flags(registry)
+    proxy_meta = get_proxy_metadata(registry)
     leg_risk: Dict[str, Any] = {}
+    leg_preflight: Dict[str, Any] = {}
     for leg, addr_key in (("token0", "token0_addr"), ("token1", "token1_addr")):
         addr = route.get(addr_key)
         if not is_valid_eth_address(addr):
             continue
-        risk = get_token_risk_metadata(registry).get(str(addr).lower())
+        key = str(addr).lower()
+        risk = get_token_risk_metadata(registry).get(key)
         if risk:
             leg_risk[leg] = risk
-            route[f"{leg}_behavior_flags"] = risk.get("token_behavior_flags")
+            route[f"{leg}_behavior_flags"] = risk.get("token_behavior_flags") or risk_flags.get(key)
             route[f"{leg}_non_erc20_reason"] = risk.get("non_erc20_reason")
+        exec_row = execution_preflight.get(key)
+        if exec_row:
+            leg_preflight[leg] = exec_row
+            route[f"{leg}_execution_preflight"] = exec_row
+        flags_row = risk_flags.get(key)
+        if flags_row:
+            route[f"{leg}_risk_flags"] = flags_row
+        proxy_row = proxy_meta.get(key)
+        if proxy_row:
+            route[f"{leg}_proxy_metadata"] = proxy_row
     if leg_risk:
         route["m8_3_token_risk"] = leg_risk
+    if leg_preflight:
+        route["m8_3_token_execution_preflight"] = leg_preflight
+    if leg_risk or leg_preflight or dex_row or pool_row:
         route["m8_3_preflight_applied"] = True
 
 

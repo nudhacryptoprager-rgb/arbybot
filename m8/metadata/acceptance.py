@@ -21,6 +21,7 @@ _M8_3_BLOCKERS = frozenset(
         "M8_3_ECON_CAPACITY_DEX_METADATA_MISSING",
         "M8_3_POOL_IDENTITY_LOW",
         "M8_3_ECON_CAPACITY_POOL_IDENTITY_MISSING",
+        "M8_3_UNSUPPORTED_METADATA_WORKER",
     }
 )
 
@@ -44,8 +45,9 @@ def evaluate_m8_3_acceptance(
             "gate_results": {},
             "token_metadata_gates": {},
             "dex_route_metadata_gates": {},
-            "risk_metadata_warnings": {},
             "pool_identity_gates": {},
+            "token_risk_warnings": {},
+            "risk_metadata_warnings": {},
         }
 
     if registry.get("schema_version") not in _VALID_SCHEMAS:
@@ -91,7 +93,15 @@ def evaluate_m8_3_acceptance(
     if econ_pool.get("routes_count", 0) > 0 and econ_pool_rate < pool_identity_min:
         blockers.append("M8_3_ECON_CAPACITY_POOL_IDENTITY_MISSING")
 
-    risk_metadata_warnings = _build_risk_metadata_warnings(registry)
+    unsupported = registry.get("unsupported_metadata_workers") or {}
+    cycle_unsupported = unsupported.get("cycle_participating_routes") or []
+    econ_unsupported = unsupported.get("econ_capacity_routes") or []
+    if cycle_unsupported:
+        blockers.append("M8_3_UNSUPPORTED_METADATA_WORKER")
+    if econ_unsupported:
+        blockers.append("M8_3_UNSUPPORTED_METADATA_WORKER")
+
+    token_risk_warnings = _build_token_risk_warnings(registry)
 
     goal = "REACHED" if not blockers else "BLOCKED"
     if strict and blockers:
@@ -116,6 +126,8 @@ def evaluate_m8_3_acceptance(
         "cycle_participating_pool_identity_verified_rate": cycle_pool_rate,
         "econ_capacity_pool_identity_verified_rate": econ_pool_rate,
         "pool_identity_min_required": pool_identity_min,
+        "cycle_unsupported_metadata_workers": len(cycle_unsupported),
+        "econ_unsupported_metadata_workers": len(econ_unsupported),
     }
 
     return {
@@ -130,18 +142,25 @@ def evaluate_m8_3_acceptance(
             "route_coverage": route_cov,
             "coverage": coverage,
             "dex_route_coverage": dex_cov,
+            "unsupported_metadata_workers": unsupported,
         },
         "token_metadata_gates": token_metadata_gates,
         "dex_route_metadata_gates": dex_route_metadata_gates,
-        "risk_metadata_warnings": risk_metadata_warnings,
+        "token_risk_warnings": token_risk_warnings,
+        "risk_metadata_warnings": token_risk_warnings,
         "pool_identity_gates": pool_identity_gates,
         "diagnostics": diagnostics,
     }
 
 
-def _build_risk_metadata_warnings(registry: Dict[str, Any]) -> Dict[str, Any]:
+def _build_token_risk_warnings(registry: Dict[str, Any]) -> Dict[str, Any]:
     """Warning-only risk summary; NON_ERC20 out of cycle scope is not a strict gate."""
-    from m8.metadata.aggregator import get_token_risk_metadata
+    from m8.metadata.aggregator import (
+        get_proxy_metadata,
+        get_token_execution_preflight,
+        get_token_risk_flags,
+        get_token_risk_metadata,
+    )
     from m8.metadata.token_risk import risk_warnings_for_token
 
     cycle_addrs = set(
@@ -151,6 +170,9 @@ def _build_risk_metadata_warnings(registry: Dict[str, Any]) -> Dict[str, Any]:
         or []
     )
     risks = get_token_risk_metadata(registry)
+    execution = get_token_execution_preflight(registry)
+    flags_map = get_token_risk_flags(registry)
+    proxy_map = get_proxy_metadata(registry)
     non_erc20_in_cycle = 0
     non_erc20_out_of_scope = 0
     proxy_count = 0
@@ -175,6 +197,9 @@ def _build_risk_metadata_warnings(registry: Dict[str, Any]) -> Dict[str, Any]:
         "non_erc20_out_of_scope_count": non_erc20_out_of_scope,
         "proxy_detected_count": proxy_count,
         "behavior_flag_counts": dict(sorted(behavior_counts.items())),
+        "execution_preflight_tokens": len(execution),
+        "risk_flags_tokens": len(flags_map),
+        "proxy_metadata_tokens": len(proxy_map),
     }
 
 

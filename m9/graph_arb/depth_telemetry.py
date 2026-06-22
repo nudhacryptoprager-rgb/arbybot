@@ -206,11 +206,16 @@ def pre_shadow_bridge_blockers(
     active_route_count: int = 0,
     depth_threshold: float = ECONOMICS_DEPTH_KNOWN_RATE_MIN,
     decimals_unknown_max: int = 50,
+    m8_3_authority_applied: bool = False,
 ) -> List[str]:
     """Blockers that must be cleared before a productive M9 shadow run."""
     blockers: List[str] = []
     if depth_known_rate_value is not None and depth_known_rate_value < depth_threshold:
         blockers.append("DEPTH_ENRICHMENT_REQUIRED")
-    if active_route_count > 0 and routes_decimals_unknown > decimals_unknown_max:
+    if (
+        not m8_3_authority_applied
+        and active_route_count > 0
+        and routes_decimals_unknown > decimals_unknown_max
+    ):
         blockers.append("DECIMALS_ENRICHMENT_REQUIRED")
     return blockers

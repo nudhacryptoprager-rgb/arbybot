@@ -5,6 +5,7 @@ from typing import Any, List
 
 from m8.metadata.contracts import MetadataTask
 from m8.metadata.dex.base import DexMetadataWorker, _require_fields
+from m8.metadata.dex.pool_static import amm_pool_static_metadata
 
 
 class UniswapV3DexWorker(DexMetadataWorker):
@@ -14,14 +15,7 @@ class UniswapV3DexWorker(DexMetadataWorker):
     def process(self, task: MetadataTask, *, w3: Any = None):
         route = task.route or {}
         missing = _require_fields(route, ("pool_address", "token0_addr", "token1_addr", "fee"))
-        meta = {
-            "pool_address": route.get("pool_address"),
-            "token0_addr": route.get("token0_addr"),
-            "token1_addr": route.get("token1_addr"),
-            "fee": route.get("fee"),
-            "tick_spacing": route.get("tick_spacing"),
-            "direction_support": "bidirectional",
-        }
+        meta = amm_pool_static_metadata(route)
         ready = not missing
         return self._result(
             task,

@@ -243,11 +243,17 @@ class MaverickDexWorker(DexMetadataWorker):
             missing.append("token_a_b_ambiguous")
 
         probe_by_tin = route.get("maverick_probe_by_token_in") or {}
-        has_direction = bool(probe_by_tin) or route.get("maverick_min_quoteable_amount_raw") is not None
+        probe_count = len(probe_by_tin) if isinstance(probe_by_tin, dict) else 0
+        has_direction = probe_count > 0 or route.get("maverick_min_quoteable_amount_raw") is not None
+        direction_probe_completeness = "bidirectional" if probe_count >= 2 else (
+            "one_direction" if probe_count == 1 else "none"
+        )
         meta = {
             "pool_address": route.get("pool_address"),
             "token_a": resolution.token_a,
             "token_b": resolution.token_b,
+            "tokenA": resolution.token_a,
+            "tokenB": resolution.token_b,
             "token_pair_source": resolution.source,
             "pool_state_metadata_source": resolution.source,
             "bin_kind": route.get("maverick_bin_kind") or route.get("bin_kind"),
@@ -258,7 +264,8 @@ class MaverickDexWorker(DexMetadataWorker):
                 "max_quoteable_raw": route.get("maverick_max_quoteable_amount_raw"),
                 "pool_lane_probe_amount": route.get("maverick_pool_lane_probe_amount"),
             },
-            "direction_support": "directional" if has_direction else "unknown",
+            "direction_support": direction_probe_completeness if has_direction else "unknown",
+            "direction_probe_completeness": direction_probe_completeness,
             "has_probe_by_token_in": resolution.has_probe_by_token_in,
             "can_infer_token_a_b": resolution.can_infer and not resolution.ambiguous,
         }

@@ -2,11 +2,12 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_2_HANDOFF_REACHED / M8_3_STRICT_PASS / M9_ADMISSION_OR_CAPACITY_GATE**
+**Current runtime line:** **M8_2_HANDOFF_REACHED / M8_3_STRICT_PASS / M9_BLOCKED_BY_DEPTH_CAPACITY**
 
 ```text
-M8.3 upstream: REACHED. M9 **consumes** M8.3 token/dex/risk/pool-identity preflight via `--metadata-registry`.
-M9 remains owner of depth, quote, sizing, economics — no direct metadata probing when M8.3 authority applied.
+M8.3 upstream: REACHED. Bridge tests PASS. Registry fee_on_transfer noise cleared.
+M9 blocked by: depth/capacity floor (6/70 routes >= $180 effective depth).
+Use econ_quote_success_rate, not raw qsr_econ, when cycles_quoteable=0.
 ```
 
 ```text

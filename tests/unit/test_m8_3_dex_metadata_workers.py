@@ -60,7 +60,8 @@ def test_maverick_worker_direction_metadata():
     }
     result = _route_task(MaverickDexWorker(), route)
     assert result.ready is True
-    assert result.metadata["direction_support"] == "directional"
+    assert result.metadata["direction_support"] == "one_direction"
+    assert result.metadata["direction_probe_completeness"] == "one_direction"
     assert result.metadata["token_pair_source"] == "explicit"
 
 
