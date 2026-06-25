@@ -248,6 +248,50 @@ Expected output when Truth Engine works correctly:
 
 Canonical command for continuous scanning with rolling artifact refresh. This demonstrates real-time arbitrage detection capability.
 
+## M8/M9 Project Pipeline Orchestrator
+
+`start.py` is also the canonical entrypoint for the M8/M8.2/M8.3/M9 branch.
+Use this path instead of manually stitching individual scripts when refreshing
+the long-tail graph-arb pipeline.
+
+Layer commands:
+
+```powershell
+# M8 sniper + M8.1 anchor
+py -3.11 start.py -m_8 --no-dashboard
+
+# M8.2 radar + expansion + acceptance
+py -3.11 start.py -m_8_2 --no-dashboard
+
+# M8.3 metadata registry + acceptance
+py -3.11 start.py -m_8_3 --no-dashboard
+
+# M9 bridge/depth/capacity diagnostics; shadow is capacity-gated
+py -3.11 start.py -m_9 --no-dashboard
+
+# Full M8 -> M9 chain
+py -3.11 start.py -m8_m9 --no-dashboard
+```
+
+Useful operator flags:
+
+```powershell
+--dry-run              # print the exact command plan without running it
+--skip-shadow          # stop after capacity/lane diagnostics
+--max-radar-tokens N   # cap M8.2 radar input
+--sniper-minutes N     # M8 sniper duration for -m_8 / -m8_m9
+--with-coingecko       # enable CoinGecko fallback; default is skipped
+```
+
+Routing contract:
+- local/report steps run directly under `py -3.11`;
+- RPC-heavy steps run through `scripts/bootstrap_productive_rpc_env.py`;
+- M8.2 radar uses DexScreener-first async/multicall verification through
+  `m8_radar_two_phase_refresh.py`;
+- M9 shadow is skipped unless `m9_capacity_cycle_diagnostic.py` allows it via
+  `cycles_at_floor > 0`;
+- dashboard is launched by default unless `--no-dashboard` is passed.
+
 ### Single-chain Non-stop Loop
 
 ```powershell

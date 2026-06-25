@@ -98,6 +98,43 @@ class TestRoundRobinConfigList(unittest.TestCase):
         self.assertEqual(configs, ["a.yaml", "b.yaml"])
 
 
+class TestProjectPipelineModes(unittest.TestCase):
+    """Tests for M8/M9 orchestration modes in start.py."""
+
+    def test_m8_alias_does_not_require_scan_config(self):
+        args = start.parse_args(["-m_8", "--dry-run", "--no-dashboard"])
+        self.assertEqual(args.pipeline, "m8")
+        self.assertTrue(args.dry_run)
+
+    def test_legacy_mode_still_requires_config_or_pipeline(self):
+        with self.assertRaises(SystemExit):
+            start.parse_args([])
+
+    def test_m9_plan_has_capacity_gate_before_shadow(self):
+        args = start.parse_args(["-m_9", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("m9_capacity_diagnostic", names)
+        self.assertIn("gate_capacity_shadow", names)
+        self.assertIn("m9_shadow_10m", names)
+        self.assertLess(names.index("gate_capacity_shadow"), names.index("m9_shadow_10m"))
+
+    def test_m9_skip_shadow_omits_runner(self):
+        args = start.parse_args(["-m_9", "--skip-shadow", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertNotIn("m9_shadow_10m", names)
+        self.assertIn("m9_lane_acceptance", names)
+
+    def test_m8_2_radar_refresh_skips_internal_acceptance(self):
+        args = start.parse_args(["-m_8_2", "--dry-run", "--no-dashboard"])
+        steps = start.build_project_pipeline_steps(args)
+        radar = next(step for step in steps if step["name"] == "m8_2_radar_two_phase")
+        names = [step["name"] for step in steps]
+        self.assertIn("--skip-acceptance", radar["cmd"])
+        self.assertIn("m8_2_cross_dex_expand", names)
+        self.assertIn("m8_2_acceptance_strict", names)
+        self.assertLess(names.index("m8_2_cross_dex_expand"), names.index("m8_2_acceptance_strict"))
+
+
 class TestRollingFlagsOnlyForPrimary(unittest.TestCase):
     """Verify rolling flags dispatched only for run_kind=NORMAL."""
 

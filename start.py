@@ -29,7 +29,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 import re
 
 import yaml
@@ -86,6 +86,10 @@ RUNS_DIR = Path("data") / "runs"
 CI_GATE = Path("scripts") / "ci_m5_0_gate.py"
 HOT_PAIRS_CACHE_DIR = Path("data") / "cache"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
+PRODUCTION_BRIDGE = "data/tmp/m9_bridge_inventory_production_latest.json"
+CAPACITY_DIAGNOSTIC = "data/tmp/m9_capacity_cycle_diagnostic_latest.json"
+M9_SHADOW_ARTIFACT = "data/tmp/m9_graph_handoff_quote_validation_10m.json"
+M9_RCA_ARTIFACT = "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
 
 # R28.16: Phase event protocol — matches ARBY_PHASE: prefix from run_scan_real.py
 PHASE_LINE_PREFIX = "ARBY_PHASE:"
@@ -199,6 +203,366 @@ def run_gate_once(
     return rc, run_dir
 
 
+def _py_cmd(*parts: str) -> list[str]:
+    return [sys.executable, *parts]
+
+
+def _productive_rpc_cmd(*parts: str) -> list[str]:
+    """Run a child command under the canonical productive RPC bootstrap."""
+    return [
+        sys.executable,
+        "scripts/bootstrap_productive_rpc_env.py",
+        "--",
+        sys.executable,
+        *parts,
+    ]
+
+
+def _pipeline_step(
+    name: str,
+    cmd: Iterable[str],
+    *,
+    allow_exit_codes: tuple[int, ...] = (0,),
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "cmd": list(cmd),
+        "allow_exit_codes": allow_exit_codes,
+        "env": dict(env or {}),
+    }
+
+
+def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Build the canonical M8/M8.2/M8.3/M9 operation plan.
+
+    This keeps M8/M9 orchestration centralized while leaving the legacy M4/M5
+    config scanner path intact.
+    """
+    mode = str(getattr(args, "pipeline", "") or "")
+    max_radar = str(int(getattr(args, "max_radar_tokens", 753) or 753))
+    sniper_minutes = str(int(getattr(args, "sniper_minutes", 45) or 45))
+    skip_coingecko = bool(getattr(args, "skip_coingecko", True))
+    include_shadow = not bool(getattr(args, "skip_shadow", False))
+
+    steps: list[dict[str, Any]] = []
+
+    def add_m8() -> None:
+        steps.append(
+            _pipeline_step(
+                "m8_sniper_acceptance",
+                _productive_rpc_cmd(
+                    "-u",
+                    "scripts/sniper_smoke_run.py",
+                    "--chain",
+                    "base",
+                    "--duration-minutes",
+                    sniper_minutes,
+                    "--acceptance-run",
+                    "--blocks-back",
+                    "50",
+                ),
+                env={"ARBY_SNIPER_ENABLE": "1"},
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_1_stable_anchor",
+                _productive_rpc_cmd("scripts/m8_1_stable_anchor_run.py"),
+            )
+        )
+
+    def add_m82() -> None:
+        radar_cmd = _py_cmd(
+            "scripts/m8_radar_two_phase_refresh.py",
+            "--max-tokens",
+            max_radar,
+            "--lane-mode",
+            "fresh_first",
+            "--skip-acceptance",
+        )
+        if skip_coingecko:
+            radar_cmd.append("--skip-coingecko")
+        steps.append(_pipeline_step("m8_2_radar_two_phase", radar_cmd))
+        steps.append(
+            _pipeline_step(
+                "gate_fresh_delta_subset",
+                _py_cmd("scripts/m9_production_refresh_gates.py", "fresh_delta_subset"),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_2_cross_dex_expand",
+                _py_cmd("scripts/m8_cross_dex_expand.py", "--chain", "base"),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_2_acceptance_strict",
+                _py_cmd("scripts/m8_2_acceptance_report.py", "--strict"),
+            )
+        )
+
+    def add_m83() -> None:
+        steps.append(
+            _pipeline_step(
+                "m8_3_registry_refresh",
+                _productive_rpc_cmd(
+                    "scripts/m8_3_token_metadata_registry_refresh.py",
+                    "--chain",
+                    "base",
+                    "--task-mode",
+                    "aggregated",
+                    "--with-dex-workers",
+                ),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "gate_negative_cache_stats",
+                _py_cmd("scripts/m9_production_refresh_gates.py", "negative_cache_stats"),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_3_acceptance_strict",
+                _py_cmd("scripts/m8_3_acceptance_report.py", "--strict"),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "gate_m8_3_acceptance_reached",
+                _py_cmd("scripts/m9_production_refresh_gates.py", "m8_3_acceptance"),
+            )
+        )
+
+    def add_m9() -> None:
+        steps.append(_pipeline_step("m9_curve_discovery", _productive_rpc_cmd("scripts/m9_curve_discovery.py")))
+        steps.append(
+            _pipeline_step(
+                "m9_bridge_curve_probe_for_indices",
+                _py_cmd(
+                    "scripts/m9_bridge_build.py",
+                    "--graph-handoff-only",
+                    "--no-registry",
+                    "--include-expansion-duplicates-for-shadow",
+                    "--metadata-registry",
+                    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+                    "--output",
+                    "data/tmp/m9_bridge_curve_probe.json",
+                    "--no-enforce-m8-provenance",
+                ),
+                env={"ARBY_M9_CURVE_ADMIT_ALL": "1"},
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_discover_curve_indices",
+                _productive_rpc_cmd(
+                    "scripts/discover_curve_indices.py",
+                    "--partial",
+                    "--debug",
+                    "--inventory",
+                    "data/tmp/m9_bridge_curve_probe.json",
+                    "--output",
+                    "data/runs/_rolling/m9_curve_pool_indices_latest.json",
+                ),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_bridge_production",
+                _py_cmd(
+                    "scripts/m9_bridge_build.py",
+                    "--metadata-registry",
+                    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+                    "--output",
+                    PRODUCTION_BRIDGE,
+                    "--no-enforce-m8-provenance",
+                ),
+                env={"ARBY_CURVE_POOL_INDICES": "data/runs/_rolling/m9_curve_pool_indices_latest.json"},
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_enrich_depth_false_positive",
+                _productive_rpc_cmd(
+                    "scripts/m9_enrich_bridge_depth.py",
+                    "--inventory",
+                    PRODUCTION_BRIDGE,
+                    "--prioritize-false-positive-reprobe",
+                    "--sleep-ms",
+                    "150",
+                ),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_enrich_depth_broad",
+                _productive_rpc_cmd(
+                    "scripts/m9_enrich_bridge_depth.py",
+                    "--inventory",
+                    PRODUCTION_BRIDGE,
+                    "--force-reprobe",
+                    "--sleep-ms",
+                    "150",
+                ),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_topology_diagnostic",
+                _py_cmd("scripts/m9_graph_topology_diagnostic.py", "--inventory", PRODUCTION_BRIDGE, "--cycle-lengths", "2,3,4"),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_capacity_diagnostic",
+                _py_cmd(
+                    "scripts/m9_capacity_cycle_diagnostic.py",
+                    "--bridge",
+                    PRODUCTION_BRIDGE,
+                    "--cycle-lengths",
+                    "2,3,4",
+                    "--four-leg-rca",
+                    "--quarantine-rca",
+                    "--output",
+                    CAPACITY_DIAGNOSTIC,
+                ),
+                allow_exit_codes=(0, 2),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "gate_capacity_shadow",
+                _py_cmd("scripts/m9_production_refresh_gates.py", "capacity_shadow", "--capacity", CAPACITY_DIAGNOSTIC),
+                allow_exit_codes=(0, 2),
+            )
+        )
+        if include_shadow:
+            steps.append(
+                _pipeline_step(
+                    "m9_shadow_10m",
+                    _productive_rpc_cmd(
+                        "-u",
+                        "-m",
+                        "m9.graph_arb.runner",
+                        "--chain",
+                        "base",
+                        "--config",
+                        "config/exotic_base_anchor.yaml",
+                        "--inventory",
+                        PRODUCTION_BRIDGE,
+                        "--duration-minutes",
+                        "10",
+                        "--productive-lane",
+                        "--require-factory-verified",
+                        "--require-cycles-at-floor",
+                        "--capacity-diagnostic",
+                        CAPACITY_DIAGNOSTIC,
+                        "--quote-backend",
+                        "raw_http",
+                        "--quote-workers",
+                        "1",
+                        "--max-cycles-per-sweep",
+                        "20",
+                        "--artifact-path",
+                        M9_SHADOW_ARTIFACT,
+                    ),
+                    env={"ARBY_M9_CYCLE_LENGTHS": "2,3,4"},
+                )
+            )
+        steps.append(
+            _pipeline_step(
+                "m9_lane_acceptance",
+                _py_cmd(
+                    "scripts/m9_lane_acceptance_report.py",
+                    "--m8-2-report",
+                    "data/tmp/m8_2_acceptance_report_latest.json",
+                    "--m8-3-registry",
+                    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+                    "--bridge",
+                    PRODUCTION_BRIDGE,
+                    "--shadow",
+                    M9_SHADOW_ARTIFACT,
+                    "--rca",
+                    M9_RCA_ARTIFACT,
+                ),
+            )
+        )
+
+    if mode == "m8":
+        add_m8()
+    elif mode == "m8_2":
+        add_m82()
+    elif mode == "m8_3":
+        add_m83()
+    elif mode == "m9":
+        add_m9()
+    elif mode in {"m8_m9", "full"}:
+        add_m8()
+        add_m82()
+        add_m83()
+        add_m9()
+    else:
+        raise ValueError(f"unknown pipeline mode: {mode}")
+    return steps
+
+
+def _run_project_pipeline(args: argparse.Namespace) -> int:
+    steps = build_project_pipeline_steps(args)
+    log_path = Path(getattr(args, "pipeline_log", "") or "data/tmp/start_pipeline_latest.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    fail_path = Path("data/tmp/start_pipeline_latest.fail")
+    done_path = Path("data/tmp/start_pipeline_latest.done")
+    for marker in (fail_path, done_path):
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+
+    print(f"Project pipeline: {args.pipeline} steps={len(steps)} log={log_path}")
+    with log_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write(f"=== start_pipeline mode={args.pipeline} ===\n")
+        shadow_gate_allowed = True
+        for step in steps:
+            name = step["name"]
+            if name == "m9_shadow_10m" and not shadow_gate_allowed:
+                msg = "skip m9_shadow_10m: capacity gate blocked\n"
+                print(msg.strip())
+                log_fh.write(msg)
+                continue
+            cmd = list(step["cmd"])
+            printable = " ".join(cmd)
+            print(f">>> {name}: {printable}")
+            log_fh.write(f">>> {name}: {printable}\n")
+            if getattr(args, "dry_run", False):
+                continue
+            env = os.environ.copy()
+            env.update(step.get("env") or {})
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                sys.stdout.write(line)
+                log_fh.write(line)
+            rc = proc.wait()
+            log_fh.write(f"<<< {name}: exit={rc}\n")
+            if name == "gate_capacity_shadow":
+                shadow_gate_allowed = rc == 0
+            if rc not in step["allow_exit_codes"]:
+                fail_path.write_text(f"{name}: exit={rc}\n", encoding="utf-8")
+                return rc or 1
+        if not getattr(args, "dry_run", False):
+            done_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    return 0
+
+
 
 # -- main -----------------------------------------------------------------
 
@@ -207,7 +571,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Multi-chain time-bounded online scan orchestrator"
     )
-    g = ap.add_mutually_exclusive_group(required=True)
+    g = ap.add_mutually_exclusive_group(required=False)
     g.add_argument(
         "--config",
         help="Single config file (legacy mode, equivalent to --config-list with one entry)",
@@ -215,6 +579,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument(
         "--config-list",
         help="Comma-separated list of config files for round-robin scanning",
+    )
+    pg = ap.add_mutually_exclusive_group(required=False)
+    pg.add_argument(
+        "--pipeline",
+        choices=("m8", "m8_2", "m8_3", "m9", "m8_m9", "full"),
+        help="Run canonical project-layer pipeline instead of legacy config scan",
+    )
+    pg.add_argument("-m_8", "--m8", dest="pipeline", action="store_const", const="m8")
+    pg.add_argument("-m_8_2", "--m8-2", dest="pipeline", action="store_const", const="m8_2")
+    pg.add_argument("-m_8_3", "--m8-3", dest="pipeline", action="store_const", const="m8_3")
+    pg.add_argument("-m_9", "--m9", dest="pipeline", action="store_const", const="m9")
+    pg.add_argument("-m8_m9", "--m8-m9", dest="pipeline", action="store_const", const="m8_m9")
+    pg.add_argument("--full-m8-m9", dest="pipeline", action="store_const", const="full")
+    ap.add_argument("--max-radar-tokens", type=int, default=753)
+    ap.add_argument("--sniper-minutes", type=int, default=45)
+    ap.add_argument("--skip-shadow", action="store_true", default=False)
+    ap.add_argument("--skip-coingecko", action="store_true", default=True)
+    ap.add_argument("--with-coingecko", dest="skip_coingecko", action="store_false")
+    ap.add_argument("--dry-run", action="store_true", default=False)
+    ap.add_argument(
+        "--pipeline-log",
+        default="data/tmp/start_pipeline_latest.log",
+        help="Runtime log for --pipeline/-m_* modes",
     )
     ap.add_argument("--hours", type=float, default=0, help="Time limit in hours (takes precedence over --minutes)")
     ap.add_argument("--minutes", type=int, default=120, help="Time limit in minutes (ignored if --hours set)")
@@ -284,7 +671,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Keep dashboard server running after scan completes (default: terminate with scan)",
     )
-    return ap.parse_args(argv)
+    ns = ap.parse_args(argv)
+    if not ns.pipeline and not ns.config and not ns.config_list:
+        ap.error(
+            "one of --config, --config-list, --pipeline, -m_8, -m_8_2, "
+            "-m_8_3, -m_9, -m8_m9 is required"
+        )
+    return ns
 
 
 def resolve_configs(args: argparse.Namespace) -> list[str]:
@@ -295,6 +688,26 @@ def resolve_configs(args: argparse.Namespace) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.pipeline:
+        dashboard_proc: subprocess.Popen | None = None
+        if not args.no_dashboard:
+            dashboard_proc = subprocess.Popen(
+                [sys.executable, "-m", "monitoring.dashboard_server", "--port", str(args.dashboard_port)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"Dashboard launched: http://127.0.0.1:{args.dashboard_port}")
+        try:
+            return _run_project_pipeline(args)
+        finally:
+            if dashboard_proc is not None:
+                if args.keep_dashboard:
+                    print(f"Dashboard server kept alive (PID {dashboard_proc.pid}): http://127.0.0.1:{args.dashboard_port}")
+                else:
+                    dashboard_proc.terminate()
+                    dashboard_proc.wait(timeout=5)
+                    print("Dashboard server stopped.")
+
     configs = resolve_configs(args)
     if not configs:
         print("ERROR: No config files specified")
