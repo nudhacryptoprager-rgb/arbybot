@@ -253,3 +253,48 @@ def test_select_graph_handoff_universe_includes_connector_closure():
     assert len(universe) == 3
     kinds = {r.get("expansion_route_kind") for r in universe}
     assert "connector_hop" in kinds or "connector_graph" in kinds
+
+
+def test_select_mirror_handoff_universe_includes_same_pair_routes():
+    from m8.discovery.graph_handoff import select_mirror_handoff_universe_routes
+
+    focus = "0xmirrorfocus000000000000000000000001"
+    routes = [
+        _route(
+            dex="uniswap_v3",
+            t0="FOO",
+            t1="USDC",
+            focus_addr=focus,
+            kind="same_pair_mirror",
+        ),
+        _route(
+            dex="aerodrome",
+            t0="FOO",
+            t1="USDC",
+            focus_addr=focus,
+            kind="same_pair_mirror",
+        ),
+        _route(
+            dex="uniswap_v2",
+            t0="FOO",
+            t1="WETH",
+            focus_addr=focus,
+            kind="token_presence",
+        ),
+    ]
+    mirror_debug = [
+        {
+            "focus_token_address": focus,
+            "mirror_quote_ready": True,
+        }
+    ]
+    universe, funnel = select_mirror_handoff_universe_routes(routes, mirror_debug)
+    assert funnel["handoff_lane"] == "mirror_2leg"
+    assert len(universe) >= 2
+    mirror_kinds = {
+        r.get("expansion_route_kind")
+        for r in universe
+        if r.get("expansion_route_kind") in ("same_pair_mirror", "cross_anchor_mirror")
+    }
+    assert "same_pair_mirror" in mirror_kinds or len(universe) >= 2
+

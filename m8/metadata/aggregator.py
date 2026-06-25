@@ -67,6 +67,15 @@ def build_aggregated_registry(
     )
     ext_hints = _external_hint_map(external_hints)
 
+    from m8.metadata.negative_cache import (
+        TokenNegativeCache,
+        collect_cycle_scope_token_addresses,
+        is_negative_cache_eligible,
+    )
+
+    neg_cache = TokenNegativeCache.load_from_registry(prior_registry)
+    cycle_scope_addrs = collect_cycle_scope_token_addresses(bridge, capacity=capacity)
+
     erc20 = Erc20TokenWorker()
     token_results: Dict[str, Dict[str, Any]] = {}
     token_decisions: List[Dict[str, Any]] = []
@@ -101,6 +110,34 @@ def build_aggregated_registry(
             )
             continue
 
+        if not neg_cache.should_bypass(addr, cycle_scope_addrs):
+            cached_err = neg_cache.get(chain, addr)
+            if cached_err and is_negative_cache_eligible(cached_err):
+                entry = {
+                    "address": addr,
+                    "decimals": None,
+                    "source": "negative_cache",
+                    "economics_grade": "unresolved",
+                    "error_code": cached_err,
+                    "worker_id": "erc20_token",
+                    "source_provenance": "m8_3",
+                    "negative_cache_hit": True,
+                }
+                token_results[addr] = entry
+                worker_errors[str(cached_err)] += 1
+                token_decisions.append(
+                    asdict(
+                        MetadataAuthorityDecision(
+                            entity_id=addr,
+                            entity_kind="token_erc20",
+                            accepted=False,
+                            reason=f"negative_cache:{cached_err}",
+                            precedence_rank=0,
+                        )
+                    )
+                )
+                continue
+
         task = erc20.build_task(addr)
         had_w3 = use_w3 is not None
         result: TokenMetadataResult = erc20.process(
@@ -118,6 +155,13 @@ def build_aggregated_registry(
             onchain_used += 1
         if result.error_code:
             worker_errors[str(result.error_code)] += 1
+            if not neg_cache.should_bypass(addr, cycle_scope_addrs):
+                neg_cache.put(
+                    chain,
+                    addr,
+                    str(result.error_code),
+                    code_length=result.code_length,
+                )
         entry = {
             "address": addr,
             "symbol": result.symbol,
@@ -165,6 +209,9 @@ def build_aggregated_registry(
     all_routes = list((bridge or {}).get("active_routes") or []) + list(
         (bridge or {}).get("exploration_routes") or []
     )
+    from m8.metadata.curve_indices import enrich_curve_routes
+
+    enrich_curve_routes(all_routes)
     scopes = _route_scope_ids(bridge, capacity=capacity)
     dex_by_route: Dict[str, Dict[str, Any]] = {}
     per_worker_metrics: Dict[str, Dict[str, Any]] = {}
@@ -304,6 +351,7 @@ def build_aggregated_registry(
             "dex_routes_ready": sum(1 for r in dex_by_route.values() if r.get("ready")),
         },
         "route_coverage": route_coverage,
+        "negative_cache": neg_cache.to_registry_block(),
     }
 
 

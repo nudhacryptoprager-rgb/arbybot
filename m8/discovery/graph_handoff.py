@@ -375,6 +375,174 @@ def _neighborhood_for_ready_token(
     return neighborhood, connectors
 
 
+_MIRROR_ROUTE_KINDS = frozenset({"same_pair_mirror", "cross_anchor_mirror"})
+
+
+def select_mirror_handoff_universe_routes(
+    routes: List[Dict[str, Any]],
+    mirror_debug: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Select M8.2 mirror_2leg expansion routes for M9 bridge handoff."""
+    from collections import Counter
+
+    from m9.graph_arb.node_canonical import normalize_expansion_route_tokens
+
+    ready_addrs: Set[str] = set()
+    for row in mirror_debug or []:
+        if not row.get("mirror_quote_ready"):
+            continue
+        addr = str(
+            row.get("focus_token_address") or row.get("token_address") or ""
+        ).lower()
+        if addr.startswith("0x"):
+            ready_addrs.add(addr)
+
+    normalized = [normalize_expansion_route_tokens(dict(r)) for r in routes]
+    selected_map: Dict[str, Dict[str, Any]] = {}
+    include_reasons: Counter[str] = Counter()
+    reject_reasons: Counter[str] = Counter()
+    use_ready_filter = bool(ready_addrs)
+
+    def _add(route: Dict[str, Any], reason: str) -> None:
+        rid = str(route.get("route_id") or "")
+        if not rid or rid in selected_map:
+            return
+        route.setdefault("handoff_lane", "mirror_2leg")
+        route.setdefault("economics_claim", False)
+        selected_map[rid] = route
+        include_reasons[reason] += 1
+
+    for route in normalized:
+        kind = str(route.get("expansion_route_kind") or "")
+        lane = str(route.get("handoff_lane") or "")
+        focus = str(
+            route.get("focus_token_address") or route.get("exotic_address") or ""
+        ).lower()
+        is_mirror_kind = kind in _MIRROR_ROUTE_KINDS or lane == "mirror_2leg"
+        if not is_mirror_kind:
+            if use_ready_filter and focus in ready_addrs:
+                _add(route, "mirror_ready_focus_token_route")
+            else:
+                reject_reasons["NOT_MIRROR_HANDOFF_ROUTE"] += 1
+            continue
+        if use_ready_filter and focus and focus not in ready_addrs:
+            reject_reasons["MIRROR_TOKEN_NOT_QUOTE_READY"] += 1
+            continue
+        _add(route, "mirror_same_pair_or_cross_anchor")
+
+    selected = list(selected_map.values())
+    funnel: Dict[str, Any] = {
+        "handoff_lane": "mirror_2leg",
+        "mirror_quote_ready_tokens": len(ready_addrs),
+        "graph_handoff_universe_routes": len(selected),
+        "graph_handoff_route_candidates": len(selected),
+        "graph_handoff_cycle_potential_routes": len(selected),
+        "include_reason_histogram": dict(sorted(include_reasons.items())),
+        "reject_reason_histogram": dict(sorted(reject_reasons.items())),
+    }
+    return selected, funnel
+
+
+def select_subgraph_handoff_universe_routes(
+    routes: List[Dict[str, Any]],
+    subgraph_debug: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Select M8.2 subgraph_3plus expansion routes for M9 bridge handoff."""
+    from collections import Counter
+
+    from m9.graph_arb.node_canonical import normalize_expansion_route_tokens
+
+    ready_addrs: Set[str] = set()
+    for row in subgraph_debug or []:
+        if not row.get("subgraph_ready"):
+            continue
+        addr = str(
+            row.get("focus_token_address") or row.get("token_address") or ""
+        ).lower()
+        if addr.startswith("0x"):
+            ready_addrs.add(addr)
+
+    normalized = [normalize_expansion_route_tokens(dict(r)) for r in routes]
+    selected_map: Dict[str, Dict[str, Any]] = {}
+    include_reasons: Counter[str] = Counter()
+    reject_reasons: Counter[str] = Counter()
+
+    def _add(route: Dict[str, Any], reason: str) -> None:
+        rid = str(route.get("route_id") or "")
+        if not rid or rid in selected_map:
+            return
+        route.setdefault("handoff_lane", "subgraph_3plus")
+        route.setdefault("requires_quote_validation", True)
+        route.setdefault("economics_claim", False)
+        selected_map[rid] = route
+        include_reasons[reason] += 1
+
+    for route in normalized:
+        focus = str(
+            route.get("focus_token_address") or route.get("exotic_address") or ""
+        ).lower()
+        kind = str(route.get("expansion_route_kind") or "")
+        if ready_addrs and focus in ready_addrs:
+            _add(route, "subgraph_ready_focus_token")
+        elif kind in _GRAPH_ROUTE_KINDS or kind == _LEGACY_CONNECTOR_KIND:
+            if ready_addrs:
+                reject_reasons["SUBGRAPH_FOCUS_NOT_READY"] += 1
+            else:
+                _add(route, "subgraph_topology_route")
+        else:
+            reject_reasons["NOT_SUBGRAPH_HANDOFF_ROUTE"] += 1
+
+    selected = list(selected_map.values())
+    funnel: Dict[str, Any] = {
+        "handoff_lane": "subgraph_3plus",
+        "subgraph_ready_tokens": len(ready_addrs),
+        "graph_handoff_universe_routes": len(selected),
+        "graph_handoff_route_candidates": len(selected),
+        "graph_handoff_cycle_potential_routes": len(selected),
+        "include_reason_histogram": dict(sorted(include_reasons.items())),
+        "reject_reason_histogram": dict(sorted(reject_reasons.items())),
+    }
+    return selected, funnel
+
+
+def select_handoff_universe_routes_for_lane(
+    routes: List[Dict[str, Any]],
+    *,
+    handoff_lane: str,
+    graph_topology_debug: Optional[List[Dict[str, Any]]] = None,
+    mirror_debug: Optional[List[Dict[str, Any]]] = None,
+    subgraph_debug: Optional[List[Dict[str, Any]]] = None,
+    anchor_syms: Optional[Set[str]] = None,
+    config_path: str = "config/exotic_base_anchor.yaml",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Lane-aware dispatcher: mirror_2leg, graph_topology, subgraph_3plus."""
+    lane = str(handoff_lane or "none")
+    if lane == "mirror_2leg":
+        return select_mirror_handoff_universe_routes(routes, mirror_debug)
+    if lane == "subgraph_3plus":
+        return select_subgraph_handoff_universe_routes(routes, subgraph_debug)
+    if lane == "graph_topology":
+        return select_graph_handoff_universe_routes(
+            routes,
+            list(graph_topology_debug or []),
+            anchor_syms=anchor_syms,
+            config_path=config_path,
+        )
+    universe, funnel = select_graph_handoff_universe_routes(
+        routes,
+        list(graph_topology_debug or []),
+        anchor_syms=anchor_syms,
+        config_path=config_path,
+    )
+    if universe:
+        funnel["handoff_lane"] = "graph_topology"
+        return universe, funnel
+    universe, funnel = select_mirror_handoff_universe_routes(routes, mirror_debug)
+    if universe:
+        return universe, funnel
+    return select_subgraph_handoff_universe_routes(routes, subgraph_debug)
+
+
 def select_graph_handoff_universe_routes(
     routes: List[Dict[str, Any]],
     graph_topology_debug: List[Dict[str, Any]],

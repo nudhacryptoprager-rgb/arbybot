@@ -267,3 +267,45 @@ def test_m8_3_upstream_blocked_when_registry_not_ready(tmp_path):
     )
     assert "UPSTREAM_M8_3_NOT_READY" in report["upstream_blockers"]
     assert "DECIMALS_ENRICHMENT_REQUIRED" not in report["m9_blockers"]
+
+
+def test_lane_report_flags_bridge_not_consuming_expansion():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "active_routes": [{"route_id": "r1"}],
+            "bridge_source_metrics": {"graph_ready_from_expansion": 0},
+        },
+        shadow=None,
+        rca=None,
+        m8_2_report={
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+            "handoff_lane": "mirror_2leg",
+        },
+    )
+    assert "M9_BRIDGE_NOT_CONSUMING_M8_2_HANDOFF_EXPANSION" in report["upstream_blockers"]
+
+
+def test_lane_report_shadow_bridge_stale_or_mismatch():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "generated_at_utc": "2026-06-22T10:00:00Z",
+            "active_routes": [{"route_id": "r1"}] * 70,
+            "bridge_source_metrics": {"graph_ready_from_m8": 1},
+        },
+        shadow={
+            "generated_at_utc": "2026-06-16T10:00:00Z",
+            "cycles_found": 100,
+            "cycles_quoteable": 0,
+            "bridge_active_routes_at_run": 70,
+        },
+        rca=None,
+        m8_2_report={"goal_status": "REACHED", "handoff_ready": True},
+    )
+    assert "SHADOW_BRIDGE_STALE_OR_MISMATCH" in report["m9_blockers"]

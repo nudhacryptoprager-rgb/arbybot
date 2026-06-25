@@ -387,6 +387,9 @@ def _load_curve_discovery_routes(
             "metadata_seeded": False,
             "source": "curve_factory_discovery",
             "pool_kind": str(pool.get("pool_kind", "stable")),
+            "coin_indices": dict(coin_indices),
+            "coins": syms,
+            "token_order": syms,
         })
     return routes
 
@@ -412,21 +415,35 @@ def _load_cross_dex_expansion_routes(
     if data.get("chain") and data.get("chain") != chain:
         return empty
     ts_str = data.get("generated_at_utc", "")
+    expansion_artifact_stale = False
+    expansion_age_seconds: Optional[float] = None
     if ts_str:
         try:
             from datetime import datetime as _dt
 
             ts = _dt.fromisoformat(ts_str.rstrip("Z")).replace(tzinfo=_tz.utc)
-            age = (_dt.now(tz=_tz.utc) - ts).total_seconds()
-            if age > max_age_seconds:
-                return empty
+            expansion_age_seconds = (_dt.now(tz=_tz.utc) - ts).total_seconds()
+            if expansion_age_seconds > max_age_seconds:
+                expansion_artifact_stale = True
+                _ignore_stale = os.environ.get(
+                    "ARBY_BRIDGE_IGNORE_EXPANSION_STALE", ""
+                ).strip().lower() in ("1", "true", "yes")
+                if not _ignore_stale:
+                    return (
+                        [],
+                        {
+                            "expansion_artifact_stale": True,
+                            "expansion_age_seconds": round(expansion_age_seconds, 1),
+                            "expansion_stale_threshold_seconds": max_age_seconds,
+                        },
+                    )
         except Exception:
             pass
     from m8.discovery.pool_hints import route_bridge_eligible
     from m8.discovery.graph_handoff import (
         apply_bridge_handoff_metadata,
         refresh_graph_handoff_in_expansion_doc,
-        select_graph_handoff_universe_routes,
+        select_handoff_universe_routes_for_lane,
         _route_pool_key,
     )
 
@@ -434,12 +451,32 @@ def _load_cross_dex_expansion_routes(
     summary = data.get("summary") or {}
     debug = list(summary.get("graph_topology_ready_debug") or [])
     handoff_funnel = dict(summary.get("handoff_funnel") or {})
+    handoff_lane = str(summary.get("handoff_lane") or data.get("handoff_lane") or "none")
+    mirror_debug = list(
+        summary.get("same_pair_mirror_ready_debug")
+        or data.get("mirror_ready_debug")
+        or summary.get("mirror_ready_debug")
+        or []
+    )
+    subgraph_debug = list(
+        summary.get("subgraph_ready_debug_sample")
+        or data.get("subgraph_ready_debug")
+        or []
+    )
 
     routes_raw = data.get("routes_admitted") or []
     universe_keys: Set[Tuple[str, str, str]] = set()
+    handoff_selector_lane = handoff_lane
     if graph_handoff_only:
-        _universe, _funnel = select_graph_handoff_universe_routes(routes_raw, debug)
+        _universe, _funnel = select_handoff_universe_routes_for_lane(
+            routes_raw,
+            handoff_lane=handoff_lane,
+            graph_topology_debug=debug,
+            mirror_debug=mirror_debug,
+            subgraph_debug=subgraph_debug,
+        )
         handoff_funnel = _funnel
+        handoff_selector_lane = str(_funnel.get("handoff_lane") or handoff_lane)
         universe_route_ids = {
             str(r.get("route_id") or "") for r in _universe if r.get("route_id")
         }
@@ -456,8 +493,11 @@ def _load_cross_dex_expansion_routes(
             continue
         if graph_handoff_only:
             if not universe_route_ids:
-                _graph_handoff_reject_hist["NO_GRAPH_HANDOFF_UNIVERSE"] = (
-                    _graph_handoff_reject_hist.get("NO_GRAPH_HANDOFF_UNIVERSE", 0) + 1
+                _reject_key = f"NO_{handoff_selector_lane.upper()}_HANDOFF_UNIVERSE"
+                if handoff_selector_lane == "none":
+                    _reject_key = "NO_GRAPH_HANDOFF_UNIVERSE"
+                _graph_handoff_reject_hist[_reject_key] = (
+                    _graph_handoff_reject_hist.get(_reject_key, 0) + 1
                 )
                 continue
             rid = str(raw.get("route_id") or "")
@@ -473,6 +513,11 @@ def _load_cross_dex_expansion_routes(
     _hint_only_dropped = len(routes_raw) - len(routes)
     summary = data.get("summary") or {}
     return routes, {
+        "expansion_artifact_stale": expansion_artifact_stale,
+        "expansion_age_seconds": (
+            round(expansion_age_seconds, 1) if expansion_age_seconds is not None else None
+        ),
+        "expansion_stale_ignored_for_diagnostic": expansion_artifact_stale,
         "reject_reason_histogram": data.get("reject_reason_histogram") or {},
         "multi_venue_tokens": summary.get("multi_venue_tokens", 0),
         "subgraph_ready_tokens": summary.get("subgraph_ready_tokens", 0),
@@ -481,7 +526,8 @@ def _load_cross_dex_expansion_routes(
         "connector_graph_ready_tokens": summary.get("connector_graph_ready_tokens", 0),
         "graph_handoff_ready_tokens": summary.get("graph_handoff_ready_tokens", 0),
         "handoff_ready": summary.get("handoff_ready", False),
-        "handoff_lane": summary.get("handoff_lane") or data.get("handoff_lane"),
+        "handoff_lane": handoff_lane,
+        "handoff_selector_lane": handoff_selector_lane if graph_handoff_only else None,
         "graph_handoff_cycle_potential_routes": handoff_funnel.get(
             "graph_handoff_cycle_potential_routes",
             summary.get("graph_handoff_cycle_potential_routes", 0),
@@ -544,6 +590,9 @@ def _build_static_curve_routes(chain: str = "base") -> List[Dict[str, Any]]:
             "metadata_seeded": True,     # came from adapter_metadata.yaml config
             "source": "adapter_metadata",
             "pool_kind": curve_pool.pool_kind,
+            "coin_indices": dict(coin_indices),
+            "coins": syms,
+            "token_order": syms,
         })
     return routes
 
@@ -1452,8 +1501,14 @@ def build_bridge_inventory(
         "curve_discovery_skipped_duplicate_count": _curve_discovery_skipped_duplicate,
         "curve_discovery_count": _curve_discovery_count,
         "graph_ready_from_expansion": len(_expansion_routes),
+        "expansion_artifact_stale": _expansion_meta.get("expansion_artifact_stale"),
+        "expansion_age_seconds": _expansion_meta.get("expansion_age_seconds"),
+        "expansion_stale_ignored_for_diagnostic": _expansion_meta.get(
+            "expansion_stale_ignored_for_diagnostic"
+        ),
         "m8_2_handoff_ready": _expansion_meta.get("handoff_ready"),
         "m8_2_handoff_lane": _expansion_meta.get("handoff_lane"),
+        "m8_2_handoff_selector_lane": _expansion_meta.get("handoff_selector_lane"),
         "graph_handoff_universe_routes": _expansion_meta.get(
             "graph_handoff_universe_routes"
         ),
@@ -1585,7 +1640,9 @@ def build_bridge_inventory(
             stamp_maverick_quote_amounts_from_debug,
             stamp_productive_quote_status_from_artifacts,
         )
+        from m8.metadata.curve_indices import enrich_curve_routes
 
+        bridge_source_metrics.update(enrich_curve_routes(final_active))
         bridge_source_metrics.update(enrich_balancer_routes_from_index(final_active))
         bridge_source_metrics.update(
             stamp_maverick_quote_amounts_from_debug(final_active)
@@ -1593,10 +1650,32 @@ def build_bridge_inventory(
         bridge_source_metrics.update(
             stamp_productive_quote_status_from_artifacts(final_active)
         )
+        if not os.environ.get("ARBY_M9_CURVE_ADMIT_ALL", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            final_active, _curve_post = _filter_curve_routes_productive_admission(
+                final_active,
+                curve_pool_indices_path=os.environ.get("ARBY_CURVE_POOL_INDICES")
+                or None,
+            )
+            bridge_source_metrics["curve_productive_admission_post_enrich_filtered"] = (
+                _curve_post.get("curve_productive_admission_filtered", 0)
+            )
         from m9.graph_arb.leg_capacity import route_probe_direction_status
 
         for _pr in final_active:
             _pr["probe_direction_status"] = route_probe_direction_status(_pr)
+            _pds = str(_pr.get("probe_direction_status") or "")
+            if _pds == "UNKNOWN":
+                _adapter = str(_pr.get("adapter_type") or _pr.get("dex_id") or "").lower()
+                if _adapter == "maverick_v2":
+                    _pr["probe_direction_block_reason"] = "maverick_direction_probe_not_run"
+                else:
+                    _pr["probe_direction_note"] = "direction_probe_not_required_for_adapter"
+            elif _pds == "NO_PROBE":
+                _pr["probe_direction_block_reason"] = "direction_probe_not_run"
         bridge_source_metrics["discovery_quoteable_by_dex"] = quoteable_by_dex(
             final_active, field="quote_smoke_status"
         )
@@ -1662,10 +1741,19 @@ def build_bridge_inventory(
                 _graph_promoted: List[Dict[str, Any]] = []
                 _remain_exploration: List[Dict[str, Any]] = []
                 for _r in _exploration_routes:
-                    if str(_r.get("handoff_lane") or "") == "graph_topology" or (
-                        _r.get("requires_quote_validation")
-                        and str(_r.get("source") or "") == "m8_cross_dex_expansion"
-                    ):
+                    _lane = str(_r.get("handoff_lane") or "")
+                    _kind = str(_r.get("expansion_route_kind") or "")
+                    _is_handoff = (
+                        _lane == "graph_topology"
+                        or _lane == "mirror_2leg"
+                        or _lane == "subgraph_3plus"
+                        or _kind in ("same_pair_mirror", "cross_anchor_mirror")
+                        or (
+                            _r.get("requires_quote_validation")
+                            and str(_r.get("source") or "") == "m8_cross_dex_expansion"
+                        )
+                    )
+                    if _is_handoff:
                         _r.setdefault("origin_source", "m8_watchlist_hint")
                         _graph_promoted.append(_r)
                     else:
@@ -1881,8 +1969,13 @@ def build_bridge_inventory(
         _depth_stash_applied = _apply_depth_stash(final_active, _depth_stash)
         bridge_source_metrics["depth_stash_applied"] = _depth_stash_applied
         try:
-            from m9.graph_arb.depth_telemetry import depth_known_rate
+            from m9.graph_arb.depth_telemetry import (
+                depth_known_rate,
+                stamp_depth_reject_class,
+            )
 
+            for _dr in final_active:
+                stamp_depth_reject_class(_dr)
             bridge_source_metrics["depth_known_rate"] = depth_known_rate(final_active)
         except Exception:
             pass

@@ -109,6 +109,14 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Capacity diagnostic JSON; probe only enrichment_targets.route_ids",
     )
+    p.add_argument(
+        "--prioritize-false-positive-reprobe",
+        action="store_true",
+        help=(
+            "Re-probe only false_positive_depth_cap_band / depth_reprobe_required "
+            "routes via full marginal ladder (implies --force-reprobe)."
+        ),
+    )
     return p.parse_args()
 
 
@@ -180,9 +188,15 @@ def main() -> int:
             len(routes),
         )
     dex_quoters = _load_dex_quoters(args.dexes, args.chain)
+    force_reprobe = bool(args.force_reprobe or args.prioritize_false_positive_reprobe)
     log.info(
-        "Enriching %d active routes (quoters loaded: %d) at $%.0f, force_reprobe=%s...",
-        len(routes), len(dex_quoters), args.probe_size_usd, args.force_reprobe,
+        "Enriching %d active routes (quoters loaded: %d) at $%.0f, force_reprobe=%s "
+        "prioritize_false_positive_reprobe=%s...",
+        len(routes),
+        len(dex_quoters),
+        args.probe_size_usd,
+        force_reprobe,
+        args.prioritize_false_positive_reprobe,
     )
 
     from m9.graph_arb.pool_depth_probe import enrich_routes_missing_depth
@@ -194,7 +208,8 @@ def main() -> int:
         probe_size_usd=args.probe_size_usd,
         ref_size_usd=args.ref_size_usd,
         sleep_s=max(0.0, args.sleep_ms / 1000.0),
-        force_reprobe=args.force_reprobe,
+        force_reprobe=force_reprobe,
+        prioritized_reprobe_only=bool(args.prioritize_false_positive_reprobe),
     )
 
     from m9.graph_arb.depth_telemetry import depth_known_rate, economics_blocked_by_depth_telemetry
@@ -217,7 +232,10 @@ def main() -> int:
         1 for r in routes if r.get("effective_depth_usd") is not None
     )
     metrics["depth_active_routes"] = len(routes)
-    metrics["depth_force_reprobe_enabled"] = bool(args.force_reprobe)
+    metrics["depth_force_reprobe_enabled"] = force_reprobe
+    metrics["depth_prioritize_false_positive_reprobe"] = bool(
+        args.prioritize_false_positive_reprobe
+    )
     metrics["depth_force_reprobe_candidates"] = counts.get("force_reprobe_candidates", 0)
     metrics["economics_conclusion_blocked"] = economics_blocked_by_depth_telemetry(_dkr)
     metrics["v4_depth_candidates"] = counts["v4_depth_candidates"]

@@ -32,34 +32,78 @@ def main() -> int:
     p.add_argument("--skip-secondary", action="store_true")
     p.add_argument("--skip-coingecko", action="store_true")
     p.add_argument("--skip-acceptance", action="store_true")
+    p.add_argument(
+        "--config",
+        default="config/exotic_base_anchor.yaml",
+        help="M8 config for fresh_delta / wide_recall lane policy",
+    )
+    p.add_argument(
+        "--lane-mode",
+        choices=("fresh_first", "wide_only", "legacy"),
+        default="fresh_first",
+        help="fresh_first: fresh_delta then wide_recall; legacy: flat watchlist order",
+    )
     args = p.parse_args()
 
     py = sys.executable
     boot = [py, "scripts/bootstrap_productive_rpc_env.py", "--", py, "-u"]
 
+    token_subset_file: str | None = None
+    if args.lane_mode != "legacy":
+        import yaml
+
+        from m8.discovery.fresh_delta_lane import build_radar_token_list
+        from m8.discovery.token_watchlist import load_watchlist, save_watchlist
+
+        wl_path = _REPO / args.watchlist
+        watchlist = load_watchlist(str(wl_path))
+        config = yaml.safe_load((_REPO / args.config).read_text(encoding="utf-8")) or {}
+        selected, lane_meta = build_radar_token_list(
+            watchlist,
+            config=config,
+            max_tokens=args.max_tokens,
+            fresh_first=args.lane_mode == "fresh_first",
+        )
+        save_watchlist(watchlist, str(wl_path))
+        subset_path = _REPO / "data/tmp/m8_fresh_delta_token_subset.json"
+        subset_path.parent.mkdir(parents=True, exist_ok=True)
+        subset_path.write_text(
+            json.dumps({"tokens": selected, "lane_meta": lane_meta}, indent=2),
+            encoding="utf-8",
+        )
+        token_subset_file = str(subset_path)
+        print(
+            f"lane_mode={args.lane_mode} fresh_delta={lane_meta.get('fresh_delta_count')} "
+            f"wide_recall={lane_meta.get('wide_recall_count')} total={len(selected)}",
+            flush=True,
+        )
+
+    phase1_cmd = boot + [
+        "scripts/m8_external_pool_hint_refresh.py",
+        "--chain",
+        "base",
+        "--radar-fast",
+        "--watchlist",
+        args.watchlist,
+        "--max-tokens",
+        str(args.max_tokens),
+        "--radar-output",
+        RADAR_OUT,
+        "--checkpoint-path",
+        "data/tmp/m8_hint_refresh_checkpoint_ds_radar.json",
+        "--provider-timeout-s",
+        "8",
+        "--sleep-ms",
+        "20",
+        "--no-resume",
+        "--no-retry-single-venue",
+    ]
+    if token_subset_file:
+        phase1_cmd.extend(["--token-subset-file", token_subset_file])
+
     # Phase 1: DexScreener fast radar (no verify)
     rc = _run(
-        boot
-        + [
-            "scripts/m8_external_pool_hint_refresh.py",
-            "--chain",
-            "base",
-            "--radar-fast",
-            "--watchlist",
-            args.watchlist,
-            "--max-tokens",
-            str(args.max_tokens),
-            "--radar-output",
-            RADAR_OUT,
-            "--checkpoint-path",
-            "data/tmp/m8_hint_refresh_checkpoint_ds_radar.json",
-            "--provider-timeout-s",
-            "8",
-            "--sleep-ms",
-            "20",
-            "--no-resume",
-            "--no-retry-single-venue",
-        ],
+        phase1_cmd,
         label="phase1_radar_fast",
     )
     if rc != 0:

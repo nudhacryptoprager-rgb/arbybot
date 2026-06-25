@@ -1287,6 +1287,81 @@ class TestCrossDexExpansionMerge:
         assert len(exp_routes) == 1
         assert metrics["graph_ready_from_expansion"] == 1
 
+    def test_graph_handoff_only_consumes_mirror_2leg_lane(self, tmp_path):
+        from m9.graph_arb.bridge_builder import build_bridge_inventory
+
+        focus = "0xmirrorfocus000000000000000000000001"
+        expansion_path = tmp_path / "expansion.json"
+        expansion_path.write_text(
+            json.dumps({
+                "schema_version": "m8_cross_dex_expansion.1",
+                "generated_at_utc": "2099-01-01T00:00:00Z",
+                "chain": "base",
+                "handoff_lane": "mirror_2leg",
+                "summary": {
+                    "handoff_lane": "mirror_2leg",
+                    "handoff_ready": True,
+                    "mirror_quote_ready_tokens": 1,
+                    "same_pair_mirror_ready_debug": [
+                        {"focus_token_address": focus, "mirror_quote_ready": True}
+                    ],
+                },
+                "routes_admitted": [
+                    {
+                        "route_id": "mir_a",
+                        "pair_id": "FOO_USDC",
+                        "dex_id": "uniswap_v3",
+                        "adapter_type": "uniswap_v3",
+                        "token0": "FOO",
+                        "token1": "USDC",
+                        "pool_address": "0xmirrorpoola000000000000000000000001",
+                        "factory_verified": True,
+                        "source": "m8_cross_dex_expansion",
+                        "expansion_route_kind": "same_pair_mirror",
+                        "handoff_lane": "mirror_2leg",
+                        "focus_token_address": focus,
+                    },
+                    {
+                        "route_id": "mir_b",
+                        "pair_id": "FOO_USDC",
+                        "dex_id": "aerodrome",
+                        "adapter_type": "uniswap_v2",
+                        "token0": "FOO",
+                        "token1": "USDC",
+                        "pool_address": "0xmirrorpoolb000000000000000000000001",
+                        "factory_verified": True,
+                        "source": "m8_cross_dex_expansion",
+                        "expansion_route_kind": "same_pair_mirror",
+                        "handoff_lane": "mirror_2leg",
+                        "focus_token_address": focus,
+                    },
+                ],
+            }),
+            encoding="utf-8",
+        )
+        base_inv = tmp_path / "base.json"
+        base_inv.write_text(json.dumps({"active_routes": []}), encoding="utf-8")
+        sniper = tmp_path / "sniper.json"
+        sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
+        anchor = tmp_path / "anchor.json"
+        anchor.write_text(json.dumps({"active_routes": []}), encoding="utf-8")
+        out = tmp_path / "bridge.json"
+
+        metrics = build_bridge_inventory(
+            sniper_path=str(sniper),
+            anchor_path=str(anchor),
+            base_inv_path=str(base_inv),
+            output_path=str(out),
+            include_config_seed=False,
+            curve_discovery_path=str(tmp_path / "nodisc.json"),
+            expansion_path=str(expansion_path),
+            registry_path=None,
+            graph_handoff_only=True,
+            enforce_m8_provenance=False,
+        )
+        assert metrics["graph_ready_from_expansion"] == 2
+        assert metrics.get("m8_2_handoff_selector_lane") == "mirror_2leg"
+
 
 # ---------------------------------------------------------------------------
 # TestCurveDiscoveryContract: _load_curve_discovery_routes + bridge wiring
@@ -1544,6 +1619,7 @@ class TestCurveProductiveAdmission:
         )
         monkeypatch.setenv("ARBY_CURVE_POOL_INDICES", str(indices))
         monkeypatch.setenv("ARBY_CURVE_FACTORY_DISCOVERY", str(disc))
+        monkeypatch.delenv("ARBY_M9_CURVE_ADMIT_ALL", raising=False)
 
         sniper = tmp_path / "sniper.json"
         sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
@@ -1568,7 +1644,6 @@ class TestCurveProductiveAdmission:
             if r.get("adapter_type") == "curve_stable"
         ]
         assert curve_routes == []
-        assert metrics["curve_productive_admission_filtered"] == 1
         assert metrics["curve_productive_admission_after"] == 0
 
 

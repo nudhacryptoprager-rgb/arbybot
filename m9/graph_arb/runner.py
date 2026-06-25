@@ -542,6 +542,29 @@ def main(argv: "list[str] | None" = None) -> int:
             "Requires effective_depth_usd in inventory entries (run pool_depth_probe first)."
         ),
     )
+    parser.add_argument(
+        "--require-cycles-at-floor",
+        action="store_true",
+        help=(
+            "Hard-fail when capacity diagnostic reports cycles_at_floor=0 for all "
+            "production/near-econ profiles (blocks noisy shadow runs)."
+        ),
+    )
+    parser.add_argument(
+        "--capacity-diagnostic",
+        default="data/tmp/m9_capacity_cycle_diagnostic_latest.json",
+        help="Capacity diagnostic JSON for --require-cycles-at-floor gate",
+    )
+    parser.add_argument(
+        "--prior-shadow-artifact",
+        default="data/tmp/m9_graph_handoff_quote_validation_10m.json",
+        help="Prior shadow artifact for spread-lifetime eligibility gate",
+    )
+    parser.add_argument(
+        "--allow-spread-lifetime-without-positive-gross",
+        action="store_true",
+        help="DEBUG override for 30m+ spread-lifetime without cycles_positive_gross>0",
+    )
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -584,6 +607,45 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
     )
     cycles_limit = int(getattr(args, "cycles_limit", 5000) or 5000)
+
+    if getattr(args, "require_cycles_at_floor", False):
+        import json
+        from pathlib import Path
+
+        from m9.graph_arb.cycle_capacity import shadow_gate_blocked
+
+        cap_path = Path(getattr(args, "capacity_diagnostic", "") or "")
+        if not cap_path.is_file():
+            log.error("SHADOW_CAPACITY_GATE: capacity diagnostic missing: %s", cap_path)
+            return 1
+        cap_doc = json.loads(cap_path.read_text(encoding="utf-8"))
+        blocked, reason = shadow_gate_blocked(cap_doc)
+        if blocked:
+            log.error("SHADOW_CAPACITY_GATE: %s (path=%s)", reason, cap_path)
+            return 1
+        log.info("SHADOW_CAPACITY_GATE: allowed (%s)", reason)
+
+    if duration_minutes >= 30.0 and not getattr(
+        args, "allow_spread_lifetime_without_positive_gross", False
+    ):
+        import json
+        from pathlib import Path
+
+        from m9.graph_arb.cycle_capacity import spread_lifetime_allowed
+
+        prior_path = Path(getattr(args, "prior_shadow_artifact", "") or "")
+        prior_shadow = None
+        if prior_path.is_file():
+            prior_shadow = json.loads(prior_path.read_text(encoding="utf-8"))
+        allowed, spread_reason = spread_lifetime_allowed(prior_shadow)
+        if not allowed:
+            log.error(
+                "SPREAD_LIFETIME_GATE: duration_minutes=%.1f blocked (%s)",
+                duration_minutes,
+                spread_reason,
+            )
+            return 1
+        log.info("SPREAD_LIFETIME_GATE: allowed (%s)", spread_reason)
 
     run_timestamp = _iso_now()
     started_at = time.monotonic()

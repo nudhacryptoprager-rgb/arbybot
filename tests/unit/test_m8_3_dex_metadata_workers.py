@@ -1,6 +1,7 @@
 """Unit tests for M8.3 per-DEX route metadata workers."""
 from __future__ import annotations
 
+import json
 from m8.metadata.contracts import MetadataTask
 from m8.metadata.dex.balancer import BalancerDexWorker
 from m8.metadata.dex.curve import CurveDexWorker
@@ -146,6 +147,44 @@ def test_curve_worker_coin_indices():
     result = _route_task(CurveDexWorker(), route)
     assert result.ready is True
     assert result.metadata["coin_indices"]["USDC"] == 0
+
+
+def test_curve_worker_ready_after_indices_enrichment(tmp_path):
+    from m8.metadata.curve_indices import enrich_curve_routes
+    from m8.metadata.pool_identity import build_pool_identity_entry
+
+    pool_addr = "0x" + "a" * 40
+    indices_path = tmp_path / "curve_indices.json"
+    indices_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "m9_curve_pool_indices.1",
+                "chain": "base",
+                "pools": {
+                    pool_addr: {
+                        "pool_kind": "stable",
+                        "probe_status": "QUOTE_OK_INT128",
+                        "coin_indices": {"USDC": 1, "WETH": 0},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    route = {
+        "route_id": f"curve_disc_{pool_addr}",
+        "adapter_type": "curve_stable",
+        "dex_id": "curve_stable",
+        "pool_address": pool_addr,
+        "token0": "USDC",
+        "token1": "WETH",
+    }
+    enrich_curve_routes([route], indices_path=str(indices_path))
+    dex_result = _route_task(CurveDexWorker(), route)
+    assert dex_result.ready is True
+    identity = build_pool_identity_entry(route, dex_route_row={"ready": True, "metadata": dex_result.metadata})
+    assert identity["token_order_verified"] is True
+    assert identity["coin_indices"]["USDC"] == 1
 
 
 def test_dex_worker_does_not_set_decimals():

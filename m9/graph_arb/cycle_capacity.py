@@ -188,6 +188,122 @@ def enrichment_targets_from_cycles(
     }
 
 
+def leg_bottleneck_diagnosis(
+    edge: GraphEdge,
+    *,
+    floor_usd: float,
+    route_map: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Per-leg capacity diagnosis for RCA (raw depth, family fraction, reason)."""
+    raw = edge.effective_depth_usd
+    family = route_family(
+        {
+            "dex_id": edge.dex_id,
+            "adapter_type": edge.adapter_type,
+        }
+    )
+    frac = depth_fraction_for_family(
+        family,
+        depth_probe_status=getattr(edge, "depth_probe_status", None),
+    )
+    usable = edge_usable_capacity_usd(edge)
+    route = (route_map or {}).get(edge.route_id) or {}
+    if raw is None:
+        reason = "unknown_depth"
+    elif route.get("depth_reprobe_required"):
+        reason = "false_positive_reprobe_required"
+    elif usable is None:
+        reason = "unknown_depth"
+    elif float(usable) < float(floor_usd):
+        reason = "below_floor"
+    else:
+        reason = "at_or_above_floor"
+    return {
+        "route_id": edge.route_id,
+        "dex_id": edge.dex_id,
+        "adapter_type": edge.adapter_type,
+        "raw_depth_usd": raw,
+        "family_fraction": round(float(frac), 4),
+        "usable_depth_usd": usable,
+        "reason": reason,
+    }
+
+
+def top_bottleneck_legs(
+    cycles: Iterable[GraphCycle],
+    *,
+    floor_usd: float,
+    route_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Aggregate bottleneck legs for cycles below ``floor_usd``."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    samples: Dict[str, Dict[str, Any]] = {}
+    for cycle in cycles:
+        if cycle_meets_usable_floor(cycle, float(floor_usd)):
+            continue
+        usable_by_leg: List[Tuple[GraphEdge, Optional[float]]] = []
+        for edge in cycle.edges:
+            usable_by_leg.append((edge, edge_usable_capacity_usd(edge)))
+        if not usable_by_leg:
+            continue
+        bottleneck_edge, _ = min(
+            usable_by_leg,
+            key=lambda row: row[1] if row[1] is not None else -1.0,
+        )
+        diag = leg_bottleneck_diagnosis(
+            bottleneck_edge,
+            floor_usd=float(floor_usd),
+            route_map=route_map,
+        )
+        rid = str(bottleneck_edge.route_id)
+        counts[rid] += 1
+        if rid not in samples:
+            samples[rid] = {
+                **diag,
+                "cycles_blocked_count": 0,
+            }
+        samples[rid]["cycles_blocked_count"] = int(counts[rid])
+    ranked = sorted(
+        samples.values(),
+        key=lambda row: (-int(row.get("cycles_blocked_count") or 0), str(row.get("route_id") or "")),
+    )
+    return ranked[: max(1, int(limit))]
+
+
+def shadow_gate_blocked(
+    capacity_doc: Dict[str, Any],
+    *,
+    profile_names: Sequence[str] = ("diagnostic_near_econ", "base_realistic", "production_conservative"),
+) -> Tuple[bool, str]:
+    """Return (blocked, reason) when no profile has cycles_at_floor > 0."""
+    by_profile = capacity_doc.get("cycles_by_profile") or {}
+    for name in profile_names:
+        row = by_profile.get(name) or {}
+        if int(row.get("cycles_at_floor") or 0) > 0:
+            return False, f"cycles_at_floor>0 profile={name}"
+    active = str(capacity_doc.get("active_economics_profile") or "")
+    if active:
+        row = by_profile.get(active) or {}
+        if int(row.get("cycles_at_floor") or 0) > 0:
+            return False, f"cycles_at_floor>0 profile={active}"
+    if int(capacity_doc.get("cycles_at_production_floor") or 0) > 0:
+        return False, "cycles_at_production_floor>0"
+    return True, "M9_CAPACITY_BLOCKED_BY_ZERO_CYCLES_AT_FLOOR"
+
+
+def spread_lifetime_allowed(prior_shadow: Optional[Dict[str, Any]]) -> Tuple[bool, str]:
+    """30m spread-lifetime requires prior shadow with cycles_positive_gross > 0."""
+    if not prior_shadow:
+        return False, "NO_PRIOR_SHADOW_ARTIFACT"
+    positive = int(prior_shadow.get("cycles_positive_gross") or 0)
+    if positive > 0:
+        return True, f"cycles_positive_gross={positive}"
+    return False, "SPREAD_LIFETIME_REQUIRES_CYCLES_POSITIVE_GROSS"
+
+
 def run_productive_four_leg_rca(
     *,
     inventory_path: str,
@@ -506,6 +622,19 @@ def run_capacity_cycle_diagnostic(
     prod_floor = production_conservative_floor(cost_model)
     active_floor = economic_size_floor_for_profile(cost_model, active_profile)
 
+    route_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        import json
+        from pathlib import Path
+
+        inv = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
+        for route in inv.get("active_routes") or []:
+            rid = str(route.get("route_id") or "")
+            if rid:
+                route_map[rid] = route
+    except Exception:
+        route_map = {}
+
     adjacency = build_graph_from_inventory(
         inventory_path=inventory_path,
         config_path=config_path,
@@ -615,6 +744,20 @@ def run_capacity_cycle_diagnostic(
     else:
         blocker_hint = "NO_ECON_CAPACITY_CYCLES_AT_PRODUCTION_FLOOR"
 
+    shadow_blocked, shadow_block_reason = shadow_gate_blocked(
+        {
+            "cycles_by_profile": cycles_by_profile,
+            "cycles_at_production_floor": cycles_at_prod,
+            "active_economics_profile": active_profile,
+        }
+    )
+    top_legs = top_bottleneck_legs(
+        all_cycles,
+        floor_usd=active_floor,
+        route_map=route_map,
+        limit=50,
+    )
+
     report: Dict[str, Any] = {
         **empty_base,
         "cycles_total": len(all_cycles),
@@ -629,6 +772,12 @@ def run_capacity_cycle_diagnostic(
         "cycles_at_econ_floor_by_length": by_length,
         "sample_cycles_at_econ_floor": samples,
         "blocker_hint": blocker_hint,
+        "top_bottleneck_legs": top_legs,
+        "shadow_gate": {
+            "blocked": shadow_blocked,
+            "reason": shadow_block_reason,
+            "cycles_at_floor_required": True,
+        },
     }
     if include_four_leg_rca:
         report["productive_four_leg_rca"] = run_productive_four_leg_rca(

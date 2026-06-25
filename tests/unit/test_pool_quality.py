@@ -39,6 +39,20 @@ def test_quarantined_toxic():
     assert productive_admission_ok(route) is False
 
 
+def test_false_positive_toxic_not_quarantined():
+    route = {
+        "factory_verified": True,
+        "adapter_type": "uniswap_v3",
+        "depth_reject_reason": "TOXIC_PRICE_IMPACT",
+        "effective_depth_usd": 10.2,
+        "price_impact_at_100usd": 0.92,
+        "depth_probe_source": "distinct_depth_probe",
+    }
+    assert annotate_route_pool_quality(route) != STATE_QUARANTINED
+    assert route.get("depth_reprobe_required") is True
+    assert productive_admission_ok(route) is False  # depth below floor, not quarantine
+
+
 def test_depth_optional_without_env():
     route = {
         "factory_verified": True,

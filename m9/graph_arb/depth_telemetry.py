@@ -199,6 +199,34 @@ def exclude_from_toxic_economics_denominator(qr: Any) -> bool:
     return False
 
 
+def classify_depth_reject_class(reason: Optional[str]) -> str:
+    """Taxonomy: real_toxic | low_capacity | adapter_probe_failed | analytical_suspect | ok."""
+    r = str(reason or "").upper()
+    if not r or r in ("OK", "NONE"):
+        return "ok"
+    if r in ("TOXIC_PRICE_IMPACT", "QUARANTINED"):
+        return "real_toxic"
+    if r in (
+        "LOW_EFFECTIVE_DEPTH",
+        "DEPTH_BELOW_ECONOMICS_FLOOR",
+        "DEPTH_BELOW_LIVENESS_FLOOR",
+        "LEG_CAPACITY_REJECT",
+    ):
+        return "low_capacity"
+    if r in ("ANALYTICAL_DEPTH_OUTLIER",):
+        return "analytical_suspect"
+    if "PROBE" in r or r in ("DEPTH_UNRESOLVED", "DEPTH_PROBE_FAILED"):
+        return "adapter_probe_failed"
+    return "low_capacity"
+
+
+def stamp_depth_reject_class(route: Dict[str, Any]) -> None:
+    """Write depth_reject_class on route from depth_reject_reason."""
+    reason = route.get("depth_reject_reason")
+    if reason:
+        route["depth_reject_class"] = classify_depth_reject_class(str(reason))
+
+
 def pre_shadow_bridge_blockers(
     *,
     depth_known_rate_value: Optional[float],

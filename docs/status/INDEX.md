@@ -17,7 +17,7 @@
 | M8 - New-Pool Sniping Pivot | [OPEN] | [Status_M8.md](Status_M8.md) |
 | M8.1 - Stable-Anchor Inventory & Diagnostics | [ACTIVE] | [Status_M8_1.md](Status_M8_1.md) |
 | M8.2 - Cross-DEX Expansion & Mirror Handoff | [HANDOFF_REACHED] | [Status_M8_2.md](Status_M8_2.md) |
-| M8.3 - Token Metadata Registry & Decimals | [PENDING] | [Status_M8_3.md](Status_M8_3.md) |
+| M8.3 - Token Metadata Registry & Decimals | [STRICT_PASS] | [Status_M8_3.md](Status_M8_3.md) |
 | M9 - Graph-Arb Long-Tail Shadow Scanner | [IN PROGRESS] | [Status_M9.md](Status_M9.md) |
 
 ## Current Focus
@@ -32,9 +32,9 @@
 
 **M8.2 - Cross-DEX Expansion & Mirror Handoff**: graph-handoff **REACHED** (`handoff_ready=true`); mirror quote / economics remain out of scope for M8.2. Quality gates in `m8_2_acceptance_report.py`. See [Status_M8_2.md](Status_M8_2.md).
 
-**M8.3 - Token Metadata Registry & Decimals Service**: metadata-quality layer between M8.2 handoff and M9 economics. Normalizes decimals/symbol/name with on-chain truth boundary for economics-grade. Rolling artifact: `m8_3_token_metadata_registry_latest.json`. See [Status_M8_3.md](Status_M8_3.md).
+**M8.3 - Token Metadata Registry & Decimals Service**: **STRICT_PASS** (`m8_3_acceptance_report.py --strict` REACHED); Curve `coin_indices` handoff via `m8/metadata/curve_indices.py`. Rolling artifact: `m8_3_token_metadata_registry_latest.json`. See [Status_M8_3.md](Status_M8_3.md).
 
-**M9 - Graph-Arb Long-Tail Shadow Scanner**: primary upstream blocker is **M8_3_DECIMALS_REGISTRY_REQUIRED** until strict M8.3 acceptance passes. See [Status_M9.md](Status_M9.md).
+**M9 - Graph-Arb Long-Tail Shadow Scanner**: **M8_3_STRICT_PASS / M9_CAPACITY_BLOCKED** — production bridge `active=407`, `cycles_total=3632`, but `cycles_at_floor=0` all profiles; `depth_known_rate=0.4275`. Shadow not run. See [Status_M9.md](Status_M9.md).
 
 ## Related
 

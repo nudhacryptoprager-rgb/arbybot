@@ -2,12 +2,43 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_2_HANDOFF_REACHED / M8_3_STRICT_PASS / M9_BLOCKED_BY_DEPTH_CAPACITY**
+**Current runtime line:** **M8_3_STRICT_PASS / M9_CAPACITY_BLOCKED_BY_ZERO_CYCLES_AT_FLOOR**
 
 ```text
-M8.3 upstream: REACHED. Bridge tests PASS. Registry fee_on_transfer noise cleared.
-M9 blocked by: depth/capacity floor (6/70 routes >= $180 effective depth).
-Use econ_quote_success_rate, not raw qsr_econ, when cycles_quoteable=0.
+production_refresh: 2026-06-24 (sniper 112 events, expansion 442 routes)
+M8.2 strict: REACHED | M8.3 strict: REACHED
+production_bridge: active=407 (curve=116, v4=138, maverick=89, balancer=27)
+depth_known_rate: 0.4275 | gte_180 routes: 72
+cycles_total: 3632 | cycles_at_floor: 0 (all profiles)
+shadow_allowed: false
+quarantine_rca: 72/96 false_positive_depth_cap_band (soft-handled)
+```
+
+## Capacity blocker audit
+
+```text
+review_verdict: report accepted with one precision note
+primary_blocker: NO_ECON_CAPACITY_CYCLES_AT_PRODUCTION_FLOOR
+artifact_scope: data/tmp/m9_bridge_inventory_production_latest.json + data/tmp/m9_capacity_cycle_diagnostic_latest.json
+raw_route_depth_note: gte_180 routes are raw route-depth counts, not cycle-usable capacity
+cycle_capacity_rule: every leg must have measured usable capacity at floor after DEX-family fraction
+shadow_policy: do not run M9 shadow while cycles_at_floor=0
+```
+
+The current blocker is not metadata and not M8.2 handoff. M8.3 strict is passing and
+the wide production bridge has enough topology to form cycles, but **no full cycle**
+has usable capacity at any configured economics profile. The gap is explained by:
+
+- unknown-depth legs inside 3/4-leg cycles (`depth_known_rate=0.4275`);
+- DEX-family usable-capacity fractions (`effective_depth_usd * fraction`) turning many raw-deep routes into thin usable legs;
+- `false_positive_depth_cap_band` rows that are now diagnostic-soft but still require a real reprobe before they can support capacity.
+
+Next evidence required before shadow:
+
+```text
+depth_known_rate >= 0.8
+false_positive_depth_cap_band reprobed or explicitly classified
+cycles_at_floor > 0 for diagnostic_near_econ or base_realistic
 ```
 
 ```text

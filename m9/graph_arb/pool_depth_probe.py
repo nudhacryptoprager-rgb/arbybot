@@ -860,6 +860,28 @@ def probe_route_marginal_depth(
     return mark_analytical_depth_suspect(depth)
 
 
+def select_false_positive_reprobe_routes(
+    routes: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Routes needing prioritized ladder reprobe (false-positive depth cap band)."""
+    from m9.graph_arb.quarantine_depth_rca import is_false_positive_toxic_depth
+
+    selected: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for route in routes:
+        rid = str(route.get("route_id") or "")
+        if not rid or rid in seen:
+            continue
+        if route.get("depth_reprobe_required"):
+            selected.append(route)
+            seen.add(rid)
+            continue
+        if is_false_positive_toxic_depth(route):
+            selected.append(route)
+            seen.add(rid)
+    return selected
+
+
 def enrich_routes_missing_depth(
     routes: List[Dict[str, Any]],
     rpc_url: str,
@@ -868,6 +890,7 @@ def enrich_routes_missing_depth(
     ref_size_usd: float = _REF_SIZE_USD,
     sleep_s: float = 0.1,
     force_reprobe: bool = False,
+    prioritized_reprobe_only: bool = False,
 ) -> Dict[str, int]:
     """Fill ``effective_depth_usd`` for routes that still lack it (M8 long-tail).
 
@@ -879,7 +902,13 @@ def enrich_routes_missing_depth(
     have an existing depth value but no ``depth_probe_status``. Rows with
     explicit post-ladder depth status stay untouched, even if the measured
     value happens to equal the first ladder rung.
+
+    When ``prioritized_reprobe_only`` is set, only false-positive / reprobe-required
+    routes are walked with ``force_reprobe``.
     """
+    if prioritized_reprobe_only:
+        routes = select_false_positive_reprobe_routes(routes)
+        force_reprobe = True
     counts = {
         "candidates": 0,
         "force_reprobe_candidates": 0,
@@ -920,7 +949,10 @@ def enrich_routes_missing_depth(
             existing_depth is not None
             and route.get("depth_probe_status") is None
         )
-        should_force_reprobe = bool(force_reprobe and legacy_depth_row)
+        should_force_reprobe = bool(
+            force_reprobe
+            and (legacy_depth_row or route.get("depth_reprobe_required"))
+        )
         if existing_depth is not None and not should_force_reprobe:
             continue
         pool_addr = route.get("pool_address") or ""

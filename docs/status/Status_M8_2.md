@@ -37,6 +37,31 @@ M9 economics:               NOT_PROVEN
 
 M8.2 fulfilled its role: found token-neighborhood topology and passed a connected graph universe to M9. It did **not** prove 2-leg mirror quote-ready or profit.
 
+## Freshness / repeated-work audit
+
+```text
+audit_verdict: M8.2 handoff remains REACHED, but freshness segmentation needs tightening
+primary_debt: accumulated watchlist is scanned as a broad universe, not only fresh sniper deltas
+current_effect: old watchlist tokens can consume radar/expansion budget and dilute fresh long-tail focus
+downstream_effect: M9 receives a valid graph, but not a freshness-isolated graph
+```
+
+The current pipeline intentionally keeps provenance (`origin_source`, `token_class`,
+`matched_m8_token`, `first_seen_as_new_token`), but physical artifacts still merge
+fresh sniper tokens, watchlist hints, specialized-index routes, and exploration routes.
+That is acceptable for recall, but it is not yet optimal for the fresh-token strategy.
+
+Required operational split for the next implementation cycle:
+
+```text
+fresh_delta_lane: new M8 tokens and unresolved 1->2 transitions only
+wide_recall_lane: accumulated watchlist/radar universe, lower priority
+audit_lane: secondary providers and old watchlist coverage
+```
+
+Do not regress the current handoff gate while adding the split: M8.2 should still pass
+`handoff_ready=true` when any lane has bridge-eligible topology.
+
 ## DexScreener-first two-phase runtime evidence (2026-06-16)
 
 ```text

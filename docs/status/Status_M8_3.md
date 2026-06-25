@@ -1,11 +1,12 @@
 # Status: M8.3 Token Metadata Registry & Decimals Service
 
-**Status**: **M8_3_STRICT_PASS / AUTHORITY_WIRED / RISK_HEURISTICS_CODE_FIXED**
+**Status**: **M8_3_STRICT_PASS / UPSTREAM_METADATA_READY**
 
 ```text
-goal_status: REACHED (m8_3_acceptance_report.py --strict)
-registry_refresh: fee_on_transfer_suspected collapsed after PUSH4 heuristic fix
-risk_heuristics: PUSH4-aware; no transfer/transferFrom in fee-on-transfer flag
+goal_status: REACHED (m8_3_acceptance_report.py --strict, 2026-06-24)
+curve_handoff: m9_curve_pool_indices → coin_indices via m8/metadata/curve_indices.py
+dex_route_metadata: cycle_participating ready_rate=1.0, pool_identity_cycle_rate=1.0
+primary_blocker_resolved: Curve coin_indices not propagated (was 0.2222 ready)
 ```
 
 ```text
@@ -95,10 +96,35 @@ py -3.11 scripts/m9_enrich_bridge_decimals.py `
 ## Current evidence line
 
 ```text
-goal_status: REACHED (m8_3_acceptance_report.py --strict)
-registry_refresh: fee_on_transfer_suspected collapsed after PUSH4 heuristic fix
-bridge_consumption: m8_3_authority_applied, routes_decimals_unknown=0 on graph-handoff rebuild
+goal_status: REACHED (m8_3_acceptance_report.py --strict, 2026-06-24)
+cycle_participating_dex_route_metadata_ready_rate: 1.0
+pool_identity_verified_rate (cycle): 1.0
+dex_routes_ready: 52/52 (pre graph-handoff rebuild registry)
+curve_indices_source: m9_curve_pool_indices_latest.json via enrich_curve_routes
+bridge_consumption: m8_3_authority_applied, routes_decimals_unknown=0
 ```
 
 `execution_enabled`: false  
 `kill_switch_active`: true
+
+## Negative-cache / repeated-probe audit
+
+```text
+audit_verdict: M8.3 strict remains REACHED
+primary_debt: unresolved NON_ERC20 / failed ERC20 rows are not yet a durable negative cache
+strict_scope: out-of-cycle NON_ERC20 does not block M8.3
+operational_risk: repeated refresh can re-probe the same non-economics-grade addresses
+```
+
+M8.3 is now the correct metadata authority for M9, but the next optimization should
+persist non-economics-grade failures with a TTL and reason code. This must be a
+metadata-cache optimization only: it must not hide cycle-participating routes from
+acceptance, and it must not overwrite valid `m8_3_*` provenance.
+
+Required follow-up:
+
+```text
+negative_cache_key: chain + token_address + code_hash
+negative_cache_values: NON_ERC20 / NO_CODE / ERC20_DECIMALS_REVERT / PROBE_CAP_EXHAUSTED
+refresh_policy: skip until TTL expires unless code_hash changes or route becomes cycle/econ-capacity participating
+```

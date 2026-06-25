@@ -61,6 +61,10 @@ def _is_quarantined(route: Dict[str, Any]) -> bool:
         return True
     reason = (route.get("depth_reject_reason") or "").upper()
     if reason in ("TOXIC_PRICE_IMPACT", "QUARANTINED"):
+        from m9.graph_arb.quarantine_depth_rca import is_false_positive_toxic_depth
+
+        if is_false_positive_toxic_depth(route):
+            return False
         return True
     return False
 
@@ -298,6 +302,33 @@ def maverick_economics_admission_fail_reason(route: Dict[str, Any]) -> Optional[
     return None
 
 
+def _productive_admission_block_reason(
+    route: Dict[str, Any],
+    *,
+    min_depth_usd: float = _DEFAULT_MIN_DEPTH_USD,
+) -> Optional[str]:
+    """Honest reason when route is not PRODUCTIVE_READY."""
+    if _is_quarantined(route):
+        return "quarantined"
+    if route.get("factory_verified") is not True:
+        return "factory_not_verified"
+    if not _depth_ok(route, min_depth_usd):
+        dr = str(route.get("depth_reject_reason") or "").upper()
+        if dr:
+            from m9.graph_arb.depth_telemetry import classify_depth_reject_class
+
+            return f"depth_{classify_depth_reject_class(dr)}"
+        if route.get("effective_depth_usd") is None:
+            return "depth_unknown"
+        return "depth_below_floor"
+    if not _quote_ok(route):
+        smoke = route.get("quote_smoke_status") or route.get("quote_smoke")
+        if smoke is None:
+            return "quote_smoke_not_run"
+        return f"quote_smoke_{smoke}"
+    return None
+
+
 def annotate_route_pool_quality(
     route: Dict[str, Any],
     *,
@@ -305,6 +336,11 @@ def annotate_route_pool_quality(
     provider_ok: bool = True,
 ) -> str:
     """Write pool_quality_state (+ admission flags) on route; return state."""
+    from m9.graph_arb.quarantine_depth_rca import is_false_positive_toxic_depth
+
+    if is_false_positive_toxic_depth(route):
+        route["depth_reprobe_required"] = True
+        route["depth_quarantine_class"] = "diagnostic_soft"
     state = compute_pool_quality_state(
         route,
         min_depth_usd=min_depth_usd,
@@ -314,6 +350,9 @@ def annotate_route_pool_quality(
     route["productive_admission_ok"] = state == STATE_PRODUCTIVE_READY
     route["depth_ok"] = _depth_ok(route, min_depth_usd)
     route["quote_ok"] = _quote_ok(route)
+    block_reason = _productive_admission_block_reason(route, min_depth_usd=min_depth_usd)
+    if block_reason:
+        route["productive_admission_block_reason"] = block_reason
     return state
 
 

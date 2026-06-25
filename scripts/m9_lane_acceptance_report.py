@@ -138,6 +138,38 @@ def _cross_mechanic_topology(
     }
 
 
+def _shadow_bridge_stale_or_mismatch(
+    bridge: Optional[Dict[str, Any]],
+    shadow: Optional[Dict[str, Any]],
+) -> bool:
+    """True when shadow artifact is older than bridge or route counts diverge."""
+    if not bridge or not shadow:
+        return False
+    bridge_ts = bridge.get("generated_at_utc")
+    shadow_ts = shadow.get("generated_at_utc") or shadow.get("run_timestamp")
+    if bridge_ts and shadow_ts:
+        try:
+            from datetime import datetime, timezone
+
+            def _parse(ts: str) -> datetime:
+                return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+
+            if _parse(str(shadow_ts)) < _parse(str(bridge_ts)):
+                return True
+        except Exception:
+            pass
+    bridge_active = len((bridge or {}).get("active_routes") or [])
+    shadow_active = shadow.get("bridge_active_routes_at_run")
+    if shadow_active is None:
+        shadow_active = shadow.get("active_routes_at_run")
+    if shadow_active is not None and int(shadow_active) != bridge_active:
+        return True
+    shadow_inv = str(shadow.get("inventory_path") or "")
+    if shadow_inv and not shadow_inv.endswith("graph_handoff_latest.json"):
+        pass  # path alone is weak signal
+    return False
+
+
 def _economics_profile_context_for_report(
     *,
     shadow: Optional[Dict[str, Any]],
@@ -188,6 +220,8 @@ def _m9_economics_blockers(
 
     if shadow_cycles_found > 0 and shadow_cycles_quoteable == 0:
         blockers.append("NO_QUOTEABLE_CYCLES")
+    if _shadow_bridge_stale_or_mismatch(bridge, shadow):
+        blockers.append("SHADOW_BRIDGE_STALE_OR_MISMATCH")
     if (
         shadow_cycles_found > 0
         and cycles_positive == 0
@@ -770,6 +804,10 @@ def build_acceptance_report(
         }
         if not handoff_ready:
             upstream_blockers.append("UPSTREAM_M8_2_NOT_READY")
+        elif int(bsm.get("graph_ready_from_expansion") or 0) == 0:
+            if bsm.get("expansion_artifact_stale"):
+                upstream_blockers.append("EXPANSION_ARTIFACT_STALE")
+            upstream_blockers.append("M9_BRIDGE_NOT_CONSUMING_M8_2_HANDOFF_EXPANSION")
 
     from m8.metadata.acceptance import evaluate_m8_3_acceptance, is_m8_3_ready
     from m8.metadata.registry import DEFAULT_REGISTRY_PATH, load_registry

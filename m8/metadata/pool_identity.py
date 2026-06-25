@@ -19,7 +19,9 @@ def build_pool_identity_entry(
     token_order = (
         dex_meta.get("token_order")
         or dex_meta.get("tokens_order")
+        or route.get("token_order")
         or route.get("balancer_assets")
+        or dex_meta.get("coins")
         or []
     )
     if not token_order:
