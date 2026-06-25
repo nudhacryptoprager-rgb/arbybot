@@ -271,16 +271,43 @@ py -3.11 start.py -m_9 --no-dashboard
 
 # Full M8 -> M9 chain
 py -3.11 start.py -m8_m9 --no-dashboard
+
+# Lane A: time-to-mirror (radar -> expand -> M8.3 metadata; no M9 shadow)
+py -3.11 start.py -time_to_mirror --no-dashboard
+
+# Lane B: patient thin-liquidity diagnostic (capacity + spread-lifetime; no profit claim)
+py -3.11 start.py --patient-lane --no-dashboard
 ```
 
 Useful operator flags:
 
 ```powershell
---dry-run              # print the exact command plan without running it
---skip-shadow          # stop after capacity/lane diagnostics
+--dry-run              # print the exact command plan + RPC policy without running it
+--skip-shadow          # stop after capacity/lane diagnostics (-m_9 / -m8_m9)
+--skip-preflight       # skip check_repo_safety / audit_layer / check_rpc_endpoints
+--resume-from m8_2     # resume at m8_2_radar_two_phase (also m8_3, m9)
+--force-rerun-steps    # ignore data/tmp/start_pipeline_steps/*.done markers
 --max-radar-tokens N   # cap M8.2 radar input
 --sniper-minutes N     # M8 sniper duration for -m_8 / -m8_m9
 --with-coingecko       # enable CoinGecko fallback; default is skipped
+```
+
+Canonical orchestration policy:
+
+```text
+START_ORCHESTRATION_POLICY: CANONICAL_START_PY_REQUIRED
+- All production M8→M9 refresh/resume runs go through start.py.
+- Direct scripts/...py invocations are debug-only (acceptance spot-checks, RCA).
+- Per-step markers: data/tmp/start_pipeline_steps/<step>.done|.fail
+- Global markers: data/tmp/start_pipeline_latest.done|.fail|.log
+```
+
+Debug-only exceptions (not the default refresh path):
+
+```powershell
+py -3.11 scripts/m8_2_acceptance_report.py --strict
+py -3.11 scripts/m8_3_acceptance_report.py --strict
+py -3.11 scripts/m9_capacity_cycle_diagnostic.py --bridge data/tmp/m9_bridge_inventory_production_latest.json --cycle-lengths 2,3,4 --four-leg-rca --quarantine-rca
 ```
 
 Routing contract:
@@ -291,6 +318,41 @@ Routing contract:
 - M9 shadow is skipped unless `m9_capacity_cycle_diagnostic.py` allows it via
   `cycles_at_floor > 0`;
 - dashboard is launched by default unless `--no-dashboard` is passed.
+
+Strategic lane discipline for the M8/M9 branch:
+
+```text
+P0: M9 sizing/profile truth
+    Fix and verify profile-specific attempted sizes before any market verdict.
+
+P1: Time-to-mirror
+    Keep M8 fresh long-tail tokens with one quoteable pool in a pending queue and
+    re-probe for a second verified venue. This is still same-chain.
+
+P2: Patient thin-liquidity lane
+    Track depth-aware near-econ spreads with lifetime metrics. Profit claims are
+    forbidden unless the active profile permits them and simulation/repeatability
+    are proven.
+
+P3: Cross-chain bridge R&D
+    Research only. It must not bypass unresolved same-chain M9 sizing, depth, or
+    adapter defects.
+```
+
+Operator verification commands for the current strategic lanes:
+
+```powershell
+# Profile/sizing truth before any economics interpretation
+py -3.11 scripts/m9_capacity_cycle_diagnostic.py --bridge data/tmp/m9_bridge_inventory_production_latest.json --cycle-lengths 2,3,4 --four-leg-rca --quarantine-rca
+py -3.11 -c "import json; d=json.load(open('data/tmp/m9_graph_handoff_quote_validation_10m.json',encoding='utf-8')); print(d.get('quote_size_truth'))"
+
+# M8.2 and M8.3 upstream contract checks
+py -3.11 scripts/m8_2_acceptance_report.py --strict
+py -3.11 scripts/m8_3_acceptance_report.py --strict
+
+# M9 report after bridge/capacity refresh
+py -3.11 scripts/m9_lane_acceptance_report.py --m8-2-report data/tmp/m8_2_acceptance_report_latest.json --m8-3-registry data/runs/_rolling/m8_3_token_metadata_registry_latest.json --bridge data/tmp/m9_bridge_inventory_production_latest.json
+```
 
 ### Single-chain Non-stop Loop
 

@@ -134,6 +134,38 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertIn("m8_2_acceptance_strict", names)
         self.assertLess(names.index("m8_2_cross_dex_expand"), names.index("m8_2_acceptance_strict"))
 
+    def test_time_to_mirror_plan_includes_m82_and_m83_without_m9(self):
+        args = start.parse_args(["-time_to_mirror", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("preflight_repo_safety", names)
+        self.assertIn("m8_2_radar_two_phase", names)
+        self.assertIn("m8_2_cross_dex_expand", names)
+        self.assertIn("m8_3_registry_refresh", names)
+        self.assertNotIn("m9_curve_discovery", names)
+        self.assertNotIn("m9_shadow_10m", names)
+
+    def test_patient_lane_plan_has_diagnostic_shadow(self):
+        args = start.parse_args(["--patient-lane", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("m9_capacity_diagnostic", names)
+        self.assertIn("m9_patient_shadow_10m", names)
+        patient = next(s for s in start.build_project_pipeline_steps(args) if s["name"] == "m9_patient_shadow_10m")
+        self.assertEqual(patient["env"].get("ARBY_M9_PATIENT_LANE"), "1")
+        self.assertEqual(patient["env"].get("ARBY_M9_ECONOMICS_PROFILE"), "diagnostic_near_econ")
+
+    def test_resume_from_m8_3_skips_earlier_steps(self):
+        args = start.parse_args(["-m8_m9", "--resume-from", "m8_3", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertEqual(names[0], "preflight_repo_safety")
+        self.assertEqual(names[3], "m8_3_registry_refresh")
+        self.assertNotIn("m8_2_radar_two_phase", names)
+
+    def test_skip_preflight_omits_safety_steps(self):
+        args = start.parse_args(["-m_8_2", "--skip-preflight", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertNotIn("preflight_repo_safety", names)
+        self.assertIn("m8_2_radar_two_phase", names)
+
 
 class TestRollingFlagsOnlyForPrimary(unittest.TestCase):
     """Verify rolling flags dispatched only for run_kind=NORMAL."""

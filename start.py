@@ -89,7 +89,14 @@ RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 PRODUCTION_BRIDGE = "data/tmp/m9_bridge_inventory_production_latest.json"
 CAPACITY_DIAGNOSTIC = "data/tmp/m9_capacity_cycle_diagnostic_latest.json"
 M9_SHADOW_ARTIFACT = "data/tmp/m9_graph_handoff_quote_validation_10m.json"
+M9_PATIENT_SHADOW_ARTIFACT = "data/tmp/m9_patient_lane_shadow_10m.json"
 M9_RCA_ARTIFACT = "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
+PIPELINE_STEP_MARKERS_DIR = Path("data/tmp/start_pipeline_steps")
+RESUME_FROM_FIRST_STEP: dict[str, str] = {
+    "m8_2": "m8_2_radar_two_phase",
+    "m8_3": "m8_3_registry_refresh",
+    "m9": "m9_curve_discovery",
+}
 
 # R28.16: Phase event protocol — matches ARBY_PHASE: prefix from run_scan_real.py
 PHASE_LINE_PREFIX = "ARBY_PHASE:"
@@ -216,6 +223,68 @@ def _productive_rpc_cmd(*parts: str) -> list[str]:
         sys.executable,
         *parts,
     ]
+
+
+def _step_marker_paths(step_name: str) -> tuple[Path, Path]:
+    PIPELINE_STEP_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
+    return (
+        PIPELINE_STEP_MARKERS_DIR / f"{step_name}.done",
+        PIPELINE_STEP_MARKERS_DIR / f"{step_name}.fail",
+    )
+
+
+def _classify_step_rpc_policy(cmd: list[str]) -> str:
+    joined = " ".join(cmd)
+    if "bootstrap_productive_rpc_env.py" in joined:
+        return "productive_rpc:alchemy_primary+dRPC_secondary"
+    if "m8_radar_two_phase_refresh.py" in joined:
+        return "direct:DexScreener/async+multicall (no bootstrap)"
+    if joined.endswith("check_rpc_endpoints.py") or "check_rpc_endpoints.py --chain" in joined:
+        return "preflight:HTTP+WS archive probe"
+    return "direct:local_py"
+
+
+def _preflight_steps() -> list[dict[str, Any]]:
+    return [
+        _pipeline_step("preflight_repo_safety", _py_cmd("scripts/check_repo_safety.py")),
+        _pipeline_step(
+            "preflight_layer_audit",
+            _py_cmd("scripts/audit_layer_responsibility.py"),
+        ),
+        _pipeline_step(
+            "preflight_rpc_endpoints",
+            _py_cmd("scripts/check_rpc_endpoints.py", "--chain", "base"),
+            allow_exit_codes=(0, 2),
+        ),
+    ]
+
+
+def _filter_steps_for_resume(
+    steps: list[dict[str, Any]],
+    resume_from: str,
+) -> list[dict[str, Any]]:
+    anchor = RESUME_FROM_FIRST_STEP.get(resume_from)
+    if not anchor:
+        raise ValueError(f"unknown --resume-from value: {resume_from}")
+    preflight = [step for step in steps if str(step["name"]).startswith("preflight_")]
+    body = [step for step in steps if not str(step["name"]).startswith("preflight_")]
+    names = [step["name"] for step in body]
+    if anchor not in names:
+        raise ValueError(
+            f"--resume-from {resume_from} anchor step {anchor!r} not in pipeline plan"
+        )
+    idx = names.index(anchor)
+    return preflight + body[idx:]
+
+
+def _print_rpc_policy_table(steps: list[dict[str, Any]]) -> None:
+    print("RPC / routing policy (dry-run):")
+    for step in steps:
+        policy = _classify_step_rpc_policy(step["cmd"])
+        ws_note = ""
+        if "productive_rpc" in policy or "preflight" in policy:
+            ws_note = " | WS: BASE_WSS when step needs subscriptions"
+        print(f"  - {step['name']}: {policy}{ws_note}")
 
 
 def _pipeline_step(
@@ -491,6 +560,98 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
 
+    def add_time_to_mirror() -> None:
+        """Lane A: fresh radar → mirror verify → M8.3 metadata for handoff candidates."""
+        add_m82()
+        add_m83()
+
+    def add_patient_lane() -> None:
+        """Lane B: thin-liquidity diagnostic shadow (no profit claim)."""
+        steps.append(
+            _pipeline_step(
+                "m9_capacity_diagnostic",
+                _py_cmd(
+                    "scripts/m9_capacity_cycle_diagnostic.py",
+                    "--bridge",
+                    PRODUCTION_BRIDGE,
+                    "--cycle-lengths",
+                    "2,3,4",
+                    "--four-leg-rca",
+                    "--quarantine-rca",
+                    "--output",
+                    CAPACITY_DIAGNOSTIC,
+                ),
+                allow_exit_codes=(0, 2),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "gate_capacity_shadow",
+                _py_cmd(
+                    "scripts/m9_production_refresh_gates.py",
+                    "capacity_shadow",
+                    "--capacity",
+                    CAPACITY_DIAGNOSTIC,
+                ),
+                allow_exit_codes=(0, 2),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_patient_shadow_10m",
+                _productive_rpc_cmd(
+                    "-u",
+                    "-m",
+                    "m9.graph_arb.runner",
+                    "--chain",
+                    "base",
+                    "--config",
+                    "config/exotic_base_anchor.yaml",
+                    "--inventory",
+                    PRODUCTION_BRIDGE,
+                    "--duration-minutes",
+                    "10",
+                    "--productive-lane",
+                    "--require-factory-verified",
+                    "--require-cycles-at-floor",
+                    "--capacity-diagnostic",
+                    CAPACITY_DIAGNOSTIC,
+                    "--quote-backend",
+                    "raw_http",
+                    "--quote-workers",
+                    "1",
+                    "--max-cycles-per-sweep",
+                    "20",
+                    "--artifact-path",
+                    M9_PATIENT_SHADOW_ARTIFACT,
+                ),
+                env={
+                    "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
+                    "ARBY_M9_ECONOMICS_PROFILE": "diagnostic_near_econ",
+                    "ARBY_M9_PATIENT_LANE": "1",
+                    "ARBY_BRIDGE_ARTIFACT_MODE": "exploration_debug",
+                },
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_lane_acceptance",
+                _py_cmd(
+                    "scripts/m9_lane_acceptance_report.py",
+                    "--m8-2-report",
+                    "data/tmp/m8_2_acceptance_report_latest.json",
+                    "--m8-3-registry",
+                    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+                    "--bridge",
+                    PRODUCTION_BRIDGE,
+                    "--shadow",
+                    M9_PATIENT_SHADOW_ARTIFACT,
+                    "--rca",
+                    M9_RCA_ARTIFACT,
+                ),
+            )
+        )
+
     if mode == "m8":
         add_m8()
     elif mode == "m8_2":
@@ -499,6 +660,10 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_m83()
     elif mode == "m9":
         add_m9()
+    elif mode == "time_to_mirror":
+        add_time_to_mirror()
+    elif mode == "patient_lane":
+        add_patient_lane()
     elif mode in {"m8_m9", "full"}:
         add_m8()
         add_m82()
@@ -506,7 +671,14 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_m9()
     else:
         raise ValueError(f"unknown pipeline mode: {mode}")
-    return steps
+
+    plan = list(steps)
+    if not getattr(args, "skip_preflight", False):
+        plan = _preflight_steps() + plan
+    resume_from = getattr(args, "resume_from", None)
+    if resume_from:
+        plan = _filter_steps_for_resume(plan, str(resume_from))
+    return plan
 
 
 def _run_project_pipeline(args: argparse.Namespace) -> int:
@@ -522,22 +694,44 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             pass
 
     print(f"Project pipeline: {args.pipeline} steps={len(steps)} log={log_path}")
+    if getattr(args, "dry_run", False):
+        _print_rpc_policy_table(steps)
+    force_rerun = bool(getattr(args, "force_rerun_steps", False))
     with log_path.open("a", encoding="utf-8") as log_fh:
         log_fh.write(f"=== start_pipeline mode={args.pipeline} ===\n")
+        if getattr(args, "resume_from", None):
+            log_fh.write(f"resume_from={args.resume_from}\n")
         shadow_gate_allowed = True
         for step in steps:
             name = step["name"]
-            if name == "m9_shadow_10m" and not shadow_gate_allowed:
-                msg = "skip m9_shadow_10m: capacity gate blocked\n"
+            done_marker, fail_marker = _step_marker_paths(name)
+            if (
+                not force_rerun
+                and done_marker.exists()
+                and not getattr(args, "dry_run", False)
+            ):
+                msg = f"skip {name}: prior step marker {done_marker}\n"
+                print(msg.strip())
+                log_fh.write(msg)
+                continue
+            if name in {"m9_shadow_10m", "m9_patient_shadow_10m"} and not shadow_gate_allowed:
+                msg = f"skip {name}: capacity gate blocked\n"
                 print(msg.strip())
                 log_fh.write(msg)
                 continue
             cmd = list(step["cmd"])
             printable = " ".join(cmd)
+            policy = _classify_step_rpc_policy(cmd)
             print(f">>> {name}: {printable}")
+            print(f"    rpc_policy: {policy}")
             log_fh.write(f">>> {name}: {printable}\n")
+            log_fh.write(f"    rpc_policy: {policy}\n")
             if getattr(args, "dry_run", False):
                 continue
+            try:
+                fail_marker.unlink()
+            except FileNotFoundError:
+                pass
             env = os.environ.copy()
             env.update(step.get("env") or {})
             proc = subprocess.Popen(
@@ -556,8 +750,10 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             if name == "gate_capacity_shadow":
                 shadow_gate_allowed = rc == 0
             if rc not in step["allow_exit_codes"]:
+                fail_marker.write_text(f"exit={rc}\n", encoding="utf-8")
                 fail_path.write_text(f"{name}: exit={rc}\n", encoding="utf-8")
                 return rc or 1
+            done_marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
         if not getattr(args, "dry_run", False):
             done_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
     return 0
@@ -583,7 +779,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     pg = ap.add_mutually_exclusive_group(required=False)
     pg.add_argument(
         "--pipeline",
-        choices=("m8", "m8_2", "m8_3", "m9", "m8_m9", "full"),
+        choices=(
+            "m8",
+            "m8_2",
+            "m8_3",
+            "m9",
+            "m8_m9",
+            "full",
+            "time_to_mirror",
+            "patient_lane",
+        ),
         help="Run canonical project-layer pipeline instead of legacy config scan",
     )
     pg.add_argument("-m_8", "--m8", dest="pipeline", action="store_const", const="m8")
@@ -592,12 +797,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     pg.add_argument("-m_9", "--m9", dest="pipeline", action="store_const", const="m9")
     pg.add_argument("-m8_m9", "--m8-m9", dest="pipeline", action="store_const", const="m8_m9")
     pg.add_argument("--full-m8-m9", dest="pipeline", action="store_const", const="full")
+    pg.add_argument(
+        "-time_to_mirror",
+        "--time-to-mirror",
+        dest="pipeline",
+        action="store_const",
+        const="time_to_mirror",
+    )
+    pg.add_argument(
+        "--patient-lane",
+        "-patient_lane",
+        dest="pipeline",
+        action="store_const",
+        const="patient_lane",
+    )
     ap.add_argument("--max-radar-tokens", type=int, default=753)
     ap.add_argument("--sniper-minutes", type=int, default=45)
     ap.add_argument("--skip-shadow", action="store_true", default=False)
     ap.add_argument("--skip-coingecko", action="store_true", default=True)
     ap.add_argument("--with-coingecko", dest="skip_coingecko", action="store_false")
     ap.add_argument("--dry-run", action="store_true", default=False)
+    ap.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        default=False,
+        help="Skip repo safety / layer audit / RPC endpoint preflight",
+    )
+    ap.add_argument(
+        "--resume-from",
+        choices=tuple(RESUME_FROM_FIRST_STEP.keys()),
+        default=None,
+        help="Resume pipeline at m8_2, m8_3, or m9 anchor step",
+    )
+    ap.add_argument(
+        "--force-rerun-steps",
+        action="store_true",
+        default=False,
+        help="Ignore per-step .done markers under data/tmp/start_pipeline_steps/",
+    )
     ap.add_argument(
         "--pipeline-log",
         default="data/tmp/start_pipeline_latest.log",
@@ -675,7 +912,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not ns.pipeline and not ns.config and not ns.config_list:
         ap.error(
             "one of --config, --config-list, --pipeline, -m_8, -m_8_2, "
-            "-m_8_3, -m_9, -m8_m9 is required"
+            "-m_8_3, -m_9, -m8_m9, -time_to_mirror, --patient-lane is required"
         )
     return ns
 

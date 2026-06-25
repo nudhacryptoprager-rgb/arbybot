@@ -174,12 +174,23 @@ def productive_cycle_size_usd_cap(
     quote either proves real size or fails honestly.
     """
     _ = token_price_usd
+    from m9.graph_arb.size_truth import is_patient_lane_mode
+
     econ_floor = _economics_floor_usd(cost_profile)
+    edges = getattr(cycle, "edges", ()) or ()
+    min_depth = getattr(cycle, "min_effective_depth_usd", None)
+    if is_patient_lane_mode() and min_depth is not None and float(min_depth) > 0:
+        capped = cap_sizes_to_depth_per_family(
+            (float(size_usd),),
+            float(min_depth),
+            edges=edges,
+        )
+        if capped:
+            return float(capped[0])
     if _cycle_has_sane_measured_depth(cycle):
         return float(size_usd)
     if _cycle_has_measured_depth(cycle):
         return float(size_usd)
-    edges = getattr(cycle, "edges", ()) or ()
     for edge in edges:
         fam = route_family(
             {
@@ -190,9 +201,11 @@ def productive_cycle_size_usd_cap(
         if fam in (FAMILY_MAVERICK_V2, FAMILY_BALANCER_VAULT, FAMILY_CURVE_STABLE):
             from m9.graph_arb.admission_mode import is_topology_probe_mode
 
-            if is_topology_probe_mode():
+            if is_topology_probe_mode() or is_patient_lane_mode():
                 return min(float(size_usd), _PRODUCTIVE_DISTINCT_MICRO_CAP_USD)
             return max(float(size_usd), econ_floor)
+    if is_patient_lane_mode():
+        return min(float(size_usd), econ_floor)
     return float(size_usd)
 
 

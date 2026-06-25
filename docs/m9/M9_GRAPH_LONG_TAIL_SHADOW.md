@@ -81,6 +81,79 @@ M9 прогресує тільки тоді, коли проходить пов�
 - не йти в cross-chain як escape-hatch від незакритої same-chain economics проблеми;
 - не вважати один lucky cycle доказом стратегії.
 
+## 4.1) Strategic lanes after the sizing/profile RCA
+
+These lanes are allowed only as ordered research/diagnostic work. They do not
+change the execution policy: `execution_enabled=false`, `kill_switch_active=true`.
+
+### Lane A — Time-to-mirror
+
+Purpose: keep fresh M8 long-tail tokens that currently have exactly one
+quoteable venue and watch for the 1-to-2 transition when a second verified pool
+appears.
+
+Ownership:
+- `M8` finds the first pool and writes first-seen provenance.
+- `M8.2` owns the pending mirror queue, radar checks, on-chain verification, and
+  second-pool handoff.
+- `M8.3` validates token and route metadata after a second pool is verified.
+- `M9` quotes only verified mirror/cross-anchor/connector routes.
+
+Required artifacts/fields:
+- `time_to_mirror_pending_tokens`
+- `time_to_mirror_verified_second_pool`
+- `time_to_mirror_ttl_expired`
+- `time_to_mirror_reprobe_count`
+- `first_pool_seen_block`
+- `second_pool_seen_block`
+
+Acceptance:
+- A token is not considered M9-economics-ready until the second pool is on-chain
+  verified and quote/depth checks pass.
+- Pending tokens are not failures; they are tracked inventory.
+
+### Lane B — Patient thin-liquidity spread tracking
+
+Purpose: observe long-tail or thin-pool cycles whose usable size is below the
+production conservative floor but may have persistent near-economics spreads.
+
+Ownership:
+- `M9` owns depth-aware sizing, quote attempts, and `spread_lifetime`.
+- The lane is diagnostic-only unless the active profile explicitly allows
+  production profit claims.
+
+Required artifact/fields:
+- `patient_lane_attempted_size_usd`
+- `patient_lane_capacity_usd`
+- `patient_lane_spread_lifetime_s`
+- `patient_lane_cost_adjusted_net_bps`
+- `patient_lane_profit_claim_allowed=false`
+
+Acceptance:
+- Near-econ cycles may be ranked and tracked.
+- They must not be reported as production profit until cost-adjusted,
+  simulation-passed, and repeatable under a production profile.
+
+### Lane C — Cross-chain bridge R&D
+
+Purpose: investigate whether M8-discovered Base long-tail tokens later appear
+on another chain or venue with a slower arbitrage window.
+
+Ownership:
+- A future R&D layer owns bridge adapters, settlement time, inventory risk, and
+  chain-specific metadata.
+- M9 same-chain remains the active production-shadow lane.
+
+Required preconditions:
+- Same-chain M9 sizing/profile contract is clean.
+- No unresolved same-chain adapter/depth bug is being hidden by the cross-chain
+  lane.
+- All bridge opportunities are marked non-atomic and include settlement risk.
+
+Acceptance:
+- Cross-chain can produce research metrics.
+- It cannot unlock real execution or replace M4/M9 execution truth gates.
+
 ## 5) Етапи роботи
 
 ### M9.1 — Inventory Consolidation

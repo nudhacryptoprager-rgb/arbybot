@@ -25,6 +25,15 @@ KNOWN_ECONOMICS_PROFILES: Tuple[str, ...] = (
 )
 
 
+def is_patient_lane_mode() -> bool:
+    """Thin-liquidity diagnostic lane: depth-aware sizing, no profit claims."""
+    return os.environ.get("ARBY_M9_PATIENT_LANE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def economic_size_floor_usd(
     *,
     gas_usd: float = _DEFAULT_GAS_USD,
@@ -232,6 +241,9 @@ def economics_profile_context(
     floor = float(spec.get("economics_floor_usd") or active_economics_floor_usd(cm))
     claim_mode = str(spec.get("profit_claim_mode") or "immediate")
     claim_allowed = bool(spec.get("profit_claim_allowed", False))
+    patient_lane = is_patient_lane_mode()
+    if patient_lane:
+        claim_allowed = False
     qst = (shadow or {}).get("quote_size_truth") or {}
     econ_rpc = int(qst.get("econ_rpc_quote_attempts") or 0)
     pos_gross = int((shadow or {}).get("cycles_positive_gross") or 0)
@@ -246,6 +258,8 @@ def economics_profile_context(
         claim_status = "allowed" if pos_gross > 0 else "market_blocked"
     else:
         claim_status = "runtime_conditional"
+    if patient_lane:
+        claim_status = "denied_patient_lane"
     return {
         "active_economics_profile": name,
         "economics_floor_usd": floor,
@@ -253,4 +267,6 @@ def economics_profile_context(
         "profit_claim_mode": claim_mode,
         "profit_claim_status": claim_status,
         "role": spec.get("role", "production"),
+        "patient_lane": patient_lane,
+        "patient_lane_profit_claim_allowed": False if patient_lane else claim_allowed,
     }

@@ -54,6 +54,27 @@ Triangular, Cross-chain — тільки після того, як Truth Engine 
 Детальний operational документ для цього напрямку:
 - `docs/m9/M9_GRAPH_LONG_TAIL_SHADOW.md`
 
+### Strategic lane order after M9 sizing/profile RCA
+
+The current long-tail branch must not keep competing in the same latency race as
+large same-block searchers. The strategic order is:
+
+1. **Fix same-chain M9 sizing/profile truth first.** If a diagnostic profile says
+   the floor is `$25`, the shadow artifact must not silently quote only `$180`.
+   No market verdict is accepted until attempted sizes match the active profile
+   and the capacity diagnostic explains every blocked cycle.
+2. **Time-to-mirror lane is the first expansion of the active thesis.** M8 finds
+   the first pool; M8.2 must keep single-venue but quoteable long-tail tokens in a
+   pending 1-to-2 mirror queue and re-probe them until a second verified venue
+   appears or TTL expires. This is still same-chain and still part of M8/M9.
+3. **Patient lane is diagnostic-only until repeatability is proven.** Thin-pool
+   micro-spreads at `$25-$75` can be tracked with lifetime metrics, but they do
+   not create production profit claims until cost-adjusted repeatability and
+   simulation are proven.
+4. **Cross-chain bridge arb is R&D, not an escape hatch.** It may be researched
+   after the same-chain M9 sizing/profile contract is clean, but it must not be
+   used to bypass unresolved same-chain quote, depth, or simulation defects.
+
 ---
 
 ## 2.2) Core Truth & Release Priority (2026-02)
