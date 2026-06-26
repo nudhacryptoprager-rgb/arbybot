@@ -188,7 +188,7 @@ class TestBuildM9CurrentPayload:
         from monitoring.dashboard_server import build_m9_current_payload
         payload = build_m9_current_payload(artifact={}, now_utc=_now())
         assert payload["schema_family"] == "m9_dashboard"
-        assert payload["schema_revision"] == "m9_dashboard.5"
+        assert payload["schema_revision"] == "m9_dashboard.6"
 
     def test_operator_control_plane_present(self):
         from monitoring.dashboard_server import build_m9_current_payload, build_m9_operator_control_plane
@@ -316,3 +316,52 @@ class TestBuildM9CurrentPayload:
         assert "top_failed_opportunities" in payload
         assert isinstance(payload["top_failed_opportunities"], list)
 
+    def test_start_pipeline_control_plane_embedded(self):
+        from monitoring.dashboard_server import build_m9_current_payload
+        payload = build_m9_current_payload(artifact={}, now_utc=_now())
+        assert "start_pipeline" in payload
+        sp = payload["start_pipeline"]
+        assert sp["schema_family"] == "start_pipeline_control_plane"
+        assert "checkpoint_progress" in sp
+
+    def test_build_pipeline_control_plane_idle(self):
+        from monitoring.dashboard_server import build_pipeline_control_plane
+        payload = build_pipeline_control_plane(now_utc=_now())
+        assert payload["schema_family"] == "start_pipeline_control_plane"
+        assert "step_markers" in payload
+
+    def test_build_pipeline_control_plane_stale_heartbeat(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from monitoring.dashboard_server import (
+            PIPELINE_CURRENT_PATH,
+            build_pipeline_control_plane,
+        )
+
+        stale_ts = "2020-01-01T00:00:00+00:00"
+        doc = {
+            "mode": "time_to_mirror",
+            "step": "m8_2_radar_two_phase",
+            "pid": 12345,
+            "started_at": stale_ts,
+            "last_heartbeat": stale_ts,
+            "status": "running",
+            "heartbeat_stale_s": 60,
+            "checkpoint_progress": {"done_count": 0, "failed_count": 0},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "start_pipeline_current.json"
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            orig = PIPELINE_CURRENT_PATH
+            try:
+                import monitoring.dashboard_server as ds
+
+                ds.PIPELINE_CURRENT_PATH = path
+                payload = build_pipeline_control_plane(now_utc=_now())
+                assert payload["stale"] is True
+                assert payload["stale_reason"] is not None
+                assert "heartbeat_silent" in payload["stale_reason"]
+            finally:
+                ds.PIPELINE_CURRENT_PATH = orig

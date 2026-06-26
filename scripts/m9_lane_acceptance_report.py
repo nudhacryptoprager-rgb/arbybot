@@ -835,7 +835,11 @@ def build_acceptance_report(
         elif shadow_cycles_quoteable == 0:
             m9_quote_validation_blockers.append("NO_QUOTEABLE_CYCLES")
         if int((shadow or {}).get("cycles_positive_gross") or 0) == 0 and shadow_cycles_found > 0:
-            m9_quote_validation_blockers.append("NO_POSITIVE_GROSS")
+            diag_status = (shadow or {}).get("diagnostic_lane_status")
+            if diag_status == "DIAGNOSTIC_NO_POSITIVE_GROSS":
+                m9_quote_validation_blockers.append("DIAGNOSTIC_NO_POSITIVE_GROSS")
+            else:
+                m9_quote_validation_blockers.append("NO_POSITIVE_GROSS")
     if rca:
         top = (rca.get("top_reject_reasons") or rca.get("reject_histogram") or {})
         if isinstance(top, dict):

@@ -109,6 +109,25 @@ def test_aggregator_registry_refresh_no_fee_on_transfer_for_standard_erc20():
     assert flags.get(usdc.lower(), {}).get("fee_on_transfer_suspected") is False
 
 
+def test_prior_code_unchanged_rejects_same_length_different_hash():
+    import hashlib
+    from unittest.mock import MagicMock, patch
+
+    from m8.metadata.aggregator import _prior_code_unchanged
+
+    w3 = MagicMock()
+    addr = "0x" + "c" * 40
+    code_a = b"\x01" * 120
+    code_b = b"\x02" * 120
+    prior_hash = "0x" + hashlib.sha256(code_a).hexdigest()
+    prior = {"code_hash": prior_hash, "code_length": 120}
+
+    with patch("m8.metadata.token_risk._fetch_code", return_value=code_b):
+        assert _prior_code_unchanged(w3, addr, prior) is False
+    with patch("m8.metadata.token_risk._fetch_code", return_value=code_a):
+        assert _prior_code_unchanged(w3, addr, prior) is True
+
+
 def test_worker_diagnostics_in_acceptance():
     doc = build_aggregated_registry(
         bridge={
@@ -136,3 +155,70 @@ def test_worker_diagnostics_in_acceptance():
     assert "per_dex_route_metadata_ready" in diag
     assert "token_task_funnel" in diag
     assert "dex_route_task_funnel" in diag
+
+
+def test_aggregator_reprobes_cached_token_when_code_changes(monkeypatch):
+    from m8.metadata import aggregator as agg
+    from m8.metadata.contracts import TokenMetadataResult
+
+    token = "0x" + "a" * 40
+    calls: list[str] = []
+
+    class StubWorker:
+        worker_id = "erc20_token"
+
+        def build_task(self, address, **_kwargs):
+            from m8.metadata.contracts import MetadataTask
+
+            return MetadataTask(
+                task_id=f"erc20:{address}",
+                kind="token_erc20",
+                worker_id=self.worker_id,
+                address=address,
+            )
+
+        def process(self, task, **_kwargs):
+            calls.append(task.address)
+            return TokenMetadataResult(
+                address=task.address,
+                decimals=18,
+                source="erc20_call",
+                economics_grade="verified_onchain",
+                code_length=2,
+            )
+
+    monkeypatch.setattr(agg, "Erc20TokenWorker", lambda: StubWorker())
+    monkeypatch.setattr(agg, "_prior_code_unchanged", lambda *_args: False)
+    monkeypatch.setattr(
+        "m8.metadata.erc20_multicall_prefetch.prefetch_erc20_metadata",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "m8.metadata.token_risk.build_token_preflight_bundle",
+        lambda *_args, **_kwargs: {
+            "token_execution_preflight": {},
+            "token_risk_flags": {},
+            "proxy_metadata": {},
+            "token_risk_metadata": {},
+        },
+    )
+
+    doc = agg.build_aggregated_registry(
+        bridge={"active_routes": [{"route_id": "r1", "token0_addr": token}]},
+        prior_registry={
+            "token_registry": {
+                token: {
+                    "address": token,
+                    "decimals": 18,
+                    "source": "erc20_call",
+                    "economics_grade": "verified_onchain",
+                    "code_length": 1,
+                }
+            }
+        },
+        w3=object(),
+        with_dex_workers=False,
+    )
+
+    assert token in calls
+    assert doc["token_registry"][token]["code_length"] == 2

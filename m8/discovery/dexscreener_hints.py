@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -13,7 +14,22 @@ from m8.discovery.radar_layer import stamp_radar_reason
 
 DEXSCREENER_BASE = "https://api.dexscreener.com/latest/dex/tokens"
 _DEFAULT_TIMEOUT_S = 12.0
+# DexScreener free tier ~300 req/min → cap at 5 req/s globally.
+_DS_MIN_INTERVAL_S = 0.2
+_ds_rate_lock = threading.Lock()
+_ds_next_allowed = 0.0
 _last_fetch_timing: Dict[str, float] = {}
+
+
+def _acquire_dexscreener_rate_limit() -> None:
+    global _ds_next_allowed
+    with _ds_rate_lock:
+        now = time.monotonic()
+        wait_s = _ds_next_allowed - now
+        if wait_s > 0:
+            time.sleep(wait_s)
+            now = time.monotonic()
+        _ds_next_allowed = now + _DS_MIN_INTERVAL_S
 
 
 def last_fetch_timing() -> Dict[str, float]:
@@ -56,6 +72,7 @@ def fetch_token_hints(
     if not cache_hit:
         url = f"{DEXSCREENER_BASE}/{addr}"
         try:
+            _acquire_dexscreener_rate_limit()
             data = _get_json(url, timeout_s=timeout_s)
             pairs = [p for p in (data.get("pairs") or []) if isinstance(p, dict)]
             if use_cache:

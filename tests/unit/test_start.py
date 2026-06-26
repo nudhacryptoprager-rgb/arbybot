@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -165,6 +166,315 @@ class TestProjectPipelineModes(unittest.TestCase):
         names = [step["name"] for step in start.build_project_pipeline_steps(args)]
         self.assertNotIn("preflight_repo_safety", names)
         self.assertIn("m8_2_radar_two_phase", names)
+
+    def test_allow_roadmap_edit_passed_to_preflight(self):
+        args = start.parse_args(
+            ["-m_8_2", "--dry-run", "--no-dashboard", "--allow-roadmap-edit"]
+        )
+        steps = start.build_project_pipeline_steps(args)
+        safety = next(step for step in steps if step["name"] == "preflight_repo_safety")
+        self.assertIn("--allow-roadmap-edit", safety["cmd"])
+
+    def test_resume_from_m8_2_expand_skips_radar(self):
+        args = start.parse_args(
+            ["-m8_m9", "--resume-from", "m8_2_expand", "--dry-run", "--no-dashboard"]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertNotIn("m8_2_radar_two_phase", names)
+        self.assertIn("m8_2_cross_dex_expand", names)
+
+    def test_resume_from_m9_capacity_skips_curve_discovery(self):
+        args = start.parse_args(
+            ["-m8_m9", "--resume-from", "m9_capacity", "--dry-run", "--no-dashboard"]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertNotIn("m9_curve_discovery", names)
+        self.assertIn("m9_capacity_diagnostic", names)
+
+    def test_time_to_mirror_includes_mirror_reprobe_steps(self):
+        args = start.parse_args(["-time_to_mirror", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("m8_time_to_mirror_pending_queue", names)
+        self.assertIn("m8_mirror_quote_reprobe", names)
+        self.assertIn("m8_second_pool_verify", names)
+        self.assertIn("m8_time_to_mirror_sla_export", names)
+        self.assertIn("m9_time_to_mirror_narrow_inventory", names)
+        idx_expand = names.index("m8_2_cross_dex_expand")
+        idx_accept = names.index("m8_2_acceptance_strict")
+        self.assertLess(names.index("m8_mirror_quote_reprobe"), idx_accept)
+        self.assertGreater(names.index("m8_mirror_quote_reprobe"), idx_expand)
+
+    def test_mirror_smoke_steps_use_productive_bootstrap_and_allow_blocked_exit(self):
+        args = start.parse_args(["-time_to_mirror", "--dry-run", "--no-dashboard"])
+        steps = start.build_project_pipeline_steps(args)
+        reprobe = next(s for s in steps if s["name"] == "m8_mirror_quote_reprobe")
+        verify = next(s for s in steps if s["name"] == "m8_second_pool_verify")
+        for step in (reprobe, verify):
+            joined = " ".join(step["cmd"])
+            self.assertIn("bootstrap_productive_rpc_env.py", joined)
+            self.assertIn("--pipeline-mode", joined)
+            self.assertIn("--checkpoint-path", joined)
+            self.assertEqual(step["allow_exit_codes"], (0, 2))
+        reprobe_ckpt = reprobe["cmd"][reprobe["cmd"].index("--checkpoint-path") + 1]
+        verify_ckpt = verify["cmd"][verify["cmd"].index("--checkpoint-path") + 1]
+        self.assertNotEqual(reprobe_ckpt, verify_ckpt)
+        self.assertEqual(reprobe_ckpt, start.MIRROR_QUOTE_REPROBE_CHECKPOINT_PATH)
+        self.assertEqual(verify_ckpt, start.MIRROR_SECOND_POOL_VERIFY_CHECKPOINT_PATH)
+
+    def test_write_pipeline_done_marker_clears_stale_fail(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fail_path = Path(tmp) / "start_pipeline_latest.fail"
+            done_path = Path(tmp) / "start_pipeline_latest.done"
+            fail_path.write_text("preflight_rpc_endpoints: exit=1\n", encoding="utf-8")
+            start._write_pipeline_done_marker(fail_path=fail_path, done_path=done_path)
+            self.assertFalse(fail_path.is_file())
+            self.assertTrue(done_path.is_file())
+
+    def test_time_to_mirror_hot_path_expansion_uses_subset_and_productive_rpc(self):
+        args = start.parse_args(
+            ["-time_to_mirror", "--hot", "--dry-run", "--no-dashboard", "--max-radar-tokens", "50"]
+        )
+        steps = start.build_project_pipeline_steps(args)
+        names = [s["name"] for s in steps]
+        self.assertIn("m8_time_to_mirror_expand_subset", names)
+        expand = next(s for s in steps if s["name"] == "m8_2_cross_dex_expand")
+        joined = " ".join(expand["cmd"])
+        self.assertIn("bootstrap_productive_rpc_env.py", joined)
+        self.assertIn("--external-hints", joined)
+        self.assertIn("m8_external_pool_hints_latest.json", joined)
+        self.assertIn("hot_path_incremental", joined)
+        self.assertIn(start.TIME_TO_MIRROR_EXPAND_SUBSET, joined)
+
+    def test_time_to_mirror_includes_m81_fresh_delta_before_expansion(self):
+        args = start.parse_args(
+            ["-time_to_mirror", "--dry-run", "--no-dashboard", "--max-radar-tokens", "50"]
+        )
+        steps = start.build_project_pipeline_steps(args)
+        names = [s["name"] for s in steps]
+        self.assertIn("m8_1_stable_anchor_fresh_delta", names)
+        self.assertLess(
+            names.index("m8_1_stable_anchor_fresh_delta"),
+            names.index("m8_2_cross_dex_expand"),
+        )
+        m81 = next(s for s in steps if s["name"] == "m8_1_stable_anchor_fresh_delta")
+        joined = " ".join(m81["cmd"])
+        self.assertIn("fresh_delta", joined)
+        self.assertIn(start.TIME_TO_MIRROR_EXPAND_SUBSET, joined)
+        self.assertLess(
+            names.index("m8_time_to_mirror_pending_queue"),
+            names.index("m8_time_to_mirror_expand_subset"),
+        )
+        self.assertLess(
+            names.index("m8_time_to_mirror_expand_subset"),
+            names.index("m8_1_stable_anchor_fresh_delta"),
+        )
+        verify = next(s for s in steps if s["name"] == "m8_second_pool_verify")
+        self.assertIn(start.SECOND_POOL_TRANSITION_SUBSET, " ".join(verify["cmd"]))
+
+    def test_time_to_mirror_narrow_shadow_quote_workers_four(self):
+        args = start.parse_args(
+            ["-time_to_mirror", "--dry-run", "--no-dashboard", "--max-radar-tokens", "25"]
+        )
+        steps = start.build_project_pipeline_steps(args)
+        shadow = next(s for s in steps if s["name"] == "m9_time_to_mirror_narrow_shadow_10m")
+        joined = " ".join(shadow["cmd"])
+        self.assertIn("--quote-workers", joined)
+        parts = joined.split("--quote-workers")
+        self.assertTrue(parts[1].strip().startswith("4"))
+
+    def test_m8_audit_lane_is_separate_wide_expansion(self):
+        args = start.parse_args(["-m8_audit", "--dry-run", "--no-dashboard"])
+        steps = start.build_project_pipeline_steps(args)
+        names = [s["name"] for s in steps]
+        self.assertIn("m8_1_stable_anchor_audit", names)
+        self.assertIn("m8_2_cross_dex_expand_audit", names)
+        self.assertNotIn("m8_time_to_mirror_expand_subset", names)
+        expand = next(s for s in steps if s["name"] == "m8_2_cross_dex_expand_audit")
+        joined = " ".join(expand["cmd"])
+        self.assertIn("candidate_summary", joined)
+        self.assertNotIn("hot_path_incremental", joined)
+
+    def test_resume_from_mirror_quote_reprobe(self):
+        args = start.parse_args(
+            [
+                "-time_to_mirror",
+                "--resume-from",
+                "m8_mirror_quote_reprobe",
+                "--dry-run",
+                "--no-dashboard",
+            ]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertEqual(names[3], "m8_mirror_quote_reprobe")
+        self.assertNotIn("m8_2_cross_dex_expand", names)
+
+    def test_patient_lane_includes_spread_lifetime_export(self):
+        args = start.parse_args(["--patient-lane", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("m9_patient_spread_lifetime_export", names)
+        patient = next(
+            s for s in start.build_project_pipeline_steps(args)
+            if s["name"] == "m9_patient_shadow_10m"
+        )
+        self.assertIn("--allow-spread-lifetime-without-positive-gross", patient["cmd"])
+        self.assertEqual(patient["env"].get("ARBY_M9_PROFIT_CLAIM_ALLOWED"), "0")
+
+    def test_radar_step_has_timeout_and_secondary_provider_flag(self):
+        args = start.parse_args(
+            [
+                "-m_8_2",
+                "--dry-run",
+                "--no-dashboard",
+                "--radar-secondary-provider-timeout-s",
+                "60",
+            ]
+        )
+        radar = next(
+            step for step in start.build_project_pipeline_steps(args)
+            if step["name"] == "m8_2_radar_two_phase"
+        )
+        self.assertEqual(radar.get("timeout_seconds"), start.DEFAULT_RADAR_STEP_TIMEOUT_S)
+        self.assertIn("--secondary-provider-timeout-s", radar["cmd"])
+        self.assertIn("--coingecko-provider-timeout-s", radar["cmd"])
+        self.assertIn("60", radar["cmd"])
+
+    def test_radar_default_secondary_provider_timeout_is_not_whole_phase(self):
+        self.assertEqual(start.DEFAULT_RADAR_SECONDARY_PROVIDER_TIMEOUT_S, 45)
+        self.assertLess(
+            start.DEFAULT_RADAR_SECONDARY_PROVIDER_TIMEOUT_S,
+            start.DEFAULT_RADAR_STEP_TIMEOUT_S,
+        )
+
+    def test_cross_chain_research_dry_run_plan(self):
+        args = start.parse_args(
+            ["--cross-chain-research", "--dry-run", "--no-dashboard"]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertEqual(names[-1], "cross_chain_research_plan")
+
+    def test_cross_chain_research_non_dry_run_blocks_with_exit_2(self):
+        rc = start._run_project_pipeline(
+            start.parse_args(["--cross-chain-research", "--no-dashboard"])
+        )
+        self.assertEqual(rc, start.CROSS_CHAIN_RESEARCH_BLOCKED_EXIT)
+        self.assertEqual(rc, 2)
+
+    def test_patient_lane_shadow_uses_diagnostic_floor_not_production_180(self):
+        from m9.graph_arb.size_truth import economics_profile_specs, load_cost_model
+
+        args = start.parse_args(["--patient-lane", "--dry-run", "--no-dashboard"])
+        patient = next(
+            s for s in start.build_project_pipeline_steps(args)
+            if s["name"] == "m9_patient_shadow_10m"
+        )
+        env = patient["env"]
+        self.assertEqual(
+            env.get("ARBY_M9_ECONOMICS_PROFILE"),
+            start.PATIENT_LANE_ECONOMICS_PROFILE,
+        )
+        self.assertEqual(env, start.patient_lane_shadow_env())
+        specs = economics_profile_specs(load_cost_model())
+        diag_floor = specs[start.PATIENT_LANE_ECONOMICS_PROFILE]["economics_floor_usd"]
+        prod_floor = specs["production_conservative"]["economics_floor_usd"]
+        self.assertLessEqual(diag_floor, 75.0)
+        self.assertGreaterEqual(prod_floor, 100.0)
+        self.assertNotEqual(diag_floor, prod_floor)
+
+    def test_time_to_mirror_pending_queue_between_expand_and_acceptance(self):
+        args = start.parse_args(["-time_to_mirror", "--dry-run", "--no-dashboard"])
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        idx_radar = names.index("m8_2_radar_two_phase")
+        idx_pending = names.index("m8_time_to_mirror_pending_queue")
+        idx_subset = names.index("m8_time_to_mirror_expand_subset")
+        idx_expand = names.index("m8_2_cross_dex_expand")
+        idx_accept = names.index("m8_2_acceptance_strict")
+        self.assertLess(idx_radar, idx_pending)
+        self.assertLess(idx_pending, idx_subset)
+        self.assertLess(idx_subset, idx_expand)
+        self.assertLess(idx_expand, idx_accept)
+
+    def test_pipeline_markers_are_namespaced_by_mode(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "markers"
+            orig = start.PIPELINE_STEP_MARKERS_DIR
+            try:
+                start.PIPELINE_STEP_MARKERS_DIR = base
+                done_a, fail_a = start._step_marker_paths(
+                    "preflight_repo_safety", pipeline_mode="patient_lane"
+                )
+                done_b, fail_b = start._step_marker_paths(
+                    "preflight_repo_safety", pipeline_mode="time_to_mirror"
+                )
+                fail_a.write_text("exit=1\n", encoding="utf-8")
+                self.assertTrue(fail_a.is_file())
+                self.assertFalse(fail_b.exists())
+                cleared = start._clear_stale_fail_markers(
+                    "patient_lane",
+                    ["preflight_repo_safety"],
+                )
+                self.assertEqual(cleared, 1)
+                self.assertFalse(fail_a.exists())
+            finally:
+                start.PIPELINE_STEP_MARKERS_DIR = orig
+
+    def test_checkpoint_activity_refreshes_quiet_step_heartbeat(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ckpt = Path(tmp) / "m8_hint_refresh_checkpoint_ds_radar.json"
+            ckpt.write_text("{}", encoding="utf-8")
+            orig = dict(start.STEP_QUIET_CHECKPOINTS)
+            try:
+                start.STEP_QUIET_CHECKPOINTS = {
+                    "quiet_step": (str(ckpt),),
+                }
+                self.assertTrue(
+                    start._checkpoint_activity_since("quiet_step", time.time() - 5)
+                )
+                self.assertFalse(
+                    start._checkpoint_activity_since("other_step", time.time() - 5)
+                )
+            finally:
+                start.STEP_QUIET_CHECKPOINTS = orig
+
+    def test_export_pending_1_to_2_queue_writes_artifact(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            wl_path = Path(tmp) / "watchlist.json"
+            out_path = Path(tmp) / "pending.json"
+            wl_path.write_text(
+                json.dumps(
+                    {
+                        "tokens": {
+                            "0xabc": {
+                                "first_pool": "0xpool",
+                                "second_pool_verified": False,
+                                "token_class": "fresh_long_tail",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            orig_out = start.PENDING_1_TO_2_QUEUE_PATH
+            orig_wl = start.WATCHLIST_PATH
+            try:
+                start.PENDING_1_TO_2_QUEUE_PATH = out_path
+                start.WATCHLIST_PATH = wl_path
+                rc = start._export_pending_1_to_2_queue()
+                self.assertEqual(rc, 0)
+                doc = json.loads(out_path.read_text(encoding="utf-8"))
+                self.assertEqual(doc["pending_count"], 1)
+                self.assertEqual(doc["schema_version"], "m8_time_to_mirror_pending_queue_v2")
+                self.assertIn("priority_score", doc["tokens"][0])
+            finally:
+                start.PENDING_1_TO_2_QUEUE_PATH = orig_out
+                start.WATCHLIST_PATH = orig_wl
 
 
 class TestRollingFlagsOnlyForPrimary(unittest.TestCase):

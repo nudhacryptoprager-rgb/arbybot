@@ -76,7 +76,17 @@ def main() -> int:
         "--output",
         default="data/runs/_rolling/m8_external_pool_hints_latest.json",
     )
-    p.add_argument("--max-tokens", type=int, default=None)
+    p.add_argument(
+        "--merge-existing-output",
+        action="store_true",
+        help="Merge with existing --output artifact instead of replacing verified hints",
+    )
+    p.add_argument(
+        "--token-concurrency",
+        type=int,
+        default=1,
+        help="Bounded parallel token fetches (DexScreener rate-limited globally)",
+    )
     p.add_argument("--sleep-ms", type=int, default=120, help="Pause between token API calls")
     p.add_argument(
         "--verify-mode",
@@ -349,29 +359,62 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
 
     checkpoint_path = Path(args.checkpoint_path)
     hints_sidecar = checkpoint_path.with_suffix(checkpoint_path.suffix + ".hints.json")
-    start_idx = 0
+    completed_indices: set[int] = set()
     all_hints: list[PoolHint] = []
     if not args.no_resume and checkpoint_path.is_file():
         try:
             ck = json.loads(checkpoint_path.read_text(encoding="utf-8"))
             if ck.get("watchlist") == args.watchlist and ck.get("chain") == args.chain:
-                start_idx = int(ck.get("next_token_index") or 0)
+                completed_indices = {
+                    int(i) for i in (ck.get("completed_indices") or []) if str(i).isdigit()
+                }
+                legacy_next = ck.get("next_token_index")
+                if legacy_next is not None and not completed_indices:
+                    completed_indices = set(range(int(legacy_next)))
                 if hints_sidecar.is_file():
                     side = json.loads(hints_sidecar.read_text(encoding="utf-8"))
                     all_hints = [PoolHint.from_dict(h) for h in (side.get("hints") or [])]
                     log.info(
-                        "Resuming hint refresh from token index %d (%d hints restored)",
-                        start_idx,
+                        "Resuming hint refresh: completed=%d/%d hints=%d",
+                        len(completed_indices),
+                        int(ck.get("tokens_total") or 0),
                         len(all_hints),
                     )
                 else:
                     log.warning(
-                        "Checkpoint at index %d but hints sidecar missing; restarting from 0",
-                        start_idx,
+                        "Checkpoint with %d completed indices but hints sidecar missing; restarting",
+                        len(completed_indices),
                     )
-                    start_idx = 0
+                    completed_indices = set()
         except Exception as exc:
             log.warning("Checkpoint load failed (starting fresh): %s", exc)
+
+    def _contiguous_frontier(done: set[int]) -> int:
+        i = 0
+        while i in done:
+            i += 1
+        return i
+
+    def _write_checkpoint(done: set[int]) -> None:
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(
+            json.dumps(
+                {
+                    "watchlist": args.watchlist,
+                    "chain": args.chain,
+                    "completed_indices": sorted(done),
+                    "contiguous_frontier": _contiguous_frontier(done),
+                    "tokens_total": len(tokens),
+                    "hints_collected": len(all_hints),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        hints_sidecar.write_text(
+            json.dumps({"hints": [h.to_dict() for h in all_hints]}, indent=2),
+            encoding="utf-8",
+        )
 
     timer = TimedSource()
     second_pool_hints = 0
@@ -547,6 +590,10 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
             log.warning("source=%s token=%s failed: %s", source, token[:10], exc)
             return []
 
+    import threading
+
+    state_lock = threading.Lock()
+
     def _fetch_token_sources(token: str, venue_count: int) -> None:
         nonlocal second_pool_hints, single_venue_retries
         passes = 1
@@ -554,7 +601,8 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
             passes = max(1, int(args.retry_max) + 1)
         for pass_idx in range(passes):
             if pass_idx > 0:
-                single_venue_retries += 1
+                with state_lock:
+                    single_venue_retries += 1
                 if args.retry_backoff_ms:
                     time.sleep(args.retry_backoff_ms / 1000.0)
             token_batch: list[PoolHint] = []
@@ -567,6 +615,18 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
                     for fut in as_completed(futs):
                         source = futs[fut]
                         batch = fut.result()
+                        with state_lock:
+                            for h in batch:
+                                raw_radar_hints.append(PoolHint.from_dict(h.to_dict()))
+                                h.focus_token = token
+                                token_batch.append(h)
+                                source_pool_counts[source] = int(
+                                    source_pool_counts.get(source, 0)
+                                ) + 1
+            else:
+                for source in sources:
+                    batch = _fetch_one_source(source, token)
+                    with state_lock:
                         for h in batch:
                             raw_radar_hints.append(PoolHint.from_dict(h.to_dict()))
                             h.focus_token = token
@@ -574,54 +634,52 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
                             source_pool_counts[source] = int(
                                 source_pool_counts.get(source, 0)
                             ) + 1
-            else:
-                for source in sources:
-                    batch = _fetch_one_source(source, token)
-                    for h in batch:
-                        raw_radar_hints.append(PoolHint.from_dict(h.to_dict()))
-                        h.focus_token = token
-                        token_batch.append(h)
-                        source_pool_counts[source] = int(
-                            source_pool_counts.get(source, 0)
-                        ) + 1
             verified = _verify_batch(token_batch)
-            for h in verified:
-                all_hints.append(h)
-                if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
-                    per_source_verified_yield[h.source] = int(
-                        per_source_verified_yield.get(h.source, 0)
-                    ) + 1
-                    if venue_count < 2:
-                        second_pool_hints += 1
+            with state_lock:
+                for h in verified:
+                    all_hints.append(h)
+                    if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
+                        per_source_verified_yield[h.source] = int(
+                            per_source_verified_yield.get(h.source, 0)
+                        ) + 1
+                        if venue_count < 2:
+                            second_pool_hints += 1
 
-    for i, token in enumerate(tokens):
-        if i < start_idx:
-            continue
+    token_concurrency = max(1, int(args.token_concurrency or 1))
+    pending_indices = [i for i in range(len(tokens)) if i not in completed_indices]
+
+    def _process_token_at_index(i: int, token: str) -> int:
+        if i in completed_indices:
+            return i
         token = token.lower()
         venue_count = _venue_count(token)
         _fetch_token_sources(token, venue_count)
-        if args.checkpoint_every and (i + 1) % int(args.checkpoint_every) == 0:
-            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-            checkpoint_path.write_text(
-                json.dumps(
-                    {
-                        "watchlist": args.watchlist,
-                        "chain": args.chain,
-                        "next_token_index": i + 1,
-                        "tokens_total": len(tokens),
-                        "hints_collected": len(all_hints),
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            hints_sidecar.write_text(
-                json.dumps({"hints": [h.to_dict() for h in all_hints]}, indent=2),
-                encoding="utf-8",
-            )
-            log.info("Checkpoint saved at token %d/%d", i + 1, len(tokens))
-        if args.sleep_ms and i + 1 < len(tokens):
-            time.sleep(args.sleep_ms / 1000.0)
+        with state_lock:
+            completed_indices.add(i)
+            if args.checkpoint_every and len(completed_indices) % int(args.checkpoint_every) == 0:
+                _write_checkpoint(completed_indices)
+                log.info(
+                    "Checkpoint saved: completed %d/%d tokens",
+                    len(completed_indices),
+                    len(tokens),
+                )
+        return i
+
+    if token_concurrency <= 1:
+        for i in pending_indices:
+            _process_token_at_index(i, tokens[i])
+            if args.sleep_ms and i + 1 < len(tokens):
+                time.sleep(args.sleep_ms / 1000.0)
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=token_concurrency) as pool:
+            futs = {
+                pool.submit(_process_token_at_index, i, tokens[i]): i
+                for i in pending_indices
+            }
+            for fut in as_completed(futs):
+                fut.result()
 
     if checkpoint_path.is_file():
         try:
@@ -724,6 +782,16 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         hints=all_hints,
         metrics=metrics,
     )
+    if args.merge_existing_output:
+        from m8.discovery.hint_artifact_merge import load_hint_artifact, merge_hint_artifacts
+
+        prior = load_hint_artifact(args.output)
+        artifact = merge_hint_artifacts(
+            prior,
+            artifact,
+            chain=args.chain,
+            sources=list(artifact.get("sources") or sources),
+        )
     write_hints_artifact(artifact, args.output)
     m = artifact["metrics"]
     log.info(

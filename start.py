@@ -92,10 +92,54 @@ M9_SHADOW_ARTIFACT = "data/tmp/m9_graph_handoff_quote_validation_10m.json"
 M9_PATIENT_SHADOW_ARTIFACT = "data/tmp/m9_patient_lane_shadow_10m.json"
 M9_RCA_ARTIFACT = "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
 PIPELINE_STEP_MARKERS_DIR = Path("data/tmp/start_pipeline_steps")
+PIPELINE_CURRENT_PATH = Path("data/tmp/start_pipeline_current.json")
+_CURRENT_PIPELINE_ARGS: argparse.Namespace | None = None
+PENDING_1_TO_2_QUEUE_PATH = Path("data/tmp/m8_time_to_mirror_pending_queue_latest.json")
+WATCHLIST_PATH = Path("data/tmp/m8_token_watchlist_latest.json")
+MIRROR_QUOTE_REPROBE_CHECKPOINT_PATH = "data/tmp/m8_mirror_quote_reprobe_progress.json"
+MIRROR_SECOND_POOL_VERIFY_CHECKPOINT_PATH = (
+    "data/tmp/m8_second_pool_verify_progress.json"
+)
+# Legacy alias kept for tests/docs that reference the old single-checkpoint name.
+MIRROR_QUOTE_CHECKPOINT_PATH = MIRROR_QUOTE_REPROBE_CHECKPOINT_PATH
+TIME_TO_MIRROR_SLA_PATH = Path("data/tmp/m8_time_to_mirror_sla_latest.json")
+M9_TTM_NARROW_BRIDGE = "data/tmp/m9_bridge_time_to_mirror_narrow_latest.json"
+M9_TTM_NARROW_SHADOW_ARTIFACT = "data/tmp/m9_time_to_mirror_narrow_shadow_10m.json"
+EXTERNAL_HINTS_ROLLING = "data/runs/_rolling/m8_external_pool_hints_latest.json"
+TIME_TO_MIRROR_EXPAND_SUBSET = "data/tmp/m8_time_to_mirror_expand_subset.json"
+SECOND_POOL_TRANSITION_SUBSET = "data/tmp/m8_second_pool_transition_subset.json"
+DEFAULT_STEP_TIMEOUT_S = 7200
+DEFAULT_RADAR_STEP_TIMEOUT_S = 7200
+# Per-provider HTTP timeout passed to m8_radar secondary/coingecko phases (seconds).
+DEFAULT_RADAR_SECONDARY_PROVIDER_TIMEOUT_S = 45
+DEFAULT_HEARTBEAT_STALE_MINUTES = 15
+PATIENT_LANE_ECONOMICS_PROFILE = "diagnostic_near_econ"
+CROSS_CHAIN_RESEARCH_BLOCKED_EXIT = 2
+# Quiet child steps may refresh these checkpoint files without stdout.
+STEP_QUIET_CHECKPOINTS: dict[str, tuple[str, ...]] = {
+    "m8_2_radar_two_phase": (
+        "data/tmp/m8_hint_refresh_checkpoint_ds_radar.json",
+        "data/tmp/m8_hint_refresh_checkpoint_ds_verify.json",
+        "data/tmp/m8_hint_refresh_checkpoint_secondary.json",
+        "data/tmp/m8_hint_refresh_checkpoint_cg.json",
+    ),
+    "m8_2_cross_dex_expand": ("data/tmp/m8_cross_dex_expand_progress.json",),
+    "m8_mirror_quote_reprobe": (MIRROR_QUOTE_REPROBE_CHECKPOINT_PATH,),
+    "m8_second_pool_verify": (MIRROR_SECOND_POOL_VERIFY_CHECKPOINT_PATH,),
+    "m8_3_registry_refresh": (
+        "data/tmp/m8_3_token_metadata_registry_refresh_progress.json",
+    ),
+}
 RESUME_FROM_FIRST_STEP: dict[str, str] = {
     "m8_2": "m8_2_radar_two_phase",
+    "m8_2_radar": "m8_2_radar_two_phase",
+    "m8_2_expand": "m8_2_cross_dex_expand",
+    "m8_mirror_quote_reprobe": "m8_mirror_quote_reprobe",
+    "m8_second_pool_verify": "m8_second_pool_verify",
+    "m8_2_acceptance": "m8_2_acceptance_strict",
     "m8_3": "m8_3_registry_refresh",
     "m9": "m9_curve_discovery",
+    "m9_capacity": "m9_capacity_diagnostic",
 }
 
 # R28.16: Phase event protocol — matches ARBY_PHASE: prefix from run_scan_real.py
@@ -225,12 +269,57 @@ def _productive_rpc_cmd(*parts: str) -> list[str]:
     ]
 
 
-def _step_marker_paths(step_name: str) -> tuple[Path, Path]:
-    PIPELINE_STEP_MARKERS_DIR.mkdir(parents=True, exist_ok=True)
+def _step_marker_paths(
+    step_name: str,
+    *,
+    pipeline_mode: str | None = None,
+) -> tuple[Path, Path]:
+    base = PIPELINE_STEP_MARKERS_DIR
+    if pipeline_mode:
+        base = base / pipeline_mode
+    base.mkdir(parents=True, exist_ok=True)
     return (
-        PIPELINE_STEP_MARKERS_DIR / f"{step_name}.done",
-        PIPELINE_STEP_MARKERS_DIR / f"{step_name}.fail",
+        base / f"{step_name}.done",
+        base / f"{step_name}.fail",
     )
+
+
+def _clear_stale_fail_markers(pipeline_mode: str, step_names: list[str]) -> int:
+    """Drop prior .fail markers for this mode/plan so aborted runs cannot block reruns."""
+    cleared = 0
+    for name in step_names:
+        _, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
+        try:
+            fail_marker.unlink()
+            cleared += 1
+        except FileNotFoundError:
+            pass
+    return cleared
+
+
+def _checkpoint_activity_since(step_name: str, since_wall_ts: float) -> bool:
+    """True when a watched checkpoint file was touched after the step started."""
+    for rel in STEP_QUIET_CHECKPOINTS.get(step_name, ()):
+        path = Path(rel)
+        if not path.is_file():
+            continue
+        try:
+            if path.stat().st_mtime >= since_wall_ts - 1.0:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def patient_lane_shadow_env() -> dict[str, str]:
+    """Canonical patient-lane runner env (diagnostic sizing, no profit claim)."""
+    return {
+        "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
+        "ARBY_M9_ECONOMICS_PROFILE": PATIENT_LANE_ECONOMICS_PROFILE,
+        "ARBY_M9_PATIENT_LANE": "1",
+        "ARBY_M9_PROFIT_CLAIM_ALLOWED": "0",
+        "ARBY_BRIDGE_ARTIFACT_MODE": "exploration_debug",
+    }
 
 
 def _classify_step_rpc_policy(cmd: list[str]) -> str:
@@ -244,9 +333,12 @@ def _classify_step_rpc_policy(cmd: list[str]) -> str:
     return "direct:local_py"
 
 
-def _preflight_steps() -> list[dict[str, Any]]:
+def _preflight_steps(*, allow_roadmap_edit: bool = False) -> list[dict[str, Any]]:
+    safety_cmd = _py_cmd("scripts/check_repo_safety.py")
+    if allow_roadmap_edit:
+        safety_cmd.append("--allow-roadmap-edit")
     return [
-        _pipeline_step("preflight_repo_safety", _py_cmd("scripts/check_repo_safety.py")),
+        _pipeline_step("preflight_repo_safety", safety_cmd),
         _pipeline_step(
             "preflight_layer_audit",
             _py_cmd("scripts/audit_layer_responsibility.py"),
@@ -284,7 +376,21 @@ def _print_rpc_policy_table(steps: list[dict[str, Any]]) -> None:
         ws_note = ""
         if "productive_rpc" in policy or "preflight" in policy:
             ws_note = " | WS: BASE_WSS when step needs subscriptions"
+        internal = step.get("internal")
+        cmd_preview = (
+            f"<internal:{internal}>"
+            if internal
+            else " ".join(step.get("cmd") or [])
+        )
         print(f"  - {step['name']}: {policy}{ws_note}")
+        if cmd_preview and not internal:
+            print(f"      cmd: {cmd_preview}")
+        env = step.get("env") or {}
+        if env:
+            env_preview = ", ".join(f"{k}={v}" for k, v in env.items())
+            print(f"      env: {env_preview}")
+        if internal:
+            print(f"      internal: {internal}")
 
 
 def _pipeline_step(
@@ -293,13 +399,360 @@ def _pipeline_step(
     *,
     allow_exit_codes: tuple[int, ...] = (0,),
     env: dict[str, str] | None = None,
+    timeout_seconds: int | None = None,
+    internal: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    step: dict[str, Any] = {
         "name": name,
         "cmd": list(cmd),
         "allow_exit_codes": allow_exit_codes,
         "env": dict(env or {}),
     }
+    if timeout_seconds is not None:
+        step["timeout_seconds"] = int(timeout_seconds)
+    if internal:
+        step["internal"] = internal
+    return step
+
+
+def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int:
+    explicit = step.get("timeout_seconds")
+    if explicit is not None:
+        return int(explicit)
+    name = str(step["name"])
+    if name == "m8_2_radar_two_phase":
+        radar_timeout = int(getattr(args, "radar_step_timeout_s", 0) or 0)
+        if radar_timeout > 0:
+            return radar_timeout
+    default_timeout = int(getattr(args, "step_timeout_s", 0) or 0)
+    if default_timeout > 0:
+        return default_timeout
+    return DEFAULT_STEP_TIMEOUT_S
+
+
+def _collect_checkpoint_progress(
+    step_names: list[str],
+    *,
+    pipeline_mode: str | None = None,
+) -> dict[str, Any]:
+    done_steps: list[str] = []
+    failed_steps: list[str] = []
+    for name in step_names:
+        done_marker, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
+        if done_marker.exists():
+            done_steps.append(name)
+        elif fail_marker.exists():
+            failed_steps.append(name)
+    return {
+        "done_steps": done_steps,
+        "failed_steps": failed_steps,
+        "done_count": len(done_steps),
+        "failed_count": len(failed_steps),
+        "marker_namespace": pipeline_mode,
+    }
+
+
+def _write_pipeline_current(payload: dict[str, Any]) -> None:
+    PIPELINE_CURRENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PIPELINE_CURRENT_PATH.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _clear_pipeline_current() -> None:
+    try:
+        PIPELINE_CURRENT_PATH.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _run_internal_pipeline_step(internal: str) -> int:
+    if internal == "pending_1_to_2_queue":
+        return _export_pending_1_to_2_queue()
+    if internal == "patient_spread_lifetime_export":
+        return _export_patient_spread_lifetime()
+    if internal == "cross_chain_research_plan":
+        print(
+            "cross_chain_research: R&D placeholder — no execution, no profit claims",
+            flush=True,
+        )
+        return 0
+    if internal == "time_to_mirror_sla_export":
+        return _export_time_to_mirror_sla()
+    if internal == "time_to_mirror_narrow_inventory":
+        return _build_time_to_mirror_narrow_inventory()
+    if internal == "time_to_mirror_expand_subset":
+        ns = _CURRENT_PIPELINE_ARGS
+        max_t = int(getattr(ns, "max_radar_tokens", 100) or 100) if ns else 100
+        return _export_time_to_mirror_expand_subset(max_tokens=max_t)
+    if internal == "second_pool_transition_subset":
+        return _export_second_pool_transition_subset()
+    print(f"ERROR: unknown internal pipeline step: {internal}", flush=True)
+    return 2
+
+
+def _m81_stable_anchor_cmd(
+    *,
+    probe_mode: str = "audit_full",
+    token_subset: str | None = None,
+) -> list[str]:
+    cmd = _productive_rpc_cmd(
+        "scripts/m8_1_stable_anchor_run.py",
+        "--probe-mode",
+        probe_mode,
+    )
+    if token_subset:
+        cmd.extend(["--token-subset-file", token_subset])
+    return cmd
+
+
+def _m82_cross_dex_expand_cmd(*, hot: bool = False) -> list[str]:
+    scan_mode = "hot_path_incremental" if hot else "candidate_summary"
+    cmd = [
+        "scripts/m8_cross_dex_expand.py",
+        "--chain",
+        "base",
+        "--external-hints",
+        EXTERNAL_HINTS_ROLLING,
+        "--scan-mode",
+        scan_mode,
+    ]
+    if hot:
+        cmd.extend(["--token-subset-file", TIME_TO_MIRROR_EXPAND_SUBSET])
+    return _productive_rpc_cmd(*cmd)
+
+
+def _mirror_smoke_pipeline_cmd(checkpoint_path: str, *extra: str) -> list[str]:
+    return _productive_rpc_cmd(
+        "scripts/m8_mirror_quote_smoke.py",
+        "--pipeline-mode",
+        "--checkpoint-path",
+        checkpoint_path,
+        *extra,
+    )
+
+
+def _export_time_to_mirror_expand_subset(*, max_tokens: int) -> int:
+    from m8.discovery.time_to_mirror_lane import (
+        FRESH_DELTA_SUBSET_PATH,
+        TIME_TO_MIRROR_EXPAND_SUBSET_PATH,
+        build_time_to_mirror_expand_subset,
+    )
+
+    return build_time_to_mirror_expand_subset(
+        max_tokens=max_tokens,
+        fresh_subset_path=FRESH_DELTA_SUBSET_PATH,
+        output_path=TIME_TO_MIRROR_EXPAND_SUBSET_PATH,
+    )
+
+
+def _export_second_pool_transition_subset() -> int:
+    from m8.discovery.time_to_mirror_lane import (
+        SECOND_POOL_TRANSITION_SUBSET_PATH,
+        build_second_pool_transition_subset,
+    )
+
+    return build_second_pool_transition_subset(output_path=SECOND_POOL_TRANSITION_SUBSET_PATH)
+
+
+def _export_pending_1_to_2_queue() -> int:
+    from m8.discovery.time_to_mirror_lane import (
+        build_pending_queue_payload,
+        load_watchlist,
+    )
+
+    watchlist = load_watchlist(WATCHLIST_PATH)
+    payload = build_pending_queue_payload(watchlist)
+    PENDING_1_TO_2_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PENDING_1_TO_2_QUEUE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(
+        f"pending_1_to_2_queue: {payload['pending_count']} tokens "
+        f"(top_score={payload['tokens'][0]['priority_score'] if payload['tokens'] else 0}) "
+        f"-> {PENDING_1_TO_2_QUEUE_PATH}",
+        flush=True,
+    )
+    return 0
+
+
+def _export_time_to_mirror_sla() -> int:
+    from m8.discovery.time_to_mirror_lane import (
+        DEFAULT_EXPANSION_PATH,
+        build_time_to_mirror_sla,
+    )
+
+    payload = build_time_to_mirror_sla(
+        watchlist_path=WATCHLIST_PATH,
+        expansion_path=DEFAULT_EXPANSION_PATH,
+        pending_path=PENDING_1_TO_2_QUEUE_PATH,
+        mirror_reprobe_checkpoint_path=Path(MIRROR_QUOTE_REPROBE_CHECKPOINT_PATH),
+        mirror_verify_checkpoint_path=Path(MIRROR_SECOND_POOL_VERIFY_CHECKPOINT_PATH),
+    )
+    TIME_TO_MIRROR_SLA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TIME_TO_MIRROR_SLA_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(
+        f"time_to_mirror_sla: quote_ready={payload.get('mirror_quote_ready_tokens')} "
+        f"pending={payload.get('pending_count')} -> {TIME_TO_MIRROR_SLA_PATH}",
+        flush=True,
+    )
+    return 0
+
+
+def _build_time_to_mirror_narrow_inventory() -> int:
+    from m8.discovery.time_to_mirror_lane import build_narrow_m9_bridge_inventory
+
+    _payload, rc = build_narrow_m9_bridge_inventory(
+        output_path=Path(M9_TTM_NARROW_BRIDGE),
+    )
+    print(
+        f"time_to_mirror_narrow_inventory: tokens={_payload.get('quote_ready_token_count')} "
+        f"routes={len(_payload.get('active_routes') or [])} exit={rc}",
+        flush=True,
+    )
+    return rc
+
+
+def _export_patient_spread_lifetime() -> int:
+    shadow_path = Path(M9_PATIENT_SHADOW_ARTIFACT)
+    out_path = Path("data/tmp/m9_spread_lifetime_latest.json")
+    if not shadow_path.is_file():
+        print(f"WARN: patient shadow artifact missing ({shadow_path})", flush=True)
+        return 0
+    shadow = json.loads(shadow_path.read_text(encoding="utf-8"))
+    spread_block = shadow.get("spread_lifetime") or {}
+    payload = {
+        "schema_version": "m9_spread_lifetime_v1",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_artifact": M9_PATIENT_SHADOW_ARTIFACT,
+        "profit_claim_allowed": False,
+        "spread_lifetime": spread_block,
+        "summary": spread_block.get("summary") if isinstance(spread_block, dict) else {},
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"patient_lane spread_lifetime exported -> {out_path}", flush=True)
+    return 0
+
+
+def _run_pipeline_step_subprocess(
+    step: dict[str, Any],
+    *,
+    mode: str,
+    step_index: int,
+    step_total: int,
+    all_step_names: list[str],
+    log_fh: Any,
+    timeout_s: int,
+    heartbeat_stale_s: float,
+) -> tuple[int, str | None]:
+    name = str(step["name"])
+    started_at = datetime.now(timezone.utc).isoformat()
+    started_wall_ts = time.time()
+    heartbeat_state = {"last": started_at}
+
+    def _touch_current(pid: int | None, *, status: str = "running") -> None:
+        _write_pipeline_current(
+            {
+                "mode": mode,
+                "step": name,
+                "pid": pid,
+                "started_at": started_at,
+                "last_heartbeat": heartbeat_state["last"],
+                "status": status,
+                "step_index": step_index,
+                "step_total": step_total,
+                "timeout_s": timeout_s,
+                "heartbeat_stale_s": heartbeat_stale_s,
+                "checkpoint_progress": _collect_checkpoint_progress(
+                    all_step_names,
+                    pipeline_mode=mode,
+                ),
+                "quiet_checkpoint_watch": list(STEP_QUIET_CHECKPOINTS.get(name, ())),
+            }
+        )
+
+    internal = step.get("internal")
+    if internal:
+        _touch_current(os.getpid(), status="running_internal")
+        rc = _run_internal_pipeline_step(str(internal))
+        heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
+        _touch_current(os.getpid(), status="finished_internal" if rc == 0 else "failed_internal")
+        log_fh.write(f"<<< {name}: internal={internal} exit={rc}\n")
+        return rc, None if rc in step["allow_exit_codes"] else f"exit={rc}"
+
+    cmd = list(step["cmd"])
+    env = os.environ.copy()
+    env.update(step.get("env") or {})
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    assert proc.stdout is not None
+    _touch_current(proc.pid)
+
+    import queue as _queue
+
+    line_queue: _queue.Queue[tuple[str, str | None]] = _queue.Queue()
+
+    def _reader() -> None:
+        try:
+            for line in proc.stdout:
+                line_queue.put(("line", line))
+        finally:
+            line_queue.put(("done", None))
+
+    threading.Thread(target=_reader, daemon=True).start()
+    start_mono = time.monotonic()
+    last_output_mono = start_mono
+    fail_reason: str | None = None
+
+    while True:
+        try:
+            kind, payload = line_queue.get(timeout=1.0)
+        except _queue.Empty:
+            kind = None
+            payload = None
+
+        now_mono = time.monotonic()
+        if kind == "line" and payload is not None:
+            last_output_mono = now_mono
+            heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
+            sys.stdout.write(payload)
+            log_fh.write(payload)
+            _touch_current(proc.pid)
+        elif kind == "done":
+            break
+        elif kind is None and _checkpoint_activity_since(name, started_wall_ts):
+            last_output_mono = now_mono
+            heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
+            _touch_current(proc.pid)
+
+        if proc.poll() is not None and line_queue.empty():
+            break
+
+        if timeout_s > 0 and (now_mono - start_mono) > timeout_s:
+            proc.kill()
+            fail_reason = f"hard_timeout_{timeout_s}s"
+            break
+        if heartbeat_stale_s > 0 and (now_mono - last_output_mono) > heartbeat_stale_s:
+            proc.kill()
+            fail_reason = f"stale_heartbeat_{int(heartbeat_stale_s)}s"
+            break
+
+    try:
+        rc = proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rc = 3
+    heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
+    _touch_current(proc.pid, status="failed" if fail_reason else "finished")
+    log_fh.write(f"<<< {name}: exit={rc}" + (f" reason={fail_reason}" if fail_reason else "") + "\n")
+    if fail_reason:
+        return rc or 1, fail_reason
+    return rc, None
 
 
 def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -341,7 +794,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
 
-    def add_m82() -> None:
+    def add_m82(*, hot_expand: bool = False) -> None:
         radar_cmd = _py_cmd(
             "scripts/m8_radar_two_phase_refresh.py",
             "--max-tokens",
@@ -352,17 +805,61 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
         if skip_coingecko:
             radar_cmd.append("--skip-coingecko")
-        steps.append(_pipeline_step("m8_2_radar_two_phase", radar_cmd))
+        radar_secondary_timeout = int(
+            getattr(args, "radar_secondary_provider_timeout_s", 0)
+            or DEFAULT_RADAR_SECONDARY_PROVIDER_TIMEOUT_S
+        )
+        if radar_secondary_timeout > 0:
+            radar_cmd.extend(
+                [
+                    "--secondary-provider-timeout-s",
+                    str(radar_secondary_timeout),
+                    "--coingecko-provider-timeout-s",
+                    str(radar_secondary_timeout),
+                ]
+            )
+        radar_step_timeout = int(getattr(args, "radar_step_timeout_s", 0) or DEFAULT_RADAR_STEP_TIMEOUT_S)
+        steps.append(
+            _pipeline_step(
+                "m8_2_radar_two_phase",
+                radar_cmd,
+                timeout_seconds=radar_step_timeout,
+            )
+        )
         steps.append(
             _pipeline_step(
                 "gate_fresh_delta_subset",
                 _py_cmd("scripts/m9_production_refresh_gates.py", "fresh_delta_subset"),
             )
         )
+        if hot_expand:
+            steps.append(
+                _pipeline_step(
+                    "m8_time_to_mirror_pending_queue",
+                    [],
+                    internal="pending_1_to_2_queue",
+                )
+            )
+            steps.append(
+                _pipeline_step(
+                    "m8_time_to_mirror_expand_subset",
+                    [],
+                    internal="time_to_mirror_expand_subset",
+                )
+            )
+            steps.append(
+                _pipeline_step(
+                    "m8_1_stable_anchor_fresh_delta",
+                    _m81_stable_anchor_cmd(
+                        probe_mode="fresh_delta",
+                        token_subset=TIME_TO_MIRROR_EXPAND_SUBSET,
+                    ),
+                )
+            )
         steps.append(
             _pipeline_step(
                 "m8_2_cross_dex_expand",
-                _py_cmd("scripts/m8_cross_dex_expand.py", "--chain", "base"),
+                _m82_cross_dex_expand_cmd(hot=hot_expand),
             )
         )
         steps.append(
@@ -372,18 +869,21 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
 
-    def add_m83() -> None:
+    def add_m83(*, hot: bool = False) -> None:
+        m83_cmd = _productive_rpc_cmd(
+            "scripts/m8_3_token_metadata_registry_refresh.py",
+            "--chain",
+            "base",
+            "--task-mode",
+            "aggregated",
+            "--with-dex-workers",
+            "--dex-worker-concurrency",
+            "4",
+        )
         steps.append(
             _pipeline_step(
                 "m8_3_registry_refresh",
-                _productive_rpc_cmd(
-                    "scripts/m8_3_token_metadata_registry_refresh.py",
-                    "--chain",
-                    "base",
-                    "--task-mode",
-                    "aggregated",
-                    "--with-dex-workers",
-                ),
+                m83_cmd,
             )
         )
         steps.append(
@@ -560,10 +1060,120 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
 
+    def _insert_time_to_mirror_steps() -> None:
+        idx = next(
+            (i for i, step in enumerate(steps) if step["name"] == "m8_2_acceptance_strict"),
+            None,
+        )
+        if idx is None:
+            return
+        mirror_steps = [
+            _pipeline_step(
+                "m8_time_to_mirror_pending_queue",
+                [],
+                internal="pending_1_to_2_queue",
+            ),
+            _pipeline_step(
+                "m8_second_pool_transition_subset",
+                [],
+                internal="second_pool_transition_subset",
+            ),
+            _pipeline_step(
+                "m8_mirror_quote_reprobe",
+                _mirror_smoke_pipeline_cmd(
+                    MIRROR_QUOTE_REPROBE_CHECKPOINT_PATH,
+                    "--force-retry",
+                ),
+                allow_exit_codes=(0, 2),
+            ),
+            _pipeline_step(
+                "m8_second_pool_verify",
+                _mirror_smoke_pipeline_cmd(
+                    MIRROR_SECOND_POOL_VERIFY_CHECKPOINT_PATH,
+                    "--token-subset-file",
+                    SECOND_POOL_TRANSITION_SUBSET,
+                ),
+                allow_exit_codes=(0, 2),
+            ),
+            _pipeline_step(
+                "m8_time_to_mirror_sla_export",
+                [],
+                internal="time_to_mirror_sla_export",
+            ),
+        ]
+        steps[idx:idx] = mirror_steps
+
+    def add_m8_audit() -> None:
+        """Scheduled wide audit lane — not part of time-to-mirror hot path."""
+        steps.append(
+            _pipeline_step(
+                "m8_1_stable_anchor_audit",
+                _m81_stable_anchor_cmd(probe_mode="audit_full"),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_2_cross_dex_expand_audit",
+                _m82_cross_dex_expand_cmd(hot=False),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_2_acceptance_strict",
+                _py_cmd("scripts/m8_2_acceptance_report.py", "--strict"),
+            )
+        )
+        add_m83()
+
     def add_time_to_mirror() -> None:
         """Lane A: fresh radar → mirror verify → M8.3 metadata for handoff candidates."""
-        add_m82()
-        add_m83()
+        # Time-to-mirror always uses hot-path expansion (subset + productive RPC).
+        hot = True
+        add_m82(hot_expand=hot)
+        _insert_time_to_mirror_steps()
+        add_m83(hot=hot)
+        steps.append(
+            _pipeline_step(
+                "m9_time_to_mirror_narrow_inventory",
+                [],
+                internal="time_to_mirror_narrow_inventory",
+                allow_exit_codes=(0, 2),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_time_to_mirror_narrow_shadow_10m",
+                _productive_rpc_cmd(
+                    "-u",
+                    "-m",
+                    "m9.graph_arb.runner",
+                    "--chain",
+                    "base",
+                    "--config",
+                    "config/exotic_base_anchor.yaml",
+                    "--inventory",
+                    M9_TTM_NARROW_BRIDGE,
+                    "--duration-minutes",
+                    "10",
+                    "--productive-lane",
+                    "--require-factory-verified",
+                    "--quote-backend",
+                    "raw_http",
+                    "--quote-workers",
+                    "4",
+                    "--max-cycles-per-sweep",
+                    "20",
+                    "--artifact-path",
+                    M9_TTM_NARROW_SHADOW_ARTIFACT,
+                    "--allow-spread-lifetime-without-positive-gross",
+                ),
+                allow_exit_codes=(0, 2),
+                env={
+                    **patient_lane_shadow_env(),
+                    "ARBY_M9_TIME_TO_MIRROR_NARROW": "1",
+                },
+            )
+        )
 
     def add_patient_lane() -> None:
         """Lane B: thin-liquidity diagnostic shadow (no profit claim)."""
@@ -624,13 +1234,18 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     "20",
                     "--artifact-path",
                     M9_PATIENT_SHADOW_ARTIFACT,
+                    "--allow-spread-lifetime-without-positive-gross",
+                    "--prior-shadow-artifact",
+                    M9_PATIENT_SHADOW_ARTIFACT,
                 ),
-                env={
-                    "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
-                    "ARBY_M9_ECONOMICS_PROFILE": "diagnostic_near_econ",
-                    "ARBY_M9_PATIENT_LANE": "1",
-                    "ARBY_BRIDGE_ARTIFACT_MODE": "exploration_debug",
-                },
+                env=patient_lane_shadow_env(),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m9_patient_spread_lifetime_export",
+                [],
+                internal="patient_spread_lifetime_export",
             )
         )
         steps.append(
@@ -652,6 +1267,16 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
 
+    def add_cross_chain_research() -> None:
+        """R&D placeholder lane — dry-run plan only, no execution or profit claims."""
+        steps.append(
+            _pipeline_step(
+                "cross_chain_research_plan",
+                [],
+                internal="cross_chain_research_plan",
+            )
+        )
+
     if mode == "m8":
         add_m8()
     elif mode == "m8_2":
@@ -662,8 +1287,12 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_m9()
     elif mode == "time_to_mirror":
         add_time_to_mirror()
+    elif mode == "m8_audit":
+        add_m8_audit()
     elif mode == "patient_lane":
         add_patient_lane()
+    elif mode == "cross_chain_research":
+        add_cross_chain_research()
     elif mode in {"m8_m9", "full"}:
         add_m8()
         add_m82()
@@ -674,15 +1303,37 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
 
     plan = list(steps)
     if not getattr(args, "skip_preflight", False):
-        plan = _preflight_steps() + plan
+        plan = _preflight_steps(
+            allow_roadmap_edit=bool(getattr(args, "allow_roadmap_edit", False)),
+        ) + plan
     resume_from = getattr(args, "resume_from", None)
     if resume_from:
         plan = _filter_steps_for_resume(plan, str(resume_from))
     return plan
 
 
+def _write_pipeline_done_marker(*, fail_path: Path, done_path: Path) -> None:
+    """Record successful pipeline completion; stale global fail must not coexist."""
+    try:
+        fail_path.unlink()
+    except FileNotFoundError:
+        pass
+    done_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+
 def _run_project_pipeline(args: argparse.Namespace) -> int:
+    global _CURRENT_PIPELINE_ARGS
+    _CURRENT_PIPELINE_ARGS = args
+    if str(args.pipeline) == "cross_chain_research" and not getattr(args, "dry_run", False):
+        print(
+            "ERROR: cross_chain_research is R&D dry-run only; pass --dry-run",
+            flush=True,
+        )
+        return CROSS_CHAIN_RESEARCH_BLOCKED_EXIT
+
     steps = build_project_pipeline_steps(args)
+    step_names = [str(step["name"]) for step in steps]
+    pipeline_mode = str(args.pipeline)
     log_path = Path(getattr(args, "pipeline_log", "") or "data/tmp/start_pipeline_latest.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fail_path = Path("data/tmp/start_pipeline_latest.fail")
@@ -693,6 +1344,17 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         except FileNotFoundError:
             pass
 
+    if not getattr(args, "dry_run", False):
+        cleared = _clear_stale_fail_markers(pipeline_mode, step_names)
+        if cleared:
+            print(f"Cleared {cleared} stale .fail marker(s) under {PIPELINE_STEP_MARKERS_DIR / pipeline_mode}")
+
+    heartbeat_stale_s = max(
+        60.0,
+        float(getattr(args, "heartbeat_stale_minutes", DEFAULT_HEARTBEAT_STALE_MINUTES))
+        * 60.0,
+    )
+
     print(f"Project pipeline: {args.pipeline} steps={len(steps)} log={log_path}")
     if getattr(args, "dry_run", False):
         _print_rpc_policy_table(steps)
@@ -701,10 +1363,13 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         log_fh.write(f"=== start_pipeline mode={args.pipeline} ===\n")
         if getattr(args, "resume_from", None):
             log_fh.write(f"resume_from={args.resume_from}\n")
+        if getattr(args, "allow_roadmap_edit", False):
+            log_fh.write("allow_roadmap_edit=true\n")
         shadow_gate_allowed = True
-        for step in steps:
+        narrow_shadow_allowed = True
+        for step_index, step in enumerate(steps, start=1):
             name = step["name"]
-            done_marker, fail_marker = _step_marker_paths(name)
+            done_marker, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
             if (
                 not force_rerun
                 and done_marker.exists()
@@ -719,43 +1384,69 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 print(msg.strip())
                 log_fh.write(msg)
                 continue
-            cmd = list(step["cmd"])
-            printable = " ".join(cmd)
-            policy = _classify_step_rpc_policy(cmd)
+            if name == "m9_time_to_mirror_narrow_shadow_10m" and not narrow_shadow_allowed:
+                msg = f"skip {name}: no quote-ready narrow inventory\n"
+                print(msg.strip())
+                log_fh.write(msg)
+                continue
+            cmd = list(step.get("cmd") or [])
+            printable = " ".join(cmd) if cmd else f"<internal:{step.get('internal')}>"
+            policy = _classify_step_rpc_policy(cmd) if cmd else "internal:local_py"
+            timeout_s = _resolve_step_timeout(step, args)
             print(f">>> {name}: {printable}")
             print(f"    rpc_policy: {policy}")
+            print(f"    timeout_s: {timeout_s} heartbeat_stale_s: {int(heartbeat_stale_s)}")
             log_fh.write(f">>> {name}: {printable}\n")
             log_fh.write(f"    rpc_policy: {policy}\n")
+            log_fh.write(
+                f"    timeout_s={timeout_s} heartbeat_stale_s={int(heartbeat_stale_s)}\n"
+            )
             if getattr(args, "dry_run", False):
                 continue
             try:
                 fail_marker.unlink()
             except FileNotFoundError:
                 pass
-            env = os.environ.copy()
-            env.update(step.get("env") or {})
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
+            rc, fail_reason = _run_pipeline_step_subprocess(
+                step,
+                mode=str(args.pipeline),
+                step_index=step_index,
+                step_total=len(steps),
+                all_step_names=step_names,
+                log_fh=log_fh,
+                timeout_s=timeout_s,
+                heartbeat_stale_s=heartbeat_stale_s,
             )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                sys.stdout.write(line)
-                log_fh.write(line)
-            rc = proc.wait()
-            log_fh.write(f"<<< {name}: exit={rc}\n")
             if name == "gate_capacity_shadow":
                 shadow_gate_allowed = rc == 0
+            if name == "m9_time_to_mirror_narrow_inventory":
+                narrow_shadow_allowed = rc == 0
             if rc not in step["allow_exit_codes"]:
-                fail_marker.write_text(f"exit={rc}\n", encoding="utf-8")
-                fail_path.write_text(f"{name}: exit={rc}\n", encoding="utf-8")
+                reason = fail_reason or f"exit={rc}"
+                fail_marker.write_text(f"{reason}\n", encoding="utf-8")
+                fail_path.write_text(f"{name}: {reason}\n", encoding="utf-8")
+                _write_pipeline_current(
+                    {
+                        "mode": str(args.pipeline),
+                        "step": name,
+                        "pid": None,
+                        "started_at": None,
+                        "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+                        "status": "failed",
+                        "fail_reason": reason,
+                        "step_index": step_index,
+                        "step_total": len(steps),
+                        "checkpoint_progress": _collect_checkpoint_progress(
+                            step_names,
+                            pipeline_mode=pipeline_mode,
+                        ),
+                    }
+                )
                 return rc or 1
             done_marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
         if not getattr(args, "dry_run", False):
-            done_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+            _write_pipeline_done_marker(fail_path=fail_path, done_path=done_path)
+            _clear_pipeline_current()
     return 0
 
 
@@ -787,7 +1478,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "m8_m9",
             "full",
             "time_to_mirror",
+            "m8_audit",
             "patient_lane",
+            "cross_chain_research",
         ),
         help="Run canonical project-layer pipeline instead of legacy config scan",
     )
@@ -811,12 +1504,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_const",
         const="patient_lane",
     )
+    pg.add_argument(
+        "--cross-chain-research",
+        dest="pipeline",
+        action="store_const",
+        const="cross_chain_research",
+        help="R&D placeholder lane (requires --dry-run)",
+    )
+    pg.add_argument(
+        "-m8_audit",
+        "--m8-audit",
+        dest="pipeline",
+        action="store_const",
+        const="m8_audit",
+        help="Scheduled wide audit lane (M8.1 audit_full + candidate_summary expansion)",
+    )
     ap.add_argument("--max-radar-tokens", type=int, default=753)
+    ap.add_argument(
+        "--hot",
+        dest="time_to_mirror_hot",
+        action="store_true",
+        default=False,
+        help="Time-to-mirror hot path: fresh-delta subset expansion (hot_path_incremental)",
+    )
     ap.add_argument("--sniper-minutes", type=int, default=45)
     ap.add_argument("--skip-shadow", action="store_true", default=False)
     ap.add_argument("--skip-coingecko", action="store_true", default=True)
     ap.add_argument("--with-coingecko", dest="skip_coingecko", action="store_false")
     ap.add_argument("--dry-run", action="store_true", default=False)
+    ap.add_argument(
+        "--allow-roadmap-edit",
+        action="store_true",
+        default=False,
+        help="Pass --allow-roadmap-edit to check_repo_safety preflight",
+    )
     ap.add_argument(
         "--skip-preflight",
         action="store_true",
@@ -827,7 +1548,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--resume-from",
         choices=tuple(RESUME_FROM_FIRST_STEP.keys()),
         default=None,
-        help="Resume pipeline at m8_2, m8_3, or m9 anchor step",
+        help=(
+            "Resume pipeline at m8_2, m8_2_radar, m8_2_expand, m8_mirror_quote_reprobe, "
+            "m8_second_pool_verify, m8_2_acceptance, m8_3, m9, or m9_capacity"
+        ),
+    )
+    ap.add_argument(
+        "--step-timeout-s",
+        type=int,
+        default=DEFAULT_STEP_TIMEOUT_S,
+        help="Default hard timeout per pipeline step (seconds, 0=disable)",
+    )
+    ap.add_argument(
+        "--radar-step-timeout-s",
+        type=int,
+        default=DEFAULT_RADAR_STEP_TIMEOUT_S,
+        help="Hard timeout for m8_2_radar_two_phase (seconds)",
+    )
+    ap.add_argument(
+        "--radar-secondary-provider-timeout-s",
+        type=int,
+        default=DEFAULT_RADAR_SECONDARY_PROVIDER_TIMEOUT_S,
+        help="Per-request provider timeout for radar secondary/coingecko phases (seconds)",
+    )
+    ap.add_argument(
+        "--heartbeat-stale-minutes",
+        type=int,
+        default=DEFAULT_HEARTBEAT_STALE_MINUTES,
+        help="Fail a step when stdout is silent longer than this many minutes",
     )
     ap.add_argument(
         "--force-rerun-steps",
@@ -912,7 +1660,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not ns.pipeline and not ns.config and not ns.config_list:
         ap.error(
             "one of --config, --config-list, --pipeline, -m_8, -m_8_2, "
-            "-m_8_3, -m_9, -m8_m9, -time_to_mirror, --patient-lane is required"
+            "-m_8_3, -m_9, -m8_m9, -time_to_mirror, --patient-lane, "
+            "--cross-chain-research is required"
         )
     return ns
 

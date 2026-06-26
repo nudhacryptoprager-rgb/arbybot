@@ -189,6 +189,26 @@ Topology diagnostic: `scripts/m9_graph_topology_diagnostic.py` → `cycles_found
 | `cross_anchor_mirror` | **0** (next expansion target) |
 | `connector_graph` | **2** (primary useful signal) |
 
+## Time-to-mirror runtime (2026-06-25)
+
+```text
+TIME_TO_MIRROR_FULL_RUNTIME: REACHED @ max_radar_tokens=100
+start_pipeline_latest.done: 2026-06-25T21:51:22Z
+pending_queue: m8_time_to_mirror_pending_queue_v2 (priority_score on disk)
+mirror_reprobe: exit 0 via productive RPC bootstrap + per-step checkpoint
+narrow M9 shadow: DIAGNOSTIC_NO_POSITIVE_GROSS (cycles_positive_gross=0)
+```
+
+## Hot-path blocker (2026-06-25)
+
+```text
+TIME_TO_MIRROR_HOT_AUDIT_COUPLING: ACTIVE (CODE_WIRING_PARTIAL / RUNTIME_PROOF_PENDING)
+wide token_neighborhood expansion (243 tokens, ~22k RPC) was incorrectly on hot-path
+fix: fresh_delta ∪ pending subset, M8.1 exotic×anchor pairs, transition_1→2 mirror verify
+prior wide expansion artifacts are audit-lane evidence only, not hot-path SLA proof
+hot canary required before 100-token run; milestone status unchanged until runtime proof
+```
+
 ## Next owner
 
 **M9 quote validation** — not production economics claim.

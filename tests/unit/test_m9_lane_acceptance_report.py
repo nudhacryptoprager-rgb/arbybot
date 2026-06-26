@@ -36,6 +36,32 @@ def test_build_acceptance_report_blockers_when_m8_not_ready():
     assert report["funnel_layers"][1]["m8_funnel_reject_histogram"]["TOKEN_SYMBOL_MISSING"] == 11
 
 
+def test_build_acceptance_report_diagnostic_no_positive_gross_blocker():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": [{}] * 11},
+        anchor={"status": "PASS", "metrics": {"stable_anchor_passes_total": 100, "qsr": 1.0}},
+        expansion={"metrics": {"routes_admitted": 50, "multi_venue_tokens": 3, "handoff_ready": True}},
+        bridge={
+            "active_routes": [{"dex_id": "uniswap_v3"}],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 10,
+                "graph_ready_from_expansion": 10,
+            },
+        },
+        shadow={
+            "cycles_found": 100,
+            "cycles_quoteable": 4,
+            "cycles_positive_gross": 0,
+            "diagnostic_lane_status": "DIAGNOSTIC_NO_POSITIVE_GROSS",
+            "qsr": 0.5,
+        },
+        rca=None,
+        m8_2_report={"handoff_ready": True, "goal_status": "REACHED"},
+    )
+    assert "DIAGNOSTIC_NO_POSITIVE_GROSS" in report["m9_quote_validation_blockers"]
+    assert "NO_POSITIVE_GROSS" not in report["m9_quote_validation_blockers"]
+
+
 def test_build_acceptance_report_m8_2_summary_from_artifact_summary():
     report = build_acceptance_report(
         sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},

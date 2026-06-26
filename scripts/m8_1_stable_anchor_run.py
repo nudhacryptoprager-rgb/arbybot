@@ -353,6 +353,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Offline mode: refresh existing artifact timestamp only (no RPC)")
     parser.add_argument("--log-json", action="store_true",
                         help="Emit JSON-formatted log lines")
+    parser.add_argument(
+        "--probe-mode",
+        choices=("audit_full", "fresh_delta"),
+        default="audit_full",
+        help="fresh_delta probes only new M8 token×anchor pairs; audit_full=config sweep",
+    )
+    parser.add_argument(
+        "--token-subset-file",
+        default=None,
+        help="When probe-mode=fresh_delta, limit to token addresses in subset JSON",
+    )
     args = parser.parse_args(argv)
 
     setup_logging(json_format=args.log_json)
@@ -382,6 +393,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Build pairs and routes
     pairs = _enumerate_pairs(cfg)
     routes = _enumerate_routes(cfg)
+    if args.probe_mode == "fresh_delta" and args.token_subset_file:
+        from m8.discovery.token_subset import load_token_subset_file
+        from m8_1.stable_anchor.fresh_delta_pairs import enumerate_fresh_delta_pairs
+
+        subset = load_token_subset_file(args.token_subset_file) or set()
+        if subset:
+            try:
+                w3_preview = _load_web3(rpc_url)
+            except RuntimeError:
+                w3_preview = None
+            fresh_pairs = enumerate_fresh_delta_pairs(cfg, subset, w3=w3_preview)
+            config_pairs = [
+                (t0, t1)
+                for t0, t1 in pairs
+                if t0.address.lower() in subset or t1.address.lower() in subset
+            ]
+            pairs = fresh_pairs + config_pairs
+            _log.info(
+                "fresh_delta probe: subset_tokens=%d fresh_pairs=%d config_pairs=%d total=%d",
+                len(subset),
+                len(fresh_pairs),
+                len(config_pairs),
+                len(pairs),
+            )
     if not pairs:
         _log.warning("no anchor-connected pairs found in config — writing stub artifact")
         run_ts = _iso_now()

@@ -125,6 +125,8 @@ M9_ACCEPTANCE_PATH = Path("data/tmp/m9_lane_acceptance_report_latest.json")
 M9_RCA_PATH = Path("data/tmp/m9_quote_lane_rca_graph_handoff_latest.json")
 M9_QUARANTINE_PROBE_PATH = Path("data/tmp/m9_quarantine_cycle_probe_latest.json")
 M8_2_ACCEPTANCE_PATH = Path("data/tmp/m8_2_acceptance_report_latest.json")
+PIPELINE_CURRENT_PATH = Path("data/tmp/start_pipeline_current.json")
+PIPELINE_STEP_MARKERS_DIR = Path("data/tmp/start_pipeline_steps")
 
 # E1.9.3: Discovery namespace artifacts (parallel to production)
 DISCOVERY_ARTIFACT_FILES = {
@@ -194,6 +196,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._serve_m8_current()
         elif path == "/api/m9/current":
             self._serve_m9_current()
+        elif path == "/api/pipeline/current":
+            self._serve_pipeline_current()
         elif path == "/m7" or path == "/m7/":
             self._serve_file(Path(__file__).parent / "dashboard_m7.html", "text/html")
         elif path == "/m8" or path == "/m8/":
@@ -835,6 +839,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _serve_pipeline_current(self):
+        """Serve start.py pipeline heartbeat + checkpoint marker progress."""
+        result = build_pipeline_control_plane(now_utc=datetime.now(timezone.utc))
+        payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def _serve_m8_current(self):
         """Serve M8 new-pool sniper dashboard data.
 
@@ -1415,6 +1430,81 @@ def build_m9_operator_control_plane(
     }
 
 
+def _pipeline_step_marker_snapshot() -> dict[str, list[str]]:
+    done_steps: list[str] = []
+    failed_steps: list[str] = []
+    if PIPELINE_STEP_MARKERS_DIR.is_dir():
+        for path in sorted(PIPELINE_STEP_MARKERS_DIR.glob("*.done")):
+            done_steps.append(path.stem)
+        for path in sorted(PIPELINE_STEP_MARKERS_DIR.glob("*.fail")):
+            failed_steps.append(path.stem)
+    return {"done_steps": done_steps, "failed_steps": failed_steps}
+
+
+def build_pipeline_control_plane(*, now_utc: datetime) -> dict:
+    """Read start.py control-plane heartbeat + per-step checkpoint markers."""
+    current: dict = {}
+    current_age_s: int | None = None
+    if PIPELINE_CURRENT_PATH.is_file():
+        current = _load_json_artifact(PIPELINE_CURRENT_PATH)
+        try:
+            current_age_s = max(
+                0,
+                int(datetime.now(timezone.utc).timestamp() - os.path.getmtime(PIPELINE_CURRENT_PATH)),
+            )
+        except OSError:
+            current_age_s = None
+
+    markers = _pipeline_step_marker_snapshot()
+    checkpoint = current.get("checkpoint_progress") if isinstance(current.get("checkpoint_progress"), dict) else {}
+    heartbeat_ts = _parse_iso_utc(current.get("last_heartbeat"))
+    heartbeat_age_s = None
+    if heartbeat_ts is not None:
+        heartbeat_age_s = max(0, int((now_utc - heartbeat_ts).total_seconds()))
+
+    status = str(current.get("status") or ("idle" if not current else "unknown"))
+    stale = False
+    stale_reason = None
+    if current and heartbeat_age_s is not None:
+        stale_after_s = int(current.get("heartbeat_stale_s") or 900)
+        if heartbeat_age_s > stale_after_s and status == "running":
+            stale = True
+            stale_reason = f"heartbeat_silent_{heartbeat_age_s}s"
+
+    return {
+        "schema_family": "start_pipeline_control_plane",
+        "schema_revision": "start_pipeline.1",
+        "now_utc": now_utc.isoformat(),
+        "artifact_path": str(PIPELINE_CURRENT_PATH),
+        "artifact_exists": bool(current),
+        "artifact_age_s": current_age_s,
+        "mode": current.get("mode"),
+        "step": current.get("step"),
+        "pid": current.get("pid"),
+        "started_at": current.get("started_at"),
+        "last_heartbeat": current.get("last_heartbeat"),
+        "heartbeat_age_s": heartbeat_age_s,
+        "status": status,
+        "fail_reason": current.get("fail_reason"),
+        "step_index": current.get("step_index"),
+        "step_total": current.get("step_total"),
+        "timeout_s": current.get("timeout_s"),
+        "heartbeat_stale_s": current.get("heartbeat_stale_s"),
+        "stale": stale,
+        "stale_reason": stale_reason,
+        "checkpoint_progress": checkpoint or {
+            "done_steps": markers["done_steps"],
+            "failed_steps": markers["failed_steps"],
+            "done_count": len(markers["done_steps"]),
+            "failed_count": len(markers["failed_steps"]),
+            "marker_namespace": current.get("checkpoint_progress", {}).get("marker_namespace")
+            if isinstance(current.get("checkpoint_progress"), dict)
+            else None,
+        },
+        "step_markers": markers,
+    }
+
+
 def build_m9_current_payload(
     *,
     artifact: dict | None,
@@ -1604,10 +1694,11 @@ def build_m9_current_payload(
         m8_2_report=m8_2_report,
         file_age_s=file_age_s,
     )
+    start_pipeline = build_pipeline_control_plane(now_utc=now_utc)
 
     return {
         "schema_family": "m9_dashboard",
-        "schema_revision": "m9_dashboard.5",
+        "schema_revision": "m9_dashboard.6",
         "now_utc": now_utc.isoformat(),
         "artifact_exists": bool(a),
         "artifact_source_path": artifact_source_path or None,
@@ -1615,6 +1706,7 @@ def build_m9_current_payload(
         "freshness_s": freshness_s,
         "generated_at_utc": generated_at,
         "operator_control_plane": operator_control_plane,
+        "start_pipeline": start_pipeline,
         "m9_summary": {
             "chain": a.get("chain", "base"),
             "cycles_found": cycles_found,

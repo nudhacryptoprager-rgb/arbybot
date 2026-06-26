@@ -1,8 +1,22 @@
 """Quote-smoke for M8.2 same-pair mirror routes (2-leg lane economics admission)."""
 from __future__ import annotations
 
+import json
 import os
-from typing import Any, Dict, List, Optional, Set, Tuple
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+DEFAULT_MIRROR_CHECKPOINT_PATH = "data/tmp/m8_mirror_quote_smoke_progress.json"
+_INFRA_RPC_REASONS = frozenset(
+    {
+        "NO_RPC",
+        "RPC_CONFIG_MISSING",
+        "RPC_CONFIG_PUBLIC_BLOCKED",
+        "RPC_CONFIG_ERROR",
+    }
+)
 
 def _anchor_syms() -> frozenset:
     """Mirror anchors must match M8.2 expansion's anchor set, not a narrower copy.
@@ -285,6 +299,84 @@ def _smoke_v2_route(route: Dict[str, Any], *, rpc_url: str) -> str:
     return "QUOTE_OK_MIRROR_SMOKE"
 
 
+def resolve_mirror_smoke_rpc_url(
+    chain: str,
+    *,
+    pipeline_mode: bool = False,
+) -> Tuple[Optional[str], str]:
+    """Resolve RPC for mirror smoke. Pipeline mode requires productive non-public RPC."""
+    pipeline = pipeline_mode or os.environ.get("ARBY_MIRROR_SMOKE_PIPELINE", "").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if pipeline:
+        try:
+            from core.rpc_urls import (
+                apply_productive_rpc_env,
+                is_public_rpc_url,
+                resolve_productive_http_rpc,
+            )
+
+            env = apply_productive_rpc_env(chain)
+            url = resolve_productive_http_rpc(chain, env=env)
+            if not url:
+                return None, "RPC_CONFIG_MISSING"
+            if is_public_rpc_url(url):
+                return None, "RPC_CONFIG_PUBLIC_BLOCKED"
+            return url, "OK"
+        except Exception as exc:
+            return None, f"RPC_CONFIG_ERROR_{type(exc).__name__}"
+
+    from core.rpc_urls import get_rpc_url
+
+    url = get_rpc_url(chain)
+    if not url:
+        return None, "NO_RPC"
+    return url, "OK"
+
+
+def write_mirror_checkpoint(path: str | Path, payload: Dict[str, Any]) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(payload)
+    payload.setdefault("schema_version", "m8_mirror_quote_smoke_progress_v1")
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def classify_mirror_smoke_exit(*, quote_ok: int, reason: str) -> Tuple[int, str]:
+    """0=quote_ready, 2=no_quote_ready_market, 1=infra_or_code_fail."""
+    upper = str(reason or "").upper()
+    if any(upper.startswith(r) for r in _INFRA_RPC_REASONS) or "RPC_CONFIG" in upper:
+        return 1, "infra"
+    if int(quote_ok) > 0:
+        return 0, "quote_ready"
+    return 2, "no_quote_ready"
+
+
+def _focus_token_lc(route: Dict[str, Any]) -> str:
+    return str(
+        route.get("focus_token_address") or route.get("exotic_address") or ""
+    ).lower()
+
+
+def filter_routes_for_token_subset(
+    routes: List[Dict[str, Any]],
+    *,
+    token_subset: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
+    if not token_subset:
+        return routes
+    return [r for r in routes if _focus_token_lc(r) in token_subset]
+
+
+def load_token_subset_from_path(path: str | Path) -> Optional[set[str]]:
+    from m8.discovery.token_subset import load_token_subset_file
+
+    return load_token_subset_file(path)
+
+
 def smoke_mirror_same_pair_routes(
     routes: List[Dict[str, Any]],
     *,
@@ -292,33 +384,78 @@ def smoke_mirror_same_pair_routes(
     config: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
     force_retry: bool = False,
+    pipeline_mode: bool = False,
+    checkpoint_path: Optional[str] = None,
+    progress_every: int = 5,
+    token_subset: Optional[set[str]] = None,
 ) -> Dict[str, Any]:
     """Run lightweight quoter smoke on same-pair mirror routes; mutates routes in place."""
+    routes = filter_routes_for_token_subset(routes, token_subset=token_subset)
+    ckpt_path = checkpoint_path or DEFAULT_MIRROR_CHECKPOINT_PATH
     if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
         return {
             "attempted": 0,
             "quote_ok": 0,
             "skipped": len(routes),
             "reason": "SKIPPED_DRY_RUN",
+            "exit_class": "skipped",
         }
 
-    from core.rpc_urls import get_rpc_url
-
-    rpc_url = get_rpc_url(chain)
+    rpc_url, rpc_reason = resolve_mirror_smoke_rpc_url(chain, pipeline_mode=pipeline_mode)
     if not rpc_url:
-        return {"attempted": 0, "quote_ok": 0, "skipped": 0, "reason": "NO_RPC"}
+        write_mirror_checkpoint(
+            ckpt_path,
+            {
+                "status": "failed",
+                "reason": rpc_reason,
+                "processed_routes": 0,
+                "quote_ok": 0,
+                "quote_fail": 0,
+                "last_route_id": None,
+                "last_rpc_error": rpc_reason,
+            },
+        )
+        return {
+            "attempted": 0,
+            "quote_ok": 0,
+            "skipped": 0,
+            "reason": rpc_reason,
+            "exit_class": "infra",
+        }
 
     attempted = 0
     quote_ok = 0
+    quote_fail = 0
     by_status: Dict[str, int] = {}
-    for route in routes:
-        if not is_same_pair_mirror_route(route) or not _needs_smoke(
-            route, force_retry=force_retry
-        ):
-            continue
+    last_route_id: Optional[str] = None
+    last_rpc_error: Optional[str] = None
+    eligible = [
+        r
+        for r in routes
+        if is_same_pair_mirror_route(r) and _needs_smoke(r, force_retry=force_retry)
+    ]
+    total_eligible = len(eligible)
+
+    write_mirror_checkpoint(
+        ckpt_path,
+        {
+            "status": "running",
+            "reason": "OK",
+            "processed_routes": 0,
+            "routes_total": total_eligible,
+            "quote_ok": 0,
+            "quote_fail": 0,
+            "last_route_id": None,
+            "last_rpc_error": None,
+            "rpc_url_class": "productive" if pipeline_mode else "default",
+        },
+    )
+
+    for route in eligible:
         attempted += 1
         adapter = str(route.get("adapter_type") or "")
         dex_id = str(route.get("dex_id") or "")
+        last_route_id = str(route.get("route_id") or route.get("pool_address") or "")
         try:
             if adapter in _V3_ADAPTERS:
                 quoter = _dex_quoter(config or {}, dex_id)
@@ -344,6 +481,7 @@ def smoke_mirror_same_pair_routes(
                 status = "QUOTE_SKIP_UNSUPPORTED_ADAPTER"
         except Exception as exc:
             status = f"QUOTE_FAIL_{type(exc).__name__}"
+            last_rpc_error = str(exc)
         route["quote_smoke_status"] = status
         route["quote_smoke"] = status
         t0a, t1a = resolve_route_token_addrs(route, config)
@@ -354,13 +492,68 @@ def smoke_mirror_same_pair_routes(
         by_status[status] = by_status.get(status, 0) + 1
         if _status_quoteable(status):
             quote_ok += 1
+        else:
+            quote_fail += 1
+            if "429" in status.upper() or "RATE" in status.upper():
+                last_rpc_error = status
 
+        if progress_every > 0 and (
+            attempted % progress_every == 0 or attempted == total_eligible
+        ):
+            ckpt = {
+                "status": "running",
+                "reason": "OK",
+                "processed_routes": attempted,
+                "routes_total": total_eligible,
+                "quote_ok": quote_ok,
+                "quote_fail": quote_fail,
+                "last_route_id": last_route_id,
+                "last_rpc_error": last_rpc_error,
+            }
+            write_mirror_checkpoint(ckpt_path, ckpt)
+            print(
+                "MIRROR_SMOKE_PROGRESS: "
+                + json.dumps(
+                    {
+                        "processed": attempted,
+                        "total": total_eligible,
+                        "quote_ok": quote_ok,
+                        "quote_fail": quote_fail,
+                        "last_route_id": last_route_id,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+    exit_code, exit_class = classify_mirror_smoke_exit(
+        quote_ok=quote_ok, reason="OK"
+    )
+    write_mirror_checkpoint(
+        ckpt_path,
+        {
+            "status": "finished",
+            "reason": "OK",
+            "processed_routes": attempted,
+            "routes_total": total_eligible,
+            "quote_ok": quote_ok,
+            "quote_fail": quote_fail,
+            "last_route_id": last_route_id,
+            "last_rpc_error": last_rpc_error,
+            "exit_code": exit_code,
+            "exit_class": exit_class,
+        },
+    )
     return {
         "attempted": attempted,
         "quote_ok": quote_ok,
+        "quote_fail": quote_fail,
         "by_status": by_status,
         "reason": "OK",
         "force_retry": force_retry,
+        "exit_code": exit_code,
+        "exit_class": exit_class,
+        "checkpoint_path": str(ckpt_path),
     }
 
 

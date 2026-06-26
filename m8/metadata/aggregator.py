@@ -41,6 +41,8 @@ def build_aggregated_registry(
     onchain_unresolved_only: bool = True,
     max_onchain_probes: Optional[int] = None,
     with_dex_workers: bool = True,
+    use_erc20_multicall: bool = True,
+    dex_worker_concurrency: int = 4,
 ) -> Dict[str, Any]:
     """Build rolling M8.3 artifact via root scheduler + child workers."""
     from m8.metadata.registry import SOURCE_M8_1, SOURCE_M8_2, SOURCE_M8_SNIPER, _utc_now
@@ -83,6 +85,28 @@ def build_aggregated_registry(
     onchain_used = 0
     sorted_addrs = sorted(addrs)
 
+    onchain_prefetch: Dict[str, Dict[str, Any]] = {}
+    multicall_stats: Dict[str, Any] = {}
+    if w3 is not None and use_erc20_multicall:
+        probe_addrs = [
+            addr
+            for addr in sorted_addrs
+            if not (
+                onchain_unresolved_only
+                and registry_cache.get(addr)
+                and is_economics_grade_entry(registry_cache[addr])
+                and _prior_code_unchanged(w3, addr, registry_cache[addr])
+            )
+        ]
+        if probe_addrs:
+            from m8.metadata.erc20_multicall_prefetch import prefetch_erc20_metadata
+
+            onchain_prefetch = prefetch_erc20_metadata(w3, probe_addrs)
+            multicall_stats = {
+                "erc20_multicall_prefetch_tokens": len(probe_addrs),
+                "erc20_multicall_resolved": len(onchain_prefetch),
+            }
+
     for addr in sorted_addrs:
         prior = registry_cache.get(addr)
         use_w3 = w3
@@ -92,23 +116,24 @@ def build_aggregated_registry(
             probe_cap_exhausted = prior is None or not is_economics_grade_entry(prior)
 
         if onchain_unresolved_only and prior and is_economics_grade_entry(prior):
-            entry = dict(prior)
-            entry.setdefault("address", addr)
-            entry["source_provenance"] = "m8_3"
-            entry["worker_id"] = "erc20_token"
-            token_results[addr] = entry
-            token_decisions.append(
-                asdict(
-                    MetadataAuthorityDecision(
-                        entity_id=addr,
-                        entity_kind="token_erc20",
-                        accepted=True,
-                        reason="prior_economics_grade_cache",
-                        precedence_rank=1,
+            if w3 is None or _prior_code_unchanged(w3, addr, prior):
+                entry = dict(prior)
+                entry.setdefault("address", addr)
+                entry["source_provenance"] = "m8_3"
+                entry["worker_id"] = "erc20_token"
+                token_results[addr] = entry
+                token_decisions.append(
+                    asdict(
+                        MetadataAuthorityDecision(
+                            entity_id=addr,
+                            entity_kind="token_erc20",
+                            accepted=True,
+                            reason="prior_economics_grade_cache",
+                            precedence_rank=1,
+                        )
                     )
                 )
-            )
-            continue
+                continue
 
         if not neg_cache.should_bypass(addr, cycle_scope_addrs):
             cached_err = neg_cache.get(chain, addr)
@@ -150,6 +175,7 @@ def build_aggregated_registry(
             external_hints=ext_hints,
             w3=use_w3,
             probe_cap_exhausted=probe_cap_exhausted,
+            onchain_prefetch=onchain_prefetch,
         )
         if had_w3 and use_w3 is not None:
             onchain_used += 1
@@ -171,6 +197,7 @@ def build_aggregated_registry(
             "economics_grade": result.economics_grade,
             "error_code": result.error_code,
             "code_length": result.code_length,
+            "code_hash": result.code_hash,
             "worker_id": result.worker_id,
             "source_provenance": "m8_3",
         }
@@ -227,6 +254,7 @@ def build_aggregated_registry(
         workers = all_dex_workers()
         seen_routes: Set[str] = set()
         routes_without_worker: Set[str] = set()
+        dex_tasks: List[Tuple[Any, str, Any]] = []
         for route in all_routes:
             rid = route_id_of(route)
             if not rid or rid in seen_routes:
@@ -241,8 +269,27 @@ def build_aggregated_registry(
             if task is None:
                 routes_without_worker.add(rid)
                 continue
-            dex_tasks_assigned += 1
-            result = worker.process(task, w3=w3)
+            dex_tasks.append((worker, rid, task))
+
+        dex_tasks_assigned = len(dex_tasks)
+
+        def _run_dex_task(item: Tuple[Any, str, Any]) -> Tuple[str, DexRouteMetadataResult]:
+            worker, rid, task = item
+            return rid, worker.process(task, w3=w3)
+
+        max_workers = max(1, int(dex_worker_concurrency or 1))
+        if max_workers <= 1 or len(dex_tasks) <= 1:
+            dex_results = [_run_dex_task(item) for item in dex_tasks]
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            dex_results = []
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(dex_tasks))) as pool:
+                futs = {pool.submit(_run_dex_task, item): item for item in dex_tasks}
+                for fut in as_completed(futs):
+                    dex_results.append(fut.result())
+
+        for rid, result in dex_results:
             dex_route_results.append(result)
             dex_by_route[rid] = _dex_result_to_dict(result)
             wm = per_worker_metrics.setdefault(
@@ -347,6 +394,8 @@ def build_aggregated_registry(
             "unresolved_count": unresolved_count,
             "onchain_probes_used": onchain_used,
             "onchain_probes_cap": max_onchain_probes,
+            "onchain_batch": multicall_stats,
+            "dex_worker_concurrency": max(1, int(dex_worker_concurrency or 1)),
             "dex_routes_tracked": len(dex_by_route),
             "dex_routes_ready": sum(1 for r in dex_by_route.values() if r.get("ready")),
         },
@@ -357,6 +406,26 @@ def build_aggregated_registry(
 
 def get_token_registry(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return dict(doc.get("token_registry") or doc.get("tokens") or {})
+
+
+def _prior_code_unchanged(w3: Any, addr: str, prior: Dict[str, Any]) -> bool:
+    """Skip on-chain reprobe when bytecode hash matches cached registry row."""
+    from m8.metadata.token_risk import _code_hash, _fetch_code
+
+    prior_hash = prior.get("code_hash")
+    if w3 is None:
+        return True
+    if not prior_hash and prior.get("code_length") is None:
+        return True
+    try:
+        code = _fetch_code(w3, addr)
+        cur_hash = _code_hash(code)
+        if prior_hash:
+            return str(prior_hash).lower() == str(cur_hash or "").lower()
+        cur_len = len(code) if code and len(code) > 2 else 0
+        return int(prior.get("code_length") or -1) == int(cur_len)
+    except Exception:
+        return False
 
 
 def get_dex_route_metadata(doc: Dict[str, Any]) -> Dict[str, Any]:

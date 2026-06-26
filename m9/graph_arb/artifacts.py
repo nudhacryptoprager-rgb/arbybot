@@ -621,6 +621,89 @@ def _compute_quote_failure_diagnostics(
 
 _PHANTOM_REJECT = "PHANTOM_QUOTE_BPS_OVERFLOW"
 _MAX_PHANTOM_DIAGNOSTIC_TOP = 20
+_NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN = "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN"
+_MAX_NO_ACTIVE_LIQUIDITY_RCA = 20
+
+
+def _is_diagnostic_shadow_lane() -> bool:
+    """True for time-to-mirror narrow / patient diagnostic shadows (no profit claim)."""
+    if os.environ.get("ARBY_M9_TIME_TO_MIRROR_NARROW") == "1":
+        return True
+    profile = str(os.environ.get("ARBY_M9_ECONOMICS_PROFILE") or "")
+    return profile.startswith("diagnostic")
+
+
+def _resolve_positive_gross_lane_status(
+    *,
+    cycles_found: int,
+    cycles_positive_gross: int,
+) -> Optional[str]:
+    """Distinguish diagnostic lane zero-gross from production market absence."""
+    if cycles_found <= 0 or cycles_positive_gross > 0:
+        return None
+    if _is_diagnostic_shadow_lane():
+        return "DIAGNOSTIC_NO_POSITIVE_GROSS"
+    return "MARKET_NO_POSITIVE_GROSS"
+
+
+def _compute_no_active_liquidity_rca(
+    cycle_results: List[CycleQuoteResult],
+    *,
+    top_n: int = _MAX_NO_ACTIVE_LIQUIDITY_RCA,
+) -> Dict[str, Any]:
+    """Top-N RCA for NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN by dex / pool / token_in."""
+    by_dex: Dict[str, int] = defaultdict(int)
+    by_pool: Dict[str, int] = defaultdict(int)
+    by_token_in: Dict[str, int] = defaultdict(int)
+    samples: Dict[str, Dict[str, Any]] = {}
+
+    for qr in cycle_results:
+        edges = qr.cycle.edges
+        for i, leg in enumerate(qr.leg_results or []):
+            if leg.ok or leg.reject_reason != _NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN:
+                continue
+            edge = edges[i] if i < len(edges) else None
+            dex_id = str(edge.dex_id if edge else "unknown")
+            pool = str(edge.pool_address if edge else "unknown").lower()
+            tin_sym = str(edge.token_in_sym if edge else "unknown")
+            tin_addr = str(edge.token_in_addr if edge else "").lower()
+            token_key = tin_addr if tin_addr.startswith("0x") else tin_sym
+
+            by_dex[dex_id] += 1
+            by_pool[pool] += 1
+            by_token_in[token_key] += 1
+
+            sample_key = f"{dex_id}:{pool}:{token_key}"
+            row = samples.setdefault(
+                sample_key,
+                {
+                    "dex_id": dex_id,
+                    "pool_address": pool,
+                    "token_in": tin_sym,
+                    "token_in_addr": tin_addr or None,
+                    "route_id": leg.route_id,
+                    "count": 0,
+                },
+            )
+            row["count"] += 1
+
+    top_samples = sorted(samples.values(), key=lambda r: -int(r["count"]))[:top_n]
+    leg_total = sum(by_dex.values())
+
+    def _top_items(counter: Dict[str, int]) -> List[Dict[str, Any]]:
+        return [
+            {"key": key, "count": count}
+            for key, count in sorted(counter.items(), key=lambda kv: -kv[1])[:top_n]
+        ]
+
+    return {
+        "reject_reason": _NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN,
+        "leg_failures_total": leg_total,
+        "by_dex_id": _top_items(by_dex),
+        "by_pool_address": _top_items(by_pool),
+        "by_token_in": _top_items(by_token_in),
+        "top_samples": top_samples,
+    }
 
 
 def _compute_phantom_quote_diagnostics(
@@ -1176,6 +1259,11 @@ def build_artifact(
         else _compute_edge_error_histogram(cycle_results)
     )
     quote_failure_diagnostics = _compute_quote_failure_diagnostics(cycle_results)
+    no_active_liquidity_rca = _compute_no_active_liquidity_rca(cycle_results)
+    diagnostic_lane_status = _resolve_positive_gross_lane_status(
+        cycles_found=cycles_found,
+        cycles_positive_gross=cycles_positive_gross,
+    )
     phantom_quote_diagnostics = _compute_phantom_quote_diagnostics(cycle_results)
     computed_route_hist, _route_hist_trim = _trim_route_error_histogram(computed_route_hist_full)
     _edge_hist_total = len(computed_edge_hist_full) if isinstance(computed_edge_hist_full, list) else 0
@@ -1200,6 +1288,9 @@ def build_artifact(
         }
     # Inject pool-quality gate lane metadata into scan_scope (Steps 2+3)
     scan_scope["pool_quality_lane"] = pool_quality_lane
+    scan_scope["time_to_mirror_narrow"] = (
+        os.environ.get("ARBY_M9_TIME_TO_MIRROR_NARROW") == "1"
+    )
     if depth_quarantine_skipped > 0:
         scan_scope["depth_quarantine_skipped"] = depth_quarantine_skipped
     if revert_quarantine_skipped > 0:
@@ -1558,6 +1649,17 @@ def build_artifact(
         "route_error_histogram": computed_route_hist,
         "edge_error_histogram": computed_edge_hist,
         "quote_failure_diagnostics": quote_failure_diagnostics,
+        "no_active_liquidity_rca": no_active_liquidity_rca,
+        "diagnostic_lane_status": diagnostic_lane_status,
+        "cycle_buckets": (
+            {
+                "hot_candidate_cycles": cycles_found,
+                "audit_cycles": 0,
+                "diagnostic_cycles": cycles_found,
+            }
+            if os.environ.get("ARBY_M9_TIME_TO_MIRROR_NARROW") == "1"
+            else None
+        ),
         "phantom_quote_diagnostics": phantom_quote_diagnostics,
         "artifact_compaction": {
             "route_error_histogram": _route_hist_trim,

@@ -595,6 +595,74 @@ class TestM9GraphArtifactBuilder:
         assert phantom_diag.get("blocker_class_hint") == "PHANTOM_VALIDATION"
         assert "m8_participation" in a
 
+    def test_diagnostic_lane_status_for_time_to_mirror_narrow(self, monkeypatch):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        monkeypatch.setenv("ARBY_M9_TIME_TO_MIRROR_NARROW", "1")
+        mock_cycle = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=mock_cycle,
+            size_usd=1000.0,
+            amount_in=1000,
+            amount_out=990,
+            gross_bps=-5.0,
+            status="NEGATIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=10.0,
+            cycle_results=[qr],
+            topology=_make_topology(),
+            sizes_usd=(0.05,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=600.0,
+        )
+        assert a["diagnostic_lane_status"] == "DIAGNOSTIC_NO_POSITIVE_GROSS"
+        assert a["scan_scope"]["time_to_mirror_narrow"] is True
+
+    def test_no_active_liquidity_rca_top_samples(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        mock_cycle = _make_mock_cycle()
+        leg = MagicMock()
+        leg.ok = False
+        leg.reject_reason = "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN"
+        leg.route_id = "uniswap_v3:FOO-WETH@500"
+        leg.raw_error = None
+        leg.amount_in = 0
+        leg.amount_out = 0
+        qr = CycleQuoteResult(
+            cycle=mock_cycle,
+            size_usd=0.05,
+            amount_in=1000,
+            amount_out=0,
+            gross_bps=0.0,
+            status="QUOTE_FAILED",
+            reject_reason="CYCLE_QUOTE_FAILED",
+            leg_results=[leg],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=10.0,
+            cycle_results=[qr],
+            topology=_make_topology(),
+            sizes_usd=(0.05,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=600.0,
+        )
+        rca = a.get("no_active_liquidity_rca") or {}
+        assert rca.get("leg_failures_total") == 1
+        assert rca.get("by_dex_id")
+        assert rca.get("top_samples")
+
     def test_infra_status_blocked_when_qsr_below_acceptance(self):
         from m9.graph_arb.artifacts import build_artifact
         from m9.graph_arb.models import CycleQuoteResult

@@ -42,6 +42,7 @@ class Erc20TokenWorker:
         external_hints: Optional[Dict[str, Dict[str, Any]]] = None,
         w3: Any = None,
         probe_cap_exhausted: bool = False,
+        onchain_prefetch: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> TokenMetadataResult:
         addr = (task.address or "").lower()
         if probe_cap_exhausted and w3 is None:
@@ -52,8 +53,13 @@ class Erc20TokenWorker:
             )
 
         code_length: Optional[int] = None
+        code_hash: Optional[str] = None
         if w3 is not None:
-            code_length = _contract_code_length(w3, addr)
+            from m8.metadata.token_risk import _code_hash, _fetch_code
+
+            code = _fetch_code(w3, addr)
+            code_length = len(code) if code and len(code) > 2 else 0
+            code_hash = _code_hash(code) if code_length > 0 else None
             if code_length == 0:
                 return TokenMetadataResult(
                     address=addr,
@@ -70,6 +76,7 @@ class Erc20TokenWorker:
             registry_cache=registry_cache,
             external_hints=external_hints,
             w3=w3,
+            onchain_prefetch=onchain_prefetch,
         )
         err = entry.get("error_code")
         if err == ERROR_ERC20_DECIMALS_REVERT and code_length is not None and code_length > 0:
@@ -84,6 +91,7 @@ class Erc20TokenWorker:
             economics_grade=str(entry.get("economics_grade") or "unresolved"),
             error_code=err,
             code_length=code_length,
+            code_hash=code_hash,
         )
 
 

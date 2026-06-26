@@ -8,9 +8,87 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from m8.discovery.token_subset import load_token_subset_file
+
 SCHEMA_VERSION = "m8_cross_dex_expansion.1"
 
 _log = logging.getLogger(__name__)
+
+_WATCHLIST_PROVENANCE_PATH = Path("data/tmp/m8_token_watchlist_latest.json")
+
+
+def _load_watchlist_provenance_map() -> Dict[str, Dict[str, Any]]:
+    if not _WATCHLIST_PROVENANCE_PATH.is_file():
+        return {}
+    try:
+        doc = json.loads(_WATCHLIST_PROVENANCE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    tokens = doc.get("tokens") or {}
+    return {str(k).lower(): v for k, v in tokens.items() if isinstance(v, dict)}
+
+
+def _merge_registry_provenance_map(
+    provenance_map: Dict[str, Dict[str, Any]],
+    registry: Optional[Dict[str, Any]],
+) -> None:
+    """Fill provenance for M8 registry tokens missing from radar watchlist."""
+    if not registry:
+        return
+    for addr, entry in (registry.get("tokens") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        key = str(addr).lower()
+        if key in provenance_map:
+            continue
+        provenance_map[key] = {
+            "token_class": "registry_m8_token",
+            "refresh_lane": "wide_recall_lane",
+            "first_seen_ts": entry.get("first_seen_ts"),
+            "first_block": entry.get("first_seen_block"),
+            "first_dex": None,
+        }
+
+
+def _provenance_token_candidates(route: Dict[str, Any], token_addr: str) -> List[str]:
+    candidates: List[str] = []
+    for raw in (
+        token_addr,
+        route.get("focus_token_address"),
+        route.get("exotic_address"),
+        route.get("matched_m8_token"),
+        route.get("connector_token"),
+    ):
+        addr = str(raw or "").lower()
+        if addr.startswith("0x") and addr not in candidates:
+            candidates.append(addr)
+    return candidates
+
+
+def _attach_watchlist_provenance(
+    route: Dict[str, Any],
+    watchlist: Dict[str, Dict[str, Any]],
+    token_addr: str,
+) -> None:
+    entry: Dict[str, Any] = {}
+    for candidate in _provenance_token_candidates(route, token_addr):
+        hit = watchlist.get(candidate) or {}
+        if hit:
+            entry = hit
+            break
+    if not entry:
+        return
+    route["token_class"] = entry.get("token_class")
+    route["refresh_lane"] = entry.get("refresh_lane")
+    route["first_seen_dex"] = entry.get("first_dex")
+    route["first_seen_block"] = (
+        entry.get("first_seen_block")
+        or entry.get("block_number")
+        or entry.get("first_block")
+    )
+    route["token_first_seen_ts"] = entry.get("first_seen_ts") or route.get(
+        "token_first_seen_ts"
+    )
 
 # Align with m9/graph_arb/bridge_builder.py dex_id → adapter_type
 _DEX_ID_TO_ADAPTER: Dict[str, str] = {
@@ -1712,6 +1790,10 @@ def _build_route(
         "hint_source": pool_entry.get("hint_source"),
         "origin_source": pool_entry.get("origin_source"),
         "matched_m8_token": pool_entry.get("matched_m8_token"),
+        "token_class": pool_entry.get("token_class"),
+        "refresh_lane": pool_entry.get("refresh_lane"),
+        "first_seen_dex": pool_entry.get("first_seen_dex"),
+        "first_seen_block": pool_entry.get("first_seen_block"),
     }
 
 
@@ -1728,6 +1810,7 @@ def _expand_batch_token_neighborhood(
     external_hints_artifact: Optional[Dict[str, Any]] = None,
     scan_mode: str = "candidate_summary",
     progress_path: Optional[str] = None,
+    token_subset_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Batch rolling expansion: token-neighborhood per registry token."""
     from discovery.pool_resolver import get_pool_resolver
@@ -1737,6 +1820,9 @@ def _expand_batch_token_neighborhood(
     mirror_index = MirrorIndex.load(chain)
     reg_tokens = (registry or {}).get("tokens") or {}
     token_addrs = list(reg_tokens.keys())
+    subset = load_token_subset_file(token_subset_file) if token_subset_file else None
+    if subset is not None:
+        token_addrs = [a for a in token_addrs if str(a).lower() in subset]
     if max_tokens is not None:
         token_addrs = token_addrs[:max_tokens]
 
@@ -1812,6 +1898,9 @@ def _expand_batch_token_neighborhood(
         batch_hint_metrics["hint_registry_overlap_tokens"] = sum(
             1 for addr in token_addrs if hints_for_token(external_hints_artifact, addr)
         )
+
+    watchlist_map = _load_watchlist_provenance_map()
+    _merge_registry_provenance_map(watchlist_map, registry)
 
     for idx, addr in enumerate(token_addrs):
         if idx and idx % 25 == 0:
@@ -1947,6 +2036,7 @@ def _expand_batch_token_neighborhood(
             ("connector_routes", connector_routes),
         ):
             for route in nh.get(bucket) or []:
+                _attach_watchlist_provenance(route, watchlist_map, addr)
                 key = (
                     route.get("dex_id", ""),
                     route.get("pool_address", "").lower(),
@@ -2258,6 +2348,7 @@ def expand_cross_dex(
     external_hints_artifact: Optional[Dict[str, Any]] = None,
     scan_mode: str = "candidate_summary",
     progress_path: Optional[str] = None,
+    token_subset_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run M8.2 expansion and return artifact dict (not written)."""
     from m8.discovery.scan_batch import SCAN_MODES
@@ -2282,6 +2373,7 @@ def expand_cross_dex(
             external_hints_artifact=external_hints_artifact,
             scan_mode=scan_mode,
             progress_path=progress_path,
+            token_subset_file=token_subset_file,
         )
 
     if expansion_mode == "token_neighborhood" and exotic_address_filter:

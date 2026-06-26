@@ -46,6 +46,7 @@ class TokenMetadataResult:
     economics_grade: str = "unresolved"
     error_code: Optional[str] = None
     code_length: Optional[int] = None
+    code_hash: Optional[str] = None
     probe_skipped: bool = False
 
 

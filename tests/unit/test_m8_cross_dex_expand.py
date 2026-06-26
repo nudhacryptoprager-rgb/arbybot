@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import importlib
+import sys
 from pathlib import Path
 
 import yaml
 
 from m8.discovery.cross_dex_expand import (
     SCHEMA_VERSION,
+    _attach_watchlist_provenance,
     _build_route,
+    _merge_registry_provenance_map,
     _registry_pools_for_pair,
     collect_token_anchor_pairs,
     discovery_dexes_from_config,
@@ -39,6 +43,60 @@ def _minimal_config() -> dict:
             },
         },
     }
+
+
+def test_merge_registry_provenance_map_fills_missing_watchlist_tokens():
+    provenance: dict = {}
+    registry = {
+        "tokens": {
+            "0xabc": {"symbol": "FOO", "first_seen_ts": 1_700_000_000.0},
+        }
+    }
+    _merge_registry_provenance_map(provenance, registry)
+    assert provenance["0xabc"]["token_class"] == "registry_m8_token"
+    assert provenance["0xabc"]["refresh_lane"] == "wide_recall_lane"
+
+
+def test_hot_cli_dry_run_does_not_require_removed_benchmark_flag(monkeypatch):
+    cli = importlib.import_module("scripts.m8_cross_dex_expand")
+
+    monkeypatch.setattr(
+        "m8.discovery.cross_dex_expand.load_yaml_config",
+        lambda _path: _minimal_config(),
+    )
+    monkeypatch.setattr(
+        "m8.discovery.cross_dex_expand.expand_cross_dex",
+        lambda **_kwargs: {"summary": {"tokens_in": 0, "routes_admitted_count": 0}},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "m8_cross_dex_expand.py",
+            "--dry-run",
+            "--scan-mode",
+            "hot_path_incremental",
+            "--pipeline-hot",
+        ],
+    )
+
+    assert cli.main() == 0
+
+
+def test_attach_watchlist_provenance_uses_focus_token_when_loop_addr_differs():
+    watchlist = {
+        "0xfocus": {
+            "token_class": "fresh_long_tail",
+            "refresh_lane": "fresh_delta_lane",
+            "first_dex": "uniswap_v3",
+            "first_seen_block": 12345,
+        }
+    }
+    route = {"focus_token_address": "0xFOCUS", "dex_id": "uniswap_v3"}
+    _attach_watchlist_provenance(route, watchlist, "0xother")
+    assert route["token_class"] == "fresh_long_tail"
+    assert route["refresh_lane"] == "fresh_delta_lane"
+    assert route["first_seen_block"] == 12345
 
 
 def test_collect_candidates_from_registry():

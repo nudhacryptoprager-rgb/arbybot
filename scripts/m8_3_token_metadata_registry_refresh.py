@@ -60,6 +60,17 @@ def main() -> int:
         help="Run per-DEX route metadata workers (default when task-mode=aggregated)",
     )
     ap.add_argument("--no-dex-workers", action="store_true", help="Disable dex route workers")
+    ap.add_argument(
+        "--dex-worker-concurrency",
+        type=int,
+        default=4,
+        help="Bounded parallel DEX metadata workers",
+    )
+    ap.add_argument(
+        "--no-erc20-multicall",
+        action="store_true",
+        help="Disable Multicall3 batch for ERC20 decimals/symbol prefetch",
+    )
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -106,6 +117,8 @@ def main() -> int:
         max_onchain_probes=args.max_onchain_probes,
         task_mode=args.task_mode,
         with_dex_workers=with_dex,
+        use_erc20_multicall=not args.no_erc20_multicall,
+        dex_worker_concurrency=args.dex_worker_concurrency,
     )
 
     cov = doc.get("coverage") or {}

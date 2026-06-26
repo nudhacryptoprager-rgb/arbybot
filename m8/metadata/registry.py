@@ -180,6 +180,7 @@ def resolve_token_entry(
     registry_cache: Optional[Dict[str, Dict[str, Any]]] = None,
     external_hints: Optional[Dict[str, Dict[str, Any]]] = None,
     w3: Any = None,
+    onchain_prefetch: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Resolve one token with M8.3 precedence."""
     if not is_valid_eth_address(address):
@@ -248,23 +249,34 @@ def resolve_token_entry(
         candidates.append(c)
 
     if w3 is not None:
-        from m9.graph_arb.token_decimals import fetch_on_chain_decimals
-
-        dec = fetch_on_chain_decimals(w3, addr)
-        if dec is not None:
+        pref = (onchain_prefetch or {}).get(addr) or {}
+        if pref.get("decimals") is not None:
             candidates.append(
-                _candidate(decimals=dec, source=SOURCE_ERC20) or {}
+                _candidate(
+                    decimals=int(pref["decimals"]),
+                    source=SOURCE_ERC20,
+                    symbol=pref.get("symbol"),
+                )
+                or {}
             )
-        elif not any(c["source"] in _ECONOMICS_SOURCES for c in candidates):
-            return {
-                "address": addr,
-                "symbol": None,
-                "name": None,
-                "decimals": None,
-                "source": SOURCE_UNRESOLVED,
-                "economics_grade": ECONOMICS_GRADE_UNRESOLVED,
-                "error_code": ERROR_ERC20_DECIMALS_REVERT,
-            }
+        else:
+            from m9.graph_arb.token_decimals import fetch_on_chain_decimals
+
+            dec = fetch_on_chain_decimals(w3, addr)
+            if dec is not None:
+                candidates.append(
+                    _candidate(decimals=dec, source=SOURCE_ERC20) or {}
+                )
+            elif not any(c["source"] in _ECONOMICS_SOURCES for c in candidates):
+                return {
+                    "address": addr,
+                    "symbol": None,
+                    "name": None,
+                    "decimals": None,
+                    "source": SOURCE_UNRESOLVED,
+                    "economics_grade": ECONOMICS_GRADE_UNRESOLVED,
+                    "error_code": ERROR_ERC20_DECIMALS_REVERT,
+                }
 
     return _merge_candidates(addr, [c for c in candidates if c])
 
@@ -480,6 +492,8 @@ def build_token_metadata_registry(
     max_onchain_probes: Optional[int] = None,
     with_dex_workers: bool = False,
     task_mode: str = "legacy",
+    use_erc20_multicall: bool = True,
+    dex_worker_concurrency: int = 4,
 ) -> Dict[str, Any]:
     """Build rolling M8.3 registry artifact."""
     if task_mode == "aggregated" or with_dex_workers:
@@ -499,6 +513,8 @@ def build_token_metadata_registry(
             onchain_unresolved_only=onchain_unresolved_only,
             max_onchain_probes=max_onchain_probes,
             with_dex_workers=True,
+            use_erc20_multicall=use_erc20_multicall,
+            dex_worker_concurrency=dex_worker_concurrency,
         )
     addrs = collect_token_addresses(
         bridge=bridge,

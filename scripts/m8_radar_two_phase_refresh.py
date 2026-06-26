@@ -43,6 +43,18 @@ def main() -> int:
         default="fresh_first",
         help="fresh_first: fresh_delta then wide_recall; legacy: flat watchlist order",
     )
+    p.add_argument(
+        "--secondary-provider-timeout-s",
+        type=int,
+        default=12,
+        help="Provider timeout for GeckoTerminal/TheGraph secondary phase",
+    )
+    p.add_argument(
+        "--coingecko-provider-timeout-s",
+        type=int,
+        default=45,
+        help="Provider timeout for CoinGecko onchain fallback phase",
+    )
     args = p.parse_args()
 
     py = sys.executable
@@ -158,7 +170,9 @@ def main() -> int:
         subset_file.parent.mkdir(parents=True, exist_ok=True)
         subset_file.write_text(json.dumps({"tokens": secondary}), encoding="utf-8")
         if secondary:
-            _run(
+            secondary_out = str(_REPO / "data/tmp/m8_secondary_hints_merge_staging.json")
+            secondary_staging = Path(secondary_out)
+            rc_secondary = _run(
                 boot
                 + [
                     "scripts/m8_external_pool_hint_refresh.py",
@@ -175,11 +189,11 @@ def main() -> int:
                     "--verify-mode",
                     "specialized",
                     "--output",
-                    HINTS_OUT,
+                    secondary_out,
                     "--checkpoint-path",
                     "data/tmp/m8_hint_refresh_checkpoint_secondary.json",
                     "--provider-timeout-s",
-                    "12",
+                    str(int(args.secondary_provider_timeout_s)),
                     "--sleep-ms",
                     "80",
                     "--fetch-async",
@@ -188,6 +202,24 @@ def main() -> int:
                 ],
                 label="phase3_secondary",
             )
+            if rc_secondary != 0:
+                print(
+                    f"phase3_secondary failed rc={rc_secondary}; skipping hint merge",
+                    flush=True,
+                )
+            elif secondary_staging.is_file():
+                from m8.discovery.hint_artifact_merge import merge_hint_artifact_files
+
+                merge_hint_artifact_files(
+                    _REPO / HINTS_OUT,
+                    secondary_staging,
+                    _REPO / HINTS_OUT,
+                    chain="base",
+                )
+                try:
+                    secondary_staging.unlink()
+                except OSError:
+                    pass
 
     if not args.skip_coingecko:
         subset_file = _REPO / "data/tmp/m8_coingecko_fallback_subset.json"
@@ -195,7 +227,8 @@ def main() -> int:
             json.dumps({"tokens": []}),
             encoding="utf-8",
         )
-        _run(
+        coingecko_staging = _REPO / "data/tmp/m8_coingecko_hints_merge_staging.json"
+        rc_cg = _run(
             boot
             + [
                 "scripts/m8_external_pool_hint_refresh.py",
@@ -211,10 +244,12 @@ def main() -> int:
                 "50",
                 "--verify-mode",
                 "specialized",
+                "--output",
+                str(coingecko_staging),
                 "--checkpoint-path",
                 "data/tmp/m8_hint_refresh_checkpoint_cg.json",
                 "--provider-timeout-s",
-                "45",
+                str(int(args.coingecko_provider_timeout_s)),
                 "--sleep-ms",
                 "250",
                 "--fetch-async",
@@ -223,6 +258,21 @@ def main() -> int:
             ],
             label="phase4_coingecko_canary",
         )
+        if rc_cg != 0:
+            print(f"phase4_coingecko_canary failed rc={rc_cg}; skipping merge", flush=True)
+        elif coingecko_staging.is_file():
+            from m8.discovery.hint_artifact_merge import merge_hint_artifact_files
+
+            merge_hint_artifact_files(
+                _REPO / HINTS_OUT,
+                coingecko_staging,
+                _REPO / HINTS_OUT,
+                chain="base",
+            )
+            try:
+                coingecko_staging.unlink()
+            except OSError:
+                pass
 
     if not args.skip_acceptance:
         rc = _run(

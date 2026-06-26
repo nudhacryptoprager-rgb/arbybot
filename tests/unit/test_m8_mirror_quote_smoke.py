@@ -45,6 +45,16 @@ def test_mirror_smoke_dry_run_skips_rpc():
     assert is_same_pair_mirror_route(routes[0]) is True
 
 
+def test_classify_mirror_smoke_exit_distinct_infra_and_market():
+    from m8.discovery.mirror_quote_smoke import classify_mirror_smoke_exit
+
+    assert classify_mirror_smoke_exit(quote_ok=0, reason="RPC_CONFIG_PUBLIC_BLOCKED") == (
+        1,
+        "infra",
+    )
+    assert classify_mirror_smoke_exit(quote_ok=0, reason="OK") == (2, "no_quote_ready")
+
+
 def test_aggregate_mirror_topology_without_quote():
     routes = [
         {

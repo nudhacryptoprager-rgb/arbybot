@@ -59,9 +59,19 @@ def main() -> int:
         help="Progress artifact for long foreground runs",
     )
     p.add_argument(
+        "--token-subset-file",
+        default=None,
+        help="JSON file with tokens[] — limit expansion to this hot-path subset",
+    )
+    p.add_argument(
+        "--pipeline-hot",
+        action="store_true",
+        help="Hot-path mode telemetry (refuses public-only RPC when unset bootstrap)",
+    )
+    p.add_argument(
         "--benchmark",
         action="store_true",
-        help="Compare audit_full vs candidate_summary on --max-pairs sample",
+        help="Compare audit_full and candidate_summary on a dry-run sample",
     )
     args = p.parse_args()
 
@@ -159,9 +169,16 @@ def main() -> int:
         external_hints_artifact=external_hints,
         scan_mode=args.scan_mode,
         progress_path=args.progress,
+        token_subset_file=args.token_subset_file,
     )
     artifact["config_path"] = str(config_path).replace("\\", "/")
     artifact["input_registry_path"] = args.input
+    if args.external_hints:
+        artifact["external_hints_path"] = args.external_hints
+    if args.token_subset_file:
+        artifact["token_subset_file"] = args.token_subset_file
+    if args.pipeline_hot or args.scan_mode == "hot_path_incremental":
+        artifact.setdefault("summary", {})["expansion_lane"] = "time_to_mirror_hot"
 
     if not args.dry_run:
         write_artifact(artifact, Path(args.output))
