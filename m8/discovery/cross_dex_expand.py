@@ -50,6 +50,68 @@ def _merge_registry_provenance_map(
         }
 
 
+def _refresh_lane_from_subset_source(source: str) -> str:
+    mapping = {
+        "pending_queue": "time_to_mirror_hot",
+        "fresh_delta_lane": "fresh_delta_lane",
+        "transition_1_to_2": "time_to_mirror_hot",
+    }
+    return mapping.get(str(source or ""), str(source or "time_to_mirror_hot"))
+
+
+def _merge_expand_subset_provenance_map(
+    provenance_map: Dict[str, Dict[str, Any]],
+    token_subset_file: Optional[str],
+) -> None:
+    """Attach hot-path provenance from expand subset JSON (source, first_seen_block)."""
+    if not token_subset_file:
+        return
+    p = Path(token_subset_file)
+    if not p.is_file():
+        return
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    for item in doc.get("tokens") or []:
+        if not isinstance(item, dict):
+            continue
+        addr = str(item.get("token") or item.get("address") or "").lower()
+        if not addr.startswith("0x"):
+            continue
+        watchlist_hit = provenance_map.get(addr) or {}
+        source = str(item.get("source") or "")
+        entry = {
+            "token_class": (
+                item.get("token_class")
+                or watchlist_hit.get("token_class")
+                or "fresh_long_tail"
+            ),
+            "refresh_lane": (
+                item.get("refresh_lane")
+                or watchlist_hit.get("refresh_lane")
+                or _refresh_lane_from_subset_source(source)
+            ),
+            "first_seen_block": (
+                item.get("first_seen_block")
+                or watchlist_hit.get("first_seen_block")
+                or watchlist_hit.get("first_block")
+            ),
+            "first_block": (
+                item.get("first_seen_block")
+                or watchlist_hit.get("first_block")
+            ),
+            "first_dex": watchlist_hit.get("first_dex"),
+            "first_seen_ts": watchlist_hit.get("first_seen_ts"),
+        }
+        if addr in provenance_map:
+            for key, value in entry.items():
+                if value is not None and provenance_map[addr].get(key) is None:
+                    provenance_map[addr][key] = value
+        else:
+            provenance_map[addr] = entry
+
+
 def _provenance_token_candidates(route: Dict[str, Any], token_addr: str) -> List[str]:
     candidates: List[str] = []
     for raw in (
@@ -58,11 +120,29 @@ def _provenance_token_candidates(route: Dict[str, Any], token_addr: str) -> List
         route.get("exotic_address"),
         route.get("matched_m8_token"),
         route.get("connector_token"),
+        route.get("token0_addr"),
+        route.get("token1_addr"),
     ):
         addr = str(raw or "").lower()
         if addr.startswith("0x") and addr not in candidates:
             candidates.append(addr)
     return candidates
+
+
+def _attach_provenance_all_routes(
+    routes: List[Dict[str, Any]],
+    provenance_map: Dict[str, Dict[str, Any]],
+) -> None:
+    """Ensure every route inherits subset/watchlist provenance from any leg token."""
+    for route in routes:
+        if route.get("token_class") and route.get("refresh_lane"):
+            continue
+        for candidate in _provenance_token_candidates(route, ""):
+            if candidate not in provenance_map:
+                continue
+            _attach_watchlist_provenance(route, provenance_map, candidate)
+            if route.get("token_class"):
+                break
 
 
 def _attach_watchlist_provenance(
@@ -1821,8 +1901,12 @@ def _expand_batch_token_neighborhood(
     reg_tokens = (registry or {}).get("tokens") or {}
     token_addrs = list(reg_tokens.keys())
     subset = load_token_subset_file(token_subset_file) if token_subset_file else None
+    subset_requested_count = len(subset) if subset is not None else 0
     if subset is not None:
-        token_addrs = [a for a in token_addrs if str(a).lower() in subset]
+        reg_by_lc = {str(a).lower(): a for a in token_addrs}
+        token_addrs = [
+            reg_by_lc.get(addr, addr) for addr in sorted(subset)
+        ]
     if max_tokens is not None:
         token_addrs = token_addrs[:max_tokens]
 
@@ -1901,6 +1985,7 @@ def _expand_batch_token_neighborhood(
 
     watchlist_map = _load_watchlist_provenance_map()
     _merge_registry_provenance_map(watchlist_map, registry)
+    _merge_expand_subset_provenance_map(watchlist_map, token_subset_file)
 
     for idx, addr in enumerate(token_addrs):
         if idx and idx % 25 == 0:
@@ -2101,6 +2186,7 @@ def _expand_batch_token_neighborhood(
             dry_run=dry_run,
         )
     )
+    _attach_provenance_all_routes(routes_admitted, watchlist_map)
     pools_found_by_dex: Counter = Counter(r["dex_id"] for r in routes_admitted)
     _cm_tagged = tag_cross_mechanic_routes(routes_admitted)
     quoteable_by_dex = _expansion_quoteable_by_dex(routes_admitted)
@@ -2192,6 +2278,7 @@ def _expand_batch_token_neighborhood(
         "candidate_rows_rpc": len(candidate_rows_for_expand),
         "candidate_covered_by_canonical": len(covered_candidates),
         "tokens_in": len(token_addrs),
+        "subset_requested_count": subset_requested_count,
         "pairs_in": 0,
         "subgraph_ready_tokens": subgraph_ready_count,
         "mirror_topology_ready_tokens": mirror_topology_ready_count,

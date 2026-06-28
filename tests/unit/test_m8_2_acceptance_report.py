@@ -383,3 +383,30 @@ def test_mirror_handoff_unblocks_m9_upstream():
     assert m8_2["goal_status"] == "REACHED"
     assert "UPSTREAM_M8_2_NOT_READY" not in m9["upstream_blockers"]
     assert m9["m8_2_upstream"]["handoff_lane"] == "mirror_2leg"
+
+
+def test_time_to_mirror_hot_stale_hints_warn_not_block_when_mirror_ready():
+    sniper, hints, expansion = _artifacts(
+        summary=_good_expansion_summary(
+            subgraph_ready_tokens=0,
+            mirror_quote_ready_tokens=2,
+            verified_second_pool_count=2,
+            multi_venue_tokens=2,
+        )
+    )
+    hints["metrics"] = {
+        "hint_pools_seen": 100,
+        "hint_status_counts": {"HINT_STALE": 90, "HINT_ONCHAIN_VERIFIED": 10},
+    }
+    expansion["summary"]["expansion_lane"] = "time_to_mirror_hot"
+    expansion["summary"]["scan_mode"] = "hot_path_incremental"
+    report = build_m8_2_acceptance_report(
+        sniper=sniper, hints=hints, expansion=expansion, strict=True
+    )
+    assert report["handoff_ready"] is True
+    assert "HIGH_STALE_HINT_RATE" not in report["blockers"]
+    assert "STALE_HINT_RATE_HIGH" in report["warnings"]
+    assert "HIGH_STALE_HINT_RATE" in report["freshness_blockers"] or (
+        "STALE_HINT_RATE_HIGH" in report["warnings"]
+    )
+    assert report["goal_status"] == "REACHED"

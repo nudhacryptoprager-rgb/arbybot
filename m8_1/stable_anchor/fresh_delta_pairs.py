@@ -112,7 +112,7 @@ def enumerate_fresh_delta_pairs(
 
     config_addrs = {(tc.address or "").lower() for tc in cfg.tokens.values()}
     pairs: List[Tuple[TokenInfo, TokenInfo]] = []
-    seen: set[Tuple[str, str]] = set()
+    seen: set[frozenset[str]] = set()
 
     for addr in sorted(subset_addrs):
         low = addr.lower()
@@ -130,12 +130,12 @@ def enumerate_fresh_delta_pairs(
         for anchor in anchors.values():
             if exotic.address == anchor.address:
                 continue
-            syms = sorted([exotic.symbol, anchor.symbol])
-            key = (syms[0], syms[1])
+            key = frozenset({exotic.address, anchor.address})
             if key in seen:
                 continue
             seen.add(key)
-            t0 = exotic if exotic.symbol == syms[0] else anchor
-            t1 = anchor if exotic.symbol == syms[0] else exotic
-            pairs.append((t0, t1))
+            if exotic.address < anchor.address:
+                pairs.append((exotic, anchor))
+            else:
+                pairs.append((anchor, exotic))
     return pairs

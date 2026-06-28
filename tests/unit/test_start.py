@@ -195,6 +195,11 @@ class TestProjectPipelineModes(unittest.TestCase):
         args = start.parse_args(["-time_to_mirror", "--dry-run", "--no-dashboard"])
         names = [step["name"] for step in start.build_project_pipeline_steps(args)]
         self.assertIn("m8_time_to_mirror_pending_queue", names)
+        self.assertIn("m8_time_to_mirror_pending_queue_post_expand", names)
+        self.assertEqual(
+            names.count("m8_time_to_mirror_pending_queue"),
+            1,
+        )
         self.assertIn("m8_mirror_quote_reprobe", names)
         self.assertIn("m8_second_pool_verify", names)
         self.assertIn("m8_time_to_mirror_sla_export", names)
@@ -283,6 +288,33 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertIn("--quote-workers", joined)
         parts = joined.split("--quote-workers")
         self.assertTrue(parts[1].strip().startswith("4"))
+
+    def test_time_to_mirror_skip_shadow_omits_narrow_shadow_step(self):
+        args = start.parse_args(
+            [
+                "-time_to_mirror",
+                "--dry-run",
+                "--no-dashboard",
+                "--skip-shadow",
+                "--max-radar-tokens",
+                "25",
+            ]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertNotIn("m9_time_to_mirror_narrow_shadow_10m", names)
+        self.assertIn("m9_time_to_mirror_narrow_inventory", names)
+
+    def test_time_to_mirror_pending_queue_markers_are_distinct(self):
+        pre_done, pre_fail = start._step_marker_paths(
+            "m8_time_to_mirror_pending_queue",
+            pipeline_mode="time_to_mirror",
+        )
+        post_done, post_fail = start._step_marker_paths(
+            "m8_time_to_mirror_pending_queue_post_expand",
+            pipeline_mode="time_to_mirror",
+        )
+        self.assertNotEqual(pre_done, post_done)
+        self.assertNotEqual(pre_fail, post_fail)
 
     def test_m8_audit_lane_is_separate_wide_expansion(self):
         args = start.parse_args(["-m8_audit", "--dry-run", "--no-dashboard"])

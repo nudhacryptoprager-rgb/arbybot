@@ -39,7 +39,14 @@ def write_token_subset_file(
             if not addr.startswith("0x"):
                 continue
             row = {"token": addr}
-            for key in ("source", "priority_score", "first_seen_block", "transitions_1_to_2"):
+            for key in (
+                "source",
+                "token_class",
+                "refresh_lane",
+                "priority_score",
+                "first_seen_block",
+                "transitions_1_to_2",
+            ):
                 if item.get(key) is not None:
                     row[key] = item[key]
             normalized.append(row)

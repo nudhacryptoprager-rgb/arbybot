@@ -85,59 +85,72 @@ def build_time_to_mirror_expand_subset(
 
     watchlist = load_watchlist(watchlist_path)
     pending = build_pending_queue_payload(watchlist)
+    cap = max(1, int(max_tokens))
+    pending_cap = max(1, cap // 2)
+    fresh_cap = cap - pending_cap
     merged: List[Dict[str, Any]] = []
     seen: set[str] = set()
-    cap = max(1, int(max_tokens))
+    pending_merged = 0
+    fresh_merged = 0
 
-    for addr, meta in fresh_meta.items():
-        if addr in seen:
+    for row in pending.get("tokens") or []:
+        if pending_merged >= pending_cap:
+            break
+        addr = str(row.get("token") or "").lower()
+        if not addr.startswith("0x") or addr in seen:
             continue
         merged.append(
             {
                 "token": addr,
+                "source": "pending_queue",
+                "token_class": row.get("token_class"),
+                "refresh_lane": row.get("refresh_lane") or "time_to_mirror_hot",
+                "priority_score": row.get("priority_score"),
+                "first_seen_block": row.get("first_seen_block"),
+                "transitions_1_to_2": row.get("transitions_1_to_2"),
+            }
+        )
+        seen.add(addr)
+        pending_merged += 1
+
+    for addr, meta in fresh_meta.items():
+        if fresh_merged >= fresh_cap or len(merged) >= cap:
+            break
+        if addr in seen:
+            continue
+        wl_entry = (watchlist.get("tokens") or {}).get(addr) or {}
+        merged.append(
+            {
+                "token": addr,
                 "source": meta.get("source") or "fresh_delta_lane",
+                "token_class": wl_entry.get("token_class"),
+                "refresh_lane": wl_entry.get("refresh_lane") or "fresh_delta_lane",
                 "priority_score": meta.get("priority_score"),
                 "first_seen_block": meta.get("first_seen_block"),
             }
         )
         seen.add(addr)
-        if len(merged) >= cap:
-            break
-
-    if len(merged) < cap:
-        for row in pending.get("tokens") or []:
-            addr = str(row.get("token") or "").lower()
-            if not addr.startswith("0x") or addr in seen:
-                continue
-            merged.append(
-                {
-                    "token": addr,
-                    "source": "pending_queue",
-                    "priority_score": row.get("priority_score"),
-                    "first_seen_block": row.get("first_seen_block"),
-                    "transitions_1_to_2": row.get("transitions_1_to_2"),
-                }
-            )
-            seen.add(addr)
-            if len(merged) >= cap:
-                break
+        fresh_merged += 1
 
     if not merged:
         return 2
+    subset_distribution = {
+        "cap": cap,
+        "pending_quota": pending_cap,
+        "fresh_quota": fresh_cap,
+        "pending_merged_count": pending_merged,
+        "fresh_merged_count": fresh_merged,
+        "fresh_delta_pool_count": len(fresh_meta),
+    }
     write_token_subset_file(
         merged,
         output_path,
         source="fresh_delta_union_pending",
-        lane_meta={
-            "fresh_delta_count": len(fresh_meta),
-            "pending_merged_count": sum(1 for r in merged if r.get("source") == "pending_queue"),
-            "cap": cap,
-        },
+        lane_meta=subset_distribution,
     )
     print(
         f"time_to_mirror_expand_subset: {len(merged)} tokens "
-        f"(fresh={len(fresh_meta)} pending_merged="
-        f"{sum(1 for r in merged if r.get('source') == 'pending_queue')}) -> {output_path}",
+        f"(pending={pending_merged}/{pending_cap} fresh={fresh_merged}/{fresh_cap}) -> {output_path}",
         flush=True,
     )
     return 0
@@ -175,11 +188,20 @@ def build_second_pool_transition_subset(
             }
         )
     rows.sort(key=lambda r: float(r.get("priority_score") or 0.0), reverse=True)
+    lane_meta: Dict[str, Any] = {}
     if not rows:
-        return 2
-    write_token_subset_file(rows, output_path, source="second_pool_transition_1_to_2")
+        lane_meta["market_state"] = "MARKET_NO_1_TO_2_TRANSITION"
+    write_token_subset_file(
+        rows,
+        output_path,
+        source="second_pool_transition_1_to_2",
+        lane_meta=lane_meta or None,
+    )
+    state_note = (
+        f" market_state={lane_meta['market_state']}" if lane_meta else ""
+    )
     print(
-        f"second_pool_transition_subset: {len(rows)} tokens -> {output_path}",
+        f"second_pool_transition_subset: {len(rows)} tokens{state_note} -> {output_path}",
         flush=True,
     )
     return 0
@@ -341,6 +363,15 @@ def build_time_to_mirror_sla(
         )
     rows.sort(key=lambda r: float(r.get("priority_score") or 0.0), reverse=True)
     per_token_quote_ready = sum(1 for r in rows if r.get("quote_ready"))
+    expand_subset_distribution: Dict[str, Any] = {}
+    if TIME_TO_MIRROR_EXPAND_SUBSET_PATH.is_file():
+        try:
+            subset_doc = json.loads(
+                TIME_TO_MIRROR_EXPAND_SUBSET_PATH.read_text(encoding="utf-8")
+            )
+            expand_subset_distribution = dict(subset_doc.get("lane_meta") or {})
+        except (OSError, json.JSONDecodeError):
+            pass
     return {
         "schema_version": "m8_time_to_mirror_sla_v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -348,6 +379,7 @@ def build_time_to_mirror_sla(
         "mirror_quote_ready_tokens_global": quote_ready_global,
         "verified_second_pool_count": verified_second,
         "pending_count": int(pending.get("pending_count") or 0),
+        "expand_subset_distribution": expand_subset_distribution,
         "mirror_reprobe_exit": reprobe_ckpt.get("exit_code"),
         "mirror_verify_exit": verify_ckpt.get("exit_code"),
         "mirror_reprobe_checkpoint": _ckpt_summary(reprobe_ckpt),

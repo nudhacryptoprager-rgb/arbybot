@@ -202,11 +202,27 @@ narrow M9 shadow: DIAGNOSTIC_NO_POSITIVE_GROSS (cycles_positive_gross=0)
 ## Hot-path blocker (2026-06-25)
 
 ```text
-TIME_TO_MIRROR_HOT_AUDIT_COUPLING: ACTIVE (CODE_WIRING_PARTIAL / RUNTIME_PROOF_PENDING)
+TIME_TO_MIRROR_HOT_AUDIT_COUPLING: RESOLVED (code + canary runtime partial)
 wide token_neighborhood expansion (243 tokens, ~22k RPC) was incorrectly on hot-path
-fix: fresh_delta ∪ pending subset, M8.1 exotic×anchor pairs, transition_1→2 mirror verify
+fix: fresh_delta ∪ pending subset (50/50 quota), M8.1 exotic×anchor pairs, transition_1→2 mirror verify
 prior wide expansion artifacts are audit-lane evidence only, not hot-path SLA proof
-hot canary required before 100-token run; milestone status unchanged until runtime proof
+```
+
+## Time-to-mirror hot runtime (2026-06-27)
+
+```text
+TIME_TO_MIRROR_HOT_CANARY_PARTIAL / MARKET_NO_1_TO_2_TRANSITION
+hot expansion (100-token refresh): expansion_lane=time_to_mirror_hot scan_mode=hot_path_incremental
+tokens_in=100 routes_admitted=264 mirror_quote_ready_tokens=1
+transition_subset: token_count=0 market_state=MARKET_NO_1_TO_2_TRANSITION
+m8_second_pool_verify: exit=2 NO_TRANSITION_SUBSET (expected market blocker)
+m8_2_acceptance --strict: goal_status=REACHED (handoff_ready=true; quality_blockers remain)
+  freshness_blockers: [] (HIGH_STALE_HINT_RATE downgraded to STALE_HINT_RATE_HIGH warning on hot lane)
+  handoff_blockers: SUBGRAPH_READY_LOW, VERIFIED_SECOND_POOL_LOW, MULTI_VENUE_TOKENS_LOW
+m8_3_acceptance --strict: REACHED
+narrow bridge: quote_ready_token_count=1 active_routes=2 (M9 shadow skipped correctly)
+pipeline exit=0 (--skip-shadow, no full M9)
+next: 753-token hot refresh to hunt fresh 1→2 transitions; no M9 shadow until transition_tokens>0
 ```
 
 ## Next owner

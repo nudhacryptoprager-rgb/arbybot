@@ -1069,7 +1069,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             return
         mirror_steps = [
             _pipeline_step(
-                "m8_time_to_mirror_pending_queue",
+                "m8_time_to_mirror_pending_queue_post_expand",
                 [],
                 internal="pending_1_to_2_queue",
             ),
@@ -1140,40 +1140,41 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 allow_exit_codes=(0, 2),
             )
         )
-        steps.append(
-            _pipeline_step(
-                "m9_time_to_mirror_narrow_shadow_10m",
-                _productive_rpc_cmd(
-                    "-u",
-                    "-m",
-                    "m9.graph_arb.runner",
-                    "--chain",
-                    "base",
-                    "--config",
-                    "config/exotic_base_anchor.yaml",
-                    "--inventory",
-                    M9_TTM_NARROW_BRIDGE,
-                    "--duration-minutes",
-                    "10",
-                    "--productive-lane",
-                    "--require-factory-verified",
-                    "--quote-backend",
-                    "raw_http",
-                    "--quote-workers",
-                    "4",
-                    "--max-cycles-per-sweep",
-                    "20",
-                    "--artifact-path",
-                    M9_TTM_NARROW_SHADOW_ARTIFACT,
-                    "--allow-spread-lifetime-without-positive-gross",
-                ),
-                allow_exit_codes=(0, 2),
-                env={
-                    **patient_lane_shadow_env(),
-                    "ARBY_M9_TIME_TO_MIRROR_NARROW": "1",
-                },
+        if include_shadow:
+            steps.append(
+                _pipeline_step(
+                    "m9_time_to_mirror_narrow_shadow_10m",
+                    _productive_rpc_cmd(
+                        "-u",
+                        "-m",
+                        "m9.graph_arb.runner",
+                        "--chain",
+                        "base",
+                        "--config",
+                        "config/exotic_base_anchor.yaml",
+                        "--inventory",
+                        M9_TTM_NARROW_BRIDGE,
+                        "--duration-minutes",
+                        "10",
+                        "--productive-lane",
+                        "--require-factory-verified",
+                        "--quote-backend",
+                        "raw_http",
+                        "--quote-workers",
+                        "4",
+                        "--max-cycles-per-sweep",
+                        "20",
+                        "--artifact-path",
+                        M9_TTM_NARROW_SHADOW_ARTIFACT,
+                        "--allow-spread-lifetime-without-positive-gross",
+                    ),
+                    allow_exit_codes=(0, 2),
+                    env={
+                        **patient_lane_shadow_env(),
+                        "ARBY_M9_TIME_TO_MIRROR_NARROW": "1",
+                    },
+                )
             )
-        )
 
     def add_patient_lane() -> None:
         """Lane B: thin-liquidity diagnostic shadow (no profit claim)."""

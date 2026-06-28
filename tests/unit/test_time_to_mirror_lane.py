@@ -203,7 +203,10 @@ def test_build_time_to_mirror_expand_subset_unions_pending():
         doc = json.loads(out.read_text(encoding="utf-8"))
         addrs = {r["token"] for r in doc["tokens"]}
         assert "0x" + "3" * 40 in addrs
-        assert doc["lane_meta"]["pending_merged_count"] >= 1
+        meta = doc["lane_meta"]
+        assert meta["pending_quota"] == 5
+        assert meta["fresh_quota"] == 5
+        assert meta["pending_merged_count"] >= 1
 
 
 def test_build_second_pool_transition_subset_filters_1_to_2():
@@ -238,6 +241,24 @@ def test_build_second_pool_transition_subset_filters_1_to_2():
         doc = json.loads(out.read_text(encoding="utf-8"))
         assert len(doc["tokens"]) == 1
         assert doc["tokens"][0]["token"] == "0x" + "a" * 40
+
+
+def test_build_second_pool_transition_subset_empty_writes_zero_tokens():
+    import tempfile
+    from pathlib import Path
+
+    from m8.discovery.time_to_mirror_lane import build_second_pool_transition_subset
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        wl = root / "wl.json"
+        wl.write_text(json.dumps({"tokens": {"0x" + "b" * 40: {}}}), encoding="utf-8")
+        out = root / "trans.json"
+        rc = build_second_pool_transition_subset(watchlist_path=wl, output_path=out)
+        assert rc == 0
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        assert doc["token_count"] == 0
+        assert doc.get("lane_meta", {}).get("market_state") == "MARKET_NO_1_TO_2_TRANSITION"
 
 
 def test_narrow_inventory_tags_quote_ready_same_pair_legs():

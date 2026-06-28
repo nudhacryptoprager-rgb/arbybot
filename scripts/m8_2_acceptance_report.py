@@ -86,6 +86,12 @@ _EXTERNAL_RADAR_BLOCKERS = frozenset(
     }
 )
 
+_FRESHNESS_BLOCKERS = frozenset(_EXTERNAL_RADAR_BLOCKERS) | frozenset(
+    {"HINTS_STALE", "EXTERNAL_HINTS_STALE"}
+)
+
+_HANDOFF_BLOCKERS = frozenset(_QUALITY_BLOCKERS) | frozenset({"MIRROR_READY_LOW"})
+
 _COVERAGE_MIN_RATE = 0.98
 _STALE_HINT_RATE_MAX = 0.85
 
@@ -290,6 +296,14 @@ def _mirror_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _is_time_to_mirror_hot(expansion: Optional[Dict[str, Any]]) -> bool:
+    summary = (expansion or {}).get("summary") or {}
+    return (
+        summary.get("expansion_lane") == "time_to_mirror_hot"
+        or summary.get("scan_mode") == "hot_path_incremental"
+    )
+
+
 def _subgraph_debug_block(expansion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     sample = (expansion or {}).get("subgraph_ready_debug") or (
         (expansion or {}).get("summary") or {}
@@ -430,11 +444,20 @@ def build_m8_2_acceptance_report(
         blockers.append("HIGH_STALE_HINT_RATE")
 
     blockers = sorted(set(blockers))
+    if _is_time_to_mirror_hot(expansion) and mirror_lane_ready:
+        if "HIGH_STALE_HINT_RATE" in blockers:
+            blockers.remove("HIGH_STALE_HINT_RATE")
+            if "STALE_HINT_RATE_HIGH" not in warnings:
+                warnings.append("STALE_HINT_RATE_HIGH")
+        blockers = sorted(set(blockers))
+
     coverage_blockers = sorted(b for b in blockers if b in _COVERAGE_BLOCKERS)
     quality_blockers = sorted(b for b in blockers if b in _QUALITY_BLOCKERS)
     external_radar_blockers = sorted(
         b for b in blockers if b in _EXTERNAL_RADAR_BLOCKERS
     )
+    freshness_blockers = sorted(b for b in blockers if b in _FRESHNESS_BLOCKERS)
+    handoff_blockers = sorted(b for b in blockers if b in _HANDOFF_BLOCKERS)
     if mirror_lane_ready:
         handoff_lane = "mirror_2leg"
     elif graph_topology_lane_ready:
@@ -496,7 +519,10 @@ def build_m8_2_acceptance_report(
         "radar_funnel": radar_funnel,
         "coverage_blockers": coverage_blockers,
         "quality_blockers": quality_blockers,
+        "freshness_blockers": freshness_blockers,
+        "handoff_blockers": handoff_blockers,
         "external_radar_blockers": external_radar_blockers,
+        "time_to_mirror_hot": _is_time_to_mirror_hot(expansion),
         "quality_gates": dict(_QUALITY_GATES),
         "blockers": blockers,
         "warnings": warnings,

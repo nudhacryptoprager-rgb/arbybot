@@ -36,3 +36,38 @@ def test_fresh_delta_pairs_for_non_config_token():
         assert len(pairs) >= 2
         addrs = {p[0].address for p in pairs} | {p[1].address for p in pairs}
         assert exotic in addrs
+
+
+def test_fresh_delta_pairs_dedup_by_address_not_symbol():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    exotic_a = "0x" + "a" * 40
+    exotic_b = "0x" + "b" * 40
+    with tempfile.TemporaryDirectory() as tmp:
+        wl = Path(tmp) / "wl.json"
+        wl.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        exotic_a: {"symbol": "SAME", "decimals": 18},
+                        exotic_b: {"symbol": "SAME", "decimals": 18},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        pairs = enumerate_fresh_delta_pairs(
+            _mock_cfg(),
+            {exotic_a, exotic_b},
+            w3=None,
+            watchlist_path=wl,
+            registry_path=Path(tmp) / "missing.json",
+        )
+        exotic_addrs = {
+            p[0].address if p[0].address in {exotic_a, exotic_b} else p[1].address
+            for p in pairs
+        }
+        assert exotic_a in exotic_addrs
+        assert exotic_b in exotic_addrs

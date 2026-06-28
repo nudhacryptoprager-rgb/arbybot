@@ -10,8 +10,10 @@ import yaml
 
 from m8.discovery.cross_dex_expand import (
     SCHEMA_VERSION,
+    _attach_provenance_all_routes,
     _attach_watchlist_provenance,
     _build_route,
+    _merge_expand_subset_provenance_map,
     _merge_registry_provenance_map,
     _registry_pools_for_pair,
     collect_token_anchor_pairs,
@@ -97,6 +99,57 @@ def test_attach_watchlist_provenance_uses_focus_token_when_loop_addr_differs():
     assert route["token_class"] == "fresh_long_tail"
     assert route["refresh_lane"] == "fresh_delta_lane"
     assert route["first_seen_block"] == 12345
+
+
+def test_merge_expand_subset_provenance_map_hot_path(tmp_path):
+    subset_path = tmp_path / "expand_subset.json"
+    subset_path.write_text(
+        json.dumps(
+            {
+                "tokens": [
+                    {
+                        "token": "0xabc123",
+                        "source": "pending_queue",
+                        "token_class": "fresh_long_tail",
+                        "refresh_lane": "time_to_mirror_hot",
+                        "first_seen_block": 99999,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    provenance: dict = {}
+    _merge_expand_subset_provenance_map(provenance, str(subset_path))
+    assert provenance["0xabc123"]["token_class"] == "fresh_long_tail"
+    assert provenance["0xabc123"]["refresh_lane"] == "time_to_mirror_hot"
+    assert provenance["0xabc123"]["first_seen_block"] == 99999
+
+    route = {"focus_token_address": "0xAbC123", "dex_id": "uniswap_v3"}
+    _attach_watchlist_provenance(route, provenance, "0xother")
+    assert route["token_class"] == "fresh_long_tail"
+    assert route["refresh_lane"] == "time_to_mirror_hot"
+    assert route["first_seen_block"] == 99999
+
+
+def test_attach_provenance_all_routes_uses_pool_leg_tokens():
+    provenance = {
+        "0xexotic": {
+            "token_class": "fresh_long_tail",
+            "refresh_lane": "time_to_mirror_hot",
+            "first_seen_block": 555,
+        }
+    }
+    route = {
+        "focus_token_address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "token0_addr": "0xEXOTIC",
+        "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "dex_id": "uniswap_v3",
+    }
+    _attach_provenance_all_routes([route], provenance)
+    assert route["token_class"] == "fresh_long_tail"
+    assert route["refresh_lane"] == "time_to_mirror_hot"
+    assert route["first_seen_block"] == 555
 
 
 def test_collect_candidates_from_registry():

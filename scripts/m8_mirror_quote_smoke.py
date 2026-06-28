@@ -17,6 +17,7 @@ from m8.discovery.mirror_quote_smoke import (
     aggregate_mirror_readiness_from_routes,
     build_mirror_token_details,
     classify_mirror_smoke_exit,
+    load_token_subset_from_path,
     smoke_mirror_same_pair_routes,
 )
 
@@ -56,11 +57,27 @@ def main() -> int:
     doc = json.loads(path.read_text(encoding="utf-8"))
     routes = list(doc.get("routes_admitted") or [])
     config = load_yaml_config(Path(args.config))
-    subset = (
-        load_token_subset_from_path(args.token_subset_file)
-        if args.token_subset_file
-        else None
-    )
+    subset = None
+    if args.token_subset_file:
+        subset_path = Path(args.token_subset_file)
+        if subset_path.is_file():
+            subset_doc = json.loads(subset_path.read_text(encoding="utf-8"))
+            if not (subset_doc.get("tokens") or []):
+                smoke = {
+                    "attempted": 0,
+                    "quote_ok": 0,
+                    "quote_fail": 0,
+                    "reason": "NO_TRANSITION_SUBSET",
+                    "exit_class": "no_quote_ready",
+                    "exit_code": 2,
+                    "token_subset_file": str(subset_path),
+                }
+                summary = doc.setdefault("summary", {})
+                summary["mirror_quote_smoke"] = smoke
+                write_artifact(doc, path)
+                print(json.dumps(smoke, indent=2))
+                return 2
+        subset = load_token_subset_from_path(args.token_subset_file)
     smoke = smoke_mirror_same_pair_routes(
         routes,
         chain=args.chain,

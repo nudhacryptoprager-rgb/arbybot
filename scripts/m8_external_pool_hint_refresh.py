@@ -68,6 +68,12 @@ def main() -> int:
         help="Required for canonical mode; M8-derived token universe only",
     )
     p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Cap watchlist tokens processed (ignored when --token-subset-file fully defines list)",
+    )
+    p.add_argument(
         "--exploration",
         action="store_true",
         help="Non-canonical mode without watchlist (hints not for production bridge)",
