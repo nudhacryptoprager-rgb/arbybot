@@ -136,6 +136,25 @@ def verify_v4_pool_id(
     return True, VERIFY_V4_STATEVIEW
 
 
+def verify_v4_pool_id_exists(
+    pool_id: str,
+    *,
+    chain: str = "base",
+    rpc_url: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Existence-only V4 check: initialized poolId (slot0), no liquidity floor."""
+    if not is_bytes32_hex(pool_id):
+        return False, "V4_INVALID_POOL_ID"
+    url = _rpc_url(chain, rpc_url)
+    if not url:
+        return False, "RPC_UNAVAILABLE"
+    arg = _encode_bytes32_arg(pool_id)
+    slot0 = _eth_call(url, _V4_STATEVIEW_BASE, "0x" + _SEL_V4_GET_SLOT0 + arg)
+    if slot0 and len(slot0) >= 66:
+        return True, VERIFY_V4_STATEVIEW
+    return False, "V4_SLOT0_EMPTY"
+
+
 def verify_balancer_pool_id(
     pool_id: str,
     *,

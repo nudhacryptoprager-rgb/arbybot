@@ -42,6 +42,18 @@ class ProviderTiming:
 SECONDARY_SOURCES = ("geckoterminal", "thegraph_token_api")
 FALLBACK_SOURCES = ("coingecko_onchain",)
 AUDIT_SOURCES = ("dexscreener", "geckoterminal", "thegraph_token_api", "coingecko_onchain")
+HOT_RECALL_SOURCES = ("dexscreener",)
+WARM_AUDIT_FEEDER_SOURCES = ("geckoterminal", "coingecko_onchain")
+
+
+def sources_for_lane(lane: str) -> tuple[str, ...]:
+    """Hot uses DexScreener only; warm adds audit feeders; audit uses full set."""
+    lane = str(lane or "").lower()
+    if lane in ("audit_full", "m8_audit"):
+        return AUDIT_SOURCES
+    if lane in ("warm_recall", "warm"):
+        return HOT_RECALL_SOURCES + WARM_AUDIT_FEEDER_SOURCES
+    return HOT_RECALL_SOURCES
 
 
 def hints_by_token(hints: List[PoolHint]) -> Dict[str, List[PoolHint]]:

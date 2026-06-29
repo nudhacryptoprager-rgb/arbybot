@@ -37,7 +37,9 @@ DEFAULT_VERIFY_BUDGET_PATH = "data/tmp/m8_verify_budget_latest.json"
 DEFAULT_EXPAND_SUBSET = "data/tmp/m8_time_to_mirror_expand_subset.json"
 FACTORY_LOG_CONFIG_PATH = Path("config/new_pool_factories.yaml")
 
-P0_ANCHOR_SYMS = ("USDC", "WETH", "cbBTC", "EURC", "USDbC", "DAI")
+from m8.discovery.mirror_anchors import P0_FACTORY_ANCHOR_SYMS
+
+P0_ANCHOR_SYMS = P0_FACTORY_ANCHOR_SYMS
 FRESH_NEG_CACHE_TTL_S = 180.0
 FACTORY_LOG_MAX_BLOCKS = 5000
 FACTORY_LOG_HOT_CHUNK_BLOCKS = 200

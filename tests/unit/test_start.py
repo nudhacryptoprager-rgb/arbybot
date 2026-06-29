@@ -605,7 +605,7 @@ class TestProjectPipelineModes(unittest.TestCase):
                 self.assertEqual(rc, 0)
                 doc = json.loads(out_path.read_text(encoding="utf-8"))
                 self.assertEqual(doc["pending_count"], 1)
-                self.assertEqual(doc["schema_version"], "m8_time_to_mirror_pending_queue_v2")
+                self.assertEqual(doc["schema_version"], "m8_time_to_mirror_pending_queue_v3")
                 self.assertIn("priority_score", doc["tokens"][0])
             finally:
                 start.PENDING_1_TO_2_QUEUE_PATH = orig_out

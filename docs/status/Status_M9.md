@@ -2,17 +2,13 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_3_STRICT_PASS / M9_NOT_STARTED_BY_TARGET_UNIVERSE_GATE**
+**Current runtime line:** **M8_3_STRICT_PASS / M9_WAITING_FOR_SELECTION_VERIFIED_MIRRORS**
 
 ```text
-production_refresh: 2026-06-29 full m8_m9 --skip-shadow (~119m, exit 0)
-M8.2 strict: REACHED (110 tokens, 371 routes, mirror_quote_ready=10 wide lane)
-M8.3 strict: REACHED
-sniper: status=ACTIVE generated_at_utc=2026-06-29T15:34:44Z
-time_to_mirror_hot_slice: first_pool_found=4 second_venue_found=0 fresh_long_tail_quote_ready_tokens=0
-time_to_mirror_narrow: active_routes=49 token_class=unknown; target_universe_gate_blocked=true
-narrow_capacity: cycles_total=0 cycles_at_floor=0 (depth/capacity skipped)
-m9_shadow: NOT_STARTED (--skip-shadow + target universe gate); do not shadow until fresh_long_tail_quote_ready_tokens>0
+mirror_recall_clean_rerun: all_dex=32 pool_exists=2 pool_exists_stale=2 selection_fresh=0
+selection_input: data/tmp/m8_mirror_recall_hints_latest.json (not rolling hints)
+raw/stale DexScreener mirrors are not M9 input; only selection_verified_fresh + quote_ready
+m9_shadow: NOT_STARTED; do not shadow until selection_verified_fresh_total>0
 ```
 
 ## Capacity blocker audit

@@ -341,20 +341,54 @@ def score_pending_token(entry: Dict[str, Any], *, now_ts: Optional[float] = None
     return round(score, 2)
 
 
+def _classify_pending_queue_state(entry: Dict[str, Any]) -> str:
+    """Bucket token into pending-queue lane (step 6)."""
+    if entry.get("mirror_quote_ready") or entry.get("quote_smoke_ok"):
+        return "quote_ready"
+    if entry.get("second_pool_verified") or entry.get("second_pool_hint"):
+        return "second_venue_seen"
+    from m8.discovery.launchpad_classifier import classify_launchpad
+
+    launchpad = classify_launchpad(
+        str(entry.get("token") or ""),
+        entry=entry,
+    )
+    if launchpad.get("launchpad") not in ("unknown", "generic_launchpad") and launchpad.get(
+        "single_venue_common"
+    ):
+        return "patient_candidate"
+    has_first = bool(entry.get("first_pool") or entry.get("first_dex"))
+    if has_first and not entry.get("second_pool_verified"):
+        return "single_venue_watch"
+    return "single_venue_watch"
+
+
 def build_pending_queue_payload(
     watchlist: Dict[str, Any],
     *,
     now_ts: Optional[float] = None,
 ) -> Dict[str, Any]:
     now = float(now_ts if now_ts is not None else time.time())
+    buckets: Dict[str, List[Dict[str, Any]]] = {
+        "single_venue_watch": [],
+        "second_venue_seen": [],
+        "quote_ready": [],
+        "patient_candidate": [],
+    }
     pending: List[Dict[str, Any]] = []
     for addr, entry in (watchlist.get("tokens") or {}).items():
         if not isinstance(entry, dict):
             continue
         second_verified = bool(entry.get("second_pool_verified"))
         has_first = bool(entry.get("first_pool") or entry.get("first_dex"))
-        if not has_first or second_verified:
+        if not has_first:
             continue
+        if second_verified and entry.get("mirror_quote_ready"):
+            state = "quote_ready"
+        elif second_verified or entry.get("second_pool_hint"):
+            state = "second_venue_seen"
+        else:
+            state = _classify_pending_queue_state({**entry, "token": addr})
         row = {
             "token": str(addr).lower(),
             "token_class": entry.get("token_class"),
@@ -368,14 +402,22 @@ def build_pending_queue_payload(
                 or entry.get("first_block")
             ),
             "second_pool_hint": entry.get("second_pool_hint"),
+            "queue_state": state,
             "priority_score": score_pending_token(entry, now_ts=now),
         }
-        pending.append(row)
+        buckets[state].append(row)
+        if state != "quote_ready":
+            pending.append(row)
+    for key in buckets:
+        buckets[key].sort(key=lambda r: float(r.get("priority_score") or 0.0), reverse=True)
     pending.sort(key=lambda r: float(r.get("priority_score") or 0.0), reverse=True)
     return {
-        "schema_version": "m8_time_to_mirror_pending_queue_v2",
+        "schema_version": "m8_time_to_mirror_pending_queue_v3",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "pending_count": len(pending),
+        "queues": {
+            k: {"count": len(v), "tokens": v} for k, v in buckets.items()
+        },
         "tokens": pending,
     }
 

@@ -245,6 +245,21 @@ pipeline exit=0 (--skip-shadow when capacity gate blocks)
 next: narrow depth reprobe + widen mirror yield (753-token scored verify); no M9 shadow until cycles_at_floor>0
 ```
 
+## Mirror recall expansion (2026-06-29)
+
+```text
+MIRROR_RECALL_BREADTH_PROVEN / STALE_EXISTENCE_VERIFICATION_PARTIAL
+stale_existence_resolver_v4: factory/v4-poolId/aerodrome paths + existence RCA buckets
+wide_recall_clean_rerun: mirror_recall 753 tokens exit=0 selection_input=m8_mirror_recall_hints_latest.json
+MIRROR_RECALL_BREADTH: all_dex_mirrors_total=32 (was 28 pre-resolver / 8 @150)
+  dex_alias_backlog: uniswap=27 aerodrome=4 pancakeswap=1
+recall_verified_pool_exists_total=2 pool_exists_stale_total=2 selection_verified_fresh_total=0
+existence_rca: STALE_BUT_POOL_EXISTS=2 V4_POOLID_NOT_RESOLVED=25
+selection_stages: recall=32 -> pool_exists=2 -> fresh_enough=0 -> narrow=0
+blocker: selection_verified_fresh_total=0; stale_quote_smoke infra RPC_CONFIG_ERROR (non-M9)
+next: v4 poolId resolver depth + stale quote smoke RPC bootstrap; no M9 shadow
+```
+
 ## Next owner
 
 **M9 quote validation** — not production economics claim.

@@ -307,6 +307,14 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         verify_mode = "specialized"
 
     sources = [s.strip() for s in args.sources.split(",") if s.strip()]
+    cache_lane = getattr(args, "cache_lane", None) or os.environ.get("ARBY_HINT_CACHE_LANE")
+    if cache_lane:
+        from m8.discovery.radar_fast_pipeline import sources_for_lane
+
+        allowed = set(sources_for_lane(str(cache_lane)))
+        sources = [s for s in sources if s in allowed]
+        if not sources:
+            sources = list(sources_for_lane(str(cache_lane)))
     for s in sources:
         if s not in _SOURCE_FETCHERS:
             log.error("Unknown source: %s", s)
@@ -366,6 +374,20 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         len(tokens),
         args.pipeline_mode,
     )
+
+    if "dexscreener" in sources and len(tokens) > 1:
+        from m8.discovery.dexscreener_hints import (
+            DEXSCREENER_BATCH_MAX,
+            fetch_token_hints_batch,
+        )
+
+        for i in range(0, len(tokens), DEXSCREENER_BATCH_MAX):
+            chunk = [str(t).lower() for t in tokens[i : i + DEXSCREENER_BATCH_MAX]]
+            fetch_token_hints_batch(
+                chunk,
+                chain=args.chain,
+                cache_lane=cache_lane,
+            )
 
     from m8.discovery.radar_fast_pipeline import ProviderTiming
 

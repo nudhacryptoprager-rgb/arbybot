@@ -120,10 +120,35 @@ DEFAULT_HEARTBEAT_STALE_MINUTES = 15
 TIME_TO_MIRROR_STEP_TIMINGS_PATH = Path(
     "data/tmp/m8_time_to_mirror_step_timings_latest.json"
 )
+EVENT_STREAM_LANE_ARTIFACT = Path("data/tmp/m8_event_stream_lane_latest.json")
+MIRROR_DISCOVERY_RECALL_PATH = Path("data/tmp/m8_mirror_discovery_recall_latest.json")
+PATIENT_LANE_DIAGNOSTIC_PATH = Path("data/tmp/m8_patient_lane_diagnostics_latest.json")
+HOT_LOOP_EVENT_INTERVAL_S = 300
+
+
+def _fresh_quote_ready_count() -> int:
+    """Event-trigger gate: M9 depth/capacity only when fresh long-tail quote-ready > 0."""
+    for path in (Path(M9_TTM_NARROW_BRIDGE), TIME_TO_MIRROR_SLA_PATH):
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            count = int(doc.get("fresh_long_tail_quote_ready_tokens") or 0)
+            if count > 0:
+                return count
+            funnel = doc.get("mirror_yield_funnel") or {}
+            count = int(funnel.get("fresh_long_tail_quote_ready_tokens") or 0)
+            if count > 0:
+                return count
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return 0
 
 
 def _target_m9_allowed_from_bridge() -> bool:
-    """Hydrate M9 depth/capacity allowance from latest narrow bridge artifact."""
+    """Hydrate M9 depth/capacity allowance from narrow bridge + quote-ready gate."""
+    if _fresh_quote_ready_count() <= 0:
+        return False
     path = Path(M9_TTM_NARROW_BRIDGE)
     if not path.is_file():
         return False
@@ -150,6 +175,8 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "hot_sla_max_s": TIME_TO_MIRROR_HOT_SLA_S,
         "hot_expand": True,
         "m83_max_onchain_probes": 120,
+        "event_poll_max_blocks": 500,
+        "hot_loop_event_interval_s": HOT_LOOP_EVENT_INTERVAL_S,
     },
     "warm_recall": {
         "max_radar_tokens": 150,
@@ -161,6 +188,22 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "hot_sla_max_s": 1800,
         "hot_expand": True,
         "m83_max_onchain_probes": 250,
+        "event_poll_max_blocks": 1500,
+        "hot_loop_event_interval_s": HOT_LOOP_EVENT_INTERVAL_S * 2,
+    },
+    "mirror_recall": {
+        "max_radar_tokens": 753,
+        "skip_secondary": True,
+        "verify_subset_max": 0,
+        "m81_duration_minutes": 2.0,
+        "radar_step_timeout_s": 1200,
+        "expand_step_timeout_s": 3600,
+        "hot_sla_max_s": 3600,
+        "hot_expand": True,
+        "mirror_discovery_max_recall": True,
+        "m83_max_onchain_probes": 120,
+        "event_poll_max_blocks": 800,
+        "hot_loop_event_interval_s": HOT_LOOP_EVENT_INTERVAL_S * 2,
     },
     "audit_full": {
         "max_radar_tokens": 753,
@@ -180,6 +223,12 @@ CROSS_CHAIN_RESEARCH_BLOCKED_EXIT = 2
 STEP_QUIET_CHECKPOINTS: dict[str, tuple[str, ...]] = {
     "m8_onchain_factory_mirror_scan": (
         "data/tmp/m8_onchain_factory_scan_latest.json",
+    ),
+    "m8_event_stream_lane": (
+        "data/tmp/m8_event_stream_lane_latest.json",
+    ),
+    "m8_mirror_discovery_recall": (
+        "data/tmp/m8_mirror_discovery_recall_latest.json",
     ),
     "m8_2_radar_two_phase": (
         "data/tmp/m8_hint_refresh_checkpoint_ds_radar.json",
@@ -555,6 +604,12 @@ def _run_internal_pipeline_step(internal: str) -> int:
         return _export_time_to_mirror_expand_subset(max_tokens=max_t)
     if internal == "second_pool_transition_subset":
         return _export_second_pool_transition_subset()
+    if internal == "event_stream_lane":
+        return _run_event_stream_lane()
+    if internal == "patient_lane_diagnostics":
+        return _export_patient_lane_diagnostics()
+    if internal == "mirror_selection_pass":
+        return _run_mirror_selection_pass()
     print(f"ERROR: unknown internal pipeline step: {internal}", flush=True)
     return 2
 
@@ -661,6 +716,88 @@ def _export_second_pool_transition_subset() -> int:
     )
 
     return build_second_pool_transition_subset(output_path=SECOND_POOL_TRANSITION_SUBSET_PATH)
+
+
+def _run_event_stream_lane() -> int:
+    ns = _CURRENT_PIPELINE_ARGS
+    max_t = 50
+    max_blocks = 500
+    if ns is not None:
+        prof = _resolve_time_to_mirror_profile(ns)
+        max_t = int(prof.get("max_radar_tokens") or max_t)
+        max_blocks = int(prof.get("event_poll_max_blocks") or max_blocks)
+    from m8.discovery.event_stream_lane import run_event_stream_lane
+
+    payload = run_event_stream_lane(
+        subset_path=Path(TIME_TO_MIRROR_EXPAND_SUBSET),
+        max_tokens=max_t,
+        max_blocks=max_blocks,
+        output_path=EVENT_STREAM_LANE_ARTIFACT,
+        dry_run=os.environ.get("ARBY_SKIP_RPC") == "1",
+    )
+    print(
+        f"event_stream_lane: events={payload.get('events_emitted')} "
+        f"pending={payload.get('pending_count')}",
+        flush=True,
+    )
+    return 0
+
+
+def _export_patient_lane_diagnostics() -> int:
+    from m8.discovery.patient_lane_diagnostics import export_patient_lane_diagnostics
+
+    payload = export_patient_lane_diagnostics(
+        watchlist_path=WATCHLIST_PATH,
+        output_path=PATIENT_LANE_DIAGNOSTIC_PATH,
+    )
+    print(
+        f"patient_lane_diagnostics: single_venue={payload.get('single_venue_count')} "
+        f"-> {PATIENT_LANE_DIAGNOSTIC_PATH}",
+        flush=True,
+    )
+    return 0
+
+
+def _run_mirror_selection_pass() -> int:
+    """Hand off supported+verified recall mirrors to rolling hints (selection for narrow bridge)."""
+    if not MIRROR_DISCOVERY_RECALL_PATH.is_file():
+        print("mirror_selection_pass: recall artifact missing", flush=True)
+        return 2
+    recall = json.loads(MIRROR_DISCOVERY_RECALL_PATH.read_text(encoding="utf-8"))
+    from m8.discovery.mirror_discovery_recall import (
+        DEFAULT_RECALL_HINTS_PATH,
+        DEFAULT_SUPPORTED_HINTS_PATH,
+        load_recall_hints_checkpoint,
+        run_mirror_selection_pass,
+    )
+    from m8.discovery.pool_hints import PoolHint, load_hints_artifact
+
+    hints = load_recall_hints_checkpoint(DEFAULT_RECALL_HINTS_PATH)
+    selection_input = DEFAULT_RECALL_HINTS_PATH
+    if not hints:
+        hints_doc = load_hints_artifact(str(DEFAULT_SUPPORTED_HINTS_PATH))
+        hints = [PoolHint.from_dict(h) for h in hints_doc.get("hints") or []]
+        selection_input = DEFAULT_SUPPORTED_HINTS_PATH
+    if not hints:
+        print(
+            "mirror_selection_pass: no recall hints checkpoint "
+            "(recall step should write data/tmp/m8_mirror_recall_hints_latest.json)",
+            flush=True,
+        )
+        return 0
+    payload = run_mirror_selection_pass(
+        recall,
+        hints=hints,
+        selection_input_path=selection_input,
+    )
+    print(
+        f"mirror_selection_pass: input={selection_input} "
+        f"stages={payload.get('selection_stages')} "
+        f"selected={payload.get('mirrors_selected')} "
+        f"m9_target_ready={payload.get('m9_target_ready')}",
+        flush=True,
+    )
+    return 0
 
 
 def _export_pending_1_to_2_queue() -> int:
@@ -955,6 +1092,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             or getattr(args, "radar_step_timeout_s", 0)
             or DEFAULT_RADAR_STEP_TIMEOUT_S
         )
+        mirror_max_recall = bool(prof.get("mirror_discovery_max_recall"))
         if hot_expand:
             steps.append(
                 _pipeline_step(
@@ -968,6 +1106,25 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     "m8_time_to_mirror_expand_subset",
                     [],
                     internal="time_to_mirror_expand_subset",
+                )
+            )
+            steps.append(
+                _pipeline_step(
+                    "m8_event_stream_lane",
+                    _productive_rpc_cmd(
+                        "scripts/m8_event_stream_lane.py",
+                        "--chain",
+                        "base",
+                        "--token-subset-file",
+                        TIME_TO_MIRROR_EXPAND_SUBSET,
+                        "--max-tokens",
+                        str(max_radar),
+                        "--max-blocks",
+                        str(int(prof.get("event_poll_max_blocks") or 500)),
+                        "--output",
+                        str(EVENT_STREAM_LANE_ARTIFACT),
+                    ),
+                    timeout_seconds=min(radar_step_timeout, 600),
                 )
             )
             steps.append(
@@ -996,22 +1153,68 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     timeout_seconds=min(radar_step_timeout, 1200),
                 )
             )
-            enrich_radar = list(radar_cmd)
-            enrich_radar.extend(
-                [
-                    "--dexscreener-enrich-only",
-                    "--token-subset-file",
-                    TIME_TO_MIRROR_EXPAND_SUBSET,
-                    "--merge-existing-hints",
-                ]
-            )
-            steps.append(
-                _pipeline_step(
-                    "m8_2_radar_two_phase",
-                    enrich_radar,
-                    timeout_seconds=radar_step_timeout,
+            if mirror_max_recall:
+                steps.append(
+                    _pipeline_step(
+                        "m8_mirror_discovery_recall",
+                        _py_cmd(
+                            "scripts/m8_mirror_discovery_recall.py",
+                            "--chain",
+                            "base",
+                            "--token-subset-file",
+                            TIME_TO_MIRROR_EXPAND_SUBSET,
+                            "--max-tokens",
+                            str(max_radar),
+                            "--output",
+                            str(MIRROR_DISCOVERY_RECALL_PATH),
+                            "--write-supported-hints",
+                        ),
+                        timeout_seconds=radar_step_timeout,
+                    )
                 )
-            )
+                steps.append(
+                    _pipeline_step(
+                        "gate_mirror_recall",
+                        _py_cmd(
+                            "scripts/m9_production_refresh_gates.py",
+                            "mirror_recall",
+                            "--recall",
+                            str(MIRROR_DISCOVERY_RECALL_PATH),
+                        ),
+                        allow_exit_codes=(0, 2),
+                    )
+                )
+                steps.append(
+                    _pipeline_step(
+                        "m8_mirror_selection_pass",
+                        [],
+                        internal="mirror_selection_pass",
+                    )
+                )
+                steps.append(
+                    _pipeline_step(
+                        "m8_2_cross_dex_expand",
+                        _m82_cross_dex_expand_cmd(hot=True),
+                        timeout_seconds=int(prof.get("expand_step_timeout_s") or 1200),
+                    )
+                )
+            else:
+                enrich_radar = list(radar_cmd)
+                enrich_radar.extend(
+                    [
+                        "--dexscreener-enrich-only",
+                        "--token-subset-file",
+                        TIME_TO_MIRROR_EXPAND_SUBSET,
+                        "--merge-existing-hints",
+                    ]
+                )
+                steps.append(
+                    _pipeline_step(
+                        "m8_2_radar_two_phase",
+                        enrich_radar,
+                        timeout_seconds=radar_step_timeout,
+                    )
+                )
         else:
             steps.append(
                 _pipeline_step(
@@ -1020,20 +1223,21 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     timeout_seconds=radar_step_timeout,
                 )
             )
-        steps.append(
-            _pipeline_step(
-                "gate_fresh_delta_subset",
-                _py_cmd("scripts/m9_production_refresh_gates.py", "fresh_delta_subset"),
+        if not mirror_max_recall:
+            steps.append(
+                _pipeline_step(
+                    "gate_fresh_delta_subset",
+                    _py_cmd("scripts/m9_production_refresh_gates.py", "fresh_delta_subset"),
+                )
             )
-        )
-        expand_timeout = prof.get("expand_step_timeout_s") if prof else None
-        steps.append(
-            _pipeline_step(
-                "m8_2_cross_dex_expand",
-                _m82_cross_dex_expand_cmd(hot=hot_expand),
-                timeout_seconds=int(expand_timeout) if expand_timeout else None,
+            expand_timeout = prof.get("expand_step_timeout_s") if prof else None
+            steps.append(
+                _pipeline_step(
+                    "m8_2_cross_dex_expand",
+                    _m82_cross_dex_expand_cmd(hot=hot_expand),
+                    timeout_seconds=int(expand_timeout) if expand_timeout else None,
+                )
             )
-        )
         steps.append(
             _pipeline_step(
                 "m8_2_acceptance_strict",
@@ -1279,6 +1483,11 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 "m8_time_to_mirror_sla_export",
                 [],
                 internal="time_to_mirror_sla_export",
+            ),
+            _pipeline_step(
+                "m8_patient_lane_diagnostics",
+                [],
+                internal="patient_lane_diagnostics",
             ),
         ]
         steps[idx:idx] = mirror_steps
@@ -1703,6 +1912,8 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 if name in {
                     "m9_time_to_mirror_depth_enrich",
                     "m9_time_to_mirror_capacity_diagnostic",
+                    "m9_time_to_mirror_narrow_shadow_10m",
+                    "gate_time_to_mirror_narrow_shadow",
                 } and not target_m9_allowed:
                     msg = (
                         f"skip {name}: target narrow universe gate blocked "
@@ -1735,6 +1946,8 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             if name in {
                 "m9_time_to_mirror_depth_enrich",
                 "m9_time_to_mirror_capacity_diagnostic",
+                "m9_time_to_mirror_narrow_shadow_10m",
+                "gate_time_to_mirror_narrow_shadow",
             } and not target_m9_allowed:
                 msg = (
                     f"skip {name}: target narrow universe gate blocked "
@@ -1899,7 +2112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hot-lane",
         choices=tuple(HOT_LANE_PROFILES.keys()),
         default=None,
-        help="time_to_mirror lane budget: hot_delta (50), warm_recall (150), audit_full (753+)",
+        help="time_to_mirror lane budget: hot_delta (50), warm_recall (150), mirror_recall (753 wide), audit_full (753+)",
     )
     ap.add_argument(
         "--skip-secondary",

@@ -19,18 +19,15 @@ _INFRA_RPC_REASONS = frozenset(
 )
 
 def _anchor_syms() -> frozenset:
-    """Mirror anchors must match M8.2 expansion's anchor set, not a narrower copy.
+    """Mirror anchors: generic stable/WETH plus launchpad lane (VIRTUAL)."""
+    from m8.discovery.mirror_anchors import ALL_MIRROR_ANCHOR_SYMS
 
-    Sourced from the canonical registry anchor set plus USDbC (Base bridged USDC),
-    so EURC / cbBTC / USDT / WETH_BASE same-pair mirrors are not silently dropped
-    from mirror_topology_ready after post-smoke re-aggregation.
-    """
     try:
         from m8.discovery.pending_pair_registry import _ANCHOR_TOKENS
 
-        return frozenset(set(_ANCHOR_TOKENS) | {"USDbC"})
+        return frozenset(set(_ANCHOR_TOKENS) | set(ALL_MIRROR_ANCHOR_SYMS) | {"USDbC"})
     except Exception:
-        return frozenset({"WETH", "USDC", "USDbC", "DAI", "EURC", "cbBTC", "USDT"})
+        return frozenset(set(ALL_MIRROR_ANCHOR_SYMS) | {"USDbC"})
 
 
 _ANCHOR_SYMS = _anchor_syms()
@@ -73,6 +70,11 @@ def _is_anchor_address(addr: str) -> bool:
 
 
 def is_same_pair_mirror_route(route: Dict[str, Any]) -> bool:
+    """Same focus token paired with any approved anchor (same or cross-anchor)."""
+    return is_cross_anchor_mirror_route(route)
+
+
+def is_cross_anchor_mirror_route(route: Dict[str, Any]) -> bool:
     focus_sym = str(route.get("focus_token_symbol") or "")
     focus_addr = str(
         route.get("focus_token_address") or route.get("exotic_address") or ""

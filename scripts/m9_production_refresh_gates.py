@@ -287,6 +287,46 @@ def gate_hot_sla(path: Path, *, max_latency_s: int = 900) -> int:
     return 0
 
 
+def gate_mirror_recall(recall_path: Path) -> int:
+    from m8.discovery.mirror_discovery_recall import evaluate_mirror_recall_gate
+
+    if not recall_path.is_file():
+        print(f"FAIL mirror_recall_gate: missing {recall_path}", file=sys.stderr)
+        return 2
+    doc = _load(recall_path)
+    ok, reason = evaluate_mirror_recall_gate(doc or {})
+    m9_ready = int(
+        doc.get("selection_verified_fresh_total") or doc.get("supported_hints_verified") or 0
+    ) > 0 if doc else False
+    print(
+        json.dumps(
+            {
+                "gate": "mirror_recall",
+                "path": str(recall_path),
+                "mirror_recall_ready": ok,
+                "m9_target_ready": m9_ready,
+                "reason": reason,
+                "mirrors_total": doc.get("mirrors_total") if doc else 0,
+                "mirrors_supported": doc.get("mirrors_supported") if doc else 0,
+                "mirrors_unsupported": doc.get("mirrors_unsupported") if doc else 0,
+                "mirrors_unknown_alias": doc.get("mirrors_unknown_alias") if doc else 0,
+                "all_dex_mirrors_total": doc.get("all_dex_mirrors_total") if doc else 0,
+                "supported_mirrors_total": doc.get("supported_mirrors_total") if doc else 0,
+                "unsupported_mirrors_total": doc.get("unsupported_mirrors_total") if doc else 0,
+                "unknown_alias_mirrors_total": doc.get("unknown_alias_mirrors_total") if doc else 0,
+                "recall_verified_pool_exists_total": doc.get("recall_verified_pool_exists_total") if doc else 0,
+                "selection_verified_fresh_total": doc.get("selection_verified_fresh_total") if doc else 0,
+                "verify_rca_primary_blocker": (doc.get("verify_rca") or {}).get("primary_blocker"),
+            },
+            indent=2,
+        )
+    )
+    if not ok:
+        print(f"INFO mirror_recall_gate: no mirrors seen ({reason})", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="M8→M9 production refresh runtime gates")
     ap.add_argument(
@@ -299,6 +339,7 @@ def main() -> int:
             "narrow_shadow",
             "target_narrow_universe",
             "hot_sla",
+            "mirror_recall",
         ),
     )
     ap.add_argument("--fresh-subset", default=str(_DEFAULT_FRESH_SUBSET))
@@ -314,6 +355,10 @@ def main() -> int:
         default=str(REPO_ROOT / "data/tmp/m8_time_to_mirror_step_timings_latest.json"),
     )
     ap.add_argument("--max-latency-s", type=int, default=900)
+    ap.add_argument(
+        "--recall",
+        default=str(REPO_ROOT / "data/tmp/m8_mirror_discovery_recall_latest.json"),
+    )
     args = ap.parse_args()
 
     if args.gate == "fresh_delta_subset":
@@ -330,6 +375,8 @@ def main() -> int:
         return gate_target_narrow_universe(Path(args.bridge))
     if args.gate == "hot_sla":
         return gate_hot_sla(Path(args.timings), max_latency_s=int(args.max_latency_s))
+    if args.gate == "mirror_recall":
+        return gate_mirror_recall(Path(args.recall))
     return 1
 
 

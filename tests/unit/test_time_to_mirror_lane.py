@@ -47,8 +47,10 @@ def test_build_pending_queue_payload_sorted_by_priority():
         }
     }
     payload = build_pending_queue_payload(watchlist)
-    assert payload["schema_version"] == "m8_time_to_mirror_pending_queue_v2"
+    assert payload["schema_version"] == "m8_time_to_mirror_pending_queue_v3"
     assert payload["pending_count"] == 2
+    assert "queues" in payload
+    assert payload["queues"]["single_venue_watch"]["count"] + payload["queues"]["patient_candidate"]["count"] >= 1
     assert payload["tokens"][0]["priority_score"] >= payload["tokens"][1]["priority_score"]
 
 

@@ -49,9 +49,9 @@ DEFAULT_REGISTRY_PATH = "data/runs/_rolling/m8_pending_pairs.json"
 DEFAULT_TTL_SECONDS: float = 48 * 3600
 
 # Anchor tokens (kept local to avoid a circular import with bridge_builder).
-_ANCHOR_TOKENS = frozenset({
-    "USDC", "EURC", "WETH", "cbBTC", "WETH_BASE", "DAI", "USDT",
-})
+from m8.discovery.mirror_anchors import ALL_MIRROR_ANCHOR_SYMS
+
+_ANCHOR_TOKENS = ALL_MIRROR_ANCHOR_SYMS
 
 # Fields copied from a sniper event into a venue record.  These are exactly the
 # fields bridge_builder._build_m8_route() consumes, so a stored venue record can

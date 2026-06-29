@@ -36,6 +36,8 @@ def save_cache(doc: Dict[str, Any], path: str = DEFAULT_CACHE_PATH) -> None:
 def cache_ttl_s(*, hot: bool = True, lane: Optional[str] = None) -> float:
     if lane in ("fresh_delta", "fresh_delta_lane", "time_to_mirror_hot"):
         return FRESH_DELTA_HOT_TTL_S
+    if lane in ("mirror_recall", "mirror_discovery_max_recall"):
+        return 300.0
     return HOT_TTL_S if hot else COLD_TTL_S
 
 

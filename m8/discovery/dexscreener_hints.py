@@ -13,6 +13,8 @@ from m8.discovery.pool_hints import PoolHint, normalize_dex_id
 from m8.discovery.radar_layer import stamp_radar_reason
 
 DEXSCREENER_BASE = "https://api.dexscreener.com/latest/dex/tokens"
+DEXSCREENER_BATCH_BASE = "https://api.dexscreener.com/tokens/v1"
+DEXSCREENER_BATCH_MAX = 30
 _DEFAULT_TIMEOUT_S = 12.0
 # DexScreener free tier ~300 req/min → cap at 5 req/s globally.
 _DS_MIN_INTERVAL_S = 0.2
@@ -56,46 +58,128 @@ def fetch_token_hints(
     use_cache: bool = True,
     cache_hot: bool = True,
     cache_lane: Optional[str] = None,
+    max_recall: bool = False,
+    dex_config: Optional[Dict[str, Any]] = None,
 ) -> List[PoolHint]:
     """Fetch pairs for *token_address* from DexScreener API."""
+    batch = fetch_token_hints_batch(
+        [token_address],
+        chain=chain,
+        timeout_s=timeout_s,
+        use_cache=use_cache,
+        cache_hot=cache_hot,
+        cache_lane=cache_lane,
+        max_recall=max_recall,
+        dex_config=dex_config,
+    )
+    return batch.get((token_address or "").lower(), [])
+
+
+def fetch_token_hints_batch(
+    token_addresses: List[str],
+    *,
+    chain: str = "base",
+    timeout_s: float = _DEFAULT_TIMEOUT_S,
+    use_cache: bool = True,
+    cache_hot: bool = True,
+    cache_lane: Optional[str] = None,
+    max_recall: bool = False,
+    dex_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, List[PoolHint]]:
+    """Batch fetch up to 30 token addresses per DexScreener /tokens/v1 request."""
     global _last_fetch_timing
-    addr = (token_address or "").lower().strip()
-    if not addr.startswith("0x"):
-        return []
+    normalized = [
+        (a or "").lower().strip()
+        for a in token_addresses
+        if str(a or "").lower().startswith("0x")
+    ]
+    out: Dict[str, List[PoolHint]] = {a: [] for a in normalized}
+    if not normalized:
+        return out
+
     t0 = time.monotonic()
-    pairs: List[Dict[str, Any]] = []
-    cache_hit = False
+    uncached: List[str] = []
     if use_cache:
-        cached = get_cached_pairs(addr, hot=cache_hot, lane=cache_lane)
-        if cached is not None:
-            pairs = cached
-            cache_hit = True
-    if not cache_hit:
-        url = f"{DEXSCREENER_BASE}/{addr}"
+        for addr in normalized:
+            cached = get_cached_pairs(addr, hot=cache_hot, lane=cache_lane)
+            if cached is not None:
+                for pair in cached:
+                    hint = _pair_to_hint(
+                        pair,
+                        chain=chain,
+                        focus_token=addr,
+                        max_recall=max_recall,
+                        dex_config=dex_config,
+                    )
+                    if hint:
+                        out[addr].append(hint)
+            else:
+                uncached.append(addr)
+    else:
+        uncached = list(normalized)
+
+    chain_slug = "base" if chain.lower() in ("base", "8453") else chain.lower()
+    for i in range(0, len(uncached), DEXSCREENER_BATCH_MAX):
+        chunk = uncached[i : i + DEXSCREENER_BATCH_MAX]
+        url = f"{DEXSCREENER_BATCH_BASE}/{chain_slug}/{','.join(chunk)}"
         try:
             _acquire_dexscreener_rate_limit()
             data = _get_json(url, timeout_s=timeout_s)
-            pairs = [p for p in (data.get("pairs") or []) if isinstance(p, dict)]
-            if use_cache:
-                set_cached_pairs(addr, pairs)
+            pairs_list = data if isinstance(data, list) else data.get("pairs") or []
+            by_token: Dict[str, List[Dict[str, Any]]] = {a: [] for a in chunk}
+            for pair in pairs_list:
+                if not isinstance(pair, dict):
+                    continue
+                base = pair.get("baseToken") or {}
+                quote = pair.get("quoteToken") or {}
+                for tok_addr in (
+                    str(base.get("address") or "").lower(),
+                    str(quote.get("address") or "").lower(),
+                ):
+                    if tok_addr in by_token:
+                        by_token[tok_addr].append(pair)
+            for addr, pairs in by_token.items():
+                if use_cache:
+                    set_cached_pairs(addr, pairs)
+                for pair in pairs:
+                    hint = _pair_to_hint(
+                        pair,
+                        chain=chain,
+                        focus_token=addr,
+                        max_recall=max_recall,
+                        dex_config=dex_config,
+                    )
+                    if hint:
+                        out[addr].append(hint)
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError):
-            _last_fetch_timing = {
-                "latency_s": round(time.monotonic() - t0, 4),
-                "cache_hit": False,
-                "error": 1.0,
-            }
-            return []
-    hints: List[PoolHint] = []
-    for pair in pairs:
-        hint = _pair_to_hint(pair, chain=chain, focus_token=addr)
-        if hint:
-            hints.append(hint)
+            for addr in chunk:
+                single_url = f"{DEXSCREENER_BASE}/{addr}"
+                try:
+                    _acquire_dexscreener_rate_limit()
+                    data = _get_json(single_url, timeout_s=timeout_s)
+                    pairs = [p for p in (data.get("pairs") or []) if isinstance(p, dict)]
+                    if use_cache:
+                        set_cached_pairs(addr, pairs)
+                    for pair in pairs:
+                        hint = _pair_to_hint(
+                            pair,
+                            chain=chain,
+                            focus_token=addr,
+                            max_recall=max_recall,
+                            dex_config=dex_config,
+                        )
+                        if hint:
+                            out[addr].append(hint)
+                except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError):
+                    continue
+
     _last_fetch_timing = {
         "latency_s": round(time.monotonic() - t0, 4),
-        "cache_hit": float(cache_hit),
-        "pair_count": float(len(pairs)),
+        "cache_hit": float(len(uncached) == 0),
+        "batch_tokens": float(len(normalized)),
+        "uncached_tokens": float(len(uncached)),
     }
-    return hints
+    return out
 
 
 def _pair_to_hint(
@@ -103,14 +187,49 @@ def _pair_to_hint(
     *,
     chain: str,
     focus_token: str,
+    max_recall: bool = False,
+    dex_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[PoolHint]:
     chain_id = str(pair.get("chainId") or "").lower()
     if chain_id not in ("base", "8453"):
         return None
     raw_dex = str(pair.get("dexId") or "")
-    dex_id = normalize_dex_id("dexscreener", raw_dex)
-    if not dex_id:
-        return None
+    normalized_dex_id = ""
+    support_status = "supported"
+    uniswap_resolve_reason: Optional[str] = None
+    if max_recall:
+        from m8.discovery.dex_coverage_gate import (
+            classify_dex_support_status,
+            validate_dex_package,
+        )
+        from m8.discovery.dexscreener_uniswap_resolver import resolve_uniswap_dex_variant
+
+        cfg = dex_config if dex_config is not None else _default_dex_config()
+        mapped_id, support_status = classify_dex_support_status(
+            source="dexscreener",
+            raw_dex_id=raw_dex,
+            config=cfg,
+        )
+        normalized_dex_id = mapped_id
+        dex_id, uniswap_resolve_reason = resolve_uniswap_dex_variant(
+            pair,
+            raw_dex_id=raw_dex,
+            normalized_default=mapped_id,
+        )
+        if uniswap_resolve_reason:
+            verdict = validate_dex_package(dex_id, cfg)
+            if verdict.get("package_complete"):
+                support_status = "supported"
+            elif dex_id in (cfg.get("dexes") or {}):
+                support_status = "unsupported"
+        if not dex_id:
+            return None
+    else:
+        dex_id = normalize_dex_id("dexscreener", raw_dex)
+        normalized_dex_id = dex_id or ""
+        uniswap_resolve_reason = None
+        if not dex_id:
+            return None
     pool_addr = str(pair.get("pairAddress") or "").lower()
     if not pool_addr:
         return None
@@ -158,10 +277,31 @@ def _pair_to_hint(
         liquidity_usd=liq_usd,
         volume_24h=vol_h24,
         confidence=min(1.0, confidence),
-        raw={"dexId": raw_dex, "pair": pair, "txns_h24": txn_count},
+        raw={
+            "dexId": raw_dex,
+            "pair": pair,
+            "txns_h24": txn_count,
+            "support_status": support_status,
+            "raw_dex_id": raw_dex,
+            "normalized_dex_id": normalized_dex_id,
+            "uniswap_resolve_reason": uniswap_resolve_reason,
+        },
         focus_token=focus_token,
     )
     return stamp_radar_reason(hint)
+
+
+def _default_dex_config() -> Dict[str, Any]:
+    try:
+        import yaml
+        from pathlib import Path
+
+        p = Path("config/exotic_base_anchor.yaml")
+        if p.is_file():
+            return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception:
+        pass
+    return {}
 
 
 def _safe_float(v: Any) -> Optional[float]:
