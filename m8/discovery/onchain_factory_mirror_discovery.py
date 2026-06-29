@@ -40,7 +40,10 @@ FACTORY_LOG_CONFIG_PATH = Path("config/new_pool_factories.yaml")
 P0_ANCHOR_SYMS = ("USDC", "WETH", "cbBTC", "EURC", "USDbC", "DAI")
 FRESH_NEG_CACHE_TTL_S = 180.0
 FACTORY_LOG_MAX_BLOCKS = 5000
-FACTORY_LOG_CHUNK_BLOCKS = 2000
+FACTORY_LOG_HOT_CHUNK_BLOCKS = 200
+FACTORY_LOG_MIN_CHUNK_BLOCKS = 25
+# Backward-compat alias (hot lane uses smaller chunks than legacy 2000-block scans).
+FACTORY_LOG_CHUNK_BLOCKS = FACTORY_LOG_HOT_CHUNK_BLOCKS
 
 _SOURCE_ONCHAIN_FACTORY = "onchain_factory"
 _SOURCE_FACTORY_LOG = "factory_log"
@@ -52,10 +55,52 @@ class MirrorDiscoveryResult:
     factory_log_candidates: int = 0
     dexscreener_candidates: int = 0
     verified_second_pool_by_source: Dict[str, int] = field(default_factory=dict)
+    first_pool_found: int = 0
+    second_venue_found: int = 0
+    verified_pool_count: int = 0
     hints: List[PoolHint] = field(default_factory=list)
     tokens_scanned: int = 0
     rpc_skipped: bool = False
     scan_stats: Dict[str, Any] = field(default_factory=dict)
+
+
+_VERIFIED_HINT_STATUSES = frozenset({HINT_FACTORY_VERIFIED, "HINT_ONCHAIN_VERIFIED"})
+
+
+def compute_mirror_venue_metrics(
+    hints: List[PoolHint],
+) -> Dict[str, Any]:
+    """Split first-pool discovery from true second-venue mirror readiness.
+
+    * first_pool_found — unique focus tokens with ≥1 verified pool
+    * second_venue_found — unique focus tokens with pools on ≥2 distinct dex_id
+    * verified_pool_count — total verified pool hints (may be > tokens)
+    """
+    by_focus_dexes: Dict[str, Set[str]] = {}
+    verified_pool_count = 0
+    by_source: Dict[str, int] = {}
+    for h in hints:
+        if h.hint_status not in _VERIFIED_HINT_STATUSES:
+            continue
+        focus = str(h.focus_token or "").lower()
+        if not focus.startswith("0x"):
+            continue
+        dex = str(h.dex_id or "")
+        if not dex:
+            continue
+        verified_pool_count += 1
+        by_focus_dexes.setdefault(focus, set()).add(dex)
+        by_source[h.source] = int(by_source.get(h.source, 0)) + 1
+    first_pool_tokens = [f for f, dexes in by_focus_dexes.items() if dexes]
+    second_venue_tokens = [f for f, dexes in by_focus_dexes.items() if len(dexes) >= 2]
+    return {
+        "first_pool_found": len(first_pool_tokens),
+        "second_venue_found": len(second_venue_tokens),
+        "verified_pool_count": verified_pool_count,
+        "tokens_with_first_pool": first_pool_tokens,
+        "tokens_with_second_venue": second_venue_tokens,
+        "verified_pools_by_source": by_source,
+    }
 
 
 def _iso_now() -> str:
@@ -256,6 +301,201 @@ def scan_tokens_via_factory(
     return hints, stats
 
 
+def _factory_log_scan_from_blocks(
+    tokens: List[Dict[str, Any]],
+    *,
+    head: int,
+    max_blocks: int = FACTORY_LOG_MAX_BLOCKS,
+) -> Tuple[int, Dict[str, int]]:
+    """Earliest bulk scan lower bound across per-token windows."""
+    default_from = head - max(1, int(max_blocks))
+    scan_from = default_from
+    per_token_from: Dict[str, int] = {}
+    for row in tokens:
+        token = str(row.get("token") or "").lower()
+        if not token.startswith("0x"):
+            continue
+        token_from = default_from
+        fsb = row.get("first_seen_block")
+        if fsb is not None:
+            try:
+                token_from = max(default_from, int(fsb))
+            except (TypeError, ValueError):
+                pass
+        per_token_from[token] = token_from
+        scan_from = min(scan_from, token_from)
+    return scan_from, per_token_from
+
+
+def _factory_log_chunk_ranges(
+    from_block: int,
+    to_block: int,
+    *,
+    chunk_blocks: int = FACTORY_LOG_HOT_CHUNK_BLOCKS,
+) -> List[Tuple[int, int]]:
+    """Split an inclusive block window into hot-lane sized getLogs chunks."""
+    if from_block > to_block:
+        return []
+    ranges: List[Tuple[int, int]] = []
+    cur = int(from_block)
+    end_head = int(to_block)
+    step = max(FACTORY_LOG_MIN_CHUNK_BLOCKS, int(chunk_blocks))
+    while cur <= end_head:
+        hi = min(end_head, cur + step - 1)
+        ranges.append((cur, hi))
+        cur = hi + 1
+    return ranges
+
+
+def _empty_factory_log_stats() -> Dict[str, Any]:
+    return {
+        "logs_fetched": 0,
+        "pools_matched": 0,
+        "log_fetch_errors": 0,
+        "log_chunks_attempted": 0,
+        "log_chunks_ok": 0,
+        "log_chunks_split": 0,
+        "log_provider_fallbacks": 0,
+        "factories_skipped_no_topic0": 0,
+        "last_log_error": "",
+    }
+
+
+def _merge_funnel_into_factory_log_stats(
+    stats: Dict[str, Any],
+    funnel: Any,
+) -> None:
+    try:
+        snap = funnel.snapshot()
+    except Exception:
+        return
+    stats["log_chunks_split"] = int(snap.get("getlogs_400_count") or 0)
+    stats["log_provider_fallbacks"] = int(snap.get("sniper_rpc_failover_count") or 0)
+    chunk_sz = int(snap.get("getlogs_chunk_size") or 0)
+    if chunk_sz:
+        stats["last_successful_chunk_blocks"] = chunk_sz
+
+
+def _build_factory_log_rpc_lane(chain: str) -> Tuple[Any, Any, Dict[str, Any]]:
+    """Productive sniper RPC lane for eth_getLogs (dRPC secondary-first when configured)."""
+    from core.rpc_urls import resolve_sniper_rpc_lane
+    from monitoring.sniper_funnel import FunnelTracker
+    from m8.runtime.smoke_run import SniperRpcLane
+    from web3 import Web3
+
+    pri_url, pri_prov, sec_url, sec_prov, diag = resolve_sniper_rpc_lane(
+        network=chain,
+    )
+    funnel = FunnelTracker()
+    w3_pri = Web3(Web3.HTTPProvider(pri_url, request_kwargs={"timeout": 20}))
+    w3_sec = None
+    if sec_url:
+        w3_sec = Web3(Web3.HTTPProvider(sec_url, request_kwargs={"timeout": 20}))
+    lane = SniperRpcLane(
+        w3_primary=w3_pri,
+        w3_secondary=w3_sec,
+        primary_provider=str(pri_prov or "unknown"),
+        secondary_provider=sec_prov,
+        funnel=funnel,
+    )
+    return lane, funnel, dict(diag or {})
+
+
+def _factory_log_get_logs(
+    rpc_lane: Any,
+    params: Dict[str, Any],
+    stats: Dict[str, Any],
+) -> List[Any]:
+    """Fetch logs via sniper lane (split + provider failover); never skip on transient 400."""
+    stats["log_chunks_attempted"] = int(stats.get("log_chunks_attempted") or 0) + 1
+    logs, had_err, err = rpc_lane.get_logs(params)
+    if had_err:
+        stats["log_fetch_errors"] = int(stats.get("log_fetch_errors") or 0) + 1
+        stats["last_log_error"] = str(err)[:200]
+        return []
+    stats["log_chunks_ok"] = int(stats.get("log_chunks_ok") or 0) + 1
+    return list(logs)
+
+
+def _fetch_factory_logs_chunked(
+    rpc_lane: Any,
+    *,
+    factory: str,
+    topic0: str,
+    from_block: int,
+    to_block: int,
+    chunk_blocks: int,
+    stats: Dict[str, Any],
+    checksum_fn: Any,
+) -> List[Any]:
+    out: List[Any] = []
+    for lo, hi in _factory_log_chunk_ranges(
+        from_block, to_block, chunk_blocks=chunk_blocks
+    ):
+        params = {
+            "fromBlock": lo,
+            "toBlock": hi,
+            "address": checksum_fn(factory),
+            "topics": [topic0],
+        }
+        out.extend(_factory_log_get_logs(rpc_lane, params, stats))
+    return out
+
+
+def run_factory_log_mirror_quote_smoke(
+    hints: List[PoolHint],
+    *,
+    chain: str = "base",
+    config_path: str = "config/exotic_base_anchor.yaml",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Targeted quote smoke for factory-log discovered pools only."""
+    log_hints = [h for h in hints if h.source == _SOURCE_FACTORY_LOG]
+    if not log_hints:
+        return {"skipped": "no_factory_log_hints"}
+    if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
+        return {"skipped": "dry_run_or_arby_skip_rpc", "candidates": len(log_hints)}
+
+    from m8.discovery.mirror_quote_smoke import smoke_mirror_same_pair_routes
+
+    config = _load_yaml_config(config_path)
+    routes: List[Dict[str, Any]] = []
+    for h in log_hints:
+        raw = dict(h.raw or {})
+        anchor_sym = str(raw.get("connector_token") or "WETH")
+        focus = str(h.focus_token or "").lower()
+        t0a = str(h.token0_addr or "").lower()
+        t1a = str(h.token1_addr or "").lower()
+        if focus == t0a:
+            t0_sym, t1_sym = focus[:10], anchor_sym
+        else:
+            t0_sym, t1_sym = anchor_sym, focus[:10]
+        routes.append(
+            {
+                "focus_token_address": focus,
+                "focus_token_symbol": focus[:10],
+                "token0": t0_sym,
+                "token1": t1_sym,
+                "token0_addr": t0a,
+                "token1_addr": t1a,
+                "dex_id": h.dex_id,
+                "adapter_type": h.dex_id,
+                "pool_address": h.pool_address,
+                "factory_address": h.factory_address,
+                "quote_smoke_status": "not_run",
+                "resolve_source": "factory_log",
+                "hint_source": "factory_log",
+                "factory_verified": True,
+                "token_class": raw.get("token_class", "fresh_long_tail"),
+            }
+        )
+    stats = smoke_mirror_same_pair_routes(
+        routes, chain=chain, config=config, dry_run=dry_run
+    )
+    stats["factory_log_candidates"] = len(log_hints)
+    return stats
+
+
 def scan_factory_logs_for_tokens(
     tokens: List[Dict[str, Any]],
     *,
@@ -274,7 +514,6 @@ def scan_factory_logs_for_tokens(
             load_factory_config,
             parse_raw_log,
         )
-        from core.rpc_urls import get_rpc_url
     except ImportError as exc:
         return [], {"error": f"import_failed:{exc}"}
 
@@ -300,88 +539,100 @@ def scan_factory_logs_for_tokens(
         _log.warning("factory log config load failed: %s", exc)
         return [], {"error": str(exc)}
 
-    rpc = get_rpc_url(chain)
-    if not rpc:
-        return [], {"error": "no_rpc"}
+    try:
+        rpc_lane, funnel, rpc_diag = _build_factory_log_rpc_lane(chain)
+    except Exception as exc:
+        _log.warning("factory log rpc lane failed: %s", exc)
+        return [], {"error": f"rpc_lane_failed:{exc}"}
 
     from web3 import Web3
 
-    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 20}))
+    w3 = rpc_lane.w3
     if not w3.is_connected():
         return [], {"error": "rpc_not_connected"}
 
     head = int(w3.eth.block_number)
-    min_from = head - max(1, int(max_blocks))
-    for row in tokens:
-        fsb = row.get("first_seen_block")
-        if fsb is not None:
-            try:
-                min_from = max(min_from, int(fsb))
-            except (TypeError, ValueError):
-                pass
+    scan_from, per_token_from = _factory_log_scan_from_blocks(
+        tokens, head=head, max_blocks=max_blocks
+    )
+
+    if scan_from > head:
+        return [], {
+            "error": "invalid_block_window",
+            "scan_from_block": scan_from,
+            "head_block": head,
+        }
 
     hints: List[PoolHint] = []
-    stats = {"factories": len(factories), "logs_fetched": 0, "pools_matched": 0}
+    stats: Dict[str, Any] = {
+        "factories": len(factories),
+        "scan_from_block": scan_from,
+        "head_block": head,
+        "block_window": head - scan_from + 1,
+        "per_token_from_blocks": len(per_token_from),
+        "hot_chunk_blocks": FACTORY_LOG_HOT_CHUNK_BLOCKS,
+        "rpc_lane_primary_source": rpc_diag.get("primary_source"),
+        "rpc_lane_secondary_source": rpc_diag.get("secondary_source"),
+        **_empty_factory_log_stats(),
+    }
     seen_pools: Set[str] = set()
+    checksum = Web3.to_checksum_address
 
     for fcfg in factories:
         topic0 = fcfg.topic0
         if not topic0:
+            stats["factories_skipped_no_topic0"] = int(
+                stats.get("factories_skipped_no_topic0") or 0
+            ) + 1
             continue
-        from_block = min_from
-        while from_block <= head:
-            to_block = min(head, from_block + FACTORY_LOG_CHUNK_BLOCKS - 1)
-            try:
-                logs = w3.eth.get_logs(
-                    {
-                        "fromBlock": from_block,
-                        "toBlock": to_block,
-                        "address": Web3.to_checksum_address(fcfg.factory),
-                        "topics": [topic0],
-                    }
-                )
-            except Exception as exc:
-                _log.debug("get_logs failed factory=%s: %s", fcfg.factory[:10], exc)
-                from_block = to_block + 1
+        logs = _fetch_factory_logs_chunked(
+            rpc_lane,
+            factory=fcfg.factory,
+            topic0=topic0,
+            from_block=scan_from,
+            to_block=head,
+            chunk_blocks=FACTORY_LOG_HOT_CHUNK_BLOCKS,
+            stats=stats,
+            checksum_fn=checksum,
+        )
+        stats["logs_fetched"] += len(logs)
+        for raw in logs:
+            ev = parse_raw_log(dict(raw), fcfg)
+            if ev is None:
                 continue
-            stats["logs_fetched"] += len(logs)
-            for raw in logs:
-                ev = parse_raw_log(dict(raw), fcfg)
-                if ev is None:
-                    continue
-                t0 = str(ev.token0 or "").lower()
-                t1 = str(ev.token1 or "").lower()
-                pool = str(ev.pool_address or "").lower()
-                if not pool or pool in seen_pools:
-                    continue
-                focus = ""
-                anchor = ""
-                if t0 in token_set and t1 in anchor_addrs:
-                    focus, anchor = t0, t1
-                elif t1 in token_set and t0 in anchor_addrs:
-                    focus, anchor = t1, t0
-                else:
-                    continue
-                seen_pools.add(pool)
-                anchor_sym = next(
-                    (s for s, a in _anchor_pairs(config) if a.lower() == anchor),
-                    "",
+            t0 = str(ev.token0 or "").lower()
+            t1 = str(ev.token1 or "").lower()
+            pool = str(getattr(ev, "pool", None) or getattr(ev, "pool_address", "") or "").lower()
+            if not pool or pool in seen_pools:
+                continue
+            focus = ""
+            anchor = ""
+            if t0 in token_set and t1 in anchor_addrs:
+                focus, anchor = t0, t1
+            elif t1 in token_set and t0 in anchor_addrs:
+                focus, anchor = t1, t0
+            else:
+                continue
+            seen_pools.add(pool)
+            anchor_sym = next(
+                (s for s, a in _anchor_pairs(config) if a.lower() == anchor),
+                "",
+            )
+            hints.append(
+                _pool_hint_from_factory_scan(
+                    chain=chain,
+                    token_addr=focus,
+                    dex_id=fcfg.dex,
+                    pool_addr=pool,
+                    anchor_sym=anchor_sym,
+                    anchor_addr=anchor,
+                    source=_SOURCE_FACTORY_LOG,
+                    factory=fcfg.factory,
                 )
-                hints.append(
-                    _pool_hint_from_factory_scan(
-                        chain=chain,
-                        token_addr=focus,
-                        dex_id=fcfg.dex,
-                        pool_addr=pool,
-                        anchor_sym=anchor_sym,
-                        anchor_addr=anchor,
-                        source=_SOURCE_FACTORY_LOG,
-                        factory=fcfg.factory,
-                    )
-                )
-                stats["pools_matched"] += 1
-            from_block = to_block + 1
+            )
+            stats["pools_matched"] += 1
 
+    _merge_funnel_into_factory_log_stats(stats, funnel)
     return hints, stats
 
 
@@ -462,8 +713,9 @@ def write_verify_budget_split(
             existing = {}
 
     verified_by_source = dict(result.verified_second_pool_by_source)
-    onchain_verified = sum(verified_by_source.values())
-    verified_second_pool_count = onchain_verified
+    first_pool_found = int(result.first_pool_found)
+    second_venue_found = int(result.second_venue_found)
+    verified_pool_count = int(result.verified_pool_count)
     payload = {
         "schema_version": "m8_verify_budget_v1",
         "pipeline_mode": "onchain_factory_mirror_scan",
@@ -474,11 +726,14 @@ def write_verify_budget_split(
         "onchain_factory_candidates": result.onchain_factory_candidates,
         "factory_log_candidates": result.factory_log_candidates,
         "verified_second_pool_by_source": verified_by_source,
-        "verified_second_pool_count": verified_second_pool_count,
+        "first_pool_found": first_pool_found,
+        "second_venue_found": second_venue_found,
+        "verified_pool_count": verified_pool_count,
+        "verified_second_pool_count": second_venue_found,
         "onchain_factory_verified": int(verified_by_source.get("onchain_factory") or 0),
-        "onchain_verified": int(existing.get("onchain_verified") or 0) + onchain_verified
+        "onchain_verified": int(existing.get("onchain_verified") or 0) + verified_pool_count
         if merge_existing
-        else onchain_verified,
+        else verified_pool_count,
         "verify_subset_cap": int(verify_subset_cap),
         "verify_subset_size": min(
             result.onchain_factory_candidates + result.factory_log_candidates,
@@ -508,14 +763,38 @@ def load_onchain_scan_funnel_fields(
         return {}
     by_source = dict(doc.get("verified_second_pool_by_source") or {})
     factory_verified = int(by_source.get("onchain_factory") or 0)
-    total = int(doc.get("verified_second_pool_count") or sum(by_source.values()) or 0)
+    verified_pools = list(doc.get("verified_pools") or [])
+    first_pool = int(doc.get("first_pool_found") or 0)
+    second_venue = int(doc.get("second_venue_found") or 0)
+    verified_pool_count = int(doc.get("verified_pool_count") or 0)
+    if not first_pool and verified_pools:
+        first_pool = len(
+            {str(vp.get("focus_token") or "").lower() for vp in verified_pools if vp.get("focus_token")}
+        )
+    if not verified_pool_count:
+        verified_pool_count = len(verified_pools) or sum(by_source.values())
+    if not second_venue and verified_pools:
+        by_focus: Dict[str, Set[str]] = {}
+        for vp in verified_pools:
+            focus = str(vp.get("focus_token") or "").lower()
+            dex = str(vp.get("dex_id") or "")
+            if focus.startswith("0x") and dex:
+                by_focus.setdefault(focus, set()).add(dex)
+        second_venue = sum(1 for dexes in by_focus.values() if len(dexes) >= 2)
+    # Legacy artifacts stored first-pool count in verified_second_pool_count.
+    legacy_vspc = int(doc.get("verified_second_pool_count") or 0)
+    if not doc.get("second_venue_found") and legacy_vspc and not first_pool:
+        first_pool = legacy_vspc
     return {
         "onchain_factory_candidates": int(doc.get("onchain_factory_candidates") or 0),
         "factory_log_candidates": int(doc.get("factory_log_candidates") or 0),
         "onchain_factory_verified": factory_verified,
         "verified_second_pool_by_source": by_source,
-        "verified_second_pool_count": total,
-        "verified_pools": list(doc.get("verified_pools") or []),
+        "first_pool_found": first_pool,
+        "second_venue_found": second_venue,
+        "verified_pool_count": verified_pool_count,
+        "verified_second_pool_count": second_venue,
+        "verified_pools": verified_pools,
     }
 
 
@@ -533,16 +812,20 @@ def overlay_verify_budget_with_onchain_scan(
         "onchain_factory_candidates",
         "factory_log_candidates",
         "onchain_factory_verified",
+        "first_pool_found",
+        "second_venue_found",
+        "verified_pool_count",
         "verified_second_pool_count",
     ):
-        if scan.get(key):
+        if key in scan:
             out[key] = scan[key]
     merged_src = dict(scan.get("verified_second_pool_by_source") or {})
     merged_src.update(dict(out.get("verified_second_pool_by_source") or {}))
     out["verified_second_pool_by_source"] = merged_src
     factory_v = int(scan.get("onchain_factory_verified") or 0)
     dex_v = int(out.get("onchain_verified") or 0)
-    out["onchain_verified"] = max(dex_v, factory_v, int(scan.get("verified_second_pool_count") or 0))
+    pool_v = int(scan.get("verified_pool_count") or 0)
+    out["onchain_verified"] = max(dex_v, factory_v, pool_v)
     return out
 
 
@@ -588,11 +871,24 @@ def run_mirror_discovery(
         "elapsed_s": round(time.monotonic() - t0, 3),
     }
 
-    by_source: Dict[str, int] = {}
-    for h in verified:
-        if h.hint_status in {HINT_FACTORY_VERIFIED, "HINT_ONCHAIN_VERIFIED"}:
-            by_source[h.source] = int(by_source.get(h.source, 0)) + 1
-    result.verified_second_pool_by_source = by_source
+    venue_metrics = compute_mirror_venue_metrics(verified)
+    result.verified_second_pool_by_source = dict(
+        venue_metrics.get("verified_pools_by_source") or {}
+    )
+    result.first_pool_found = int(venue_metrics.get("first_pool_found") or 0)
+    result.second_venue_found = int(venue_metrics.get("second_venue_found") or 0)
+    result.verified_pool_count = int(venue_metrics.get("verified_pool_count") or 0)
+
+    factory_log_smoke: Dict[str, Any] = {}
+    if result.factory_log_candidates > 0 and not dry_run:
+        factory_log_smoke = run_factory_log_mirror_quote_smoke(
+            verified,
+            chain=chain,
+            config_path=config_path,
+            dry_run=dry_run,
+        )
+    if factory_log_smoke:
+        result.scan_stats["factory_log_quote_smoke"] = factory_log_smoke
 
     if verified or not dry_run:
         hints_artifact = _merge_existing_hints(hints_path, verified, chain=chain)
@@ -614,7 +910,11 @@ def run_mirror_discovery(
         "onchain_factory_candidates": result.onchain_factory_candidates,
         "factory_log_candidates": result.factory_log_candidates,
         "verified_second_pool_by_source": result.verified_second_pool_by_source,
-        "verified_second_pool_count": sum(result.verified_second_pool_by_source.values()),
+        "first_pool_found": result.first_pool_found,
+        "second_venue_found": result.second_venue_found,
+        "verified_pool_count": result.verified_pool_count,
+        "verified_second_pool_count": result.second_venue_found,
+        "tokens_with_second_venue": venue_metrics.get("tokens_with_second_venue") or [],
         "verified_pools": [
             {
                 "focus_token": h.focus_token,

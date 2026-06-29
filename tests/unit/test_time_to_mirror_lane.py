@@ -61,6 +61,48 @@ def test_classify_mirror_smoke_exit_codes():
     )
 
 
+def test_build_time_to_mirror_sla_uses_second_venue_not_first_pool_count(
+    monkeypatch, tmp_path: Path
+):
+    expansion = tmp_path / "expansion.json"
+    expansion.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "mirror_quote_ready_tokens": 9,
+                    "verified_second_pool_count": 4,
+                    "tokens_in": 50,
+                },
+                "routes_admitted": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    scan = tmp_path / "scan.json"
+    scan.write_text(
+        json.dumps(
+            {
+                "first_pool_found": 4,
+                "second_venue_found": 0,
+                "verified_pool_count": 4,
+                "verified_second_pool_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.onchain_factory_mirror_discovery.load_onchain_scan_funnel_fields",
+        lambda scan_path=None: json.loads(scan.read_text(encoding="utf-8")),
+    )
+    payload = build_time_to_mirror_sla(expansion_path=expansion)
+    assert payload["first_pool_found"] == 4
+    assert payload["second_venue_found"] == 0
+    assert payload["verified_pool_count"] == 4
+    assert payload["verified_second_pool_count"] == 0
+    assert payload["mirror_yield_funnel"]["first_pool_found"] == 4
+    assert payload["mirror_yield_funnel"]["second_venue_found"] == 0
+
+
 def test_build_time_to_mirror_sla_preserves_separate_mirror_checkpoints():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

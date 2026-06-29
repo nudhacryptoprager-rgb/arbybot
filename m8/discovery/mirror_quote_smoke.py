@@ -65,14 +65,39 @@ def _status_quoteable(status: str) -> bool:
     return any(upper.startswith(p) for p in ("QUOTE_OK", "OK", "PASS", "SUCCESS", "INDEXED"))
 
 
+def _is_anchor_address(addr: str) -> bool:
+    low = str(addr or "").lower()
+    if not low.startswith("0x") or len(low) != 42:
+        return False
+    return low in set(_base_anchor_addrs().values())
+
+
 def is_same_pair_mirror_route(route: Dict[str, Any]) -> bool:
     focus_sym = str(route.get("focus_token_symbol") or "")
-    if not focus_sym:
-        return False
+    focus_addr = str(
+        route.get("focus_token_address") or route.get("exotic_address") or ""
+    ).lower()
     t0 = str(route.get("token0") or "")
     t1 = str(route.get("token1") or "")
-    anchor = t1 if t0 == focus_sym else t0 if t1 == focus_sym else ""
-    return anchor in _ANCHOR_SYMS
+    t0a = _normalize_eth_alias(str(route.get("token0_addr") or ""), t0)
+    t1a = _normalize_eth_alias(str(route.get("token1_addr") or ""), t1)
+
+    if focus_sym and not focus_sym.lower().startswith("0x"):
+        anchor = t1 if t0 == focus_sym else t0 if t1 == focus_sym else ""
+        if anchor in _ANCHOR_SYMS:
+            return True
+
+    if focus_addr.startswith("0x"):
+        if not t0a or not t1a:
+            t0a, t1a = resolve_route_token_addrs(route)
+        other = ""
+        if t0a == focus_addr:
+            other = t1a
+        elif t1a == focus_addr:
+            other = t0a
+        if other and _is_anchor_address(other):
+            return True
+    return False
 
 
 def _normalize_eth_alias(addr: str, symbol: str) -> str:

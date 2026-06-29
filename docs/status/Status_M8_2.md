@@ -211,20 +211,18 @@ prior wide expansion artifacts are audit-lane evidence only, not hot-path SLA pr
 ## Time-to-mirror hot runtime (2026-06-29)
 
 ```text
-TIME_TO_MIRROR_HOT_SLA_REGRESSED / DEXSCREENER_ZERO_PAIR_BLOCKED
-primary_blocker: DexScreener does not see fresh_delta long-tail pools early enough
-next_owner: M8.2 on-chain factory/log mirror discovery (primary hot path)
-hot_delta fresh proof (prior): latency_s=560.22 hot_sla_pass=true (stale — superseded)
-hot_delta fresh proof (latest --force-rerun-steps): latency_s=1349.42 hot_sla_pass=false
-step7_cap_rca: data/tmp/m8_dexscreener_mapping_rca_latest.json — cap50/100 both onchain_verified=0; NOT cap-limited
-step8_root_cause: DEXSCREENER_ZERO_PAIRS_FOR_FRESH_DELTA_TOKENS (753-entry negative cache, disposition NO_RADAR_POOL)
-hot_discovery_order: fresh_delta → onchain_factory_mirror_scan → dexscreener_enrich (not DexScreener-first)
-target_blocker: NO_FRESH_LONG_TAIL_QUOTE_READY + NON_TARGET_NARROW_UNIVERSE (known_major excluded from narrow bridge)
-pending_queue: count=743 fresh_long_tail=704
-verify_budget_source: data/tmp/m8_verify_budget_latest.json (split: dexscreener/onchain_factory/factory_log candidates)
-funnel_artifact: data/tmp/m8_mirror_yield_funnel_latest.json
-m9_depth_capacity: hard-gated by gate_time_to_mirror_target_universe (skipped when fresh_long_tail_quote_ready=0)
-m9_shadow: blocked (cycles_at_floor=0 + non_target_universe)
+TIME_TO_MIRROR_FACTORY_LOG_INFRA_FIXED / SECOND_VENUE_NOT_FOUND_IN_HOT_SLICE
+M8_TO_M8_3_REFRESH_REACHED / M9_NOT_STARTED_BY_TARGET_UNIVERSE_GATE
+primary_blocker: fresh_long_tail_quote_ready_tokens=0 (no second venue in 50-token hot slice)
+factory_log_infra: log_fetch_errors=0 logs_fetched=101 log_chunks_ok=208 pools_matched=0
+onchain_metrics: first_pool_found=4 second_venue_found=0 verified_pool_count=4 verified_second_pool_count=0
+artifact_sync: scan + SLA + funnel aligned on second_venue semantics
+full_upstream_refresh (m8_m9 --skip-shadow, ~119m): sniper ACTIVE; M8.2/M8.3 strict REACHED; M9 shadow skipped
+m8_2_wide_expansion: tokens_in=110 routes=371 mirror_quote_ready_tokens=10 (not hot-slice fresh_long_tail proof)
+hot_delta control-plane: latency_s=641.12 hot_sla_pass=true
+narrow_bridge: active_routes=49 token_class=unknown fresh_long_tail_quote_ready_tokens=0
+m9_depth_capacity: skipped (gate_time_to_mirror_target_universe blocked)
+next: wait for second venue on fresh_long_tail tokens; do not shadow until fresh_long_tail_quote_ready_tokens>0
 ```
 
 ## Time-to-mirror hot runtime (2026-06-27)

@@ -52,7 +52,9 @@ def main() -> int:
     print(
         f"onchain_factory={result.onchain_factory_candidates} "
         f"factory_log={result.factory_log_candidates} "
-        f"verified={result.verified_second_pool_by_source} "
+        f"first_pool={result.first_pool_found} "
+        f"second_venue={result.second_venue_found} "
+        f"verified_pools={result.verified_pool_count} "
         f"tokens={result.tokens_scanned}",
         flush=True,
     )

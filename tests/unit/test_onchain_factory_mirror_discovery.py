@@ -14,6 +14,7 @@ from m8.discovery.mirror_candidate_score import (
 )
 from m8.discovery.onchain_factory_mirror_discovery import (
     FACTORY_LOG_CONFIG_PATH,
+    compute_mirror_venue_metrics,
     load_expand_subset_tokens,
     run_mirror_discovery,
 )
@@ -141,6 +142,163 @@ def test_factory_log_config_path_is_path_object():
     assert FACTORY_LOG_CONFIG_PATH.name == "new_pool_factories.yaml"
 
 
+def test_compute_mirror_venue_metrics_splits_first_pool_and_second_venue():
+    weth = "0x4200000000000000000000000000000000000006"
+    tok_a = "0x" + "a" * 40
+    tok_b = "0x" + "b" * 40
+    hints = [
+        PoolHint(
+            source="onchain_factory",
+            chain="base",
+            dex_id="uniswap_v2",
+            pool_address="0x" + "1" * 40,
+            token0_addr=tok_a,
+            token1_addr=weth,
+            focus_token=tok_a,
+            hint_status="HINT_ONCHAIN_VERIFIED",
+        ),
+        PoolHint(
+            source="onchain_factory",
+            chain="base",
+            dex_id="sushiswap_v2",
+            pool_address="0x" + "2" * 40,
+            token0_addr=tok_a,
+            token1_addr=weth,
+            focus_token=tok_a,
+            hint_status="HINT_ONCHAIN_VERIFIED",
+        ),
+        PoolHint(
+            source="onchain_factory",
+            chain="base",
+            dex_id="uniswap_v2",
+            pool_address="0x" + "3" * 40,
+            token0_addr=tok_b,
+            token1_addr=weth,
+            focus_token=tok_b,
+            hint_status="HINT_ONCHAIN_VERIFIED",
+        ),
+    ]
+    m = compute_mirror_venue_metrics(hints)
+    assert m["first_pool_found"] == 2
+    assert m["second_venue_found"] == 1
+    assert m["verified_pool_count"] == 3
+    assert tok_a in m["tokens_with_second_venue"]
+
+
+def test_factory_log_scan_from_uses_earliest_per_token_window():
+    from m8.discovery.onchain_factory_mirror_discovery import _factory_log_scan_from_blocks
+
+    tokens = [
+        {"token": "0x" + "1" * 40, "first_seen_block": 100},
+        {"token": "0x" + "2" * 40, "first_seen_block": 4900},
+    ]
+    scan_from, per_token = _factory_log_scan_from_blocks(tokens, head=5000, max_blocks=5000)
+    assert scan_from == 0
+    assert len(per_token) == 2
+    assert per_token["0x" + "1" * 40] == 100
+    assert per_token["0x" + "2" * 40] == 4900
+
+
+def test_factory_log_scan_from_not_shared_max_across_tokens():
+    from m8.discovery.onchain_factory_mirror_discovery import _factory_log_scan_from_blocks
+
+    tokens = [
+        {"token": "0x" + "1" * 40, "first_seen_block": 100},
+        {"token": "0x" + "2" * 40, "first_seen_block": 4900},
+    ]
+    # Old bug used max(100, 4900)=4900 as sole lower bound.
+    scan_from, _ = _factory_log_scan_from_blocks(tokens, head=5000, max_blocks=100)
+    assert scan_from == 4900
+    scan_from_wide, _ = _factory_log_scan_from_blocks(tokens, head=5000, max_blocks=5000)
+    assert scan_from_wide == 0
+
+
+def test_factory_log_chunk_ranges_splits_wide_window():
+    from m8.discovery.onchain_factory_mirror_discovery import (
+        FACTORY_LOG_HOT_CHUNK_BLOCKS,
+        _factory_log_chunk_ranges,
+    )
+
+    ranges = _factory_log_chunk_ranges(0, 5000, chunk_blocks=FACTORY_LOG_HOT_CHUNK_BLOCKS)
+    assert len(ranges) == 26
+    assert ranges[0] == (0, FACTORY_LOG_HOT_CHUNK_BLOCKS - 1)
+    assert ranges[-1][1] == 5000
+
+
+def test_factory_log_wide_window_fetch_splits_and_fetches_logs():
+    from m8.discovery.onchain_factory_mirror_discovery import (
+        _empty_factory_log_stats,
+        _factory_log_chunk_ranges,
+        _fetch_factory_logs_chunked,
+    )
+
+    class _Lane:
+        def __init__(self):
+            self.calls: list = []
+
+        def get_logs(self, params):
+            self.calls.append(dict(params))
+            span = int(params["toBlock"]) - int(params["fromBlock"]) + 1
+            if span > 250:
+                return [], True, "400 Bad Request: block range too large"
+            return [{"block": params["fromBlock"]}], False, ""
+
+    stats = _empty_factory_log_stats()
+    lane = _Lane()
+    ranges = _factory_log_chunk_ranges(0, 5000, chunk_blocks=200)
+    logs = _fetch_factory_logs_chunked(
+        lane,
+        factory="0x" + "f" * 40,
+        topic0="0x" + "a" * 64,
+        from_block=0,
+        to_block=5000,
+        chunk_blocks=200,
+        stats=stats,
+        checksum_fn=lambda x: x,
+    )
+    assert logs
+    assert len(logs) == len(ranges)
+    assert stats["log_chunks_ok"] == len(ranges)
+    assert stats["log_fetch_errors"] == 0
+    assert len(lane.calls) == len(ranges)
+
+
+def test_factory_log_get_logs_failover_after_alchemy_400():
+    from unittest.mock import MagicMock
+
+    from monitoring.sniper_funnel import FunnelTracker
+    from m8.discovery.onchain_factory_mirror_discovery import (
+        _empty_factory_log_stats,
+        _factory_log_get_logs,
+        _merge_funnel_into_factory_log_stats,
+    )
+    from m8.runtime.smoke_run import SniperRpcLane
+
+    funnel = FunnelTracker()
+    w3_pri = MagicMock()
+    w3_pri.eth.get_logs.side_effect = [Exception("400 Bad Request: block range too large")]
+    w3_sec = MagicMock()
+    w3_sec.eth.get_logs.return_value = [{"log": "secondary"}]
+    lane = SniperRpcLane(
+        w3_primary=w3_pri,
+        w3_secondary=w3_sec,
+        primary_provider="alchemy",
+        secondary_provider="drpc",
+        funnel=funnel,
+    )
+    stats = _empty_factory_log_stats()
+    logs = _factory_log_get_logs(
+        lane,
+        {"fromBlock": 100, "toBlock": 199, "address": "0x" + "a" * 40},
+        stats,
+    )
+    _merge_funnel_into_factory_log_stats(stats, funnel)
+    assert logs == [{"log": "secondary"}]
+    assert stats["log_chunks_ok"] == 1
+    assert stats["log_fetch_errors"] == 0
+    assert stats["log_provider_fallbacks"] >= 1
+
+
 def test_overlay_verify_budget_preserves_onchain_scan(tmp_path: Path):
     from m8.discovery.onchain_factory_mirror_discovery import (
         overlay_verify_budget_with_onchain_scan,
@@ -152,7 +310,10 @@ def test_overlay_verify_budget_preserves_onchain_scan(tmp_path: Path):
             {
                 "onchain_factory_candidates": 4,
                 "verified_second_pool_by_source": {"onchain_factory": 4},
-                "verified_second_pool_count": 4,
+                "first_pool_found": 4,
+                "second_venue_found": 0,
+                "verified_pool_count": 4,
+                "verified_second_pool_count": 0,
             }
         ),
         encoding="utf-8",
@@ -162,6 +323,8 @@ def test_overlay_verify_budget_preserves_onchain_scan(tmp_path: Path):
         scan_path=scan,
     )
     assert out["onchain_factory_verified"] == 4
+    assert out["first_pool_found"] == 4
+    assert out["second_venue_found"] == 0
     assert out["onchain_verified"] == 4
 
 
@@ -174,7 +337,10 @@ def test_build_mirror_yield_funnel_reads_onchain_scan(tmp_path: Path, monkeypatc
             {
                 "onchain_factory_candidates": 3,
                 "verified_second_pool_by_source": {"onchain_factory": 3},
-                "verified_second_pool_count": 3,
+                "first_pool_found": 3,
+                "second_venue_found": 0,
+                "verified_pool_count": 3,
+                "verified_second_pool_count": 0,
                 "verified_pools": [{"focus_token": "0x" + "1" * 40}],
             }
         ),
@@ -198,7 +364,10 @@ def test_build_mirror_yield_funnel_reads_onchain_scan(tmp_path: Path, monkeypatc
         lambda scan_path=None: {
             "onchain_factory_candidates": 3,
             "onchain_factory_verified": 3,
-            "verified_second_pool_count": 3,
+            "first_pool_found": 3,
+            "second_venue_found": 0,
+            "verified_pool_count": 3,
+            "verified_second_pool_count": 0,
             "verified_second_pool_by_source": {"onchain_factory": 3},
             "verified_pools": [{"focus_token": "0x" + "1" * 40}],
         },
@@ -211,3 +380,5 @@ def test_build_mirror_yield_funnel_reads_onchain_scan(tmp_path: Path, monkeypatc
     )
     assert payload["onchain_factory_verified"] == 3
     assert payload["onchain_verified"] == 3
+    assert payload["first_pool_found"] == 3
+    assert payload["second_venue_found"] == 0

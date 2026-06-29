@@ -423,9 +423,19 @@ def build_time_to_mirror_sla(
 
     summary = expansion.get("summary") or {}
     quote_ready_global = int(summary.get("mirror_quote_ready_tokens") or 0)
-    verified_second = int(summary.get("verified_second_pool_count") or 0)
     routes = list(expansion.get("routes_admitted") or [])
     mirror_by_token = mirror_readiness_by_focus(routes) if routes else {}
+
+    from m8.discovery.onchain_factory_mirror_discovery import load_onchain_scan_funnel_fields
+
+    onchain_scan = load_onchain_scan_funnel_fields()
+    first_pool_found = int(onchain_scan.get("first_pool_found") or 0)
+    second_venue_found = int(onchain_scan.get("second_venue_found") or 0)
+    verified_pool_count = int(onchain_scan.get("verified_pool_count") or 0)
+    if onchain_scan:
+        verified_second = second_venue_found
+    else:
+        verified_second = int(summary.get("verified_second_pool_count") or 0)
 
     rows: List[Dict[str, Any]] = []
     now = time.time()
@@ -475,6 +485,9 @@ def build_time_to_mirror_sla(
         "fresh_long_tail_quote_ready_tokens": int(
             summary.get("fresh_long_tail_quote_ready_tokens") or 0
         ),
+        "first_pool_found": first_pool_found,
+        "second_venue_found": second_venue_found,
+        "verified_pool_count": verified_pool_count,
     }
     hints_path = DEFAULT_EXTERNAL_HINTS_PATH
     verify_budget_path = DEFAULT_VERIFY_BUDGET_PATH
@@ -554,6 +567,9 @@ def build_time_to_mirror_sla(
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mirror_quote_ready_tokens": per_token_quote_ready or quote_ready_global,
         "mirror_quote_ready_tokens_global": quote_ready_global,
+        "first_pool_found": first_pool_found,
+        "second_venue_found": second_venue_found,
+        "verified_pool_count": verified_pool_count,
         "verified_second_pool_count": verified_second,
         "pending_count": int(pending.get("pending_count") or 0),
         "expand_subset_distribution": expand_subset_distribution,
@@ -846,15 +862,32 @@ def build_mirror_yield_funnel_artifact(
         "verify_subset_cap": verify_cap,
         "onchain_verified": combined_onchain_verified,
         "onchain_factory_verified": onchain_factory_verified,
+        "first_pool_found": int(
+            onchain_scan.get("first_pool_found")
+            or verify_budget.get("first_pool_found")
+            or 0
+        ),
+        "second_venue_found": int(
+            onchain_scan.get("second_venue_found")
+            or verify_budget.get("second_venue_found")
+            or 0
+        ),
+        "verified_pool_count": int(
+            onchain_scan.get("verified_pool_count")
+            or verify_budget.get("verified_pool_count")
+            or combined_onchain_verified
+        ),
         "onchain_factory_candidates": int(
             onchain_scan.get("onchain_factory_candidates")
             or verify_budget.get("onchain_factory_candidates")
             or 0
         ),
         "verified_second_pool_count": int(
-            onchain_scan.get("verified_second_pool_count")
+            onchain_scan.get("second_venue_found")
+            or onchain_scan.get("verified_second_pool_count")
+            or verify_budget.get("second_venue_found")
             or verify_budget.get("verified_second_pool_count")
-            or combined_onchain_verified
+            or 0
         ),
         "verified_pools_from_onchain_scan": list(onchain_scan.get("verified_pools") or []),
         "dropped_to_warm_count": int(verify_budget.get("dropped_to_warm_count") or 0),

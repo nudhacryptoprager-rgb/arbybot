@@ -24,6 +24,19 @@ def test_v4_event_index_hit_rate_capped_at_one():
     assert cov["v4_routes_admitted"] == 2
 
 
+def test_is_same_pair_mirror_route_accepts_onchain_address_route():
+    route = {
+        "focus_token_symbol": "0x3df432",
+        "focus_token_address": "0x3df432dfcd52403bcde323503cd2ae3de8a5eed9",
+        "token0": "",
+        "token1": "0x3df432",
+        "token0_addr": "0x4200000000000000000000000000000000000006",
+        "token1_addr": "0x3df432dfcd52403bcde323503cd2ae3de8a5eed9",
+        "dex_id": "uniswap_v2",
+    }
+    assert is_same_pair_mirror_route(route) is True
+
+
 def test_mirror_smoke_dry_run_skips_rpc():
     routes = [
         {
