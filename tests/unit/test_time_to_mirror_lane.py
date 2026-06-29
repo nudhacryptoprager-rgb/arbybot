@@ -135,6 +135,58 @@ def test_mirror_readiness_requires_two_quoteable_legs():
     assert ready["0xabc"]["quoteable_legs"] == 1
 
 
+def test_narrow_bridge_excludes_known_major_only_quote_ready():
+    import tempfile
+    from pathlib import Path
+
+    exotic = "0x" + "f" * 40
+    with tempfile.TemporaryDirectory() as tmp:
+        expansion = Path(tmp) / "exp.json"
+        out = Path(tmp) / "narrow.json"
+        expansion.write_text(
+            json.dumps(
+                {
+                    "routes_admitted": [
+                        {
+                            "dex_id": "uniswap_v3",
+                            "focus_token_address": exotic,
+                            "focus_token_symbol": "FOO",
+                            "token0": "FOO",
+                            "token1": "USDC",
+                            "token0_addr": exotic,
+                            "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                            "token_class": "known_major",
+                            "refresh_lane": "audit_lane",
+                            "quote_smoke_status": "QUOTE_OK_MIRROR_SMOKE",
+                        },
+                        {
+                            "dex_id": "aerodrome",
+                            "focus_token_address": exotic,
+                            "focus_token_symbol": "FOO",
+                            "token0": "FOO",
+                            "token1": "USDC",
+                            "token0_addr": exotic,
+                            "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                            "token_class": "known_major",
+                            "refresh_lane": "audit_lane",
+                            "quote_smoke_status": "QUOTE_OK_MIRROR_SMOKE",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        payload, rc = build_narrow_m9_bridge_inventory(
+            expansion_path=expansion,
+            output_path=out,
+        )
+        assert rc == 2
+        assert payload["quote_ready_token_count"] == 0
+        assert payload["fresh_long_tail_quote_ready_tokens"] == 0
+        assert payload.get("excluded_known_major_route_count", 0) >= 2
+        assert payload.get("target_universe_gate_blocked") is True
+
+
 def test_build_narrow_m9_bridge_inventory_no_quote_ready_returns_2():
     with tempfile.TemporaryDirectory() as tmp:
         expansion = Path(tmp) / "exp.json"
@@ -254,7 +306,12 @@ def test_build_second_pool_transition_subset_empty_writes_zero_tokens():
         wl = root / "wl.json"
         wl.write_text(json.dumps({"tokens": {"0x" + "b" * 40: {}}}), encoding="utf-8")
         out = root / "trans.json"
-        rc = build_second_pool_transition_subset(watchlist_path=wl, output_path=out)
+        rc = build_second_pool_transition_subset(
+            watchlist_path=wl,
+            expansion_path=root / "missing_expansion.json",
+            hints_path=root / "missing_hints.json",
+            output_path=out,
+        )
         assert rc == 0
         doc = json.loads(out.read_text(encoding="utf-8"))
         assert doc["token_count"] == 0
@@ -280,6 +337,8 @@ def test_narrow_inventory_tags_quote_ready_same_pair_legs():
                             "token1": "USDC",
                             "token0_addr": "0xabc",
                             "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                            "token_class": "fresh_long_tail",
+                            "refresh_lane": "fresh_delta_lane",
                             "quote_smoke_status": "QUOTE_OK_MIRROR_SMOKE",
                         },
                         {
@@ -290,6 +349,8 @@ def test_narrow_inventory_tags_quote_ready_same_pair_legs():
                             "token1": "USDC",
                             "token0_addr": "0xabc",
                             "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                            "token_class": "fresh_long_tail",
+                            "refresh_lane": "fresh_delta_lane",
                             "quote_smoke_status": "QUOTE_OK_MIRROR_SMOKE",
                         },
                         {
@@ -317,3 +378,72 @@ def test_narrow_inventory_tags_quote_ready_same_pair_legs():
             for r in payload["active_routes"]
         )
         assert payload["quote_ready_token_count"] == 1
+
+
+def test_transition_subset_topology_fallback(tmp_path: Path):
+    from m8.discovery.time_to_mirror_lane import build_second_pool_transition_subset
+
+    watchlist_path = tmp_path / "wl.json"
+    expansion_path = tmp_path / "exp.json"
+    out_path = tmp_path / "subset.json"
+    exotic = "0x" + "d" * 40
+    watchlist_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    exotic: {
+                        "token_class": "fresh_long_tail",
+                        "refresh_lane": "fresh_delta_lane",
+                        "first_pool": "p1",
+                        "second_pool_verified": False,
+                        "transitions_1_to_2": 0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    expansion_path.write_text(
+        json.dumps(
+            {
+                "routes_admitted": [
+                    {
+                        "focus_token_address": exotic,
+                        "focus_token_symbol": "FOO",
+                        "exotic_address": exotic,
+                        "dex_id": "uniswap_v3",
+                        "pool_address": "0x" + "1" * 40,
+                        "token0": "FOO",
+                        "token1": "USDC",
+                        "token0_addr": exotic,
+                        "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                        "quote_smoke_status": "QUOTE_OK_MIRROR_SMOKE",
+                    },
+                    {
+                        "focus_token_address": exotic,
+                        "focus_token_symbol": "FOO",
+                        "exotic_address": exotic,
+                        "dex_id": "aerodrome",
+                        "pool_address": "0x" + "2" * 40,
+                        "token0": "FOO",
+                        "token1": "USDC",
+                        "token0_addr": exotic,
+                        "token1_addr": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                        "quote_smoke_status": "QUOTE_FAIL",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = build_second_pool_transition_subset(
+        watchlist_path=watchlist_path,
+        expansion_path=expansion_path,
+        hints_path=tmp_path / "missing_hints.json",
+        output_path=out_path,
+    )
+    assert rc == 0
+    doc = json.loads(out_path.read_text(encoding="utf-8"))
+    assert len(doc.get("tokens") or []) >= 1
+    assert doc["tokens"][0]["source"] == "same_pair_mirror_topology_fallback"
+    assert doc["lane_meta"]["fallback"] == "same_pair_mirror_topology"

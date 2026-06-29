@@ -103,12 +103,33 @@ def enumerate_fresh_delta_pairs(
 
     watchlist: Dict[str, Any] = {}
     if watchlist_path.is_file():
-        watchlist = json.loads(watchlist_path.read_text(encoding="utf-8")).get("tokens") or {}
+        wl_doc = json.loads(watchlist_path.read_text(encoding="utf-8"))
+        watchlist = {
+            str(k).lower(): v
+            for k, v in (wl_doc.get("tokens") or {}).items()
+            if isinstance(v, dict)
+        }
 
     registry: Dict[str, Any] = {}
     if registry_path.is_file():
         doc = json.loads(registry_path.read_text(encoding="utf-8"))
-        registry = doc.get("token_registry") or doc.get("tokens") or {}
+        reg_raw = doc.get("token_registry") or doc.get("tokens") or {}
+        registry = {
+            str(k).lower(): v
+            for k, v in reg_raw.items()
+            if isinstance(v, dict)
+        }
+
+    subset_meta: Dict[str, Dict[str, Any]] = {}
+    expand_subset_path = Path("data/tmp/m8_time_to_mirror_expand_subset.json")
+    if expand_subset_path.is_file():
+        for item in json.loads(expand_subset_path.read_text(encoding="utf-8")).get(
+            "tokens"
+        ) or []:
+            if isinstance(item, dict):
+                addr = str(item.get("token") or item.get("address") or "").lower()
+                if addr.startswith("0x"):
+                    subset_meta[addr] = item
 
     config_addrs = {(tc.address or "").lower() for tc in cfg.tokens.values()}
     pairs: List[Tuple[TokenInfo, TokenInfo]] = []
@@ -122,8 +143,8 @@ def enumerate_fresh_delta_pairs(
             low,
             w3=w3,
             cfg=cfg,
-            watchlist_entry=watchlist.get(low) or watchlist.get(addr),
-            registry_row=registry.get(low) or registry.get(addr),
+            watchlist_entry=watchlist.get(low) or subset_meta.get(low),
+            registry_row=registry.get(low),
         )
         if exotic is None:
             continue

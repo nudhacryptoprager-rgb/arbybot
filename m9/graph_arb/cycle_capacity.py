@@ -278,7 +278,9 @@ def shadow_gate_blocked(
     *,
     profile_names: Sequence[str] = ("diagnostic_near_econ", "base_realistic", "production_conservative"),
 ) -> Tuple[bool, str]:
-    """Return (blocked, reason) when no profile has cycles_at_floor > 0."""
+    """Return (blocked, reason) when cycles_total=0 or no profile has cycles_at_floor > 0."""
+    if int(capacity_doc.get("cycles_total") or 0) <= 0:
+        return True, "M9_CAPACITY_BLOCKED_BY_ZERO_CYCLES_TOTAL"
     by_profile = capacity_doc.get("cycles_by_profile") or {}
     for name in profile_names:
         row = by_profile.get(name) or {}

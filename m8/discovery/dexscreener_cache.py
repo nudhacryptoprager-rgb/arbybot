@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 DEFAULT_CACHE_PATH = "data/tmp/m8_dexscreener_radar_cache.json"
 HOT_TTL_S = 1800.0
 COLD_TTL_S = 21600.0
+# Short TTL for fresh_delta lane — avoid hiding tokens when second pool appears.
+FRESH_DELTA_HOT_TTL_S = 180.0
 
 
 def _now() -> float:
@@ -31,18 +33,25 @@ def save_cache(doc: Dict[str, Any], path: str = DEFAULT_CACHE_PATH) -> None:
     p.write_text(json.dumps(doc, indent=2), encoding="utf-8")
 
 
+def cache_ttl_s(*, hot: bool = True, lane: Optional[str] = None) -> float:
+    if lane in ("fresh_delta", "fresh_delta_lane", "time_to_mirror_hot"):
+        return FRESH_DELTA_HOT_TTL_S
+    return HOT_TTL_S if hot else COLD_TTL_S
+
+
 def get_cached_pairs(
     token: str,
     *,
     cache: Optional[Dict[str, Any]] = None,
     path: str = DEFAULT_CACHE_PATH,
     hot: bool = True,
+    lane: Optional[str] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     doc = cache if cache is not None else load_cache(path)
     entry = (doc.get("entries") or {}).get(token.lower())
     if not entry:
         return None
-    ttl = HOT_TTL_S if hot else COLD_TTL_S
+    ttl = cache_ttl_s(hot=hot, lane=lane)
     if _now() - float(entry.get("fetched_at") or 0) > ttl:
         return None
     pairs = entry.get("pairs")

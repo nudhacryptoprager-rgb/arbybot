@@ -61,8 +61,29 @@ def build_verify_subset_tokens(
     hints: List[PoolHint],
     *,
     min_dex_count: int = 2,
+    watchlist: Optional[Dict[str, Any]] = None,
+    use_scored: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> Set[str]:
     """Tokens worth on-chain verify: multi-venue or strong radar signals."""
+    if use_scored:
+        from m8.discovery.mirror_candidate_score import (
+            rank_tokens_for_verify,
+            verify_subset_from_scored_candidates,
+        )
+
+        ranked = rank_tokens_for_verify(
+            hints,
+            all_tokens=(watchlist or {}).get("tokens", {}).keys()
+            if isinstance(watchlist, dict) and watchlist.get("tokens")
+            else None,
+            watchlist=watchlist if isinstance(watchlist, dict) else None,
+            max_tokens=max_tokens,
+        )
+        scored = verify_subset_from_scored_candidates(ranked)
+        if scored:
+            return scored
+
     by_tok = hints_by_token(hints)
     subset: Set[str] = set()
     for tok, rows in by_tok.items():
@@ -131,8 +152,20 @@ def pipeline_metrics(
     verified_count: int,
     provider_timing: Dict[str, ProviderTiming],
     verified_yield_by_source: Optional[Dict[str, int]] = None,
+    verify_budget: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     rate = round(verified_count / verify_subset_size, 4) if verify_subset_size else 0.0
+    budget = dict(verify_budget or {})
+    if "onchain_verified" not in budget:
+        budget["onchain_verified"] = int(verified_count)
+    if "radar_seen" not in budget:
+        budget["radar_seen"] = int(radar_candidates)
+    if "scored_candidates" not in budget:
+        budget["scored_candidates"] = int(verify_subset_size)
+    if "verify_subset_size" not in budget:
+        budget["verify_subset_size"] = int(verify_subset_size)
+    if "dropped_to_warm_count" not in budget:
+        budget["dropped_to_warm_count"] = 0
     return {
         "pipeline_mode": "dexscreener_first_two_phase",
         "radar_fast_tokens": radar_fast_tokens,
@@ -142,6 +175,7 @@ def pipeline_metrics(
         "verified_yield": int(verified_count),
         "per_source_verified_yield": dict(verified_yield_by_source or {}),
         "provider_timing": {k: v.to_dict() for k, v in provider_timing.items()},
+        **budget,
     }
 
 

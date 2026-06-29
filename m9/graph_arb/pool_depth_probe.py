@@ -38,6 +38,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
+_DEPTH_PROBE_CACHE = None
+
+
+def _depth_probe_cache():
+    global _DEPTH_PROBE_CACHE
+    if _DEPTH_PROBE_CACHE is None:
+        from m9.graph_arb.depth_cache import DepthProbeCache
+
+        _DEPTH_PROBE_CACHE = DepthProbeCache(ttl_s=90.0)
+    return _DEPTH_PROBE_CACHE
+
 # Default first rung of the iterative depth ladder (see depth_capacity_probe).
 _PROBE_SIZE_USD = 100.0
 # Impact threshold above which a pool is considered TOXIC
@@ -628,6 +639,21 @@ def probe_route_marginal_depth(
 
     anchor_dec = _ANCHOR_DECIMALS[anchor_sym]
     anchor_price, price_source = _resolve_probe_price(anchor_sym, anchor_addr, price_map)
+    pool_address = route.get("pool_address", "") or ""
+    from m9.graph_arb.depth_cache import depth_cache_key
+
+    cache_key = depth_cache_key(
+        chain=str(route.get("chain") or "base"),
+        dex_id=str(route.get("dex_id") or ""),
+        pool_address=pool_address,
+        token_in=anchor_addr,
+        token_out=exotic_addr,
+        block_number=route.get("block_number") or route.get("depth_block_number"),
+    )
+    cached = _depth_probe_cache().get(cache_key)
+    if cached is not None:
+        return dict(cached)
+
     ref_in = int(ref_size_usd / anchor_price * (10 ** anchor_dec))
     if ref_in <= 0:
         result["probe_error"] = "ZERO_AMOUNT_IN"
@@ -662,7 +688,36 @@ def probe_route_marginal_depth(
                     token_in=token_in,
                     token_a=token_a or None,
                 )
+                if not amount_out:
+                    amount_out, _gas, _dbg = quote_maverick_productive(
+                        _eth_call_mav,
+                        pool_address=pool_address,
+                        amount_in=int(amount_in),
+                        token_a_in=not token_a_in,
+                        token_in=token_in,
+                        token_a=token_a or None,
+                    )
                 return int(amount_out) if amount_out else None
+            if adapter_type == "curve_stable":
+                idx_in = route.get("token_in_index")
+                idx_out = route.get("token_out_index")
+                pool = pool_address or quoter
+                if idx_in is None or idx_out is None or not pool:
+                    return None
+                pool_kind = route.get("pool_kind") or route.get("curve_pool_kind")
+                selector = "556d6e9f" if pool_kind == "crypto" else "5e0d443f"
+                calldata = (
+                    "0x"
+                    + selector
+                    + int(idx_in).to_bytes(32, "big").hex()
+                    + int(idx_out).to_bytes(32, "big").hex()
+                    + int(amount_in).to_bytes(32, "big").hex()
+                )
+                hexr = _raw_eth_call(rpc_url, pool, calldata)
+                if not hexr or hexr == "0x":
+                    return None
+                raw = hexr[2:] if hexr.startswith("0x") else hexr
+                return int(raw[:64], 16)
             if adapter_type in (
                 "balancer_vault",
                 "balancer_stable",
@@ -857,7 +912,9 @@ def probe_route_marginal_depth(
 
     from m9.graph_arb.depth_capacity_probe import mark_analytical_depth_suspect
 
-    return mark_analytical_depth_suspect(depth)
+    depth = mark_analytical_depth_suspect(depth)
+    _depth_probe_cache().set(cache_key, depth)
+    return depth
 
 
 def select_false_positive_reprobe_routes(
@@ -1027,8 +1084,17 @@ def enrich_routes_missing_depth(
         except Exception:
             pass
 
+        from m9.graph_arb.depth_contract import normalize_route_depth_contract
+
+        normalize_route_depth_contract(route)
+
         if sleep_s:
             time.sleep(sleep_s)
+
+    for route in routes:
+        from m9.graph_arb.depth_contract import normalize_route_depth_contract
+
+        normalize_route_depth_contract(route)
 
     return counts
 

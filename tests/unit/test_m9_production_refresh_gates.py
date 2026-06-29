@@ -41,6 +41,7 @@ def test_gate_capacity_shadow_blocked(tmp_path: Path):
     path.write_text(
         json.dumps(
             {
+                "cycles_total": 0,
                 "cycles_at_production_floor": 0,
                 "cycles_by_profile": {
                     "production_conservative": {"cycles_at_floor": 0},
@@ -50,6 +51,53 @@ def test_gate_capacity_shadow_blocked(tmp_path: Path):
         encoding="utf-8",
     )
     assert gate_capacity_shadow(path) == 2
+
+
+def test_gate_narrow_shadow_blocks_non_target_universe(tmp_path: Path):
+    from scripts.m9_production_refresh_gates import gate_narrow_shadow
+
+    cap = tmp_path / "cap.json"
+    bridge = tmp_path / "bridge.json"
+    cap.write_text(
+        json.dumps(
+            {
+                "cycles_total": 5,
+                "cycles_by_profile": {
+                    "diagnostic_near_econ": {"cycles_at_floor": 2},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    bridge.write_text(
+        json.dumps(
+            {
+                "fresh_long_tail_quote_ready_tokens": 1,
+                "active_routes": [
+                    {"token_class": "known_major", "refresh_lane": "audit_lane"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert gate_narrow_shadow(cap, bridge) == 2
+
+
+def test_gate_target_narrow_universe_blocks_without_fresh_quote_ready(tmp_path: Path):
+    from scripts.m9_production_refresh_gates import gate_target_narrow_universe
+
+    bridge = tmp_path / "bridge.json"
+    bridge.write_text(
+        json.dumps(
+            {
+                "active_routes": [],
+                "fresh_long_tail_quote_ready_tokens": 0,
+                "quote_ready_token_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert gate_target_narrow_universe(bridge) == 2
 
 
 def test_gate_negative_cache_stats(tmp_path: Path):

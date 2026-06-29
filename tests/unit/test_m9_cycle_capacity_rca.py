@@ -37,9 +37,24 @@ def _edge(route_id: str, depth, *, sym_in="A", sym_out="B", pool_suffix="2"):
     )
 
 
+def test_shadow_gate_blocked_when_zero_cycles_total():
+    blocked, reason = shadow_gate_blocked(
+        {
+            "cycles_by_profile": {
+                "production_conservative": {"cycles_at_floor": 0},
+                "diagnostic_near_econ": {"cycles_at_floor": 0},
+            },
+            "cycles_at_production_floor": 0,
+        }
+    )
+    assert blocked is True
+    assert "ZERO_CYCLES_TOTAL" in reason
+
+
 def test_shadow_gate_blocked_when_zero_cycles_at_floor():
     blocked, reason = shadow_gate_blocked(
         {
+            "cycles_total": 10,
             "cycles_by_profile": {
                 "production_conservative": {"cycles_at_floor": 0},
                 "diagnostic_near_econ": {"cycles_at_floor": 0},

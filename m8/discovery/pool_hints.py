@@ -338,6 +338,12 @@ def hint_to_pool_entry(
     else:
         t0s, t1s = focus_symbol or "T", connector_symbol or ""
     pool_addr = hint.pool_id or hint.pool_address
+    raw = hint.raw or {}
+    primary_source = str(hint.source or "")
+    if primary_source in ("onchain_factory", "factory_log"):
+        resolve_source = primary_source
+    else:
+        resolve_source = f"external_hint:{primary_source}"
     return {
         "dex_id": hint.dex_id,
         "pool_address": pool_addr,
@@ -355,11 +361,14 @@ def hint_to_pool_entry(
         "connector_token": connector_symbol,
         "focus_token_address": ft,
         "focus_token_symbol": focus_symbol,
-        "resolve_source": f"external_hint:{hint.source}",
+        "resolve_source": resolve_source,
+        "discovery_source": raw.get("discovery_source") or primary_source,
         "hint_status": hint.hint_status,
         "hint_source": hint.source,
         "verify_method": hint.verify_method,
-        "factory_verified": False,
+        "factory_verified": primary_source in ("onchain_factory", "factory_log"),
+        "token_class": raw.get("token_class"),
+        "refresh_lane": raw.get("refresh_lane"),
         "quote_smoke": "not_run",
         "liquidity_usd": hint.liquidity_usd,
         "volume_24h": hint.volume_24h,

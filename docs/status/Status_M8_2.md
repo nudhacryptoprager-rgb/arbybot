@@ -208,10 +208,31 @@ fix: fresh_delta ∪ pending subset (50/50 quota), M8.1 exotic×anchor pairs, tr
 prior wide expansion artifacts are audit-lane evidence only, not hot-path SLA proof
 ```
 
+## Time-to-mirror hot runtime (2026-06-29)
+
+```text
+TIME_TO_MIRROR_HOT_SLA_REGRESSED / DEXSCREENER_ZERO_PAIR_BLOCKED
+primary_blocker: DexScreener does not see fresh_delta long-tail pools early enough
+next_owner: M8.2 on-chain factory/log mirror discovery (primary hot path)
+hot_delta fresh proof (prior): latency_s=560.22 hot_sla_pass=true (stale — superseded)
+hot_delta fresh proof (latest --force-rerun-steps): latency_s=1349.42 hot_sla_pass=false
+step7_cap_rca: data/tmp/m8_dexscreener_mapping_rca_latest.json — cap50/100 both onchain_verified=0; NOT cap-limited
+step8_root_cause: DEXSCREENER_ZERO_PAIRS_FOR_FRESH_DELTA_TOKENS (753-entry negative cache, disposition NO_RADAR_POOL)
+hot_discovery_order: fresh_delta → onchain_factory_mirror_scan → dexscreener_enrich (not DexScreener-first)
+target_blocker: NO_FRESH_LONG_TAIL_QUOTE_READY + NON_TARGET_NARROW_UNIVERSE (known_major excluded from narrow bridge)
+pending_queue: count=743 fresh_long_tail=704
+verify_budget_source: data/tmp/m8_verify_budget_latest.json (split: dexscreener/onchain_factory/factory_log candidates)
+funnel_artifact: data/tmp/m8_mirror_yield_funnel_latest.json
+m9_depth_capacity: hard-gated by gate_time_to_mirror_target_universe (skipped when fresh_long_tail_quote_ready=0)
+m9_shadow: blocked (cycles_at_floor=0 + non_target_universe)
+```
+
 ## Time-to-mirror hot runtime (2026-06-27)
 
 ```text
-TIME_TO_MIRROR_HOT_CANARY_PARTIAL / MARKET_NO_1_TO_2_TRANSITION
+TIME_TO_MIRROR_HOT_REACHED_WITH_LOW_MIRROR_YIELD
+TIME_TO_MIRROR_HOT_PATH_NEEDS_SLA_SPLIT: hot_delta≤50 / warm_recall≤150 / audit_full via -m8_audit only
+hot lane policy: fresh_delta ∪ top pending, skip-secondary default, 15m SLA gate
 hot expansion (100-token refresh): expansion_lane=time_to_mirror_hot scan_mode=hot_path_incremental
 tokens_in=100 routes_admitted=264 mirror_quote_ready_tokens=1
 transition_subset: token_count=0 market_state=MARKET_NO_1_TO_2_TRANSITION
@@ -220,9 +241,10 @@ m8_2_acceptance --strict: goal_status=REACHED (handoff_ready=true; quality_block
   freshness_blockers: [] (HIGH_STALE_HINT_RATE downgraded to STALE_HINT_RATE_HIGH warning on hot lane)
   handoff_blockers: SUBGRAPH_READY_LOW, VERIFIED_SECOND_POOL_LOW, MULTI_VENUE_TOKENS_LOW
 m8_3_acceptance --strict: REACHED
-narrow bridge: quote_ready_token_count=1 active_routes=2 (M9 shadow skipped correctly)
-pipeline exit=0 (--skip-shadow, no full M9)
-next: 753-token hot refresh to hunt fresh 1→2 transitions; no M9 shadow until transition_tokens>0
+narrow bridge: quote_ready_token_count=1 active_routes=2
+hot lane pipeline: depth_enrich -> capacity_diagnostic -> gate_time_to_mirror_narrow_shadow (M9 shadow only if cycles_at_floor>0)
+pipeline exit=0 (--skip-shadow when capacity gate blocks)
+next: narrow depth reprobe + widen mirror yield (753-token scored verify); no M9 shadow until cycles_at_floor>0
 ```
 
 ## Next owner

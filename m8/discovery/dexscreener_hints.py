@@ -55,6 +55,7 @@ def fetch_token_hints(
     timeout_s: float = _DEFAULT_TIMEOUT_S,
     use_cache: bool = True,
     cache_hot: bool = True,
+    cache_lane: Optional[str] = None,
 ) -> List[PoolHint]:
     """Fetch pairs for *token_address* from DexScreener API."""
     global _last_fetch_timing
@@ -65,7 +66,7 @@ def fetch_token_hints(
     pairs: List[Dict[str, Any]] = []
     cache_hit = False
     if use_cache:
-        cached = get_cached_pairs(addr, hot=cache_hot)
+        cached = get_cached_pairs(addr, hot=cache_hot, lane=cache_lane)
         if cached is not None:
             pairs = cached
             cache_hit = True

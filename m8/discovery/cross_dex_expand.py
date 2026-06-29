@@ -761,6 +761,10 @@ def _merge_external_hints(
             connector_symbol=conn_sym,
         )
         entry["factory_verified"] = True
+        if (verified.raw or {}).get("token_class"):
+            entry["token_class"] = (verified.raw or {}).get("token_class")
+        if (verified.raw or {}).get("refresh_lane"):
+            entry["refresh_lane"] = (verified.raw or {}).get("refresh_lane")
         entry["hint_status"] = verified.hint_status
         t_pools[_route_dedupe_key(entry)] = entry
         existing_dexes.add(verified.dex_id)
@@ -1922,6 +1926,7 @@ def _expand_batch_token_neighborhood(
     subgraph_ready_debug: List[Dict[str, Any]] = []
     mirror_topology_ready_count = 0
     mirror_quote_ready_count = 0
+    fresh_long_tail_quote_ready_count = 0
     same_pair_mirror_token_count = 0
     mirror_ready_debug: List[Dict[str, Any]] = []
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
@@ -2090,6 +2095,9 @@ def _expand_batch_token_neighborhood(
             mirror_topology_ready_count += 1
         if _mr.get("mirror_quote_ready"):
             mirror_quote_ready_count += 1
+            _wl_tc = str((watchlist_map.get(addr.lower()) or {}).get("token_class") or "")
+            if _wl_tc == "fresh_long_tail":
+                fresh_long_tail_quote_ready_count += 1
         if _mr.get("same_pair_mirror_token") and len(mirror_ready_debug) < 64:
             mirror_ready_debug.append(
                 {
@@ -2283,6 +2291,7 @@ def _expand_batch_token_neighborhood(
         "subgraph_ready_tokens": subgraph_ready_count,
         "mirror_topology_ready_tokens": mirror_topology_ready_count,
         "mirror_quote_ready_tokens": mirror_quote_ready_count,
+        "fresh_long_tail_quote_ready_tokens": fresh_long_tail_quote_ready_count,
         "same_pair_mirror_tokens": same_pair_mirror_token_count,
         "graph_topology_ready_tokens": graph_topology_ready_count,
         "cross_anchor_ready_tokens": cross_anchor_ready_count,

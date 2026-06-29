@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      ".venv/**",
+      "venv/**",
+      "**/__pycache__/**",
+      ".pytest_cache/**",
+      ".mypy_cache/**",
+      ".ruff_cache/**",
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      "logs/**",
+      "data/runs/**",
+      "data/snapshots/**",
+      "data/trades/**",
+      "data/cache/**",
+      "**/*.db-wal",
+      "**/*.db-shm",
+      "**/*.log",
+      "**/*.pyc"
+    ]
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true
+  },
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  }
+}

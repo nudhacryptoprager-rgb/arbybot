@@ -183,6 +183,23 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertNotIn("m8_2_radar_two_phase", names)
         self.assertIn("m8_2_cross_dex_expand", names)
 
+    def test_resume_from_onchain_factory_scan_skips_earlier_hot_steps(self):
+        args = start.parse_args(
+            [
+                "-time_to_mirror",
+                "--hot",
+                "--resume-from",
+                "m8_onchain_factory_mirror_scan",
+                "--dry-run",
+                "--no-dashboard",
+            ]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertNotIn("m8_time_to_mirror_pending_queue", names)
+        self.assertNotIn("m8_1_stable_anchor_fresh_delta", names)
+        self.assertIn("m8_onchain_factory_mirror_scan", names)
+        self.assertIn("m8_2_radar_two_phase", names)
+
     def test_resume_from_m9_capacity_skips_curve_discovery(self):
         args = start.parse_args(
             ["-m8_m9", "--resume-from", "m9_capacity", "--dry-run", "--no-dashboard"]
@@ -244,6 +261,7 @@ class TestProjectPipelineModes(unittest.TestCase):
         steps = start.build_project_pipeline_steps(args)
         names = [s["name"] for s in steps]
         self.assertIn("m8_time_to_mirror_expand_subset", names)
+        self.assertIn("m8_onchain_factory_mirror_scan", names)
         expand = next(s for s in steps if s["name"] == "m8_2_cross_dex_expand")
         joined = " ".join(expand["cmd"])
         self.assertIn("bootstrap_productive_rpc_env.py", joined)
@@ -251,6 +269,16 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertIn("m8_external_pool_hints_latest.json", joined)
         self.assertIn("hot_path_incremental", joined)
         self.assertIn(start.TIME_TO_MIRROR_EXPAND_SUBSET, joined)
+        onchain = next(s for s in steps if s["name"] == "m8_onchain_factory_mirror_scan")
+        onchain_joined = " ".join(onchain["cmd"])
+        self.assertIn("m8_onchain_factory_mirror_scan.py", onchain_joined)
+        self.assertIn(start.TIME_TO_MIRROR_EXPAND_SUBSET, onchain_joined)
+        radar = next(s for s in steps if s["name"] == "m8_2_radar_two_phase")
+        radar_joined = " ".join(radar["cmd"])
+        self.assertIn("--skip-secondary", radar_joined)
+        self.assertIn("--verify-subset-max", radar_joined)
+        self.assertIn("--dexscreener-enrich-only", radar_joined)
+        self.assertIn("gate_time_to_mirror_hot_sla", names)
 
     def test_time_to_mirror_includes_m81_fresh_delta_before_expansion(self):
         args = start.parse_args(
@@ -302,7 +330,78 @@ class TestProjectPipelineModes(unittest.TestCase):
         )
         names = [step["name"] for step in start.build_project_pipeline_steps(args)]
         self.assertNotIn("m9_time_to_mirror_narrow_shadow_10m", names)
+        self.assertNotIn("gate_time_to_mirror_narrow_shadow", names)
         self.assertIn("m9_time_to_mirror_narrow_inventory", names)
+        self.assertIn("m9_time_to_mirror_depth_enrich", names)
+        self.assertIn("m9_time_to_mirror_capacity_diagnostic", names)
+
+    def test_time_to_mirror_target_universe_gate_before_m9_depth(self):
+        args = start.parse_args(
+            ["-time_to_mirror", "--dry-run", "--no-dashboard", "--max-radar-tokens", "25"]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("gate_time_to_mirror_target_universe", names)
+        self.assertIn("m8_mirror_yield_funnel_export", names)
+        idx_inv = names.index("m9_time_to_mirror_narrow_inventory")
+        idx_gate = names.index("gate_time_to_mirror_target_universe")
+        idx_depth = names.index("m9_time_to_mirror_depth_enrich")
+        self.assertLess(idx_inv, idx_gate)
+        self.assertLess(idx_gate, idx_depth)
+
+    def test_hot_verify_subset_max_cli_override(self):
+        args = start.parse_args(
+            [
+                "-time_to_mirror",
+                "--hot",
+                "--dry-run",
+                "--no-dashboard",
+                "--verify-subset-max",
+                "100",
+            ]
+        )
+        profile = start._resolve_time_to_mirror_profile(args)
+        self.assertEqual(profile.get("verify_subset_max"), 100)
+        steps = start.build_project_pipeline_steps(args)
+        radar = next(s for s in steps if s["name"] == "m8_2_radar_two_phase")
+        self.assertIn("--verify-subset-max", radar["cmd"])
+        self.assertIn("100", radar["cmd"])
+
+    def test_verify_subset_max_ignored_without_hot(self):
+        args = start.parse_args(
+            [
+                "-time_to_mirror",
+                "--dry-run",
+                "--no-dashboard",
+                "--verify-subset-max",
+                "100",
+            ]
+        )
+        profile = start._resolve_time_to_mirror_profile(args)
+        self.assertEqual(profile.get("verify_subset_max"), 50)
+
+    def test_time_to_mirror_narrow_shadow_gated_by_capacity(self):
+        args = start.parse_args(
+            ["-time_to_mirror", "--dry-run", "--no-dashboard", "--max-radar-tokens", "25"]
+        )
+        names = [step["name"] for step in start.build_project_pipeline_steps(args)]
+        self.assertIn("m9_time_to_mirror_depth_enrich", names)
+        self.assertIn("m9_time_to_mirror_capacity_diagnostic", names)
+        self.assertIn("gate_time_to_mirror_narrow_shadow", names)
+        idx_gate = names.index("gate_time_to_mirror_narrow_shadow")
+        idx_shadow = names.index("m9_time_to_mirror_narrow_shadow_10m")
+        self.assertLess(idx_gate, idx_shadow)
+        shadow = next(
+            s for s in start.build_project_pipeline_steps(args)
+            if s["name"] == "m9_time_to_mirror_narrow_shadow_10m"
+        )
+        gate = next(
+            s for s in start.build_project_pipeline_steps(args)
+            if s["name"] == "gate_time_to_mirror_narrow_shadow"
+        )
+        self.assertIn("--require-cycles-at-floor", shadow["cmd"])
+        self.assertIn(start.M9_TTM_NARROW_DEPTH_BRIDGE, shadow["cmd"])
+        self.assertIn("narrow_shadow", gate["cmd"])
+        self.assertIn(start.M9_TTM_NARROW_CAPACITY_DIAGNOSTIC, gate["cmd"])
 
     def test_time_to_mirror_pending_queue_markers_are_distinct(self):
         pre_done, pre_fail = start._step_marker_paths(
@@ -417,14 +516,18 @@ class TestProjectPipelineModes(unittest.TestCase):
     def test_time_to_mirror_pending_queue_between_expand_and_acceptance(self):
         args = start.parse_args(["-time_to_mirror", "--dry-run", "--no-dashboard"])
         names = [step["name"] for step in start.build_project_pipeline_steps(args)]
-        idx_radar = names.index("m8_2_radar_two_phase")
         idx_pending = names.index("m8_time_to_mirror_pending_queue")
         idx_subset = names.index("m8_time_to_mirror_expand_subset")
+        idx_m81 = names.index("m8_1_stable_anchor_fresh_delta")
+        idx_onchain = names.index("m8_onchain_factory_mirror_scan")
+        idx_radar = names.index("m8_2_radar_two_phase")
         idx_expand = names.index("m8_2_cross_dex_expand")
         idx_accept = names.index("m8_2_acceptance_strict")
-        self.assertLess(idx_radar, idx_pending)
         self.assertLess(idx_pending, idx_subset)
-        self.assertLess(idx_subset, idx_expand)
+        self.assertLess(idx_subset, idx_m81)
+        self.assertLess(idx_m81, idx_onchain)
+        self.assertLess(idx_onchain, idx_radar)
+        self.assertLess(idx_radar, idx_expand)
         self.assertLess(idx_expand, idx_accept)
 
     def test_pipeline_markers_are_namespaced_by_mode(self):

@@ -14,6 +14,8 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 RADAR_OUT = "data/runs/_rolling/m8_radar_pool_candidates_latest.json"
 HINTS_OUT = "data/runs/_rolling/m8_external_pool_hints_latest.json"
+# Wide radar sweep may use hundreds of tokens; on-chain verify stays scored-subset capped.
+DEFAULT_VERIFY_SUBSET_MAX_TOKENS = 50
 
 
 def _run(cmd: list[str], *, label: str) -> int:
@@ -55,13 +57,34 @@ def main() -> int:
         default=45,
         help="Provider timeout for CoinGecko onchain fallback phase",
     )
+    p.add_argument(
+        "--verify-subset-max",
+        type=int,
+        default=None,
+        help="Cap scored on-chain verify tokens (hot path default 50)",
+    )
+    p.add_argument(
+        "--token-subset-file",
+        default=None,
+        help="Explicit hot-path token subset (overrides lane-mode subset build)",
+    )
+    p.add_argument(
+        "--dexscreener-enrich-only",
+        action="store_true",
+        help="DexScreener enrichment after on-chain scan; empty DS pairs are non-blocking",
+    )
+    p.add_argument(
+        "--merge-existing-hints",
+        action="store_true",
+        help="Merge DexScreener phase into existing on-chain hints artifact",
+    )
     args = p.parse_args()
 
     py = sys.executable
     boot = [py, "scripts/bootstrap_productive_rpc_env.py", "--", py, "-u"]
 
-    token_subset_file: str | None = None
-    if args.lane_mode != "legacy":
+    token_subset_file: str | None = args.token_subset_file
+    if token_subset_file is None and args.lane_mode != "legacy":
         import yaml
 
         from m8.discovery.fresh_delta_lane import build_radar_token_list
@@ -112,16 +135,29 @@ def main() -> int:
     ]
     if token_subset_file:
         phase1_cmd.extend(["--token-subset-file", token_subset_file])
+    if args.dexscreener_enrich_only:
+        phase1_cmd.extend(["--cache-lane", "fresh_delta_lane"])
+    if args.merge_existing_hints:
+        phase1_cmd.extend(["--merge-existing-radar", "--merge-existing-output"])
 
-    # Phase 1: DexScreener fast radar (no verify)
+    # Phase 1: DexScreener fast radar (no verify); enrichment-only when on-chain primary ran first.
     rc = _run(
         phase1_cmd,
-        label="phase1_radar_fast",
+        label="phase1_radar_fast" if not args.dexscreener_enrich_only else "phase1_dexscreener_enrich",
     )
-    if rc != 0:
+    if rc != 0 and not args.dexscreener_enrich_only:
         return rc
+    if rc != 0 and args.dexscreener_enrich_only:
+        print(
+            f"dexscreener_enrich phase1 rc={rc}; continuing (on-chain primary discovery)",
+            flush=True,
+        )
 
-    # Phase 2: verify subset from radar artifact
+    # Phase 2: scored verify subset from radar artifact (not full RPC scan)
+    verify_subset_max = min(
+        int(args.verify_subset_max or DEFAULT_VERIFY_SUBSET_MAX_TOKENS),
+        int(args.max_tokens),
+    )
     rc = _run(
         boot
         + [
@@ -134,6 +170,10 @@ def main() -> int:
             "verify_subset",
             "--load-radar-input",
             RADAR_OUT,
+            "--watchlist",
+            args.watchlist,
+            "--max-tokens",
+            str(verify_subset_max),
             "--verify-subset-only",
             "--verify-mode",
             "specialized",
@@ -149,6 +189,7 @@ def main() -> int:
             "--skip-route-liveness",
             "--skip-defillama-weights",
             "--no-resume",
+            "--merge-existing-output",
         ],
         label="phase2_verify_subset",
     )

@@ -41,7 +41,7 @@ _RADAR_FETCH_FN = {
 }
 
 
-def _fetch_source(source: str, token: str, *, chain: str):
+def _fetch_source(source: str, token: str, *, chain: str, cache_lane: str | None = None):
     import importlib
 
     mod = importlib.import_module(_SOURCE_FETCHERS[source])
@@ -49,6 +49,8 @@ def _fetch_source(source: str, token: str, *, chain: str):
         return mod.fetch_token_pool_hints(token, chain=chain)
     if source == "coingecko_onchain":
         return mod.fetch_token_pool_hints(token, chain=chain)
+    if source == "dexscreener":
+        return mod.fetch_token_hints(token, chain=chain, cache_lane=cache_lane)
     if source in _RADAR_FETCH_FN:
         return getattr(mod, _RADAR_FETCH_FN[source])(token, chain=chain)
     return mod.fetch_token_hints(token, chain=chain)
@@ -86,6 +88,11 @@ def main() -> int:
         "--merge-existing-output",
         action="store_true",
         help="Merge with existing --output artifact instead of replacing verified hints",
+    )
+    p.add_argument(
+        "--merge-existing-radar",
+        action="store_true",
+        help="Merge radar candidates into existing --radar-output artifact",
     )
     p.add_argument(
         "--token-concurrency",
@@ -209,6 +216,11 @@ def main() -> int:
         "--radar-fast",
         action="store_true",
         help="DexScreener-only fast radar (verify none, low sleep, no single-venue retry)",
+    )
+    p.add_argument(
+        "--cache-lane",
+        default=None,
+        help="DexScreener cache TTL lane (e.g. fresh_delta_lane for short TTL)",
     )
     p.add_argument(
         "--load-radar-input",
@@ -486,42 +498,75 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         ]
 
     if args.load_radar_input:
+        from m8.discovery.mirror_candidate_score import rank_tokens_for_verify_with_budget
         from m8.discovery.radar_fast_pipeline import (
-            build_verify_subset_tokens,
             filter_hints_for_tokens,
             pipeline_metrics,
         )
 
         radar_doc = json.loads(Path(args.load_radar_input).read_text(encoding="utf-8"))
         raw_hints = [PoolHint.from_dict(h) for h in (radar_doc.get("candidates") or [])]
-        subset = build_verify_subset_tokens(raw_hints)
+        watchlist_doc: dict = {}
+        if Path(args.watchlist).is_file():
+            watchlist_doc = json.loads(Path(args.watchlist).read_text(encoding="utf-8"))
+        ranked, verify_budget = rank_tokens_for_verify_with_budget(
+            raw_hints,
+            all_tokens=(watchlist_doc.get("tokens") or {}).keys()
+            if watchlist_doc.get("tokens")
+            else None,
+            watchlist=watchlist_doc,
+            max_tokens=args.max_tokens,
+        )
+        radar_seen = len(
+            {
+                str(h.focus_token or h.token0_addr or "").lower()
+                for h in raw_hints
+                if str(h.focus_token or h.token0_addr or "").lower().startswith("0x")
+            }
+        )
+        if radar_seen > 0:
+            verify_budget["radar_seen"] = radar_seen
+        verify_budget["verify_subset_cap"] = int(args.max_tokens or 0)
+        subset = {str(r.get("token") or "").lower() for r in ranked if str(r.get("token") or "").startswith("0x")}
         verify_hints = (
             filter_hints_for_tokens(raw_hints, subset)
             if args.verify_subset_only
             else list(raw_hints)
         )
+        onchain_preverified = [
+            h
+            for h in raw_hints
+            if str(h.source or "") in ("onchain_factory", "factory_log")
+            and h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES
+        ]
         log.info(
-            "Verify-from-radar: candidates=%d subset_tokens=%d verify_hints=%d",
+            "Verify-from-radar: candidates=%d subset_tokens=%d verify_hints=%d onchain_preverified=%d",
             len(raw_hints),
             len(subset),
             len(verify_hints),
+            len(onchain_preverified),
         )
         verified = _verify_batch(verify_hints)
-        all_hints = dedupe_hints(verified)
+        all_hints = dedupe_hints(list(onchain_preverified) + list(verified))
         for h in all_hints:
             if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES:
                 per_source_verified_yield[h.source] = int(
                     per_source_verified_yield.get(h.source, 0)
                 ) + 1
+        verified_count = sum(
+            1 for h in all_hints if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES
+        )
+        verify_budget["onchain_verified"] = int(verified_count)
+        if int(verify_budget.get("verify_subset_cap") or 0) <= 0:
+            verify_budget["verify_subset_cap"] = int(args.max_tokens or len(subset))
         pipe_m = pipeline_metrics(
             radar_fast_tokens=len(tokens),
             radar_candidates=len(raw_hints),
             verify_subset_size=len(subset),
-            verified_count=sum(
-                1 for h in all_hints if h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES
-            ),
+            verified_count=verified_count,
             provider_timing=provider_timing,
             verified_yield_by_source=per_source_verified_yield,
+            verify_budget=verify_budget,
         )
         metrics = {
             "hint_tokens_checked": len(tokens),
@@ -539,7 +584,52 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
             hints=all_hints,
             metrics=metrics,
         )
+        if args.merge_existing_output:
+            from m8.discovery.hint_artifact_merge import load_hint_artifact, merge_hint_artifacts
+
+            prior = load_hint_artifact(args.output)
+            artifact = merge_hint_artifacts(
+                prior,
+                artifact,
+                chain=args.chain,
+                sources=list(artifact.get("sources") or sources),
+            )
         write_hints_artifact(artifact, args.output)
+        budget_path = Path("data/tmp/m8_verify_budget_latest.json")
+        budget_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_budget: dict = {}
+        if budget_path.is_file():
+            try:
+                existing_budget = json.loads(budget_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing_budget = {}
+        merged_budget = {
+            "schema_version": "m8_verify_budget_v1",
+            "pipeline_mode": args.pipeline_mode,
+            "dexscreener_candidates": int(
+                sum(1 for h in raw_hints if str(h.source or "") == "dexscreener")
+            ),
+            "onchain_factory_candidates": int(
+                existing_budget.get("onchain_factory_candidates") or 0
+            ),
+            "factory_log_candidates": int(
+                existing_budget.get("factory_log_candidates") or 0
+            ),
+            "verified_second_pool_by_source": {
+                **dict(existing_budget.get("verified_second_pool_by_source") or {}),
+                **{
+                    src: int(per_source_verified_yield.get(src, 0))
+                    for src in per_source_verified_yield
+                },
+            },
+            **verify_budget,
+        }
+        from m8.discovery.onchain_factory_mirror_discovery import (
+            overlay_verify_budget_with_onchain_scan,
+        )
+
+        merged_budget = overlay_verify_budget_with_onchain_scan(merged_budget)
+        budget_path.write_text(json.dumps(merged_budget, indent=2), encoding="utf-8")
         log.info("Written %s verified=%d", args.output, pipe_m.get("verified_yield"))
         return 0
 
@@ -569,7 +659,9 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         try:
             with ThreadPoolExecutor(max_workers=1) as pool:
                 fut = pool.submit(
-                    lambda s=source, t=token: _fetch_source(s, t, chain=args.chain),
+                    lambda s=source, t=token: _fetch_source(
+                        s, t, chain=args.chain, cache_lane=args.cache_lane
+                    ),
                 )
                 out = list(fut.result(timeout=max(1.0, float(args.provider_timeout_s))))
             provider_timing[source].record(time.monotonic() - t0)
@@ -734,6 +826,31 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
             "external_route_liveness": route_liveness,
         },
     )
+    if args.merge_existing_radar:
+        from m8.discovery.pool_hints import PoolHint
+        from m8.discovery.radar_layer import build_radar_candidates_artifact as build_radar
+
+        prior_path = Path(args.radar_output)
+        prior_hints: list[PoolHint] = []
+        if prior_path.is_file():
+            prior_doc = json.loads(prior_path.read_text(encoding="utf-8"))
+            prior_hints = [
+                PoolHint.from_dict(h) for h in (prior_doc.get("candidates") or [])
+            ]
+        merged_hints = dedupe_hints(prior_hints + list(raw_radar_hints))
+        prior_sources = (
+            json.loads(prior_path.read_text(encoding="utf-8")).get("sources") or []
+            if prior_path.is_file()
+            else []
+        )
+        radar_artifact = build_radar(
+            chain=args.chain,
+            sources=list(
+                dict.fromkeys(list(prior_sources) + list(radar_artifact.get("sources") or []))
+            ),
+            hints=merged_hints,
+            metrics=radar_artifact.get("metrics") or {},
+        )
     write_radar_candidates_artifact(radar_artifact, args.radar_output)
     log.info(
         "Radar candidates written %s pools=%d",

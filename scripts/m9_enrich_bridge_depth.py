@@ -260,6 +260,14 @@ def main() -> int:
     except Exception:
         pass
 
+    from m9.graph_arb.depth_contract import normalize_route_depth_contract
+    from m9.graph_arb.narrow_universe_gate import depth_probe_status_histogram
+
+    for route in routes:
+        normalize_route_depth_contract(route)
+
+    inventory["depth_probe_status_histogram"] = depth_probe_status_histogram(routes)
+
     if args.dry_run:
         log.info("Dry-run: not writing inventory")
         return 0

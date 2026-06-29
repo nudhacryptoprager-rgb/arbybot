@@ -2,16 +2,16 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_3_STRICT_PASS / M9_CAPACITY_BLOCKED_BY_ZERO_CYCLES_AT_FLOOR**
+**Current runtime line:** **M8_3_STRICT_PASS / M9_SHADOW_BLOCKED_BY_EMPTY_TARGET_UNIVERSE**
 
 ```text
 production_refresh: 2026-06-24 (sniper 112 events, expansion 442 routes)
 M8.2 strict: REACHED | M8.3 strict: REACHED
-production_bridge: active=407 (curve=116, v4=138, maverick=89, balancer=27)
-depth_known_rate: 0.4275 | gte_180 routes: 72
-cycles_total: 3632 | cycles_at_floor: 0 (all profiles)
-shadow_allowed: false
-quarantine_rca: 72/96 false_positive_depth_cap_band (soft-handled)
+time_to_mirror_hot_delta: latency_s=1349.42 sla_pass=false (HOT_SLA_REGRESSED after fresh rerun)
+time_to_mirror_narrow: known_major routes excluded; fresh_long_tail_quote_ready_tokens=0
+narrow_capacity: cycles_total=0 cycles_at_floor=0
+target_universe_gate: gate_time_to_mirror_target_universe blocks m9_depth_enrich + capacity when fresh_long_tail_quote_ready=0
+m9_shadow: M9_SHADOW_BLOCKED_BY_EMPTY_TARGET_UNIVERSE — fresh_long_tail_quote_ready_tokens=0; cycles_total=0
 ```
 
 ## Capacity blocker audit
