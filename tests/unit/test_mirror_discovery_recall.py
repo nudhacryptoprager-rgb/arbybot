@@ -1,14 +1,21 @@
 """Tests for mirror discovery max-recall lane."""
 from __future__ import annotations
 
+import json
+
 from m8.discovery.dex_coverage_gate import classify_dex_support_status
 from m8.discovery.dexscreener_hints import _pair_to_hint
 from m8.discovery.mirror_discovery_recall import (
+    EXISTENCE_VERIFY_QUEUE_PATH,
+    QUOTE_READY_QUEUE_PATH,
+    RECALL_CANDIDATES_PATH,
     build_dex_alias_backlog,
     compute_recall_metrics,
     evaluate_mirror_recall_gate,
+    evaluate_selection_verified_fresh_gate,
     hint_support_status,
     mirror_row_from_hint,
+    write_mirror_queue_artifacts,
 )
 from m8.discovery.pool_hints import PoolHint
 
@@ -44,7 +51,7 @@ def test_classify_dex_support_status_buckets():
     _, unsupported = classify_dex_support_status(
         source="dexscreener", raw_dex_id="baseswap", config=cfg
     )
-    assert unsupported == "unsupported"
+    assert unsupported == "unknown_alias"
 
 
 def test_pair_to_hint_max_recall_keeps_unknown_dex():
@@ -97,6 +104,15 @@ def test_compute_recall_metrics_and_gate():
     assert reason == "MIRROR_RECALL_READY"
 
 
+def test_selection_verified_fresh_gate():
+    ok, reason = evaluate_selection_verified_fresh_gate({"selection_verified_fresh_total": 0})
+    assert ok is False
+    assert reason == "SELECTION_VERIFIED_FRESH_ZERO"
+    ok2, reason2 = evaluate_selection_verified_fresh_gate({"selection_verified_fresh_total": 2})
+    assert ok2 is True
+    assert reason2 == "selection_verified_fresh_ready"
+
+
 def test_mirror_row_from_hint_fields():
     hint = PoolHint(
         source="dexscreener",
@@ -114,3 +130,38 @@ def test_mirror_row_from_hint_fields():
     assert row["support_status"] == "supported"
     assert row["source"] == "dexscreener"
     assert row["liquidity_usd"] == 500.0
+
+
+def test_write_mirror_queue_artifacts_splits_queues(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.RECALL_CANDIDATES_PATH",
+        tmp_path / "recall_candidates.json",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.EXISTENCE_VERIFY_QUEUE_PATH",
+        tmp_path / "existence_queue.json",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.QUOTE_READY_QUEUE_PATH",
+        tmp_path / "quote_ready.json",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.EXISTENCE_VERIFY_SUBSET_PATH",
+        tmp_path / "existence_subset.json",
+    )
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "d" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        raw={"support_status": "supported", "raw_dex_id": "uniswap"},
+    )
+    payload = {"mirrors": [{"token": "0x" + "1" * 40}], "all_dex_mirrors_total": 1}
+    paths = write_mirror_queue_artifacts(payload, hints=[hint], chain="base")
+    assert paths["recall_candidates"] == str(tmp_path / "recall_candidates.json")
+    assert (tmp_path / "existence_subset.json").is_file()
+    existence = json.loads((tmp_path / "existence_queue.json").read_text(encoding="utf-8"))
+    assert existence["queue_count"] == 1

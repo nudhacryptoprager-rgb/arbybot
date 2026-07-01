@@ -122,6 +122,31 @@ TIME_TO_MIRROR_STEP_TIMINGS_PATH = Path(
 )
 EVENT_STREAM_LANE_ARTIFACT = Path("data/tmp/m8_event_stream_lane_latest.json")
 MIRROR_DISCOVERY_RECALL_PATH = Path("data/tmp/m8_mirror_discovery_recall_latest.json")
+EXISTENCE_VERIFY_SUBSET_PATH = Path("data/tmp/m8_existence_verify_subset.json")
+RECALL_SLA_MAX_S = 180
+VERIFY_SLA_MAX_S = 900
+# Downstream verify steps invalidated after each fresh recall run.
+RECALL_DOWNSTREAM_MARKER_STEPS: tuple[str, ...] = (
+    "m8_onchain_factory_mirror_scan",
+    "m8_1_stable_anchor_fresh_delta",
+    "m8_mirror_selection_pass",
+    "gate_selection_verified_fresh",
+    "m8_2_cross_dex_expand",
+    "gate_verify_sla",
+    "m8_time_to_mirror_pending_queue_post_expand",
+    "m8_second_pool_transition_subset",
+    "m8_mirror_quote_reprobe",
+    "m8_second_pool_verify",
+)
+SELECTION_FRESH_GATED_STEPS: frozenset[str] = frozenset(
+    {
+        "m8_2_cross_dex_expand",
+        "m8_3_registry_refresh",
+        "gate_negative_cache_stats",
+        "m8_3_acceptance_strict",
+        "gate_m8_3_acceptance_reached",
+    }
+)
 PATIENT_LANE_DIAGNOSTIC_PATH = Path("data/tmp/m8_patient_lane_diagnostics_latest.json")
 HOT_LOOP_EVENT_INTERVAL_S = 300
 
@@ -199,11 +224,30 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "radar_step_timeout_s": 1200,
         "expand_step_timeout_s": 3600,
         "hot_sla_max_s": 3600,
+        "recall_sla_max_s": 180,
+        "verify_sla_max_s": 900,
         "hot_expand": True,
         "mirror_discovery_max_recall": True,
+        "token_pool_universe": True,
+        "graph_closure_only": True,
+        "defer_heavy_verify": True,
         "m83_max_onchain_probes": 120,
         "event_poll_max_blocks": 800,
         "hot_loop_event_interval_s": HOT_LOOP_EVENT_INTERVAL_S * 2,
+    },
+    "mirror_recall_fast": {
+        "max_radar_tokens": 753,
+        "skip_secondary": True,
+        "verify_subset_max": 0,
+        "hot_sla_max_s": 180,
+        "recall_sla_max_s": 180,
+        "verify_sla_max_s": 900,
+        "hot_expand": True,
+        "mirror_discovery_max_recall": True,
+        "recall_only": True,
+        "token_pool_universe": True,
+        "graph_closure_only": True,
+        "defer_heavy_verify": True,
     },
     "audit_full": {
         "max_radar_tokens": 753,
@@ -411,6 +455,20 @@ def _clear_stale_fail_markers(pipeline_mode: str, step_names: list[str]) -> int:
     return cleared
 
 
+def _clear_recall_downstream_markers(pipeline_mode: str) -> int:
+    """Drop downstream verify markers after a fresh recall so resume reruns verify."""
+    cleared = 0
+    for name in RECALL_DOWNSTREAM_MARKER_STEPS:
+        done_marker, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
+        for marker in (done_marker, fail_marker):
+            try:
+                marker.unlink()
+                cleared += 1
+            except FileNotFoundError:
+                pass
+    return cleared
+
+
 def _checkpoint_activity_since(step_name: str, since_wall_ts: float) -> bool:
     """True when a watched checkpoint file was touched after the step started."""
     for rel in STEP_QUIET_CHECKPOINTS.get(step_name, ()):
@@ -610,20 +668,26 @@ def _run_internal_pipeline_step(internal: str) -> int:
         return _export_patient_lane_diagnostics()
     if internal == "mirror_selection_pass":
         return _run_mirror_selection_pass()
+    if internal == "gate_recall_verify_admission":
+        return _gate_recall_verify_admission()
     print(f"ERROR: unknown internal pipeline step: {internal}", flush=True)
     return 2
 
 
 def _resolve_time_to_mirror_profile(args: argparse.Namespace) -> dict[str, Any]:
     """Map hot-lane mode to bounded token/timeout budgets (minutes-scale hot path)."""
-    explicit_lane = getattr(args, "hot_lane", None)
-    hot_flag = bool(getattr(args, "time_to_mirror_hot", False))
-    if explicit_lane:
-        lane = str(explicit_lane)
-    elif hot_flag:
-        lane = "hot_delta"
+    pipeline = str(getattr(args, "pipeline", "") or "")
+    if pipeline == "mirror_recall_fast":
+        lane = "mirror_recall_fast"
     else:
-        lane = "warm_recall"
+        explicit_lane = getattr(args, "hot_lane", None)
+        hot_flag = bool(getattr(args, "time_to_mirror_hot", False))
+        if explicit_lane:
+            lane = str(explicit_lane)
+        elif hot_flag:
+            lane = "hot_delta"
+        else:
+            lane = "warm_recall"
     profile = dict(HOT_LANE_PROFILES.get(lane, HOT_LANE_PROFILES["warm_recall"]))
     profile["lane"] = lane
     cli_max = int(getattr(args, "max_radar_tokens", 753) or 753)
@@ -693,6 +757,33 @@ def _mirror_smoke_pipeline_cmd(checkpoint_path: str, *extra: str) -> list[str]:
         checkpoint_path,
         *extra,
     )
+
+
+def _gate_recall_verify_admission() -> int:
+    """Downstream verify (factory/m81) only when recall produced candidates."""
+    if not MIRROR_DISCOVERY_RECALL_PATH.is_file():
+        print("gate_recall_verify_admission: recall artifact missing", flush=True)
+        return 2
+    doc = json.loads(MIRROR_DISCOVERY_RECALL_PATH.read_text(encoding="utf-8"))
+    total = int(doc.get("all_dex_mirrors_total") or doc.get("mirrors_total") or 0)
+    pool_exists = int(doc.get("recall_verified_pool_exists_total") or 0)
+    if total <= 0:
+        print(
+            "gate_recall_verify_admission: no recall candidates — skip heavy verify",
+            flush=True,
+        )
+        return 2
+    print(
+        f"gate_recall_verify_admission: recall={total} pool_exists={pool_exists} "
+        f"subset={EXISTENCE_VERIFY_SUBSET_PATH}",
+        flush=True,
+    )
+    return 0
+
+
+def _verify_token_subset_path() -> str:
+    """Prefer existence-verify queue subset over full expand universe."""
+    return str(EXISTENCE_VERIFY_SUBSET_PATH)
 
 
 def _export_time_to_mirror_expand_subset(*, max_tokens: int) -> int:
@@ -1021,7 +1112,9 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
     """
     mode = str(getattr(args, "pipeline", "") or "")
     ttm_profile = (
-        _resolve_time_to_mirror_profile(args) if mode == "time_to_mirror" else None
+        _resolve_time_to_mirror_profile(args)
+        if mode in ("time_to_mirror", "mirror_recall_fast")
+        else None
     )
     max_radar = str(
         int((ttm_profile or {}).get("max_radar_tokens") or getattr(args, "max_radar_tokens", 753) or 753)
@@ -1093,6 +1186,21 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             or DEFAULT_RADAR_STEP_TIMEOUT_S
         )
         mirror_max_recall = bool(prof.get("mirror_discovery_max_recall"))
+        recall_only = bool(prof.get("recall_only"))
+        defer_verify = bool(prof.get("defer_heavy_verify"))
+        verify_subset = _verify_token_subset_path()
+        recall_cmd = _py_cmd(
+            "scripts/m8_mirror_discovery_recall.py",
+            "--chain",
+            "base",
+            "--token-subset-file",
+            TIME_TO_MIRROR_EXPAND_SUBSET,
+            "--max-tokens",
+            str(max_radar),
+            "--output",
+            str(MIRROR_DISCOVERY_RECALL_PATH),
+            "--write-supported-hints",
+        )
         if hot_expand:
             steps.append(
                 _pipeline_step(
@@ -1108,67 +1216,11 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     internal="time_to_mirror_expand_subset",
                 )
             )
-            steps.append(
-                _pipeline_step(
-                    "m8_event_stream_lane",
-                    _productive_rpc_cmd(
-                        "scripts/m8_event_stream_lane.py",
-                        "--chain",
-                        "base",
-                        "--token-subset-file",
-                        TIME_TO_MIRROR_EXPAND_SUBSET,
-                        "--max-tokens",
-                        str(max_radar),
-                        "--max-blocks",
-                        str(int(prof.get("event_poll_max_blocks") or 500)),
-                        "--output",
-                        str(EVENT_STREAM_LANE_ARTIFACT),
-                    ),
-                    timeout_seconds=min(radar_step_timeout, 600),
-                )
-            )
-            steps.append(
-                _pipeline_step(
-                    "m8_1_stable_anchor_fresh_delta",
-                    _m81_stable_anchor_cmd(
-                        probe_mode="fresh_delta",
-                        token_subset=TIME_TO_MIRROR_EXPAND_SUBSET,
-                        duration_minutes=prof.get("m81_duration_minutes"),
-                    ),
-                )
-            )
-            onchain_scan_cmd = _productive_rpc_cmd(
-                "scripts/m8_onchain_factory_mirror_scan.py",
-                "--chain",
-                "base",
-                "--token-subset-file",
-                TIME_TO_MIRROR_EXPAND_SUBSET,
-                "--max-tokens",
-                str(max_radar),
-            )
-            steps.append(
-                _pipeline_step(
-                    "m8_onchain_factory_mirror_scan",
-                    onchain_scan_cmd,
-                    timeout_seconds=min(radar_step_timeout, 1200),
-                )
-            )
             if mirror_max_recall:
                 steps.append(
                     _pipeline_step(
                         "m8_mirror_discovery_recall",
-                        _py_cmd(
-                            "scripts/m8_mirror_discovery_recall.py",
-                            "--chain",
-                            "base",
-                            "--token-subset-file",
-                            TIME_TO_MIRROR_EXPAND_SUBSET,
-                            "--max-tokens",
-                            str(max_radar),
-                            "--output",
-                            str(MIRROR_DISCOVERY_RECALL_PATH),
-                            "--write-supported-hints",
-                        ),
+                        recall_cmd,
                         timeout_seconds=radar_step_timeout,
                     )
                 )
@@ -1184,21 +1236,166 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                         allow_exit_codes=(0, 2),
                     )
                 )
-                steps.append(
-                    _pipeline_step(
-                        "m8_mirror_selection_pass",
-                        [],
-                        internal="mirror_selection_pass",
+                recall_sla = int(prof.get("recall_sla_max_s") or 0)
+                if recall_sla > 0:
+                    steps.append(
+                        _pipeline_step(
+                            "gate_recall_sla",
+                            _py_cmd(
+                                "scripts/m9_production_refresh_gates.py",
+                                "recall_sla",
+                                "--timings",
+                                str(TIME_TO_MIRROR_STEP_TIMINGS_PATH),
+                                "--max-latency-s",
+                                str(recall_sla),
+                            ),
+                            allow_exit_codes=(0, 2),
+                        )
                     )
-                )
-                steps.append(
-                    _pipeline_step(
-                        "m8_2_cross_dex_expand",
-                        _m82_cross_dex_expand_cmd(hot=True),
-                        timeout_seconds=int(prof.get("expand_step_timeout_s") or 1200),
+                if not recall_only:
+                    steps.append(
+                        _pipeline_step(
+                            "m8_event_stream_lane",
+                            _productive_rpc_cmd(
+                                "scripts/m8_event_stream_lane.py",
+                                "--chain",
+                                "base",
+                                "--token-subset-file",
+                                TIME_TO_MIRROR_EXPAND_SUBSET,
+                                "--max-tokens",
+                                str(max_radar),
+                                "--max-blocks",
+                                str(int(prof.get("event_poll_max_blocks") or 500)),
+                                "--output",
+                                str(EVENT_STREAM_LANE_ARTIFACT),
+                            ),
+                            timeout_seconds=min(radar_step_timeout, 600),
+                        )
                     )
-                )
+                    steps.append(
+                        _pipeline_step(
+                            "gate_recall_verify_admission",
+                            [],
+                            internal="gate_recall_verify_admission",
+                            allow_exit_codes=(0, 2),
+                        )
+                    )
+                    onchain_scan_cmd = _productive_rpc_cmd(
+                        "scripts/m8_onchain_factory_mirror_scan.py",
+                        "--chain",
+                        "base",
+                        "--token-subset-file",
+                        verify_subset,
+                        "--max-tokens",
+                        str(max_radar),
+                    )
+                    steps.append(
+                        _pipeline_step(
+                            "m8_onchain_factory_mirror_scan",
+                            onchain_scan_cmd,
+                            timeout_seconds=min(radar_step_timeout, 1200),
+                            allow_exit_codes=(0, 2),
+                        )
+                    )
+                    steps.append(
+                        _pipeline_step(
+                            "m8_1_stable_anchor_fresh_delta",
+                            _m81_stable_anchor_cmd(
+                                probe_mode="fresh_delta",
+                                token_subset=verify_subset,
+                                duration_minutes=prof.get("m81_duration_minutes"),
+                            ),
+                            allow_exit_codes=(0, 2),
+                        )
+                    )
+                    steps.append(
+                        _pipeline_step(
+                            "m8_mirror_selection_pass",
+                            [],
+                            internal="mirror_selection_pass",
+                        )
+                    )
+                    steps.append(
+                        _pipeline_step(
+                            "gate_selection_verified_fresh",
+                            _py_cmd(
+                                "scripts/m9_production_refresh_gates.py",
+                                "selection_verified_fresh",
+                                "--recall",
+                                str(MIRROR_DISCOVERY_RECALL_PATH),
+                            ),
+                            allow_exit_codes=(0, 2),
+                        )
+                    )
+                    steps.append(
+                        _pipeline_step(
+                            "m8_2_cross_dex_expand",
+                            _m82_cross_dex_expand_cmd(hot=True),
+                            timeout_seconds=int(prof.get("expand_step_timeout_s") or 1200),
+                        )
+                    )
+                    verify_sla = int(prof.get("verify_sla_max_s") or 0)
+                    if verify_sla > 0 and defer_verify:
+                        steps.append(
+                            _pipeline_step(
+                                "gate_verify_sla",
+                                _py_cmd(
+                                    "scripts/m9_production_refresh_gates.py",
+                                    "verify_sla",
+                                    "--timings",
+                                    str(TIME_TO_MIRROR_STEP_TIMINGS_PATH),
+                                    "--max-latency-s",
+                                    str(verify_sla),
+                                ),
+                                allow_exit_codes=(0, 2),
+                            )
+                        )
             else:
+                steps.append(
+                    _pipeline_step(
+                        "m8_event_stream_lane",
+                        _productive_rpc_cmd(
+                            "scripts/m8_event_stream_lane.py",
+                            "--chain",
+                            "base",
+                            "--token-subset-file",
+                            TIME_TO_MIRROR_EXPAND_SUBSET,
+                            "--max-tokens",
+                            str(max_radar),
+                            "--max-blocks",
+                            str(int(prof.get("event_poll_max_blocks") or 500)),
+                            "--output",
+                            str(EVENT_STREAM_LANE_ARTIFACT),
+                        ),
+                        timeout_seconds=min(radar_step_timeout, 600),
+                    )
+                )
+                steps.append(
+                    _pipeline_step(
+                        "m8_1_stable_anchor_fresh_delta",
+                        _m81_stable_anchor_cmd(
+                            probe_mode="fresh_delta",
+                            token_subset=TIME_TO_MIRROR_EXPAND_SUBSET,
+                            duration_minutes=prof.get("m81_duration_minutes"),
+                        ),
+                    )
+                )
+                onchain_scan_cmd = _productive_rpc_cmd(
+                    "scripts/m8_onchain_factory_mirror_scan.py",
+                    "--chain",
+                    "base",
+                    "--token-subset-file",
+                    TIME_TO_MIRROR_EXPAND_SUBSET,
+                    "--max-tokens",
+                    str(max_radar),
+                )
+                steps.append(
+                    _pipeline_step(
+                        "m8_onchain_factory_mirror_scan",
+                        onchain_scan_cmd,
+                        timeout_seconds=min(radar_step_timeout, 1200),
+                    )
+                )
                 enrich_radar = list(radar_cmd)
                 enrich_radar.extend(
                     [
@@ -1238,12 +1435,13 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     timeout_seconds=int(expand_timeout) if expand_timeout else None,
                 )
             )
-        steps.append(
-            _pipeline_step(
-                "m8_2_acceptance_strict",
-                _py_cmd("scripts/m8_2_acceptance_report.py", "--strict"),
+        if not bool(prof.get("recall_only")):
+            steps.append(
+                _pipeline_step(
+                    "m8_2_acceptance_strict",
+                    _py_cmd("scripts/m8_2_acceptance_report.py", "--strict"),
+                )
             )
-        )
 
     def add_m83(*, hot: bool = False, profile: dict[str, Any] | None = None) -> None:
         prof = profile or {}
@@ -1514,6 +1712,16 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
         add_m83()
 
+    def add_mirror_recall_fast() -> None:
+        """Contour A only: DexScreener token-scoped recall (≤180s SLA)."""
+        profile = ttm_profile or dict(HOT_LANE_PROFILES["mirror_recall_fast"])
+        print(
+            f"mirror_recall_fast max_radar={profile.get('max_radar_tokens')} "
+            f"recall_sla_max_s={profile.get('recall_sla_max_s')}",
+            flush=True,
+        )
+        add_m82(hot_expand=True, profile=profile)
+
     def add_time_to_mirror() -> None:
         """Lane A: fresh delta + top pending only (minutes-scale hot path)."""
         profile = ttm_profile or _resolve_time_to_mirror_profile(args)
@@ -1766,6 +1974,8 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_m9()
     elif mode == "time_to_mirror":
         add_time_to_mirror()
+    elif mode == "mirror_recall_fast":
+        add_mirror_recall_fast()
     elif mode == "m8_audit":
         add_m8_audit()
     elif mode == "patient_lane":
@@ -1894,7 +2104,8 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             if pipeline_mode == "time_to_mirror"
             else True
         )
-        record_ttm_timings = pipeline_mode == "time_to_mirror"
+        selection_fresh_allowed = True
+        record_ttm_timings = pipeline_mode in ("time_to_mirror", "mirror_recall_fast")
         ttm_profile = (
             _resolve_time_to_mirror_profile(args) if record_ttm_timings else None
         )
@@ -1925,6 +2136,16 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                         step_timings[name] = 0.0
                     continue
                 msg = f"skip {name}: prior step marker {done_marker}\n"
+                print(msg.strip())
+                log_fh.write(msg)
+                if record_ttm_timings:
+                    step_timings[name] = 0.0
+                continue
+            if name in SELECTION_FRESH_GATED_STEPS and not selection_fresh_allowed:
+                msg = (
+                    f"skip {name}: selection_verified_fresh_total=0 "
+                    "(cross-dex/M8.3 blocked until fresh verified mirrors)\n"
+                )
                 print(msg.strip())
                 log_fh.write(msg)
                 if record_ttm_timings:
@@ -1992,6 +2213,17 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 narrow_shadow_allowed = rc == 0
             if name == "gate_time_to_mirror_target_universe":
                 target_m9_allowed = rc == 0
+            if name == "gate_selection_verified_fresh":
+                selection_fresh_allowed = rc == 0
+            if name == "m8_mirror_discovery_recall" and rc == 0:
+                cleared = _clear_recall_downstream_markers(pipeline_mode)
+                if cleared:
+                    msg = (
+                        f"cleared {cleared} recall-downstream marker(s) "
+                        f"under {PIPELINE_STEP_MARKERS_DIR / pipeline_mode}\n"
+                    )
+                    print(msg.strip())
+                    log_fh.write(msg)
             if rc not in step["allow_exit_codes"]:
                 reason = fail_reason or f"exit={rc}"
                 fail_marker.write_text(f"{reason}\n", encoding="utf-8")
@@ -2066,6 +2298,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "m8_m9",
             "full",
             "time_to_mirror",
+            "mirror_recall_fast",
             "m8_audit",
             "patient_lane",
             "cross_chain_research",
@@ -2084,6 +2317,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="pipeline",
         action="store_const",
         const="time_to_mirror",
+    )
+    pg.add_argument(
+        "-mirror_recall_fast",
+        "--mirror-recall-fast",
+        dest="pipeline",
+        action="store_const",
+        const="mirror_recall_fast",
+        help="Fast recall-only lane: pending→expand→DexScreener recall (≤180s SLA)",
     )
     pg.add_argument(
         "--patient-lane",
@@ -2112,7 +2353,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hot-lane",
         choices=tuple(HOT_LANE_PROFILES.keys()),
         default=None,
-        help="time_to_mirror lane budget: hot_delta (50), warm_recall (150), mirror_recall (753 wide), audit_full (753+)",
+        help="time_to_mirror lane budget: hot_delta (50), warm_recall (150), mirror_recall (753 wide), mirror_recall_fast, audit_full (753+)",
     )
     ap.add_argument(
         "--skip-secondary",

@@ -26,6 +26,17 @@ def main() -> int:
     )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument(
+        "--token-pool-universe",
+        action="store_true",
+        default=True,
+        help="Token-scoped all-pool recall (default on)",
+    )
+    p.add_argument(
+        "--no-graph-closure-only",
+        action="store_true",
+        help="Allow anchor-only pools in hot recall (audit only)",
+    )
+    p.add_argument(
         "--use-cache",
         action="store_true",
         help="Reuse DexScreener cache (default: live fetch for max recall diversity)",
@@ -58,6 +69,8 @@ def main() -> int:
         config=cfg,
         dry_run=args.dry_run or os.environ.get("ARBY_SKIP_RPC") == "1",
         use_cache=bool(args.use_cache),
+        token_pool_universe=bool(args.token_pool_universe),
+        graph_closure_only=not bool(args.no_graph_closure_only),
     )
     write_mirror_discovery_recall(payload, output_path=Path(args.output))
     if args.write_supported_hints:

@@ -34,6 +34,10 @@ DEFAULT_EXPAND_SUBSET = Path("data/tmp/m8_time_to_mirror_expand_subset.json")
 DEFAULT_CONFIG_PATH = Path("config/exotic_base_anchor.yaml")
 DEFAULT_RECALL_HINTS_PATH = Path("data/tmp/m8_mirror_recall_hints_latest.json")
 DEFAULT_SUPPORTED_HINTS_PATH = Path("data/runs/_rolling/m8_external_pool_hints_latest.json")
+RECALL_CANDIDATES_PATH = Path("data/tmp/m8_mirror_recall_candidates_latest.json")
+EXISTENCE_VERIFY_QUEUE_PATH = Path("data/tmp/m8_mirror_existence_verify_queue_latest.json")
+QUOTE_READY_QUEUE_PATH = Path("data/tmp/m8_mirror_quote_ready_queue_latest.json")
+EXISTENCE_VERIFY_SUBSET_PATH = Path("data/tmp/m8_existence_verify_subset.json")
 
 SUPPORT_SUPPORTED = "supported"
 SUPPORT_UNSUPPORTED = "unsupported"
@@ -106,7 +110,7 @@ def mirror_row_from_hint(hint: PoolHint) -> Dict[str, Any]:
         "pool": str(hint.pool_address or "").lower(),
         "dex_id": str(hint.dex_id or ""),
         "normalized_dex_id": str(raw.get("normalized_dex_id") or hint.dex_id or ""),
-        "raw_dex_id": str(raw.get("raw_dex_id") or raw.get("dexId") or ""),
+        "raw_dex_id": str(raw.get("raw_dex_id") or raw.get("dexId") or hint.dex_id or ""),
         "liquidity_usd": hint.liquidity_usd,
         "volume_24h": hint.volume_24h,
         "pair_created_at": hint.created_at or pair.get("pairCreatedAt"),
@@ -345,8 +349,24 @@ def run_mirror_discovery_recall(
     dry_run: bool = False,
     cache_lane: str = "mirror_recall",
     use_cache: bool = False,
+    token_pool_universe: bool = True,
+    graph_closure_only: bool = True,
 ) -> Tuple[List[PoolHint], Dict[str, Any]]:
+    from m8.discovery.token_pool_universe import (
+        anchor_addresses_from_config,
+        build_pool_universe_width,
+        build_unsupported_dex_backlog,
+        filter_hot_path_hints,
+        fresh_token_addresses,
+        load_factory_recall_hints,
+        sort_hints_for_verify,
+        stamp_universe_type,
+        build_closure_graph,
+    )
+
     cfg = config or _load_yaml_config(DEFAULT_CONFIG_PATH)
+    fresh_set = fresh_token_addresses(tokens)
+    anchor_addrs = anchor_addresses_from_config(cfg)
     all_hints: List[PoolHint] = []
     for i in range(0, len(tokens), DEXSCREENER_BATCH_MAX):
         chunk = tokens[i : i + DEXSCREENER_BATCH_MAX]
@@ -360,8 +380,31 @@ def run_mirror_discovery_recall(
         )
         for rows in batch.values():
             all_hints.extend(rows)
+    if token_pool_universe:
+        factory_hints = load_factory_recall_hints(fresh_set)
+        all_hints.extend(factory_hints)
     deduped = dedupe_hints(all_hints)
-    verified, rca, _reject_rows = verify_supported_hints(deduped, chain=chain, dry_run=dry_run)
+    if token_pool_universe:
+        deduped = filter_hot_path_hints(
+            deduped,
+            fresh_tokens=fresh_set,
+            anchor_addrs=anchor_addrs,
+            graph_closure_only=graph_closure_only,
+        )
+    closure_graph = build_closure_graph(deduped, fresh_tokens=fresh_set)
+    stamped = [
+        stamp_universe_type(
+            h,
+            fresh_tokens=fresh_set,
+            closure_graph=closure_graph,
+            anchor_addrs=anchor_addrs,
+        )
+        for h in deduped
+    ]
+    verify_order = sort_hints_for_verify(stamped)
+    verified, rca, _reject_rows = verify_supported_hints(
+        verify_order, chain=chain, dry_run=dry_run
+    )
     mirrors = [mirror_row_from_hint(h) for h in verified]
     metrics = compute_recall_metrics(mirrors)
     recall_exists_total = sum(1 for row in mirrors if row.get("recall_verified_pool_exists"))
@@ -369,17 +412,27 @@ def run_mirror_discovery_recall(
     pool_exists_stale_total = sum(1 for row in mirrors if row.get("pool_exists_stale"))
     fresh_quote_candidate_total = sum(1 for row in mirrors if row.get("fresh_quote_candidate"))
     age_buckets = Counter(str(row.get("mirror_age_bucket") or "unknown") for row in mirrors)
+    pool_universe_width = build_pool_universe_width(
+        verified, mirrors, fresh_tokens=fresh_set
+    )
+    unsupported_backlog = build_unsupported_dex_backlog(mirrors, config=cfg)
+    recall_run_id = _iso_now()
     payload = {
-        "schema_version": "m8_mirror_discovery_recall_v4",
-        "generated_at_utc": _iso_now(),
-        "lane": "mirror_discovery_max_recall",
+        "schema_version": "m8_mirror_discovery_recall_v5",
+        "generated_at_utc": recall_run_id,
+        "recall_run_id": recall_run_id,
+        "lane": "token_pool_universe" if token_pool_universe else "mirror_discovery_max_recall",
         "chain": chain,
         "tokens_scanned": len(tokens),
-        "fetch_mode": "dexscreener_all_dex_max_recall",
+        "fetch_mode": "token_scoped_all_pool_recall",
+        "token_pool_universe": token_pool_universe,
+        "graph_closure_only": graph_closure_only,
         "use_cache": use_cache,
-        "truth_boundary": "external_mirrors_hint_only_until_onchain_verified",
+        "truth_boundary": "recall_candidate_wide_admission_strict",
+        "pool_universe_width": pool_universe_width,
         "mirrors": mirrors,
         "dex_alias_backlog": build_dex_alias_backlog(mirrors),
+        "unsupported_dex_backlog": unsupported_backlog,
         "stale_mirror_backlog": build_stale_mirror_backlog(mirrors),
         "mirror_age_bucket_histogram": dict(age_buckets),
         "verify_rca_path": str(DEFAULT_VERIFY_RCA_PATH),
@@ -394,6 +447,8 @@ def run_mirror_discovery_recall(
     }
     write_verify_rca(rca)
     write_recall_hints_checkpoint(verified, chain=chain)
+    queue_paths = write_mirror_queue_artifacts(payload, hints=verified, chain=chain)
+    payload["queue_artifacts"] = queue_paths
     payload["verify_rca"] = {
         "supported_hints_total": rca.get("supported_hints_total"),
         "recall_verified_pool_exists_total": rca.get("recall_verified_pool_exists_total"),
@@ -406,6 +461,74 @@ def run_mirror_discovery_recall(
         "pool_exists_stale_total": rca.get("pool_exists_stale_total"),
     }
     return verified, payload
+
+
+def write_mirror_queue_artifacts(
+    recall_payload: Dict[str, Any],
+    *,
+    hints: List[PoolHint],
+    chain: str = "base",
+) -> Dict[str, str]:
+    """Split recall output into recall / existence-verify / quote-ready queues."""
+    mirrors = list(recall_payload.get("mirrors") or [])
+    recall_doc = {
+        "schema_version": "m8_mirror_recall_candidates_v1",
+        "generated_at_utc": _iso_now(),
+        "chain": chain,
+        "candidates": mirrors,
+        "all_dex_mirrors_total": int(recall_payload.get("all_dex_mirrors_total") or 0),
+        "pool_universe_width": recall_payload.get("pool_universe_width"),
+    }
+    existence_hints = [
+        h
+        for h in hints
+        if hint_support_status(h) == SUPPORT_SUPPORTED
+        and not _hint_raw_bool(h, "recall_verified_pool_exists")
+    ]
+    quote_ready_hints = [h for h in hints if _hint_raw_bool(h, "selection_verified_fresh")]
+    existence_doc = {
+        "schema_version": "m8_mirror_existence_verify_queue_v1",
+        "generated_at_utc": _iso_now(),
+        "chain": chain,
+        "queue_count": len(existence_hints),
+        "hints": [h.to_dict() for h in existence_hints],
+        "tokens": sorted(
+            {str(h.focus_token or "").lower() for h in existence_hints if h.focus_token}
+        ),
+    }
+    quote_doc = {
+        "schema_version": "m8_mirror_quote_ready_queue_v1",
+        "generated_at_utc": _iso_now(),
+        "chain": chain,
+        "queue_count": len(quote_ready_hints),
+        "hints": [h.to_dict() for h in quote_ready_hints],
+    }
+    for path, doc in (
+        (RECALL_CANDIDATES_PATH, recall_doc),
+        (EXISTENCE_VERIFY_QUEUE_PATH, existence_doc),
+        (QUOTE_READY_QUEUE_PATH, quote_doc),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    _write_existence_verify_subset(existence_doc)
+    return {
+        "recall_candidates": str(RECALL_CANDIDATES_PATH),
+        "existence_verify_queue": str(EXISTENCE_VERIFY_QUEUE_PATH),
+        "quote_ready_queue": str(QUOTE_READY_QUEUE_PATH),
+        "existence_verify_subset": str(EXISTENCE_VERIFY_SUBSET_PATH),
+    }
+
+
+def _write_existence_verify_subset(existence_doc: Dict[str, Any]) -> None:
+    tokens = existence_doc.get("tokens") or []
+    subset = {
+        "schema_version": "m8_existence_verify_subset_v1",
+        "generated_at_utc": _iso_now(),
+        "tokens": [{"token": t, "source": "existence_verify_queue"} for t in tokens],
+        "token_count": len(tokens),
+    }
+    EXISTENCE_VERIFY_SUBSET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    EXISTENCE_VERIFY_SUBSET_PATH.write_text(json.dumps(subset, indent=2), encoding="utf-8")
 
 
 def write_recall_hints_checkpoint(
@@ -452,6 +575,22 @@ def write_mirror_discovery_recall(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return output_path
+
+
+def evaluate_selection_verified_fresh_gate(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    """Cross-dex expand and M8.3 require at least one selection-fresh verified mirror."""
+    sel_fresh = int(payload.get("selection_verified_fresh_total") or 0)
+    if sel_fresh > 0:
+        return True, "selection_verified_fresh_ready"
+    return False, "SELECTION_VERIFIED_FRESH_ZERO"
+
+
+def evaluate_m9_admission_gate(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    """M9 opens only when selection fresh + quote-ready + capacity (checked downstream)."""
+    sel_fresh = int(payload.get("selection_verified_fresh_total") or 0)
+    if sel_fresh <= 0:
+        return False, "SELECTION_VERIFIED_FRESH_ZERO"
+    return True, "M9_ADMISSION_POSSIBLE"
 
 
 def evaluate_mirror_recall_gate(payload: Dict[str, Any]) -> Tuple[bool, str]:

@@ -961,7 +961,15 @@ def build_time_to_mirror_latency_artifact(
     """Summarize per-step latency for hot-path SLA gate."""
     prof = profile or {}
     radar_s = float(step_timings_s.get("m8_2_radar_two_phase") or 0.0)
-    verify_s = 0.0  # verify is inside radar step
+    recall_s = float(step_timings_s.get("m8_mirror_discovery_recall") or 0.0)
+    verify_s = sum(
+        float(step_timings_s.get(k) or 0.0)
+        for k in (
+            "m8_onchain_factory_mirror_scan",
+            "m8_1_stable_anchor_fresh_delta",
+            "m8_mirror_selection_pass",
+        )
+    )
     expand_s = float(step_timings_s.get("m8_2_cross_dex_expand") or 0.0)
     mirror_reprobe_s = float(step_timings_s.get("m8_mirror_quote_reprobe") or 0.0)
     mirror_verify_s = float(step_timings_s.get("m8_second_pool_verify") or 0.0)
@@ -974,6 +982,8 @@ def build_time_to_mirror_latency_artifact(
         )
     )
     max_s = int(prof.get("hot_sla_max_s") or 0)
+    recall_sla_max_s = int(prof.get("recall_sla_max_s") or 0)
+    verify_sla_max_s = int(prof.get("verify_sla_max_s") or 0)
     return {
         "schema_version": "m8_time_to_mirror_latency_v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -981,7 +991,9 @@ def build_time_to_mirror_latency_artifact(
         "hot_lane": prof.get("lane"),
         "time_to_mirror_latency_s": pipeline_latency_s,
         "radar_s": radar_s,
-        "verify_s": verify_s,
+        "recall_latency_s": round(recall_s, 2),
+        "verify_latency_s": round(verify_s, 2),
+        "verify_s": round(verify_s, 2),
         "expand_s": expand_s,
         "mirror_reprobe_s": mirror_reprobe_s,
         "mirror_verify_s": mirror_verify_s,
@@ -989,6 +1001,10 @@ def build_time_to_mirror_latency_artifact(
         "step_timings_s": step_timings_s,
         "hot_sla_max_s": max_s,
         "hot_sla_pass": (max_s <= 0 or pipeline_latency_s <= float(max_s)),
+        "recall_sla_max_s": recall_sla_max_s,
+        "recall_sla_pass": (recall_sla_max_s <= 0 or recall_s <= float(recall_sla_max_s)),
+        "verify_sla_max_s": verify_sla_max_s,
+        "verify_sla_pass": (verify_sla_max_s <= 0 or verify_s <= float(verify_sla_max_s)),
     }
 
 
@@ -1003,3 +1019,33 @@ def evaluate_hot_sla_gate(
     if latency > float(max_latency_s):
         return False, f"HOT_SLA_EXCEEDED latency_s={latency} max_s={max_latency_s}"
     return True, "hot_sla_pass"
+
+
+def evaluate_recall_sla_gate(
+    timings_doc: Dict[str, Any],
+    *,
+    max_latency_s: int,
+) -> tuple[bool, str]:
+    latency = float(
+        timings_doc.get("recall_latency_s")
+        or (timings_doc.get("step_timings_s") or {}).get("m8_mirror_discovery_recall")
+        or 0.0
+    )
+    if latency <= 0:
+        return False, "RECALL_SLA_MISSING_LATENCY"
+    if latency > float(max_latency_s):
+        return False, f"RECALL_SLA_EXCEEDED latency_s={latency} max_s={max_latency_s}"
+    return True, "recall_sla_pass"
+
+
+def evaluate_verify_sla_gate(
+    timings_doc: Dict[str, Any],
+    *,
+    max_latency_s: int,
+) -> tuple[bool, str]:
+    latency = float(timings_doc.get("verify_latency_s") or timings_doc.get("verify_s") or 0.0)
+    if latency <= 0:
+        return False, "VERIFY_SLA_MISSING_LATENCY"
+    if latency > float(max_latency_s):
+        return False, f"VERIFY_SLA_EXCEEDED latency_s={latency} max_s={max_latency_s}"
+    return True, "verify_sla_pass"

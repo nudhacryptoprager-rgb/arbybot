@@ -2,13 +2,17 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_3_STRICT_PASS / M9_WAITING_FOR_SELECTION_VERIFIED_MIRRORS**
+**Current runtime line:** **FAST_RECALL_SPLIT_RUNTIME_PROOF / M9_WAITING_FOR_SELECTION_VERIFIED_MIRRORS**
 
 ```text
-mirror_recall_clean_rerun: all_dex=32 pool_exists=2 pool_exists_stale=2 selection_fresh=0
-selection_input: data/tmp/m8_mirror_recall_hints_latest.json (not rolling hints)
-raw/stale DexScreener mirrors are not M9 input; only selection_verified_fresh + quote_ready
-m9_shadow: NOT_STARTED; do not shadow until selection_verified_fresh_total>0
+TOKEN_SCOPED_POOL_UNIVERSE_ACTIVE / FAST_RECALL_SPLIT_RUNTIME_PROOF_REACHED
+mirror_recall_fast: recall_latency_s=39.58 recall_sla_pass=true all_dex_mirrors_total=80
+admission_width: supported_mirrors_total=80 unknown_alias_mirrors_total=0 (alias map fix)
+downstream_verify: verify_latency_s=225.39 verify_sla_pass=true (27-token existence subset)
+m9_admission_requires: selection_verified_fresh_total>0, fresh_long_tail_quote_ready>0,
+  target_universe_gate_blocked=false, cycles_at_floor>0
+current: selection_verified_fresh_total=0 recall_verified_pool_exists=2 -> M9 shadow NOT_STARTED (correct)
+rca_blocker: V4_POOLID_NOT_RESOLVED=23 STALE_BUT_POOL_EXISTS=2 selection_blocked_stale
 ```
 
 ## Capacity blocker audit

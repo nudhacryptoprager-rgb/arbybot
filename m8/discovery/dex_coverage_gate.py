@@ -94,14 +94,45 @@ def classify_dex_support_status(
         return "", "unknown_alias"
     normalized = normalize_dex_id(source, raw_dex_id)
     internal = normalized or raw.replace("-", "_").replace(" ", "_")
-    if normalized is None:
+    dexes = config.get("dexes") or {}
+    if not internal:
+        return "", "unknown_alias"
+    if internal not in dexes and normalized is None:
         return internal, "unknown_alias"
     verdict = validate_dex_package(internal, config)
     if verdict.get("package_complete"):
         return internal, "supported"
-    if internal in (config.get("dexes") or {}):
+    if internal in dexes:
         return internal, "unsupported"
-    return internal, "unsupported"
+    return internal, "unknown_alias"
+
+
+def stamp_hint_support_status(
+    hint,
+    config: Dict[str, Any],
+    *,
+    source: str = "dexscreener",
+):
+    """Ensure hint.raw carries support_status for mirror admission metrics."""
+    raw = dict(hint.raw or {})
+    status = str(raw.get("support_status") or "")
+    if status in ("supported", "unsupported", "unknown_alias"):
+        return hint
+    raw_dex = str(
+        raw.get("raw_dex_id") or raw.get("dexId") or hint.dex_id or ""
+    ).strip()
+    internal, new_status = classify_dex_support_status(
+        source=source,
+        raw_dex_id=raw_dex or hint.dex_id,
+        config=config,
+    )
+    if internal and not hint.dex_id:
+        hint.dex_id = internal
+    raw["support_status"] = new_status
+    raw["raw_dex_id"] = raw_dex or internal or hint.dex_id
+    raw["normalized_dex_id"] = internal or hint.dex_id
+    hint.raw = raw
+    return hint
 
 
 def dex_coverage_report(config: Dict[str, Any]) -> Dict[str, Any]:

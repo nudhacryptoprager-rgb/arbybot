@@ -49,20 +49,36 @@ BRIDGE_ELIGIBLE_HINT_STATUSES = frozenset(
 
 VERIFY_FACTORY_GET_POOL = "factory_getPool"
 
-_DEFAULT_STALE_HOURS = 168.0  # 7 days
+_DEFAULT_STALE_HOURS = 168.0  # 7 days — audit / warm lanes
+RECALL_HOT_STALE_HOURS = 48.0  # hot mirror-recall selection window
 
 # External dex id → internal dex_id (subset; unknown → None)
 _DEXSCREENER_DEX_MAP: Dict[str, str] = {
     "uniswap": "uniswap_v3",
     "uniswapv2": "uniswap_v2",
+    "uniswap-v2": "uniswap_v2",
     "uniswap_v2": "uniswap_v2",
     "uniswapv3": "uniswap_v3",
+    "uniswap-v3": "uniswap_v3",
     "uniswap_v3": "uniswap_v3",
     "uniswapv4": "uniswap_v4",
+    "uniswap-v4": "uniswap_v4",
+    "uniswap_v4": "uniswap_v4",
     "aerodrome": "aerodrome",
+    "aerodrome-base": "aerodrome",
+    "aerodrome-slipstream": "aerodrome_slipstream",
+    "aerodrome_slipstream": "aerodrome_slipstream",
     "sushiswap": "sushiswap_v2",
+    "sushiswap-v2": "sushiswap_v2",
+    "sushiswap_v2": "sushiswap_v2",
+    "sushiswap-v3": "sushiswap_v3",
+    "sushiswap_v3": "sushiswap_v3",
     "pancakeswap": "pancakeswap_v3",
+    "pancakeswap-v3": "pancakeswap_v3",
+    "pancakeswap_v3": "pancakeswap_v3",
     "baseswap": "baseswap_v2",
+    "baseswap-v2": "baseswap_v2",
+    "baseswap_v2": "baseswap_v2",
     "curve": "curve_stable",
     "balancer": "balancer_vault",
     "maverick": "maverick_v2",
@@ -195,9 +211,15 @@ def normalize_dex_id(source: str, raw_dex_id: str) -> Optional[str]:
     if not key:
         return None
     if source == "dexscreener":
-        return _DEXSCREENER_DEX_MAP.get(key) or _DEXSCREENER_DEX_MAP.get(
-            key.replace("-", "_").replace(" ", "")
+        compact = key.replace("-", "_").replace(" ", "")
+        mapped = (
+            _DEXSCREENER_DEX_MAP.get(key)
+            or _DEXSCREENER_DEX_MAP.get(compact)
+            or _DEXSCREENER_DEX_MAP.get(key.replace("-", "_"))
         )
+        if mapped:
+            return mapped
+        return compact or None
     if source == "geckoterminal":
         return _GECKO_DEX_MAP.get(key) or key.replace("-base", "").replace("-", "_")
     if source == "thegraph":
@@ -209,17 +231,36 @@ def normalize_dex_id(source: str, raw_dex_id: str) -> Optional[str]:
     return key.replace("-", "_")
 
 
-def hint_is_stale(hint: PoolHint, *, max_age_hours: float = _DEFAULT_STALE_HOURS) -> bool:
+def _hint_age_hours(hint: PoolHint) -> Optional[float]:
     if not hint.created_at:
-        return False
+        return None
     try:
         ts = datetime.fromisoformat(hint.created_at.replace("Z", "+00:00"))
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        age_h = (datetime.now(tz=timezone.utc) - ts).total_seconds() / 3600.0
-        return age_h > max_age_hours
+        return (datetime.now(tz=timezone.utc) - ts).total_seconds() / 3600.0
     except (ValueError, TypeError):
+        return None
+
+
+def hint_is_stale(hint: PoolHint, *, max_age_hours: float = _DEFAULT_STALE_HOURS) -> bool:
+    """Audit/warm staleness: missing created_at is treated as not stale."""
+    age_h = _hint_age_hours(hint)
+    if age_h is None:
         return False
+    return age_h > max_age_hours
+
+
+def hint_is_stale_for_recall(
+    hint: PoolHint,
+    *,
+    max_age_hours: float = RECALL_HOT_STALE_HOURS,
+) -> bool:
+    """Hot-recall staleness: missing or unparseable created_at → stale (existence-only)."""
+    age_h = _hint_age_hours(hint)
+    if age_h is None:
+        return True
+    return age_h > max_age_hours
 
 
 def _hint_identity(h: PoolHint) -> str:

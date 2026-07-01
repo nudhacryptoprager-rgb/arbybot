@@ -530,6 +530,47 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertLess(idx_radar, idx_expand)
         self.assertLess(idx_expand, idx_accept)
 
+    def test_mirror_recall_lane_puts_recall_before_heavy_verify(self):
+        args = start.parse_args(
+            [
+                "-time_to_mirror",
+                "--hot-lane",
+                "mirror_recall",
+                "--dry-run",
+                "--no-dashboard",
+            ]
+        )
+        steps = start.build_project_pipeline_steps(args)
+        names = [s["name"] for s in steps]
+        idx_recall = names.index("m8_mirror_discovery_recall")
+        idx_m81 = names.index("m8_1_stable_anchor_fresh_delta")
+        idx_onchain = names.index("m8_onchain_factory_mirror_scan")
+        idx_admission = names.index("gate_recall_verify_admission")
+        self.assertLess(idx_recall, idx_admission)
+        self.assertLess(idx_admission, idx_onchain)
+        self.assertLess(idx_onchain, idx_m81)
+        onchain = next(s for s in steps if s["name"] == "m8_onchain_factory_mirror_scan")
+        joined = " ".join(onchain["cmd"])
+        self.assertIn(str(start.EXISTENCE_VERIFY_SUBSET_PATH), joined)
+        self.assertIn("gate_recall_sla", names)
+        self.assertIn("gate_verify_sla", names)
+        self.assertIn("gate_selection_verified_fresh", names)
+        self.assertEqual(names.count("gate_selection_verified_fresh"), 1)
+        idx_gate_sel = names.index("gate_selection_verified_fresh")
+        idx_expand = names.index("m8_2_cross_dex_expand")
+        self.assertLess(idx_gate_sel, idx_expand)
+
+    def test_mirror_recall_fast_plan_is_recall_only(self):
+        args = start.parse_args(["-mirror_recall_fast", "--dry-run", "--no-dashboard"])
+        steps = start.build_project_pipeline_steps(args)
+        names = [s["name"] for s in steps]
+        self.assertIn("m8_mirror_discovery_recall", names)
+        self.assertIn("gate_mirror_recall", names)
+        self.assertIn("gate_recall_sla", names)
+        self.assertNotIn("m8_onchain_factory_mirror_scan", names)
+        self.assertNotIn("m8_1_stable_anchor_fresh_delta", names)
+        self.assertNotIn("m8_2_acceptance_strict", names)
+
     def test_pipeline_markers_are_namespaced_by_mode(self):
         import tempfile
 

@@ -245,19 +245,42 @@ pipeline exit=0 (--skip-shadow when capacity gate blocks)
 next: narrow depth reprobe + widen mirror yield (753-token scored verify); no M9 shadow until cycles_at_floor>0
 ```
 
-## Mirror recall expansion (2026-06-29)
+## Mirror recall expansion (2026-06-29, superseded by 2026-06-30 proof)
 
 ```text
-MIRROR_RECALL_BREADTH_PROVEN / STALE_EXISTENCE_VERIFICATION_PARTIAL
-stale_existence_resolver_v4: factory/v4-poolId/aerodrome paths + existence RCA buckets
-wide_recall_clean_rerun: mirror_recall 753 tokens exit=0 selection_input=m8_mirror_recall_hints_latest.json
-MIRROR_RECALL_BREADTH: all_dex_mirrors_total=32 (was 28 pre-resolver / 8 @150)
-  dex_alias_backlog: uniswap=27 aerodrome=4 pancakeswap=1
-recall_verified_pool_exists_total=2 pool_exists_stale_total=2 selection_verified_fresh_total=0
-existence_rca: STALE_BUT_POOL_EXISTS=2 V4_POOLID_NOT_RESOLVED=25
-selection_stages: recall=32 -> pool_exists=2 -> fresh_enough=0 -> narrow=0
-blocker: selection_verified_fresh_total=0; stale_quote_smoke infra RPC_CONFIG_ERROR (non-M9)
-next: v4 poolId resolver depth + stale quote smoke RPC bootstrap; no M9 shadow
+TOKEN_SCOPED_POOL_UNIVERSE_REQUIRED — see Fast recall split runtime proof (2026-06-30) for current metrics
+```
+
+## Fast recall split runtime proof (2026-06-30)
+
+```text
+FAST_RECALL_SPLIT_RUNTIME_PROOF_REACHED
+pipeline: start.py -mirror_recall_fast --max-radar-tokens 753
+recall_latency_s=22.59 recall_sla_pass=true (max=180)
+time_to_mirror_latency_s=27.17 (recall-only path, 8 steps)
+tokens_scanned=713 all_dex_mirrors_total=124 supported=29 unknown_alias=95
+recall_verified_pool_exists_total=2 selection_verified_fresh_total=0 m9_target_ready=false
+queue_artifacts: recall_candidates=124 existence_verify_queue=27 quote_ready_queue=0 existence_subset_tokens=27
+fetch_mode=token_scoped_all_pool_recall truth_boundary=recall_candidate_wide_admission_strict
+
+downstream_verify (resume-from m8_onchain_factory_mirror_scan --force-rerun-steps --skip-preflight):
+  onchain_factory_scan_s=83.81 (27-token existence subset vs prior 792s on 753)
+  m8_1_fresh_delta_s=141.44 verify_latency_s=225.39 verify_sla_pass=true (max=900)
+  onchain: factory=50 verified_pools=50 tokens=27
+  selection: pool_exists=2 pool_exists_stale=2 selection_verified_fresh=0
+  rca: V4_POOLID_NOT_RESOLVED=23 STALE_BUT_POOL_EXISTS=2 primary_blocker=selection_blocked_stale
+
+Decision: DexScreener recall is strategy-fast; heavy RPC verify must stay downstream on existence_subset only.
+cross_dex_expand gated: gate_selection_verified_fresh blocks expand/M8.3 when selection_verified_fresh_total=0.
+recall_run_id invalidates downstream .done markers after each fresh recall.
+
+Alias normalization fix (2026-06-30 post-proof):
+supported_mirrors_total=80 unknown_alias_mirrors_total=0 (was 29/95)
+recall_latency_s=39.58 recall_sla_pass=true
+admission blocker remains selection_verified_fresh_total=0 (V4_POOLID_NOT_RESOLVED)
+
+M9 shadow: NOT STARTED (selection_verified_fresh_total=0)
+next: v4 poolId resolver + stale-hint refresh before M8.3/M9 narrowing
 ```
 
 ## Next owner

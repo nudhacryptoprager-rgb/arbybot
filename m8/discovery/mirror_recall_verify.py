@@ -19,8 +19,9 @@ from m8.discovery.pool_hints import (
     HINT_DEX_UNSUPPORTED,
     HINT_ONLY,
     HINT_STALE,
+    RECALL_HOT_STALE_HOURS,
     PoolHint,
-    hint_is_stale,
+    hint_is_stale_for_recall,
     normalize_pool_identity,
     verify_hint_onchain,
 )
@@ -101,10 +102,11 @@ def _annotate_recall_fields(
     verify_reject_reason: Optional[str] = None,
     pool_exists_stale: bool = False,
     fresh_quote_candidate: bool = False,
+    max_age_hours: float = RECALL_HOT_STALE_HOURS,
 ) -> PoolHint:
     raw = dict(hint.raw or {})
     raw["mirror_age_bucket"] = mirror_age_bucket(hint)
-    raw["is_stale_hint"] = hint_is_stale(hint)
+    raw["is_stale_hint"] = hint_is_stale_for_recall(hint, max_age_hours=max_age_hours)
     raw["recall_verified_pool_exists"] = bool(recall_exists)
     raw["selection_verified_fresh"] = bool(selection_fresh)
     raw["pool_exists_stale"] = bool(pool_exists_stale)
@@ -144,49 +146,43 @@ def _stale_verify_v4(
     chain: str,
     metrics: Optional[Dict[str, Any]],
 ) -> Tuple[PoolHint, str]:
-    h = hint
-    pool_id = resolve_pool_id(h) or h.pool_address
-    if not is_bytes32_hex(pool_id):
-        bucket = V4_POOLID_NOT_RESOLVED
-        return _annotate_recall_fields(
-            h,
-            recall_exists=False,
-            selection_fresh=False,
-            stale_bucket=STALE_POOL_NOT_FOUND,
-            existence_bucket=bucket,
-            verify_reject_reason="V4_INVALID_POOL_ID",
-        ), bucket
+    from m8.discovery.uniswap_v4_pool_resolver import (
+        V4_POOLID_EXISTS,
+        V4_POOLID_NOT_RESOLVED,
+        resolve_v4_pool_existence,
+    )
 
-    ok, method = verify_v4_pool_id_exists(pool_id, chain=chain)
+    h = hint
+    ok, bucket, detail = resolve_v4_pool_existence(h, chain=chain)
     if metrics is not None:
         record_verification_metrics(
             metrics,
             h,
             verified=ok,
-            reject_reason=STALE_BUT_POOL_EXISTS if ok else method,
+            reject_reason=STALE_BUT_POOL_EXISTS if ok else (detail or bucket),
         )
     if ok:
-        h.pool_id = pool_id
-        h.verify_method = method
+        if is_bytes32_hex(resolve_pool_id(h) or h.pool_address):
+            h.pool_id = resolve_pool_id(h) or h.pool_address
+        h.verify_method = detail
         h.hint_status = HINT_STALE
         return _annotate_recall_fields(
             h,
             recall_exists=True,
             selection_fresh=False,
             stale_bucket=STALE_BUT_POOL_EXISTS,
-            existence_bucket=STALE_BUT_POOL_EXISTS,
+            existence_bucket=bucket,
             pool_exists_stale=True,
         ), STALE_BUT_POOL_EXISTS
 
-    bucket = _V4_FAILURE_TO_BUCKET.get(method, V4_POOLID_NOT_RESOLVED)
     return _annotate_recall_fields(
         h,
         recall_exists=False,
         selection_fresh=False,
         stale_bucket=STALE_POOL_NOT_FOUND,
-        existence_bucket=bucket,
-        verify_reject_reason=method,
-    ), bucket
+        existence_bucket=V4_POOLID_NOT_RESOLVED,
+        verify_reject_reason=detail or bucket,
+    ), V4_POOLID_NOT_RESOLVED
 
 
 def _stale_verify_factory_membership(
@@ -231,7 +227,7 @@ def _stale_verify_factory_membership(
             pool_exists_stale=True,
         ), STALE_BUT_POOL_EXISTS
 
-    bucket = POOL_CODE_MISSING if method == "BYTECODE_EMPTY" else FACTORY_MEMBERSHIP_FAIL
+    bucket = POOL_CODE_MISSING if method in ("BYTECODE_EMPTY",) else FACTORY_MEMBERSHIP_FAIL
     if metrics is not None:
         record_verification_metrics(metrics, h, verified=False, reject_reason=method)
     return _annotate_recall_fields(
@@ -319,10 +315,11 @@ def verify_hint_for_recall(
     chain: str,
     metrics: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
+    max_age_hours: float = RECALL_HOT_STALE_HOURS,
 ) -> PoolHint:
     """Recall-layer verify: stale hints may count as pool_exists but not selection-fresh."""
     h = normalize_pool_identity(PoolHint.from_dict(hint.to_dict()))
-    stale = hint_is_stale(h)
+    stale = hint_is_stale_for_recall(h, max_age_hours=max_age_hours)
 
     if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
         recall_exists = h.hint_status in BRIDGE_ELIGIBLE_HINT_STATUSES
@@ -331,6 +328,7 @@ def verify_hint_for_recall(
             recall_exists=recall_exists,
             selection_fresh=recall_exists and not stale,
             fresh_quote_candidate=recall_exists and not stale,
+            max_age_hours=max_age_hours,
         )
 
     if not stale:
@@ -344,6 +342,7 @@ def verify_hint_for_recall(
             verify_reject_reason=(
                 None if bridge_ok else str(verified.hint_status or HINT_ONLY)
             ),
+            max_age_hours=max_age_hours,
         )
 
     verified, _bucket = _classify_stale_existence(h, chain=chain, metrics=metrics)
@@ -355,6 +354,7 @@ def verify_hints_for_recall(
     *,
     chain: str = "base",
     dry_run: bool = False,
+    max_age_hours: float = RECALL_HOT_STALE_HOURS,
 ) -> Tuple[List[PoolHint], Dict[str, Any], List[Dict[str, Any]]]:
     from m8.discovery.hint_verifier import empty_verification_metrics
 
@@ -365,7 +365,13 @@ def verify_hints_for_recall(
     reject_rows: List[Dict[str, Any]] = []
 
     for h in hints:
-        verified = verify_hint_for_recall(h, chain=chain, metrics=metrics, dry_run=dry_run)
+        verified = verify_hint_for_recall(
+            h,
+            chain=chain,
+            metrics=metrics,
+            dry_run=dry_run,
+            max_age_hours=max_age_hours,
+        )
         raw = verified.raw or {}
         if raw.get("is_stale_hint"):
             bucket = str(raw.get("stale_recall_bucket") or STALE_POOL_NOT_FOUND)

@@ -19,7 +19,14 @@ from m8.discovery.mirror_recall_verify import (
     mirror_age_bucket,
     verify_hint_for_recall,
 )
-from m8.discovery.pool_hints import HINT_ONCHAIN_VERIFIED, HINT_STALE, PoolHint
+from m8.discovery.pool_hints import (
+    HINT_ONCHAIN_VERIFIED,
+    HINT_STALE,
+    RECALL_HOT_STALE_HOURS,
+    PoolHint,
+    hint_is_stale,
+    hint_is_stale_for_recall,
+)
 
 
 def _stale_hint(*, dex_id: str = "uniswap_v3", pool: str = "0x" + "a" * 40) -> PoolHint:
@@ -59,6 +66,55 @@ def test_mirror_age_bucket_buckets():
     assert mirror_age_bucket(PoolHint(**base)) == "unknown"
 
 
+def test_recall_staleness_splits_hot_vs_audit_window():
+    base = dict(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+    )
+    three_days = datetime.now(tz=timezone.utc) - timedelta(hours=72)
+    hint = PoolHint(**base, created_at=three_days.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    assert hint_is_stale_for_recall(hint, max_age_hours=RECALL_HOT_STALE_HOURS) is True
+    assert hint_is_stale(hint) is False
+
+
+def test_missing_created_at_is_stale_for_recall_not_audit():
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+    )
+    assert hint_is_stale_for_recall(hint) is True
+    assert hint_is_stale(hint) is False
+
+
+@patch("m8.discovery.mirror_recall_verify.verify_factory_pool", return_value=(True, "factory_getPool"))
+def test_missing_created_at_routes_to_existence_not_selection(mock_factory):
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        raw={"support_status": "supported", "raw_dex_id": "uniswap"},
+    )
+    verified = verify_hint_for_recall(hint, chain="base")
+    raw = verified.raw or {}
+    assert raw["is_stale_hint"] is True
+    assert raw["recall_verified_pool_exists"] is True
+    assert raw["selection_verified_fresh"] is False
+    assert raw["selection_verification_status"] == "selection_blocked_stale"
+    mock_factory.assert_called_once()
+
+
 @patch("m8.discovery.mirror_recall_verify.verify_factory_pool", return_value=(True, "factory_getPool"))
 def test_stale_hint_pool_exists_counts_for_recall_not_selection(mock_factory):
     stale = _stale_hint()
@@ -70,7 +126,10 @@ def test_stale_hint_pool_exists_counts_for_recall_not_selection(mock_factory):
     assert verified.hint_status == HINT_STALE
 
 
-@patch("m8.discovery.mirror_recall_verify.verify_v4_pool_id_exists", return_value=(True, "v4_stateview"))
+@patch(
+    "m8.discovery.uniswap_v4_pool_resolver.resolve_v4_pool_existence",
+    return_value=(True, "V4_POOLID_EXISTS", "v4_stateview"),
+)
 def test_stale_v4_uses_poolid_path(mock_v4):
     hint = _stale_hint(
         dex_id="uniswap_v4",

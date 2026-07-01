@@ -287,6 +287,117 @@ def gate_hot_sla(path: Path, *, max_latency_s: int = 900) -> int:
     return 0
 
 
+def gate_recall_sla(path: Path, *, max_latency_s: int = 180) -> int:
+    from m8.discovery.time_to_mirror_lane import evaluate_recall_sla_gate
+
+    doc = _load(path)
+    if not doc:
+        print(
+            json.dumps(
+                {
+                    "gate": "recall_sla",
+                    "path": str(path),
+                    "recall_sla_pass": True,
+                    "reason": "RECALL_SLA_SKIPPED_CACHED_RUN",
+                    "cached_pipeline": True,
+                },
+                indent=2,
+            )
+        )
+        print("INFO recall_sla_gate: cached run (no fresh timings)", file=sys.stderr)
+        return 0
+    ok, reason = evaluate_recall_sla_gate(doc, max_latency_s=int(max_latency_s))
+    print(
+        json.dumps(
+            {
+                "gate": "recall_sla",
+                "path": str(path),
+                "recall_latency_s": doc.get("recall_latency_s"),
+                "recall_sla_max_s": max_latency_s,
+                "recall_sla_pass": ok,
+                "reason": reason,
+            },
+            indent=2,
+        )
+    )
+    if not ok:
+        print(f"INFO recall_sla_gate: blocked ({reason})", file=sys.stderr)
+        return 2
+    return 0
+
+
+def gate_verify_sla(path: Path, *, max_latency_s: int = 900) -> int:
+    from m8.discovery.time_to_mirror_lane import evaluate_verify_sla_gate
+
+    doc = _load(path)
+    if not doc:
+        print(
+            json.dumps(
+                {
+                    "gate": "verify_sla",
+                    "path": str(path),
+                    "verify_sla_pass": True,
+                    "reason": "VERIFY_SLA_SKIPPED_CACHED_RUN",
+                    "cached_pipeline": True,
+                },
+                indent=2,
+            )
+        )
+        print("INFO verify_sla_gate: cached run (no fresh timings)", file=sys.stderr)
+        return 0
+    ok, reason = evaluate_verify_sla_gate(doc, max_latency_s=int(max_latency_s))
+    print(
+        json.dumps(
+            {
+                "gate": "verify_sla",
+                "path": str(path),
+                "verify_latency_s": doc.get("verify_latency_s"),
+                "verify_sla_max_s": max_latency_s,
+                "verify_sla_pass": ok,
+                "reason": reason,
+            },
+            indent=2,
+        )
+    )
+    if not ok:
+        print(f"INFO verify_sla_gate: blocked ({reason})", file=sys.stderr)
+        return 2
+    return 0
+
+
+def gate_selection_verified_fresh(recall_path: Path) -> int:
+    from m8.discovery.mirror_discovery_recall import evaluate_selection_verified_fresh_gate
+
+    if not recall_path.is_file():
+        print(f"FAIL selection_verified_fresh_gate: missing {recall_path}", file=sys.stderr)
+        return 2
+    doc = _load(recall_path)
+    ok, reason = evaluate_selection_verified_fresh_gate(doc or {})
+    sel_fresh = int(doc.get("selection_verified_fresh_total") or 0) if doc else 0
+    pool_exists = int(doc.get("recall_verified_pool_exists_total") or 0) if doc else 0
+    print(
+        json.dumps(
+            {
+                "gate": "selection_verified_fresh",
+                "path": str(recall_path),
+                "selection_verified_fresh_ready": ok,
+                "selection_verified_fresh_total": sel_fresh,
+                "recall_verified_pool_exists_total": pool_exists,
+                "recall_run_id": doc.get("recall_run_id") if doc else None,
+                "reason": reason,
+            },
+            indent=2,
+        )
+    )
+    if not ok:
+        print(
+            f"INFO selection_verified_fresh_gate: blocked ({reason})",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
 def gate_mirror_recall(recall_path: Path) -> int:
     from m8.discovery.mirror_discovery_recall import evaluate_mirror_recall_gate
 
@@ -339,6 +450,9 @@ def main() -> int:
             "narrow_shadow",
             "target_narrow_universe",
             "hot_sla",
+            "recall_sla",
+            "verify_sla",
+            "selection_verified_fresh",
             "mirror_recall",
         ),
     )
@@ -375,6 +489,12 @@ def main() -> int:
         return gate_target_narrow_universe(Path(args.bridge))
     if args.gate == "hot_sla":
         return gate_hot_sla(Path(args.timings), max_latency_s=int(args.max_latency_s))
+    if args.gate == "recall_sla":
+        return gate_recall_sla(Path(args.timings), max_latency_s=int(args.max_latency_s))
+    if args.gate == "verify_sla":
+        return gate_verify_sla(Path(args.timings), max_latency_s=int(args.max_latency_s))
+    if args.gate == "selection_verified_fresh":
+        return gate_selection_verified_fresh(Path(args.recall))
     if args.gate == "mirror_recall":
         return gate_mirror_recall(Path(args.recall))
     return 1

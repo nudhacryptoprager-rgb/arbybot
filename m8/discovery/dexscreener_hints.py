@@ -197,12 +197,14 @@ def _pair_to_hint(
     normalized_dex_id = ""
     support_status = "supported"
     uniswap_resolve_reason: Optional[str] = None
+    aero_resolve_reason: Optional[str] = None
     if max_recall:
         from m8.discovery.dex_coverage_gate import (
             classify_dex_support_status,
             validate_dex_package,
         )
         from m8.discovery.dexscreener_uniswap_resolver import resolve_uniswap_dex_variant
+        from m8.discovery.dexscreener_aerodrome_resolver import resolve_aerodrome_dex_variant
 
         cfg = dex_config if dex_config is not None else _default_dex_config()
         mapped_id, support_status = classify_dex_support_status(
@@ -216,18 +218,28 @@ def _pair_to_hint(
             raw_dex_id=raw_dex,
             normalized_default=mapped_id,
         )
-        if uniswap_resolve_reason:
-            verdict = validate_dex_package(dex_id, cfg)
-            if verdict.get("package_complete"):
-                support_status = "supported"
-            elif dex_id in (cfg.get("dexes") or {}):
-                support_status = "unsupported"
+        aero_id, aero_resolve_reason = resolve_aerodrome_dex_variant(
+            pair,
+            raw_dex_id=raw_dex,
+            normalized_default=dex_id,
+        )
+        if aero_resolve_reason:
+            dex_id = aero_id
+        dexes = cfg.get("dexes") or {}
+        verdict = validate_dex_package(dex_id, cfg)
+        if verdict.get("package_complete"):
+            support_status = "supported"
+        elif dex_id in dexes:
+            support_status = "unsupported"
+        else:
+            support_status = "unknown_alias"
         if not dex_id:
             return None
     else:
         dex_id = normalize_dex_id("dexscreener", raw_dex)
         normalized_dex_id = dex_id or ""
         uniswap_resolve_reason = None
+        aero_resolve_reason = None
         if not dex_id:
             return None
     pool_addr = str(pair.get("pairAddress") or "").lower()
@@ -285,6 +297,7 @@ def _pair_to_hint(
             "raw_dex_id": raw_dex,
             "normalized_dex_id": normalized_dex_id,
             "uniswap_resolve_reason": uniswap_resolve_reason,
+            "aerodrome_resolve_reason": aero_resolve_reason,
         },
         focus_token=focus_token,
     )

@@ -9,6 +9,7 @@ from scripts.m9_production_refresh_gates import (
     gate_fresh_delta_subset,
     gate_m83_acceptance,
     gate_negative_cache_stats,
+    gate_selection_verified_fresh,
 )
 
 
@@ -114,3 +115,27 @@ def test_gate_negative_cache_stats(tmp_path: Path):
         encoding="utf-8",
     )
     assert gate_negative_cache_stats(path) == 0
+
+
+def test_gate_selection_verified_fresh_blocks_when_zero(tmp_path: Path):
+    path = tmp_path / "recall.json"
+    path.write_text(
+        json.dumps(
+            {
+                "selection_verified_fresh_total": 0,
+                "recall_verified_pool_exists_total": 2,
+                "recall_run_id": "2026-06-30T08:11:43Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert gate_selection_verified_fresh(path) == 2
+
+
+def test_gate_selection_verified_fresh_passes_when_positive(tmp_path: Path):
+    path = tmp_path / "recall.json"
+    path.write_text(
+        json.dumps({"selection_verified_fresh_total": 1, "recall_run_id": "run-1"}),
+        encoding="utf-8",
+    )
+    assert gate_selection_verified_fresh(path) == 0
