@@ -1,17 +1,18 @@
 ---
-description: Keep Cursor as a bounded executor, not the planner or reviewer.
+description: Legacy Cursor scope; OpenCode is the active bounded executor.
 globs: ["**/*"]
 alwaysApply: true
 ---
 
 # Executor Scope
 
-- Cursor is the code executor. Planning and final review happen in GPT/team-lead chat.
-- Work only from explicit user/GPT instructions.
+- Cursor is legacy compatibility only. OpenCode is the active code executor.
+- Planning and final review happen in Codex/team-lead chat.
+- Work only from explicit user/Codex instructions.
 - Each task must name 3 to 7 target files before edits begin.
 - If more files seem necessary, stop and ask for a narrowed or approved scope.
 - Prefer the smallest backward-compatible patch that satisfies the stated contract.
 - Do not perform broad refactors, architectural redesign, or opportunistic cleanup.
 - Do not run commits, pushes, destructive git commands, or runtime cleanup unless
   the user explicitly asks.
-- After 15 to 20 Cursor messages on the same task, start a fresh Cursor chat with the current target files and latest GPT instructions.
+- After a long exchange on the same task, compact the handoff to the current target files and latest Codex instructions.

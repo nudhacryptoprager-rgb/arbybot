@@ -1,22 +1,25 @@
 ---
-description: ARBY3 source-of-truth order for Cursor executor work.
+description: Legacy Cursor compatibility; active executor contract is OPENCODE.md.
 globs: ["**/*"]
 alwaysApply: true
 ---
 
-# Source Of Truth
+# Legacy Cursor Compatibility
 
-- Follow this order when context conflicts:
+- Cursor is no longer the active ARBY3 executor.
+- If Cursor opens this repo accidentally, follow `OPENCODE.md` for executor
+  boundaries and keep work read-only unless the user explicitly asks for Cursor.
+- Follow this source-of-truth order when context conflicts:
   1. `Roadmap.md`
   2. Active milestone files under `docs/status/`
-  3. Runtime artifact paths supplied by the user or GPT reviewer
-- `CURSOR.md` and `.cursor/rules/*.mdc` define Cursor executor behavior.
-- `AGENTS.md` defines the Codex / GPT reviewer role. If Cursor loads it, use its
+  3. Runtime artifact paths supplied by the user or Codex reviewer
+- `OPENCODE.md` defines active executor behavior.
+- `AGENTS.md` defines the Codex reviewer role. If Cursor loads it, use its
   safety and artifact constraints only; do not adopt its reviewer persona or
   final-response format.
 - Do not make milestone, profit, PASS, REACHED, or production-ready claims from code alone.
 - Runtime evidence is identified by `run_timestamp`, not git SHA.
-- Stage-specific context must come from the active Status files, current GPT
+- Stage-specific context must come from the active Status files, current Codex
   brief, or `docs/agent_context/ARBY3_CURRENT_CONTEXT.md` when explicitly used.
 - Real execution stays disabled unless the user explicitly gives a separate
   unlock instruction.

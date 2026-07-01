@@ -1,4 +1,4 @@
-# ARBY3 Workflow (GPT / Codex <-> Cursor <-> GitHub)
+# ARBY3 Workflow (Codex <-> OpenCode <-> Auditors <-> GitHub)
 
 > **Provenance**: SHA tracking removed. Evidence based on `run_timestamp` + rolling artifacts.
 > See `docs/DEV_REPORT_CANONICAL_UA.md` for canonical report format.
@@ -6,12 +6,16 @@
 
 ## Agent Workflow
 
-- GPT / Codex is the team-lead reviewer: planning, critique, acceptance, and
+- Codex is the team-lead reviewer: planning, critique, acceptance, and
   exact next-step instructions.
-- Cursor is the developer-agent executor: small patches only, bounded by
-  `CURSOR.md` and `.cursor/rules/*.mdc`.
+- OpenCode is the developer-agent executor: small patches only, bounded by
+  `OPENCODE.md` and `opencode.json`.
+- Opus/Fable are independent auditors: read-only review, issue discovery, and
+  second-opinion risk calls only. Their rules live in
+  `docs/agent_context/AUDITOR_CONTRACT.md`.
 - GitHub remains the collaboration and CI surface.
-- Legacy GitHub Copilot / Claude helper files are not the active executor path.
+- Legacy Cursor, GitHub Copilot, and Claude helper files are not the active
+  executor path.
 
 ## Нові режими та діагностика
 - Для збору simulation_error_histogram (діагностичний прогін simulation для всіх кандидатів) використовуйте прапорець --sim-anyway (або ARBY_SIM_BYPASS_GUARD=1).

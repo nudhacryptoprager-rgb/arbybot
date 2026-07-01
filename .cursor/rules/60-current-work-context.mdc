@@ -1,6 +1,6 @@
 ---
-description: Stage-neutral current-context handoff rule for Cursor executor tasks.
-globs: ["docs/agent_context/**", "docs/status/**", "Roadmap.md", "CURSOR.md"]
+description: Stage-neutral current-context handoff rule for executor tasks.
+globs: ["docs/agent_context/**", "docs/status/**", "Roadmap.md", "OPENCODE.md"]
 alwaysApply: false
 ---
 
@@ -10,6 +10,6 @@ alwaysApply: false
   when the task needs current milestone orientation or the user/GPT references it.
 - Treat that file as a mutable handoff, not evidence and not source of truth.
 - If the active milestone changes, refresh the context file before using it for
-  Cursor work.
+  OpenCode work.
 - Do not claim real profit, milestone PASS, or production readiness from context
   files. Evidence must come from fresh artifacts supplied by the user or GPT.

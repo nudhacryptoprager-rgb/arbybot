@@ -6,18 +6,21 @@ files, or rolling artifacts.
 
 ## Operating Model
 
-- GPT/team lead owns planning, review, priority, and acceptance decisions.
-- Cursor is an executor for small, explicit patch tasks.
-- Each Cursor task should name 3 to 7 files and one measurable goal.
-- After 15 to 20 Cursor messages on one task, start a fresh Cursor chat.
-- Use cheaper/default models for simple patches. Reserve premium models for hard
-  debugging only after user approval.
+- Codex/team lead owns planning, review, priority, and acceptance decisions.
+- OpenCode is the active executor for small, explicit patch tasks.
+- Each OpenCode task should name 3 to 7 files and one measurable goal.
+- After a long exchange on one task, compact the handoff to the latest brief,
+  current context, target files, and failing command.
+- Use the configured OpenCode default model for simple patches. Reserve premium
+  models for hard debugging only after user approval.
+- Opus/Fable auditors are read-only reviewers; they do not execute patches or
+  close milestones.
 
 ## Source Of Truth
 
 1. `Roadmap.md`
 2. Active milestone status files under `docs/status/`
-3. Runtime artifacts supplied by the user or GPT reviewer
+3. Runtime artifacts supplied by the user or Codex reviewer
 
 Runtime provenance is based on `run_timestamp`, not git SHA. Git branch and
 commit are only for reproducibility.
@@ -25,13 +28,13 @@ commit are only for reproducibility.
 ## Current Work Reading
 
 - This section must be refreshed whenever the active development focus changes.
-- The current task brief from GPT/user is the immediate executor scope.
+- The current task brief from Codex/user is the immediate executor scope.
 - Active milestone details must be read from `docs/status/INDEX.md` and the
   relevant `docs/status/Status_*.md`.
 - Execution remains disabled unless the user gives an explicit separate unlock
   instruction after evidence review.
 
-## Cursor Boundaries
+## OpenCode Boundaries
 
 - Do not read or edit secrets, `.env`, runtime artifacts, logs, or virtual envs.
 - Do not manually edit rolling artifacts.
@@ -45,7 +48,7 @@ commit are only for reproducibility.
 - Then run the broader requested gate.
 - Use `py -3.11` on Windows.
 - Stop after two failed fix attempts for the same test or gate and report the
-  blocker back to GPT/team lead.
+  blocker back to Codex/team lead.
 
 ## Default Verification Commands
 
@@ -55,5 +58,5 @@ py -3.11 -m pytest tests/unit -q
 py -3.11 scripts/ci_full_pipeline.py --mode ci
 ```
 
-Run online commands only when GPT/user explicitly requests them and any required
+Run online commands only when Codex/user explicitly requests them and any required
 RPC preflight is satisfied.

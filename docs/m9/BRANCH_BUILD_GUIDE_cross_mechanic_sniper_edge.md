@@ -5,7 +5,7 @@
 > Source of truth лишається `Roadmap.md` → `docs/status/Status_M9.md` →
 > `docs/m9/M9_GRAPH_LONG_TAIL_SHADOW.md`. Цей файл — executor brief для гілки.
 >
-> Канонічний план-артефакт сесії:
+> Історичний legacy Cursor план-артефакт сесії:
 > `.cursor/plans/cross-mechanic_sniper_edge_35865297.plan.md` (НЕ редагувати).
 
 ## 0) Стратегічна теза (підтверджена користувачем)

@@ -29,7 +29,7 @@ Counters returned for rollup:
 
 The lane is purely additive: if the env gate is unset (default) the public
 contract of `run_execution_gate` is untouched and no synthetic candidates
-are queued. This honors `CURSOR.md` "public API must not shrink".
+are queued. This honors `OPENCODE.md` "public API must not shrink".
 """
 from __future__ import annotations
 
