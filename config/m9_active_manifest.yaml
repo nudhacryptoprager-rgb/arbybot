@@ -29,6 +29,12 @@ active_configs:
     role: GLOBAL_FEES
   - path: config/strategy.yaml
     role: GLOBAL_STRATEGY_DEFAULTS
+  - path: config/hardcode_audit_allowlist.yaml
+    role: HARDCODE_AUDIT_ALLOWLIST
+  - path: config/m8_2_candidate_dex_registry.yaml
+    role: M8_2_CANDIDATE_DEX_REGISTRY
+  - path: config/m9_token_baselines.yaml
+    role: M9_TOKEN_BASELINES
 
 adapter_metadata_policy:
   production_include_config_seed: false

@@ -184,6 +184,15 @@ class TestProbePoolDepthV4:
 class TestProbeRouteMarginalDepthV4:
     """V4 adapter should now be quoted via marginal depth probe, not skipped."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_depth_cache(self):
+        # probe_route_marginal_depth memoises by (chain, dex_id, pool, tokens,
+        # block). The happy-path test below and the missing-tick_spacing test
+        # share _ROUTE, so a cache hit would mask the failure path.
+        probe._DEPTH_PROBE_CACHE = None
+        yield
+        probe._DEPTH_PROBE_CACHE = None
+
     _ROUTE = {
         "adapter_type": "uniswap_v4",
         "fee": _FEE,

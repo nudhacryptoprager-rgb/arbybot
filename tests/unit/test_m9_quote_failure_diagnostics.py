@@ -195,7 +195,11 @@ def test_route_error_histogram_trim_keeps_top_offenders():
 
 
 def test_raw_http_empty_eth_call_classified_as_revert_not_rpc():
-    """Empty 0x eth_call is adapter/pool miss, not transport RPC failure."""
+    """Empty 0x eth_call is adapter/pool miss, not transport RPC failure.
+
+    For maverick_v2 an empty/short eth_call result is classified as
+    MAVERICK_NO_LIQUIDITY (a hard structural reject), not QUOTE_RPC_ERROR.
+    """
     from unittest.mock import patch
 
     from m8_1.stable_anchor.pairs import TokenInfo
@@ -236,17 +240,22 @@ def test_raw_http_empty_eth_call_classified_as_revert_not_rpc():
             10**15,
         )
 
-    assert result.reject_reason == "QUOTE_REVERT"
+    assert result.reject_reason == "MAVERICK_NO_LIQUIDITY"
     assert result.ok is False
 
 
 def test_quoter_negative_overflow_is_oversized_not_phantom():
-    """P0a: a catastrophic *negative* gross is OVERSIZED_VS_DEPTH, not a phantom.
+    """P0a: a catastrophic *negative* gross is not a phantom.
 
     A real quote whose notional overwhelms the bottleneck pool depth produces a
     deeply negative gross (~-99%).  That is a sizing artifact, not an impossible
     positive arb (phantom) and not an RPC failure, so it must NOT be reported as
     PHANTOM_QUOTE_BPS_OVERFLOW / QUOTE_FAILED.
+
+    When the cycle has no measured depth but every leg returned a real on-chain
+    price, the quoter classifies this as NEGATIVE_GROSS (quoteable liveness)
+    rather than OVERSIZED_VS_DEPTH, so the real spread is preserved in
+    raw_gross_bps and the cycle is excluded from phantom aggregation.
     """
     from unittest.mock import MagicMock, patch
 
@@ -272,8 +281,10 @@ def test_quoter_negative_overflow_is_oversized_not_phantom():
             quote_backend="raw_http", rpc_url="http://x",
         )
 
-    assert result.status == "OVERSIZED_VS_DEPTH"
-    assert result.reject_reason == "OVERSIZED_VS_DEPTH"
+    # Unknown depth + all legs ok → NEGATIVE_GROSS (quoteable liveness),
+    # NOT OVERSIZED_VS_DEPTH and NOT QUOTE_FAILED/phantom.
+    assert result.status == "NEGATIVE_GROSS"
+    assert result.reject_reason is None
     assert result.raw_gross_bps is not None
     assert result.raw_gross_bps < -500.0
     assert result.phantom_ceiling_bps == 500.0

@@ -110,7 +110,7 @@ def test_token_neighborhood_admits_3leg_subgraph():
     assert len(art["connector_routes"]) >= 1
     assert "AERO" in art["connector_tokens"]
     kinds = {r.get("expansion_route_kind") for r in art["routes_admitted"]}
-    assert "connector_hop" in kinds
+    assert "connector_graph" in kinds
     assert "TOKEN_NOT_SEEN_ELSEWHERE" not in art.get("reject_reason_histogram", {})
 
 

@@ -1215,6 +1215,9 @@ def expand_token_neighborhood(
             "token_presence_routes": [],
             "connector_routes": [],
             "connector_tokens": [],
+            "routes_admitted": [],
+            "token_seen_on_dexes": 0,
+            "cross_mechanic": False,
             "reject_reason_histogram": {TOKEN_ADDRESS_UNRESOLVED: 1},
             "all_reject_rows": [
                 {"reason": TOKEN_ADDRESS_UNRESOLVED, "token": exotic_address}

@@ -257,8 +257,8 @@ class TestProbeQuoteRawHttp:
                         route, token_in, token_out, 1_000_000,
                     )
                     assert result.ok is False
-                    # balancer_stable with no pool_id → config missing error
-                    assert result.reject_reason == "QUOTE_CONFIG_MISSING__BALANCER_POOL_ID"
+                    # balancer_stable with no pool_id → metadata incomplete
+                    assert result.reject_reason == "BALANCER_METADATA_INCOMPLETE"
 
     def test_unsupported_adapter_does_not_trigger_provider_throttle(self):
         """NotImplementedError (unsupported adapter) must NOT record failure in provider_throttle.

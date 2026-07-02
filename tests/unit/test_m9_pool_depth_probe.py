@@ -1,6 +1,8 @@
 """Unit tests for M9 pool depth probe pricing helpers."""
 from __future__ import annotations
 
+import pytest
+
 from m9.graph_arb import pool_depth_probe as probe
 
 
@@ -233,6 +235,18 @@ class TestAnchorLeg:
 class TestProbeRouteMarginalDepth:
     _USDC = "0x" + "00" * 19 + "11"
     _MEME = "0x" + "00" * 19 + "22"
+
+    @pytest.fixture(autouse=True)
+    def _clear_depth_cache(self):
+        # probe_route_marginal_depth memoises results in a module-level cache
+        # keyed by (chain, dex_id, pool_address, token_in, token_out, block).
+        # Several tests below reuse the same _v3_route() so cache hits would
+        # leak a previous test's outcome (e.g. linear stub result masking the
+        # sublinear stub, or a successful v3 result masking the v4/no-quoter
+        # error path). Reset the cache before each test for isolation.
+        probe._DEPTH_PROBE_CACHE = None
+        yield
+        probe._DEPTH_PROBE_CACHE = None
 
     def _v3_route(self):
         return {

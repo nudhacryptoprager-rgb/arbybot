@@ -215,7 +215,7 @@ def test_probe_leg_raw_http_uses_rpc_url_not_w3():
 
     captured: list = []
 
-    def _fake_raw_http(url, route, token_in, token_out, amount_in):
+    def _fake_raw_http(url, route, token_in, token_out, amount_in, **kwargs):
         captured.append(url)
         # Return a minimal failed QuoteResult so _probe_leg completes
         from m8_1.stable_anchor.quote_probe import QuoteResult
@@ -276,7 +276,7 @@ def test_probe_leg_raw_http_initial_url_not_leaked():
     failover_url = "https://base.llamarpc.com"
     captured: list = []
 
-    def _fake_raw_http(url, route, token_in, token_out, amount_in):
+    def _fake_raw_http(url, route, token_in, token_out, amount_in, **kwargs):
         captured.append(url)
         from m8_1.stable_anchor.quote_probe import QuoteResult
         return QuoteResult(

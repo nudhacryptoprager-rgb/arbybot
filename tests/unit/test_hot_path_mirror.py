@@ -66,9 +66,12 @@ def test_exotic_address_filter_limits_pairs():
 
 
 def test_resolve_mirrors_returns_latency():
+    # Use a valid 40-hex-char address; expand_token_neighborhood rejects
+    # short addresses via is_valid_eth_address (len == 42).
+    _exotic = "0x" + "0a" * 20
     registry = {
         "tokens": {
-            "0xabc": {
+            _exotic: {
                 "symbol": "FOO",
                 "anchors": ["USDC"],
                 "venues": {
@@ -77,7 +80,7 @@ def test_resolve_mirrors_returns_latency():
                         "pool": "0xpool1",
                         "token0_symbol": "FOO",
                         "token1_symbol": "USDC",
-                        "token0": "0xabc",
+                        "token0": _exotic,
                         "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
                     },
                     "a::0xpool2": {
@@ -85,7 +88,7 @@ def test_resolve_mirrors_returns_latency():
                         "pool": "0xpool2",
                         "token0_symbol": "FOO",
                         "token1_symbol": "USDC",
-                        "token0": "0xabc",
+                        "token0": _exotic,
                         "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
                     },
                 },
@@ -96,7 +99,7 @@ def test_resolve_mirrors_returns_latency():
         chain="base",
         config=_cfg(),
         registry=registry,
-        exotic_address="0xabc",
+        exotic_address=_exotic,
         exotic_symbol="FOO",
         anchor_symbol="USDC",
         dry_run=True,

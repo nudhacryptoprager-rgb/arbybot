@@ -260,7 +260,9 @@ class TestBalancerMissingPoolId:
             amount_in=1_000_000,
         )
         assert not result.ok
-        assert result.reject_reason == "QUOTE_CONFIG_MISSING__BALANCER_POOL_ID"
+        # Missing pool_id/assets unified under BALANCER_METADATA_INCOMPLETE
+        # (covers both missing pool_id and missing assets; hard reject).
+        assert result.reject_reason == "BALANCER_METADATA_INCOMPLETE"
 
     def test_quote_probe_returns_error_for_missing_pool_id(self):
         """quote_probe (web3 path) swallows ValueError → returns ok=False with error detail."""

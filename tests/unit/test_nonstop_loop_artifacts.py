@@ -106,6 +106,18 @@ class TestNonstopLoopArtifacts(unittest.TestCase):
             # M9: factory-enumerated Curve pool discovery (rolling, overwritten)
             "m9_curve_discovery_latest.json",
             "m9_curve_pool_indices_latest.json",
+            # M8.2: cross-dex expansion rolling artifact (M8→M9 pipeline input)
+            "m8_cross_dex_expansion_latest.json",
+            # M8.2: external pool hints + candidate DEX registries (rolling)
+            "m8_external_pool_hints_latest.json",
+            "m8_radar_pool_candidates_latest.json",
+            # M8.2: per-DEX pool indices (rolling, overwritten)
+            "m8_balancer_pool_index_latest.json",
+            "m8_maverick_pool_index_latest.json",
+            # M8.3: token metadata registry (rolling, overwritten)
+            "m8_3_token_metadata_registry_latest.json",
+            # M9: quote route diagnostic (rolling, overwritten)
+            "m9_quote_route_diagnostic_latest.json",
             # M9: Arbitrum One graph-arb shadow scanner rolling artifact
             "m9_arb_latest.json",
         }

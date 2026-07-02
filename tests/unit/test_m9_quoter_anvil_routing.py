@@ -59,7 +59,7 @@ class TestAnvilForkRouting:
 
         captured_urls = []
 
-        def mock_probe(rpc_url, route, token_in, token_out, amount_in):
+        def mock_probe(rpc_url, route, token_in, token_out, amount_in, **kwargs):
             captured_urls.append(rpc_url)
             r = MagicMock()
             r.ok = True
@@ -90,7 +90,7 @@ class TestAnvilForkRouting:
 
         captured_urls = []
 
-        def mock_probe(rpc_url, route, token_in, token_out, amount_in):
+        def mock_probe(rpc_url, route, token_in, token_out, amount_in, **kwargs):
             captured_urls.append(rpc_url)
             r = MagicMock()
             r.ok = True
@@ -118,7 +118,7 @@ class TestAnvilForkRouting:
 
         captured_urls = []
 
-        def mock_probe(rpc_url, route, token_in, token_out, amount_in):
+        def mock_probe(rpc_url, route, token_in, token_out, amount_in, **kwargs):
             captured_urls.append(rpc_url)
             r = MagicMock()
             r.ok = True
@@ -174,7 +174,7 @@ class TestRawHttpRouting:
 
         captured_urls = []
 
-        def mock_probe(rpc_url, route, token_in, token_out, amount_in):
+        def mock_probe(rpc_url, route, token_in, token_out, amount_in, **kwargs):
             captured_urls.append(rpc_url)
             r = MagicMock()
             r.ok = True
