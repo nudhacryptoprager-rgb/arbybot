@@ -263,3 +263,38 @@ def test_graph_hints_import():
 
     with patch("m8.discovery.graph_hints.query_pools_by_token", return_value=[]):
         assert fetch_token_hints("0xabc") == []
+
+
+def test_v4_slot0_empty_falls_back_to_v3_factory_in_specialized():
+    """When V4 StateView slot0 is empty, verify_hint_specialized tries V3 factory.
+
+    DexScreener may label V3 pools as V4 based on labels. The V4 poolId won't
+    match StateView, but the pool is a real V3 pool found via factory.getPool.
+    """
+    from m8.discovery.hint_verifier import verify_hint_specialized
+
+    pool_id = "0x" + "ff" * 32
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v4",
+        pool_address=pool_id,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        raw={"pair": {"feeTier": 3000}},
+    )
+
+    with patch(
+        "m8.discovery.hint_verifier.verify_v4_pool_id",
+        return_value=(False, "V4_SLOT0_EMPTY"),
+    ), patch(
+        "m8.discovery.hint_verifier.verify_factory_pool",
+        return_value=(True, "factory_getPool"),
+    ) as mock_factory, patch.dict(
+        "os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False
+    ):
+        out, reason = verify_hint_specialized(hint, chain="base")
+        assert reason == "OK"
+        assert out.dex_id == "uniswap_v3"
+        assert out.verify_method == "factory_getPool"
+        mock_factory.assert_called_once()

@@ -313,6 +313,21 @@ def verify_hint_specialized(
             h.pool_manager = h.pool_manager or _V4_POOL_MANAGER_BASE
             h.verify_method = method
             return h, "OK"
+        if h.token0_addr and h.token1_addr:
+            v3 = PoolHint.from_dict(h.to_dict())
+            v3.dex_id = "uniswap_v3"
+            pair = (h.raw or {}).get("pair") if isinstance((h.raw or {}).get("pair"), dict) else {}
+            fee_raw = pair.get("feeTier") or pair.get("fee")
+            if fee_raw is not None:
+                try:
+                    v3.fee = int(fee_raw)
+                except (TypeError, ValueError):
+                    pass
+            f_ok, f_method = verify_factory_pool(v3, chain=chain, rpc_url=rpc_url)
+            if f_ok:
+                h.dex_id = "uniswap_v3"
+                h.verify_method = f_method
+                return h, "OK"
         return h, method
 
     if dex in ("balancer_vault", "balancer_stable"):

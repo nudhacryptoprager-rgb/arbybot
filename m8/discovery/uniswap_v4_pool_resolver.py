@@ -64,13 +64,19 @@ def resolve_v4_pool_existence(
         )
         if ok_full:
             return True, V4_POOLID_EXISTS, method_full
-        if h.token0_addr and h.token1_addr and str(h.dex_id or "").startswith("uniswap"):
+        if h.token0_addr and h.token1_addr:
             v3 = PoolHint.from_dict(h.to_dict())
             v3.dex_id = "uniswap_v3"
-            if len(str(v3.pool_address or "")) == 42:
-                f_ok, f_method = verify_factory_pool(v3, chain=chain)
-                if f_ok:
-                    return True, V4_MISLABEL_V3_POOL, f_method
+            pair = _pair_from_hint(h)
+            fee_raw = pair.get("feeTier") or pair.get("fee")
+            if fee_raw is not None:
+                try:
+                    v3.fee = int(fee_raw)
+                except (TypeError, ValueError):
+                    pass
+            f_ok, f_method = verify_factory_pool(v3, chain=chain)
+            if f_ok:
+                return True, V4_MISLABEL_V3_POOL, f_method
         return False, V4_POOLID_NOT_RESOLVED, method
 
     addr = str(h.pool_address or "").lower()
