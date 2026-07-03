@@ -125,8 +125,10 @@ def _resolve_block_timestamps(
     if os.environ.get("ARBY_SKIP_RPC") == "1":
         return {}
 
+    from core.env import load_root_dotenv
     from core.rpc_urls import get_rpc_url
 
+    load_root_dotenv()
     rpc_url = get_rpc_url(chain)
     if not rpc_url:
         return {}
