@@ -1,65 +1,66 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-07-03T10:38:37Z
+timestamp_utc: 2026-07-03T11:42:22Z
 goal_status: BLOCKED
-blocker_status_after: SELECTION_VERIFIED_FRESH_ZERO / FACTORY_MEMBERSHIP_FAIL
+blocker_status_after: STALE_BUT_POOL_EXISTS / created_at=None
 docs_reread_confirmed: true
-run_id: mirror-recall-fast-v4-fallback-2026-07-03
-mode: start.py -mirror_recall_fast --force-rerun-steps
+run_id: factory-token-enrichment-2026-07-03
+mode: scripts/m8_onchain_factory_mirror_scan.py + scripts/m8_mirror_discovery_recall.py
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Fresh runtime validation of V4 poolId resolver V3 fallback patch (commit 692b470); selection_verified_fresh_total > 0 or fresh BLOCKED RCA.
+session_goal: Fix FACTORY_MISSING_TOKENS (50 hints without token0/token1) by preserving token addresses in scan artifact serialization + load_factory_recall_hints.
 goal_status: BLOCKED
-primary_blocker_of_session: selection_verified_fresh_total=0 (FACTORY_MEMBERSHIP_FAIL + stale-only)
-blocker_status_before: V4_POOLID_NOT_RESOLVED (24 hints, 2026-06-30 RCA)
-blocker_status_after: FACTORY_MEMBERSHIP_FAIL (54 hints) + V4_POOLID_NOT_RESOLVED (20 hints) + stale-only (5 pool_exists_stale)
+primary_blocker_of_session: selection_verified_fresh_total=0 (STALE_BUT_POOL_EXISTS — all 43 pool_exists hints have created_at=None)
+blocker_status_before: FACTORY_MEMBERSHIP_FAIL (50 FACTORY_MISSING_TOKENS, 2026-07-03 cycle 4)
+blocker_status_after: STALE_BUT_POOL_EXISTS (43 pools exist but created_at=None → stale by policy)
 close_allowed: true
-remaining_blockers: factory membership fail for onchain_factory hints; stale-only pool_exists; V4 slot0 empty for true V4 pools
-evidence_artifacts: data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json, data/tmp/m8_2_acceptance_report_latest.json, data/tmp/m8_3_acceptance_report_latest.json
+remaining_blockers: created_at=None for factory-sourced hints; 14 FACTORY_NO_POOL; 22 V4_POOLID_NOT_RESOLVED
+evidence_artifacts: data/tmp/m8_onchain_factory_scan_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
 docs_reread_confirmed: true
 
-## Fresh RCA (2026-07-03T10:38:37Z)
+## Fresh RCA (2026-07-03T11:42:22Z)
 
-| Metric | Before (2026-06-30) | After (2026-07-03) | Delta |
-|--------|--------------------|--------------------|-------|
-| recall_verified_pool_exists_total | 2 | 5 | +3 |
-| pool_exists_stale_total | 2 | 5 | +3 |
+| Metric | Cycle 4 (before) | Cycle 5 (after) | Delta |
+|--------|-----------------|-----------------|-------|
+| recall_verified_pool_exists_total | 5 | **43** | +38 |
+| pool_exists_stale_total | 5 | **43** | +38 |
 | selection_verified_fresh_total | 0 | 0 | 0 |
-| V4_SLOT0_EMPTY | 24 | 20 | -4 |
-| V4_MISLABEL_V3_POOL | 0 | 3 | +3 (new bucket) |
-| FACTORY_MISSING_TOKENS | 50 | 50 | 0 |
-| FACTORY_NO_POOL | 4 | 4 | 0 |
-| HINT_STALE | 2 | 5 | +3 |
-| primary_blocker_recall | V4_POOLID_NOT_RESOLVED | FACTORY_MEMBERSHIP_FAIL | shifted |
+| FACTORY_MISSING_TOKENS | 50 | **0** | **-50 (ELIMINATED)** |
+| FACTORY_NO_POOL | 4 | 14 | +10 |
+| HINT_STALE | 5 | **43** | +38 |
+| V4_SLOT0_EMPTY | 20 | 22 | +2 |
+| V4_MISLABEL_V3_POOL | 3 | 2 | -1 |
+| primary_blocker | FACTORY_MEMBERSHIP_FAIL | **STALE_BUT_POOL_EXISTS** | shifted |
+| RCA samples with token0 | 0/25 | **25/25** | +25 |
 
-## V3 fallback impact
+## Code fix impact
 
-Code fix (commit `692b470`) resolved 3 V4-mislabeled hints as `V4_MISLABEL_V3_POOL` via V3 factory lookup. These pools exist on-chain but are stale (>48h), so they count as `pool_exists_stale` not `selection_verified_fresh`.
+Commit `7c2b236` preserved token0_addr/token1_addr/fee/factory_address/created_at in:
+1. Scan artifact serialization (`onchain_factory_mirror_discovery.py:920-935`)
+2. `load_factory_recall_hints()` reads them back (`token_pool_universe.py:182-207`)
+3. `mirror_row_from_hint()` includes them in RCA samples (`mirror_discovery_recall.py:108-136`)
 
-V4_POOLID_NOT_RESOLVED decreased from 24 to 20 — the remaining 20 are likely true V4 pools (StateView slot0 genuinely empty) or non-existent pools.
+**FACTORY_MISSING_TOKENS eliminated**: 50 → 0. Factory verification now has token pairs to call `factory.getPool(token0, token1, fee)`. 43 pools verified as existing on-chain (up from 5).
 
-## Primary blocker analysis
+## Remaining blocker: staleness
 
-`selection_verified_fresh_total=0` persists because:
+All 43 pool_exists hints have `created_at=None` → `hint_is_stale_for_recall=True` → `selection_verified_fresh=False`.
 
-1. **FACTORY_MEMBERSHIP_FAIL (54 hints)**: factory.getPool() cannot find these pools. 50 have no token addresses (`FACTORY_MISSING_TOKENS`), 4 have tokens but factory returns no pool (`FACTORY_NO_POOL`). These are onchain_factory-sourced hints without populated token0/token1.
-2. **V4_POOLID_NOT_RESOLVED (20 hints)**: V4 StateView slot0 empty. V3 fallback attempted but factory also fails. Likely true V4 pools with uninitialized state or non-existent pools.
-3. **Stale-only (5 pool_exists_stale)**: Pools exist on-chain but created >48h ago. Not selection-fresh by policy.
+Root cause: `_pool_hint_from_factory_scan()` does not set `created_at`. Factory scan finds pools via `factory.getPool()` which doesn't return creation time. DexScreener hints have `created_at` from `pairCreatedAt`, but some return null.
 
-No fresh (<48h) DexScreener hints with valid pool existence were found in this run.
+**Next code task**: populate `created_at` for factory-sourced hints from `first_seen_block` timestamp (requires RPC `eth_getBlockByNumber`). Token watchlist has `first_seen_block` for each token — converting to block timestamp would give us pool creation time proxy.
 
-## M8.2/M8.3 acceptance
+## Other RCA buckets
 
-| Gate | Status | Key metrics |
-|------|--------|-------------|
-| M8.2 | BLOCKED | mirror_quote_ready_tokens=13, handoff_ready=implied, blockers: EXTERNAL_HINTS_STALE, HINTS_STALE, SUBGRAPH_READY_LOW |
-| M8.3 | REACHED | token_task_funnel: 109/109 completed, pool_identity_cycle_rate=1.0 |
+- **FACTORY_NO_POOL (14)**: factory.getPool() returns no pool for these token pairs. Pools may not exist or may be on unsupported factories.
+- **V4_POOLID_NOT_RESOLVED (22)**: V4 StateView slot0 empty. V3 fallback attempted but factory also fails. True V4 pools or non-existent.
+- **V4_MISLABEL_V3_POOL (2)**: V4-labeled hints resolved as V3 pools via factory lookup. All stale.
 
 ## Next
 
 - Do not run M9 shadow until `selection_verified_fresh_total > 0` and `cycles_at_floor > 0`.
-- Next code task: populate `token0/token1` for onchain_factory hints (54 hints blocked by FACTORY_MISSING_TOKENS/FACTORY_NO_POOL).
-- Re-run `-mirror_recall_fast` after token population fix.
-- Stale-only pools (5) require fresh market activity (new pair creation <48h) — not a code fix.
+- Next code task: populate `created_at` for factory-sourced hints from `first_seen_block` block timestamp.
+- Re-run `m8_onchain_factory_mirror_scan.py` + `m8_mirror_discovery_recall.py` after created_at fix.
+- If `created_at` is set to actual creation time, some pools may become fresh (<48h) → `selection_verified_fresh_total > 0`.
