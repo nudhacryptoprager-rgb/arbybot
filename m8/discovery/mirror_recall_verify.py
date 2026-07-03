@@ -209,6 +209,34 @@ def _stale_verify_factory_membership(
             pool_exists_stale=True,
         ), STALE_BUT_POOL_EXISTS
 
+    if method == "FACTORY_NO_POOL" and str(h.dex_id or "") == "aerodrome":
+        from m8.discovery.hint_verifier import _try_aerodrome_slipstream_fallback
+
+        slip_ok, slip_factory, slip_fee = _try_aerodrome_slipstream_fallback(
+            h, chain=chain
+        )
+        if slip_ok:
+            h.dex_id = "aerodrome_slipstream"
+            h.fee = slip_fee
+            h.factory_address = slip_factory
+            h.verify_method = VERIFY_FACTORY_GET_POOL
+            h.hint_status = HINT_STALE
+            raw = dict(h.raw or {})
+            raw["aerodrome_variant_fallback"] = "ve33_to_slipstream"
+            h.raw = raw
+            if metrics is not None:
+                record_verification_metrics(
+                    metrics, h, verified=True, reject_reason=STALE_BUT_POOL_EXISTS
+                )
+            return _annotate_recall_fields(
+                h,
+                recall_exists=True,
+                selection_fresh=False,
+                stale_bucket=STALE_BUT_POOL_EXISTS,
+                existence_bucket=STALE_BUT_POOL_EXISTS,
+                pool_exists_stale=True,
+            ), STALE_BUT_POOL_EXISTS
+
     if method == "FACTORY_MISSING_TOKENS":
         bucket = TOKEN_PAIR_MISMATCH
     elif _pool_has_bytecode(h, chain=chain):
