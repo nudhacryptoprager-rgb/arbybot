@@ -366,6 +366,7 @@ def verify_hints_for_recall(
     factory_no_pool_by_factory: Dict[str, int] = {}
     factory_no_pool_samples: List[Dict[str, Any]] = []
     dex_null_age_hist: Dict[str, int] = {}
+    aero_variant_fallback_hist: Dict[str, int] = {}
     reject_rows: List[Dict[str, Any]] = []
 
     for h in hints:
@@ -383,6 +384,10 @@ def verify_hints_for_recall(
         ex_bucket = raw.get("existence_rca_bucket")
         if ex_bucket:
             existence_buckets[str(ex_bucket)] = int(existence_buckets.get(str(ex_bucket), 0)) + 1
+
+        aero_fb = raw.get("aerodrome_variant_fallback")
+        if aero_fb:
+            aero_variant_fallback_hist[str(aero_fb)] = int(aero_variant_fallback_hist.get(str(aero_fb), 0)) + 1
 
         reason_str = str(
             raw.get("verify_reject_reason")
@@ -440,4 +445,5 @@ def verify_hints_for_recall(
     metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
     metrics["factory_no_pool_samples"] = factory_no_pool_samples
     metrics["dex_null_age_histogram"] = dex_null_age_hist
+    metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
     return out, metrics, reject_rows

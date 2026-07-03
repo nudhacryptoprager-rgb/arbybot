@@ -282,6 +282,7 @@ def build_verify_rca(
         "factory_no_pool_by_factory": dict(verify_metrics.get("factory_no_pool_by_factory") or {}),
         "factory_no_pool_samples": list(verify_metrics.get("factory_no_pool_samples") or []),
         "dex_null_age_histogram": dict(verify_metrics.get("dex_null_age_histogram") or {}),
+        "aerodrome_variant_fallback_histogram": dict(verify_metrics.get("aerodrome_variant_fallback_histogram") or {}),
         "verification_metrics": verify_metrics,
         "reject_samples": reject_rows[:25],
     }
@@ -303,6 +304,7 @@ def verify_supported_hints(
     factory_no_pool_by_factory: Dict[str, int] = {}
     factory_no_pool_samples: List[Dict[str, Any]] = []
     dex_null_age_hist: Dict[str, int] = {}
+    aero_variant_fallback_hist: Dict[str, int] = {}
 
     if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
         for h in hints:
@@ -324,6 +326,7 @@ def verify_supported_hints(
         verify_metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
         verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
         verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
+        verify_metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
         rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
         return out, rca, reject_rows
 
@@ -342,6 +345,10 @@ def verify_supported_hints(
                 ex_hist = dict(verify_metrics.get("existence_rca_bucket_histogram") or {})
                 ex_hist[str(ex_bucket)] = int(ex_hist.get(str(ex_bucket), 0)) + 1
                 verify_metrics["existence_rca_bucket_histogram"] = ex_hist
+
+            aero_fb = raw.get("aerodrome_variant_fallback")
+            if aero_fb:
+                aero_variant_fallback_hist[str(aero_fb)] = int(aero_variant_fallback_hist.get(str(aero_fb), 0)) + 1
 
             reason_str = str(
                 raw.get("verify_reject_reason")
@@ -384,6 +391,7 @@ def verify_supported_hints(
     verify_metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
     verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
     verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
+    verify_metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
     rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
     return out, rca, reject_rows
 

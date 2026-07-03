@@ -277,6 +277,43 @@ def verify_factory_pool(
     return False, "FACTORY_NO_POOL"
 
 
+def _try_aerodrome_slipstream_fallback(
+    hint: PoolHint,
+    *,
+    chain: str,
+    rpc_url: Optional[str] = None,
+) -> Tuple[bool, str, Optional[int]]:
+    """When ve33 factory.getPool returns no pool, try Slipstream factory.
+
+    Aerodrome Slipstream uses V3-style getPool(token0, token1, fee) but
+    verify_pool_exists routes it to V2 getPair because "v3" is not in
+    the dex_key. This fallback queries the slipstream factory directly
+    with common fee tiers.
+
+    Returns (found, factory_address, fee_tier) or (False, "", None).
+    """
+    from discovery.index_factories import get_factory_address, query_v3_pool, V3_FEE_TIERS
+
+    url = _rpc_url(chain, rpc_url)
+    if not url:
+        return False, "", None
+
+    slip_factory = get_factory_address(chain, "aerodrome_slipstream")
+    if not slip_factory:
+        return False, "", None
+
+    t0, t1 = hint.token0_addr, hint.token1_addr
+    if not t0 or not t1:
+        return False, "", None
+
+    for fee in V3_FEE_TIERS:
+        pool_addr = query_v3_pool(url, slip_factory, t0, t1, fee)
+        if pool_addr:
+            return True, slip_factory, fee
+
+    return False, "", None
+
+
 def verify_hint_specialized(
     hint: PoolHint,
     *,
@@ -387,6 +424,21 @@ def verify_hint_specialized(
         if ok:
             h.verify_method = method
             return h, "OK"
+
+        if dex == "aerodrome" and method == "FACTORY_NO_POOL":
+            slip_ok, slip_method, slip_fee = _try_aerodrome_slipstream_fallback(
+                h, chain=chain, rpc_url=rpc_url
+            )
+            if slip_ok:
+                h.dex_id = "aerodrome_slipstream"
+                h.fee = slip_fee
+                h.factory_address = slip_method
+                h.verify_method = VERIFY_FACTORY_GET_POOL
+                raw = dict(h.raw or {})
+                raw["aerodrome_variant_fallback"] = "ve33_to_slipstream"
+                h.raw = raw
+                return h, "OK"
+
         if verify_mode == "specialized" and addr.startswith("0x") and len(addr) == 42:
             url = _rpc_url(chain, rpc_url)
             if url and _eth_get_code(url, addr):

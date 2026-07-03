@@ -396,3 +396,103 @@ def test_pair_to_hint_no_factory_when_config_missing():
     assert h is not None
     assert h.factory_address == ""
     assert h.raw.get("factory_address_source") == ""
+
+
+def test_aerodrome_ve33_miss_falls_back_to_slipstream():
+    """When ve33 factory.getPool returns no pool, verifier tries slipstream.
+
+    DexScreener may label Slipstream pools as generic 'aerodrome' without
+    labels. The verifier should try the slipstream factory with V3 fee tiers
+    when the ve33 factory returns no pool.
+    """
+    from m8.discovery.hint_verifier import verify_hint_specialized
+
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="aerodrome",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        factory_address="0x420dd381b31aef6683db6b902084cb0ffece40da",
+        raw={"support_status": "supported", "raw_dex_id": "aerodrome"},
+    )
+
+    with patch(
+        "m8.discovery.hint_verifier.verify_factory_pool",
+        return_value=(False, "FACTORY_NO_POOL"),
+    ), patch(
+        "m8.discovery.hint_verifier._try_aerodrome_slipstream_fallback",
+        return_value=(True, "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a", 3000),
+    ) as mock_slip, patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        out, reason = verify_hint_specialized(hint, chain="base")
+
+    assert reason == "OK"
+    assert out.dex_id == "aerodrome_slipstream"
+    assert out.fee == 3000
+    assert out.factory_address == "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a"
+    assert out.verify_method == "factory_getPool"
+    assert (out.raw or {}).get("aerodrome_variant_fallback") == "ve33_to_slipstream"
+    mock_slip.assert_called_once()
+
+
+def test_aerodrome_ve33_miss_slipstream_also_misses():
+    """When both ve33 and slipstream fail, hint stays as FACTORY_NO_POOL."""
+    from m8.discovery.hint_verifier import verify_hint_specialized
+
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="aerodrome",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        factory_address="0x420dd381b31aef6683db6b902084cb0ffece40da",
+        raw={"support_status": "supported", "raw_dex_id": "aerodrome"},
+    )
+
+    with patch(
+        "m8.discovery.hint_verifier.verify_factory_pool",
+        return_value=(False, "FACTORY_NO_POOL"),
+    ), patch(
+        "m8.discovery.hint_verifier._try_aerodrome_slipstream_fallback",
+        return_value=(False, "", None),
+    ), patch(
+        "m8.discovery.hint_verifier._rpc_url", return_value=None
+    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        out, reason = verify_hint_specialized(hint, chain="base")
+
+    assert reason == "FACTORY_NO_POOL"
+    assert out.dex_id == "aerodrome"
+
+
+def test_aerodrome_slipstream_fallback_not_triggered_for_non_aerodrome():
+    """Fallback only triggers for dex_id='aerodrome', not other DEXes."""
+    from m8.discovery.hint_verifier import verify_hint_specialized
+
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v2",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        factory_address="0x8909dc15e40173ff4699343b6eb8132c65e18ec6",
+        raw={"support_status": "supported", "raw_dex_id": "uniswap_v2"},
+    )
+
+    with patch(
+        "m8.discovery.hint_verifier.verify_factory_pool",
+        return_value=(False, "FACTORY_NO_POOL"),
+    ), patch(
+        "m8.discovery.hint_verifier._try_aerodrome_slipstream_fallback",
+    ) as mock_slip, patch(
+        "m8.discovery.hint_verifier._rpc_url", return_value=None
+    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        out, reason = verify_hint_specialized(hint, chain="base")
+
+    assert reason == "FACTORY_NO_POOL"
+    mock_slip.assert_not_called()
