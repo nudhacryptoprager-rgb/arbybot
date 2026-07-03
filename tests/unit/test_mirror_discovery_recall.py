@@ -130,6 +130,27 @@ def test_mirror_row_from_hint_fields():
     assert row["support_status"] == "supported"
     assert row["source"] == "dexscreener"
     assert row["liquidity_usd"] == 500.0
+    assert row["token0_addr"] == "0x" + "1" * 40
+    assert row["token1_addr"] == "0x" + "2" * 40
+
+
+def test_mirror_row_from_hint_preserves_empty_tokens():
+    """Factory recall hints without enrichment still serialize (empty but present)."""
+    hint = PoolHint(
+        source="onchain_factory",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "d" * 40,
+        token0_addr="",
+        token1_addr="",
+        focus_token="0x" + "1" * 40,
+        raw={"support_status": "supported", "raw_dex_id": "uniswap"},
+    )
+    row = mirror_row_from_hint(hint)
+    assert "token0_addr" in row
+    assert "token1_addr" in row
+    assert row["token0_addr"] == ""
+    assert row["token1_addr"] == ""
 
 
 def test_write_mirror_queue_artifacts_splits_queues(tmp_path, monkeypatch):

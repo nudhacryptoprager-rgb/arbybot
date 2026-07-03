@@ -187,8 +187,11 @@ def load_factory_recall_hints(
                             dex_id=str(row.get("dex_id") or ""),
                             pool_address=str(row.get("pool_address") or "").lower(),
                             focus_token=focus,
-                            token0_addr="",
-                            token1_addr="",
+                            token0_addr=str(row.get("token0_addr") or "").lower(),
+                            token1_addr=str(row.get("token1_addr") or "").lower(),
+                            fee=row.get("fee") if isinstance(row.get("fee"), int) else None,
+                            factory_address=str(row.get("factory_address") or "").lower(),
+                            created_at=row.get("created_at") or None,
                             hint_status=str(row.get("hint_status") or "HINT_FACTORY_VERIFIED"),
                             raw={
                                 "pool_universe_type": FRESH_TOKEN_POOL,

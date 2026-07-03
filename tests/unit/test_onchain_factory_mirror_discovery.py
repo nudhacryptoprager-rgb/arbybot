@@ -382,3 +382,90 @@ def test_build_mirror_yield_funnel_reads_onchain_scan(tmp_path: Path, monkeypatc
     assert payload["onchain_verified"] == 3
     assert payload["first_pool_found"] == 3
     assert payload["second_venue_found"] == 0
+
+
+def test_load_factory_recall_hints_preserves_token_addresses(tmp_path, monkeypatch):
+    """Scan artifact must preserve token0/token1 for factory recall hints.
+
+    Without this, verify_factory_pool returns FACTORY_MISSING_TOKENS because
+    it cannot call factory.getPool(token0, token1, fee).
+    """
+    import json as _json
+
+    from m8.discovery.token_pool_universe import load_factory_recall_hints
+
+    scan = {
+        "chain": "base",
+        "verified_pools": [
+            {
+                "focus_token": "0x" + "1" * 40,
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x" + "a" * 40,
+                "token0_addr": "0x" + "1" * 40,
+                "token1_addr": "0x" + "2" * 40,
+                "fee": 3000,
+                "factory_address": "0x" + "f" * 40,
+                "created_at": "2026-07-01T00:00:00Z",
+                "hint_status": "HINT_FACTORY_VERIFIED",
+                "source": "onchain_factory",
+            }
+        ],
+    }
+    scan_path = tmp_path / "scan.json"
+    scan_path.write_text(_json.dumps(scan), encoding="utf-8")
+
+    hints_path = tmp_path / "hints.json"
+    hints_path.write_text(
+        _json.dumps({"schema_version": "m8_external_pool_hints_v2", "hints": []}),
+        encoding="utf-8",
+    )
+
+    fresh_tokens = {"0x" + "1" * 40}
+    hints = load_factory_recall_hints(
+        fresh_tokens,
+        scan_path=str(scan_path),
+        hints_path=str(hints_path),
+    )
+    assert len(hints) == 1
+    h = hints[0]
+    assert h.token0_addr == "0x" + "1" * 40
+    assert h.token1_addr == "0x" + "2" * 40
+    assert h.fee == 3000
+    assert h.factory_address == "0x" + "f" * 40
+    assert h.created_at == "2026-07-01T00:00:00Z"
+
+
+def test_load_factory_recall_hints_empty_tokens_when_scan_missing_fields(tmp_path):
+    """Backward compat: scan artifact without token fields still loads (empty)."""
+    import json as _json
+
+    from m8.discovery.token_pool_universe import load_factory_recall_hints
+
+    scan = {
+        "chain": "base",
+        "verified_pools": [
+            {
+                "focus_token": "0x" + "1" * 40,
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x" + "a" * 40,
+                "source": "onchain_factory",
+            }
+        ],
+    }
+    scan_path = tmp_path / "scan_old.json"
+    scan_path.write_text(_json.dumps(scan), encoding="utf-8")
+
+    hints_path = tmp_path / "hints_old.json"
+    hints_path.write_text(
+        _json.dumps({"schema_version": "m8_external_pool_hints_v2", "hints": []}),
+        encoding="utf-8",
+    )
+
+    hints = load_factory_recall_hints(
+        {"0x" + "1" * 40},
+        scan_path=str(scan_path),
+        hints_path=str(hints_path),
+    )
+    assert len(hints) == 1
+    assert hints[0].token0_addr == ""
+    assert hints[0].token1_addr == ""

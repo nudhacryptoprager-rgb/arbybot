@@ -109,6 +109,8 @@ def mirror_row_from_hint(hint: PoolHint) -> Dict[str, Any]:
         "token": str(hint.focus_token or "").lower(),
         "pool": str(hint.pool_address or "").lower(),
         "dex_id": str(hint.dex_id or ""),
+        "token0_addr": str(hint.token0_addr or "").lower(),
+        "token1_addr": str(hint.token1_addr or "").lower(),
         "normalized_dex_id": str(raw.get("normalized_dex_id") or hint.dex_id or ""),
         "raw_dex_id": str(raw.get("raw_dex_id") or raw.get("dexId") or hint.dex_id or ""),
         "liquidity_usd": hint.liquidity_usd,
