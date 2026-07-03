@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -109,6 +110,57 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _resolve_block_timestamps(
+    block_numbers: Set[int],
+    *,
+    chain: str = "base",
+) -> Dict[int, str]:
+    """Batch-resolve block numbers to ISO-8601 timestamps via eth_getBlockByNumber.
+
+    Returns a mapping {block_number: "YYYY-MM-DDTHH:MM:SSZ"}.
+    Failed lookups are silently dropped (caller treats missing as stale).
+    """
+    if not block_numbers:
+        return {}
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        return {}
+
+    from core.rpc_urls import get_rpc_url
+
+    rpc_url = get_rpc_url(chain)
+    if not rpc_url:
+        return {}
+
+    result: Dict[int, str] = {}
+    for block_num in block_numbers:
+        payload = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getBlockByNumber",
+                "params": [hex(block_num), False],
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            rpc_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            blk = body.get("result") or {}
+            ts_hex = blk.get("timestamp")
+            if ts_hex:
+                ts = int(ts_hex, 16)
+                result[block_num] = datetime.fromtimestamp(
+                    ts, tz=timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            continue
+    return result
+
+
 def _load_yaml_config(path: str | Path) -> Dict[str, Any]:
     import yaml
 
@@ -195,8 +247,15 @@ def _enrich_hints_from_subset(
     tokens: List[Dict[str, Any]],
     *,
     watchlist_path: str = "data/tmp/m8_token_watchlist_latest.json",
+    chain: str = "base",
 ) -> List[PoolHint]:
-    """Attach fresh_long_tail provenance for expansion / narrow bridge handoff."""
+    """Attach fresh_long_tail provenance for expansion / narrow bridge handoff.
+
+    Also resolves first_seen_block → created_at proxy for factory-sourced hints
+    that lack pool creation time. Provenance is marked as
+    created_at_source=first_seen_block_proxy to distinguish from real
+    PairCreated event timestamps.
+    """
     from m8.discovery.token_watchlist import load_watchlist
 
     token_meta = {
@@ -207,6 +266,25 @@ def _enrich_hints_from_subset(
     watchlist = load_watchlist(watchlist_path)
     wl_tokens = watchlist.get("tokens") or {}
     verified_at = _iso_now()
+
+    blocks_to_resolve: Set[int] = set()
+    for hint in hints:
+        if hint.created_at:
+            continue
+        focus = str(hint.focus_token or "").lower()
+        meta = token_meta.get(focus) or {}
+        wl = wl_tokens.get(focus) or {}
+        fsb = meta.get("first_seen_block") or wl.get("first_seen_block")
+        if fsb is not None:
+            try:
+                blocks_to_resolve.add(int(fsb))
+            except (TypeError, ValueError):
+                pass
+
+    block_timestamps = _resolve_block_timestamps(
+        blocks_to_resolve, chain=chain
+    )
+
     for hint in hints:
         focus = str(hint.focus_token or "").lower()
         meta = token_meta.get(focus) or {}
@@ -229,6 +307,20 @@ def _enrich_hints_from_subset(
                 "verified_at": verified_at,
             }
         )
+
+        if not hint.created_at:
+            fsb = meta.get("first_seen_block") or wl.get("first_seen_block")
+            if fsb is not None:
+                try:
+                    block_num = int(fsb)
+                    ts = block_timestamps.get(block_num)
+                    if ts:
+                        hint.created_at = ts
+                        raw["created_at_source"] = "first_seen_block_proxy"
+                        raw["first_seen_block"] = block_num
+                except (TypeError, ValueError):
+                    pass
+
         hint.raw = raw
     return hints
 
@@ -862,7 +954,7 @@ def run_mirror_discovery(
 
     all_raw = dedupe_hints(factory_hints + log_hints)
     verified = minimal_verify_hints(all_raw, chain=chain, dry_run=dry_run)
-    verified = _enrich_hints_from_subset(verified, tokens)
+    verified = _enrich_hints_from_subset(verified, tokens, chain=chain)
 
     result.onchain_factory_candidates = len(factory_hints)
     result.factory_log_candidates = len(log_hints)

@@ -14,6 +14,8 @@ from m8.discovery.mirror_candidate_score import (
 )
 from m8.discovery.onchain_factory_mirror_discovery import (
     FACTORY_LOG_CONFIG_PATH,
+    _enrich_hints_from_subset,
+    _resolve_block_timestamps,
     compute_mirror_venue_metrics,
     load_expand_subset_tokens,
     run_mirror_discovery,
@@ -469,3 +471,131 @@ def test_load_factory_recall_hints_empty_tokens_when_scan_missing_fields(tmp_pat
     assert len(hints) == 1
     assert hints[0].token0_addr == ""
     assert hints[0].token1_addr == ""
+
+
+def test_resolve_block_timestamps_returns_iso_format():
+    """_resolve_block_timestamps converts block numbers to ISO timestamps."""
+    import json as _json
+    from unittest.mock import MagicMock
+
+    block_num = 47019463
+    block_ts = 1748000000  # arbitrary Unix timestamp
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = _json.dumps(
+        {"result": {"timestamp": hex(block_ts)}}
+    ).encode("utf-8")
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp), patch(
+        "core.rpc_urls.get_rpc_url", return_value="http://rpc.test"
+    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        result = _resolve_block_timestamps({block_num}, chain="base")
+
+    assert block_num in result
+    ts = result[block_num]
+    assert ts.endswith("Z")
+    assert "2025" in ts or "2026" in ts
+
+
+def test_resolve_block_timestamps_empty_input():
+    """Empty block set returns empty dict without RPC calls."""
+    result = _resolve_block_timestamps(set(), chain="base")
+    assert result == {}
+
+
+def test_resolve_block_timestamps_skip_rpc():
+    """ARBY_SKIP_RPC=1 returns empty dict."""
+    with patch.dict("os.environ", {"ARBY_SKIP_RPC": "1"}, clear=False):
+        result = _resolve_block_timestamps({100}, chain="base")
+    assert result == {}
+
+
+def test_enrich_hints_from_subset_populates_created_at_from_first_seen_block():
+    """Factory hints without created_at get timestamp from first_seen_block."""
+    from datetime import datetime, timezone
+
+    token_addr = "0x" + "1" * 40
+    hint = PoolHint(
+        source="onchain_factory",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "a" * 40,
+        token0_addr=token_addr,
+        token1_addr="0x" + "2" * 40,
+        focus_token=token_addr,
+    )
+
+    tokens = [{"token": token_addr, "first_seen_block": 47019463}]
+    block_ts = "2025-05-23T10:00:00Z"
+
+    with patch(
+        "m8.discovery.onchain_factory_mirror_discovery._resolve_block_timestamps",
+        return_value={47019463: block_ts},
+    ), patch(
+        "m8.discovery.token_watchlist.load_watchlist", return_value={"tokens": {}}
+    ):
+        result = _enrich_hints_from_subset([hint], tokens, chain="base")
+
+    assert len(result) == 1
+    assert result[0].created_at == block_ts
+    assert result[0].raw.get("created_at_source") == "first_seen_block_proxy"
+    assert result[0].raw.get("first_seen_block") == 47019463
+
+
+def test_enrich_hints_from_subset_no_first_seen_block_keeps_stale():
+    """Hints without first_seen_block remain stale (created_at=None)."""
+    token_addr = "0x" + "1" * 40
+    hint = PoolHint(
+        source="onchain_factory",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "a" * 40,
+        token0_addr=token_addr,
+        token1_addr="0x" + "2" * 40,
+        focus_token=token_addr,
+    )
+
+    tokens = [{"token": token_addr}]  # no first_seen_block
+
+    with patch(
+        "m8.discovery.onchain_factory_mirror_discovery._resolve_block_timestamps",
+        return_value={},
+    ), patch(
+        "m8.discovery.token_watchlist.load_watchlist", return_value={"tokens": {}}
+    ):
+        result = _enrich_hints_from_subset([hint], tokens, chain="base")
+
+    assert len(result) == 1
+    assert result[0].created_at is None
+    assert "created_at_source" not in (result[0].raw or {})
+
+
+def test_enrich_hints_preserves_existing_created_at():
+    """Hints with existing created_at are not overwritten by proxy."""
+    token_addr = "0x" + "1" * 40
+    existing_ts = "2025-06-01T12:00:00Z"
+    hint = PoolHint(
+        source="factory_log",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "a" * 40,
+        token0_addr=token_addr,
+        token1_addr="0x" + "2" * 40,
+        focus_token=token_addr,
+        created_at=existing_ts,
+    )
+
+    tokens = [{"token": token_addr, "first_seen_block": 47019463}]
+
+    with patch(
+        "m8.discovery.onchain_factory_mirror_discovery._resolve_block_timestamps",
+        return_value={47019463: "2025-05-23T10:00:00Z"},
+    ), patch(
+        "m8.discovery.token_watchlist.load_watchlist", return_value={"tokens": {}}
+    ):
+        result = _enrich_hints_from_subset([hint], tokens, chain="base")
+
+    assert result[0].created_at == existing_ts
+    assert "created_at_source" not in (result[0].raw or {})
