@@ -362,6 +362,10 @@ def verify_hints_for_recall(
     out: List[PoolHint] = []
     stale_buckets: Dict[str, int] = {}
     existence_buckets: Dict[str, int] = {}
+    factory_no_pool_by_dex: Dict[str, int] = {}
+    factory_no_pool_by_factory: Dict[str, int] = {}
+    factory_no_pool_samples: List[Dict[str, Any]] = []
+    dex_null_age_hist: Dict[str, int] = {}
     reject_rows: List[Dict[str, Any]] = []
 
     for h in hints:
@@ -379,30 +383,61 @@ def verify_hints_for_recall(
         ex_bucket = raw.get("existence_rca_bucket")
         if ex_bucket:
             existence_buckets[str(ex_bucket)] = int(existence_buckets.get(str(ex_bucket), 0)) + 1
+
+        reason_str = str(
+            raw.get("verify_reject_reason")
+            or raw.get("existence_rca_bucket")
+            or raw.get("stale_recall_bucket")
+            or verified.hint_status
+        )
+
+        if reason_str == "FACTORY_NO_POOL":
+            dex_key = str(verified.dex_id or "unknown")
+            fac_key = str(verified.factory_address or (raw.get("factory_address") or "unknown"))
+            factory_no_pool_by_dex[dex_key] = int(factory_no_pool_by_dex.get(dex_key, 0)) + 1
+            factory_no_pool_by_factory[fac_key[:12]] = int(factory_no_pool_by_factory.get(fac_key[:12], 0)) + 1
+            if len(factory_no_pool_samples) < 20:
+                factory_no_pool_samples.append({
+                    "dex_id": dex_key,
+                    "raw_dex_id": str(raw.get("raw_dex_id") or ""),
+                    "factory_address": str(verified.factory_address or raw.get("factory_address") or "")[:42],
+                    "fee": verified.fee,
+                    "source": str(verified.source or ""),
+                    "pool_address": str(verified.pool_address or "")[:42],
+                    "token0_addr": str(verified.token0_addr or "")[:42],
+                    "token1_addr": str(verified.token1_addr or "")[:42],
+                    "created_at_source": raw.get("created_at_source"),
+                })
+
+        if not verified.created_at and str(verified.source or "") == "dexscreener":
+            dex_null_key = str(verified.dex_id or "unknown")
+            dex_null_age_hist[dex_null_key] = int(dex_null_age_hist.get(dex_null_key, 0)) + 1
+
         if not raw.get("selection_verified_fresh"):
-            reason = str(
-                raw.get("verify_reject_reason")
-                or raw.get("existence_rca_bucket")
-                or raw.get("stale_recall_bucket")
-                or verified.hint_status
-            )
             reject_rows.append(
                 {
                     "token": str(verified.focus_token or "").lower(),
                     "pool": str(verified.pool_address or "").lower(),
                     "dex_id": str(verified.dex_id or ""),
+                    "token0_addr": str(verified.token0_addr or "").lower(),
+                    "token1_addr": str(verified.token1_addr or "").lower(),
                     "hint_status": verified.hint_status,
-                    "verify_reject_reason": reason,
+                    "verify_reject_reason": reason_str,
                     "stale_recall_bucket": raw.get("stale_recall_bucket"),
                     "existence_rca_bucket": raw.get("existence_rca_bucket"),
                     "recall_verified_pool_exists": raw.get("recall_verified_pool_exists"),
                     "selection_verified_fresh": raw.get("selection_verified_fresh"),
                     "pool_exists_stale": raw.get("pool_exists_stale"),
                     "mirror_age_bucket": raw.get("mirror_age_bucket"),
+                    "created_at_source": raw.get("created_at_source"),
                 }
             )
         out.append(verified)
 
     metrics["stale_recall_bucket_histogram"] = stale_buckets
     metrics["existence_rca_bucket_histogram"] = existence_buckets
+    metrics["factory_no_pool_by_dex"] = factory_no_pool_by_dex
+    metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
+    metrics["factory_no_pool_samples"] = factory_no_pool_samples
+    metrics["dex_null_age_histogram"] = dex_null_age_hist
     return out, metrics, reject_rows

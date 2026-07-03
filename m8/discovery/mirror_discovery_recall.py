@@ -278,6 +278,10 @@ def build_verify_rca(
         "reject_reason_histogram": dict(by_reason),
         "stale_recall_bucket_histogram": stale_hist,
         "existence_rca_bucket_histogram": existence_hist,
+        "factory_no_pool_by_dex": dict(verify_metrics.get("factory_no_pool_by_dex") or {}),
+        "factory_no_pool_by_factory": dict(verify_metrics.get("factory_no_pool_by_factory") or {}),
+        "factory_no_pool_samples": list(verify_metrics.get("factory_no_pool_samples") or []),
+        "dex_null_age_histogram": dict(verify_metrics.get("dex_null_age_histogram") or {}),
         "verification_metrics": verify_metrics,
         "reject_samples": reject_rows[:25],
     }
@@ -295,6 +299,10 @@ def verify_supported_hints(
     verify_metrics = empty_verification_metrics()
     reject_rows: List[Dict[str, Any]] = []
     out: List[PoolHint] = []
+    factory_no_pool_by_dex: Dict[str, int] = {}
+    factory_no_pool_by_factory: Dict[str, int] = {}
+    factory_no_pool_samples: List[Dict[str, Any]] = []
+    dex_null_age_hist: Dict[str, int] = {}
 
     if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
         for h in hints:
@@ -312,6 +320,10 @@ def verify_supported_hints(
             row = mirror_row_from_hint(verified)
             if not row.get("selection_verified_fresh"):
                 reject_rows.append(row)
+        verify_metrics["factory_no_pool_by_dex"] = factory_no_pool_by_dex
+        verify_metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
+        verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
+        verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
         rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
         return out, rca, reject_rows
 
@@ -330,6 +342,35 @@ def verify_supported_hints(
                 ex_hist = dict(verify_metrics.get("existence_rca_bucket_histogram") or {})
                 ex_hist[str(ex_bucket)] = int(ex_hist.get(str(ex_bucket), 0)) + 1
                 verify_metrics["existence_rca_bucket_histogram"] = ex_hist
+
+            reason_str = str(
+                raw.get("verify_reject_reason")
+                or raw.get("existence_rca_bucket")
+                or raw.get("stale_recall_bucket")
+                or verified.hint_status
+            )
+            if reason_str == "FACTORY_NO_POOL":
+                dex_key = str(verified.dex_id or "unknown")
+                fac_key = str(verified.factory_address or raw.get("factory_address") or "unknown")
+                factory_no_pool_by_dex[dex_key] = int(factory_no_pool_by_dex.get(dex_key, 0)) + 1
+                factory_no_pool_by_factory[fac_key[:12]] = int(factory_no_pool_by_factory.get(fac_key[:12], 0)) + 1
+                if len(factory_no_pool_samples) < 20:
+                    factory_no_pool_samples.append({
+                        "dex_id": dex_key,
+                        "raw_dex_id": str(raw.get("raw_dex_id") or ""),
+                        "factory_address": str(verified.factory_address or raw.get("factory_address") or "")[:42],
+                        "fee": verified.fee,
+                        "source": str(verified.source or ""),
+                        "pool_address": str(verified.pool_address or "")[:42],
+                        "token0_addr": str(verified.token0_addr or "")[:42],
+                        "token1_addr": str(verified.token1_addr or "")[:42],
+                        "created_at_source": raw.get("created_at_source"),
+                    })
+
+            if not verified.created_at and str(verified.source or "") == "dexscreener":
+                dex_null_key = str(verified.dex_id or "unknown")
+                dex_null_age_hist[dex_null_key] = int(dex_null_age_hist.get(dex_null_key, 0)) + 1
+
             row = mirror_row_from_hint(verified)
             if not row.get("selection_verified_fresh"):
                 reject_rows.append(row)
@@ -339,6 +380,10 @@ def verify_supported_hints(
                 HINT_DEX_UNSUPPORTED if status == SUPPORT_UNSUPPORTED else HINT_ONLY
             )
             out.append(h)
+    verify_metrics["factory_no_pool_by_dex"] = factory_no_pool_by_dex
+    verify_metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
+    verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
+    verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
     rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
     return out, rca, reject_rows
 

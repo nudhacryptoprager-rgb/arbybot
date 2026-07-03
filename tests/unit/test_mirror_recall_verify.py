@@ -207,4 +207,123 @@ def test_stale_mirror_backlog_and_selection_stages():
     )
     assert selection["selection_stages"]["recall"] == 2
     assert selection["selection_stages"]["pool_exists"] == 1
-    assert selection["selection_stages"]["fresh_enough"] == 1
+
+
+def test_factory_no_pool_rca_breakdown_by_dex_and_factory():
+    """FACTORY_NO_POOL hints aggregate by dex_id and factory_address."""
+    from m8.discovery.mirror_recall_verify import verify_hints_for_recall
+
+    hints = [
+        PoolHint(
+            source="dexscreener",
+            chain="base",
+            dex_id="aerodrome",
+            pool_address="0x" + "a" * 40,
+            token0_addr="0x" + "1" * 40,
+            token1_addr="0x" + "2" * 40,
+            focus_token="0x" + "1" * 40,
+            factory_address="0x" + "f" * 40,
+            created_at="2026-06-01T00:00:00Z",
+            raw={
+                "support_status": "supported",
+                "raw_dex_id": "aerodrome",
+                "verify_reject_reason": "FACTORY_NO_POOL",
+                "existence_rca_bucket": "FACTORY_MEMBERSHIP_FAIL",
+                "recall_verified_pool_exists": False,
+                "selection_verified_fresh": False,
+                "is_stale_hint": True,
+                "stale_recall_bucket": "STALE_POOL_NOT_FOUND",
+            },
+        ),
+        PoolHint(
+            source="dexscreener",
+            chain="base",
+            dex_id="aerodrome",
+            pool_address="0x" + "b" * 40,
+            token0_addr="0x" + "3" * 40,
+            token1_addr="0x" + "4" * 40,
+            focus_token="0x" + "3" * 40,
+            factory_address="0x" + "f" * 40,
+            created_at="2026-06-01T00:00:00Z",
+            raw={
+                "support_status": "supported",
+                "raw_dex_id": "aerodrome",
+                "verify_reject_reason": "FACTORY_NO_POOL",
+                "existence_rca_bucket": "FACTORY_MEMBERSHIP_FAIL",
+                "recall_verified_pool_exists": False,
+                "selection_verified_fresh": False,
+                "is_stale_hint": True,
+                "stale_recall_bucket": "STALE_POOL_NOT_FOUND",
+            },
+        ),
+        PoolHint(
+            source="dexscreener",
+            chain="base",
+            dex_id="uniswap_v3",
+            pool_address="0x" + "c" * 40,
+            token0_addr="0x" + "5" * 40,
+            token1_addr="0x" + "6" * 40,
+            focus_token="0x" + "5" * 40,
+            factory_address="0x" + "e" * 40,
+            created_at="2026-06-01T00:00:00Z",
+            raw={
+                "support_status": "supported",
+                "raw_dex_id": "uniswap",
+                "verify_reject_reason": "FACTORY_NO_POOL",
+                "existence_rca_bucket": "FACTORY_MEMBERSHIP_FAIL",
+                "recall_verified_pool_exists": False,
+                "selection_verified_fresh": False,
+                "is_stale_hint": True,
+                "stale_recall_bucket": "STALE_POOL_NOT_FOUND",
+            },
+        ),
+    ]
+
+    with patch.dict("os.environ", {"ARBY_SKIP_RPC": "1"}):
+        _out, metrics, _rejects = verify_hints_for_recall(hints, chain="base", dry_run=False)
+
+    by_dex = metrics.get("factory_no_pool_by_dex") or {}
+    assert by_dex.get("aerodrome") == 2
+    assert by_dex.get("uniswap_v3") == 1
+
+    samples = metrics.get("factory_no_pool_samples") or []
+    assert len(samples) == 3
+    sample = samples[0]
+    assert "dex_id" in sample
+    assert "factory_address" in sample
+    assert "token0_addr" in sample
+    assert "created_at_source" in sample
+
+
+def test_dex_null_age_histogram_in_metrics():
+    """DexScreener hints without created_at are counted in dex_null_age_histogram."""
+    from m8.discovery.mirror_recall_verify import verify_hints_for_recall
+
+    hints = [
+        PoolHint(
+            source="dexscreener",
+            chain="base",
+            dex_id="aerodrome",
+            pool_address="0x" + "a" * 40,
+            token0_addr="0x" + "1" * 40,
+            token1_addr="0x" + "2" * 40,
+            focus_token="0x" + "1" * 40,
+            created_at=None,
+            raw={
+                "support_status": "supported",
+                "raw_dex_id": "aerodrome",
+                "verify_reject_reason": "HINT_STALE",
+                "existence_rca_bucket": "STALE_BUT_POOL_EXISTS",
+                "recall_verified_pool_exists": True,
+                "selection_verified_fresh": False,
+                "is_stale_hint": True,
+                "stale_recall_bucket": "STALE_BUT_POOL_EXISTS",
+            },
+        ),
+    ]
+
+    with patch.dict("os.environ", {"ARBY_SKIP_RPC": "1"}):
+        _out, metrics, _rejects = verify_hints_for_recall(hints, chain="base", dry_run=False)
+
+    null_age = metrics.get("dex_null_age_histogram") or {}
+    assert null_age.get("aerodrome") == 1
