@@ -1,71 +1,72 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-07-03T14:30:00Z
+timestamp_utc: 2026-07-03T16:00:00Z
 goal_status: BLOCKED
-blocker_status_after: STALE_BUT_POOL_EXISTS / Aerodrome pools not on ve33 or slipstream factory
+blocker_status_after: M9 fresh-selection blocked by market/cadence; Aerodrome tail now classifiable as unsupported/mislabeled
 docs_reread_confirmed: true
-run_id: aero-slipstream-fallback-2026-07-03
-mode: scripts/m8_onchain_factory_mirror_scan.py + scripts/m8_mirror_discovery_recall.py
+run_id: unsupported-aerodrome-tail-2026-07-03
+mode: mirror_recall_fast + bootstrap_single_token + event_stream_lane
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Add Aerodrome variant fallback (ve33 FACTORY_NO_POOL -> try slipstream) in both fresh and stale verification paths
+session_goal: Classify Aerodrome FACTORY_NO_POOL rows with bytecode as unsupported/mislabeled metadata tail; inspect event/cadence path
 goal_status: BLOCKED
-primary_blocker_of_session: selection_verified_fresh_total=0 (STALE_BUT_POOL_EXISTS + 8 Aerodrome pools not found on ve33 or slipstream factory)
-blocker_status_before: Aerodrome FACTORY_NO_POOL with factory_address set but getPool returns no pool (cycle 9)
-blocker_status_after: Slipstream fallback tried but pools not on slipstream factory either; bytecode check may fail due to RPC rate limiting
+primary_blocker_of_session: selection_verified_fresh_total=0 (no fresh pools in current DexScreener window or event lane window)
+blocker_status_before: 8 Aerodrome rows shown as FACTORY_NO_POOL/FACTORY_MEMBERSHIP_FAIL, mixing metadata tail with real blockers
+blocker_status_after: Unsupported Aerodrome tail bucket implemented and validated under productive RPC bootstrap; full `mirror_recall_fast` still shows FACTORY_MEMBERSHIP_FAIL due to RPC path difference
 close_allowed: true
-remaining_blockers: 8 Aerodrome pools not on any configured factory; all pools >48h; RPC rate limiting during recall
-evidence_artifacts: data/tmp/m8_onchain_factory_scan_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
-docs_reread_confirmed: true
+remaining_blockers: selection_verified_fresh_total=0; event_stream_lane caught 0 events in 2000-block window
 
-## Fresh RCA (2026-07-03T14:30:00Z)
+## Fresh RCA (2026-07-03T16:00:00Z)
 
-| Metric | Value |
-|--------|-------|
-| selection_verified_fresh_total | 0 |
-| recall_verified_pool_exists_total | 43 |
-| pool_exists_stale_total | 43 |
-| factory_no_pool_by_dex | aerodrome=8, uniswap_v2=5 |
-| aerodrome_variant_fallback_histogram | {} (empty — fallback tried but slipstream also returns no pool) |
+| Metric | Full mirror_recall_fast | Bootstrap single-token test |
+|--------|------------------------|----------------------------|
+| selection_verified_fresh_total | 0 | 0 |
+| recall_verified_pool_exists_total | 43 | 0 |
+| existence_rca_bucket_histogram | FACTORY_MEMBERSHIP_FAIL=14, V4_POOLID_NOT_RESOLVED=19, STALE_BUT_POOL_EXISTS=41, V4_MISLABEL_V3_POOL=2 | UNSUPPORTED_OR_MISLABELED_AERODROME_POOL=1 |
+| factory_no_pool_by_dex | aerodrome=8, uniswap_v2=6 | {} |
+| unsupported_aerodrome_pool_histogram | {} | aerodrome\|0x420dd...ce40da=1 |
+| aerodrome_variant_fallback_histogram | {} | {} |
 
-## Aerodrome slipstream fallback analysis
+## Unsupported Aerodrome tail classification
 
-The fallback was implemented in both verification paths:
-1. `verify_hint_specialized` (fresh path) — tries slipstream when ve33 returns FACTORY_NO_POOL
-2. `_stale_verify_factory_membership` (stale path) — same fallback for stale hints
+**Code changes** (commit `bb2f51a`):
+1. Added `UNSUPPORTED_OR_MISLABELED_AERODROME_POOL` constant and stale-path bucket.
+2. `_pool_bytecode_len()` helper returns deployed bytecode length.
+3. `_stale_verify_factory_membership()`: when aerodrome fails ve33 + slipstream fallback but has on-chain bytecode, classify as unsupported/mislabeled tail instead of FACTORY_MEMBERSHIP_FAIL.
+4. `verify_hints_for_recall()` and `verify_supported_hints()`: aggregate `unsupported_aerodrome_pool_histogram` and bounded `unsupported_aerodrome_pool_samples`.
+5. `build_verify_rca()`: surface new metrics in RCA artifact.
+6. `_eth_get_code()`: added 2 retries with backoff for transient RPC failures.
+7. Tests: 2 new tests for bytecode present/absent cases.
 
-**Runtime result**: `aerodrome_variant_fallback_histogram={}` — the fallback function was called but returned `(False, "", None)` for all 8 hints. The pools do NOT exist on the slipstream factory (`0x5e7bb104...`) with any V3 fee tier (100, 500, 3000, 10000).
+**Validation**:
+- Unit gate: 7026 passed, 19 skipped, 0 failed.
+- ci_full_pipeline: ALL REQUIRED GATES PASSED.
+- Single-token bootstrap test: correctly classifies `0x098a4...982a` as unsupported with bytecode_len=45.
+- Full `mirror_recall_fast`: still shows `FACTORY_MEMBERSHIP_FAIL` for the 8 Aerodrome rows.
 
-**On-chain verification**: I manually checked 3 of the 8 pool addresses via `eth_getCode`:
-- All 3 have bytecode (code_len=92, ~45 bytes — likely EIP-1167 minimal proxy)
-- But `getPair` on ve33 factory returns zero address
-- And `getPool` on slipstream factory with all fee tiers returns zero address
+**Why the full run differs**: `scripts/m8_mirror_discovery_recall.py` is invoked via `_py_cmd` (no `bootstrap_productive_rpc_env.py`). It appears to resolve to a public or less-privileged RPC path where `eth_getCode` calls fail/rate-limit silently, while `eth_call` factory probes succeed enough to verify 43 pools. Running the same script under `bootstrap_productive_rpc_env.py` correctly classifies the tail.
 
-**Hypothesis**: These pools are either:
-1. Aerodrome V1 pools (pre-V2) on a different factory not in config
-2. Pools from a different protocol that DexScreener mislabeled as "aerodrome"
-3. Proxy contracts that delegate to a pool implementation
+## Event/cadence path inspection
 
-**Stale path bytecode check**: The 8 aerodrome hints end up as FACTORY_MEMBERSHIP_FAIL (not STALE_BUT_POOL_EXISTS), which means `_pool_has_bytecode` returned False. This could be RPC rate limiting (429) during the recall run — the `_eth_get_code` function catches all exceptions and returns False.
+- `config/new_pool_factories.yaml` already defines verified factories for uniswap_v3, aerodrome_slipstream, aerodrome, pancakeswap_v3, uniswap_v4, uniswap_v2, sushiswap_v2, baseswap_v2 with verified topic0 and verification blocks.
+- `event_stream_lane.py` provides `run_incremental_factory_log_poll()` and `run_event_stream_lane()` for factory log polling.
+- `mirror_recall_fast` profile sets `recall_only=True`, which skips `m8_event_stream_lane` in the pipeline.
+- Direct run: `scripts/m8_event_stream_lane.py --max-tokens 100 --max-blocks 2000` caught **0 events** in the current subset window.
 
-## Code changes
+## Conclusion
 
-Commit `85ad66d`:
-1. `hint_verifier.py`: `_try_aerodrome_slipstream_fallback()` — tries slipstream factory with V3 fee tiers
-2. `hint_verifier.py`: `verify_hint_specialized()` — calls fallback when aerodrome FACTORY_NO_POOL
-3. `mirror_recall_verify.py`: `_stale_verify_factory_membership()` — same fallback in stale path
-4. `mirror_discovery_recall.py`: `aerodrome_variant_fallback_histogram` in RCA
-5. `tests/unit/test_m8_external_pool_hints.py`: 3 new tests (slipstream hit, slipstream miss, non-aerodrome)
-
-Commit `220697c`:
-1. `mirror_recall_verify.py`: Added slipstream fallback in stale path too
+- The unsupported Aerodrome classification is correct and tested.
+- The 8 Aerodrome FACTORY_NO_POOL rows are genuinely not on the configured ve33 or slipstream factories, but do have on-chain bytecode (likely mislabeled by DexScreener or an older/unconfigured Aerodrome variant).
+- Primary M9 blocker remains fresh pool discovery: `selection_verified_fresh_total=0`.
+- The current DexScreener radar window and the 2000-block event lane window both contain no fresh (<48h) pool creations for the tracked token set.
+- This is a market/cadence blocker, not a code blocker.
 
 ## Next
 
-- Do not run M9 shadow until `selection_verified_fresh_total > 0` and `cycles_at_floor > 0`.
-- The 8 Aerodrome FACTORY_NO_POOL hints are likely mislabeled by DexScreener or on an unconfigured factory. Not a code bug.
-- RPC rate limiting during recall may cause bytecode checks to fail silently. Consider adding retry or rate-limit-aware backoff in `_eth_get_code`.
-- Cadence running still needed for fresh (<48h) pool discovery.
-- `selection_verified_fresh_total=0` is now a market/infra condition: all discovered pools are >48h old.
+- Do not run M9 shadow until `selection_verified_fresh_total > 0`.
+- Run `scripts/m8_event_stream_lane.py` on a wider block window (e.g., 10000 blocks) and broader token subset to look for fresh factory events.
+- Consider whether `m8_mirror_discovery_recall.py` should be invoked under `bootstrap_productive_rpc_env.py` in `start.py` so bytecode checks use the same reliable RPC path as factory probes.
+- Cadence running remains required; a single run cannot prove absence of fresh pools.
+- Update `Status_M9.md` only after fresh verified mirrors appear.
