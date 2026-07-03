@@ -41,6 +41,7 @@ V4_POOLID_NOT_RESOLVED = "V4_POOLID_NOT_RESOLVED"
 FACTORY_MEMBERSHIP_FAIL = "FACTORY_MEMBERSHIP_FAIL"
 POOL_CODE_MISSING = "POOL_CODE_MISSING"
 TOKEN_PAIR_MISMATCH = "TOKEN_PAIR_MISMATCH"
+UNSUPPORTED_OR_MISLABELED_AERODROME_POOL = "UNSUPPORTED_OR_MISLABELED_AERODROME_POOL"
 
 _FACTORY_DEX_IDS: Set[str] = frozenset(
     {
@@ -130,14 +131,24 @@ def _annotate_recall_fields(
     return hint
 
 
-def _pool_has_bytecode(hint: PoolHint, *, chain: str) -> bool:
+def _pool_bytecode_len(hint: PoolHint, *, chain: str) -> int:
     from m8.discovery.hint_verifier import _eth_get_code, _rpc_url
 
     addr = (hint.pool_address or "").lower()
     if not addr.startswith("0x") or len(addr) != 42:
-        return False
+        return 0
     url = _rpc_url(chain, None)
-    return bool(url and _eth_get_code(url, addr))
+    if not url:
+        return 0
+    code = _eth_get_code(url, addr)
+    if not code:
+        return 0
+    hex_part = code[2:] if code.startswith("0x") else code
+    return len(hex_part) // 2
+
+
+def _pool_has_bytecode(hint: PoolHint, *, chain: str) -> bool:
+    return _pool_bytecode_len(hint, chain=chain) > 0
 
 
 def _stale_verify_v4(
@@ -239,6 +250,27 @@ def _stale_verify_factory_membership(
 
     if method == "FACTORY_MISSING_TOKENS":
         bucket = TOKEN_PAIR_MISMATCH
+    elif str(h.dex_id or "") == "aerodrome" and method == "FACTORY_NO_POOL":
+        bytecode_len = _pool_bytecode_len(h, chain=chain)
+        if bytecode_len > 0:
+            bucket = UNSUPPORTED_OR_MISLABELED_AERODROME_POOL
+            raw = dict(h.raw or {})
+            raw["aerodrome_bytecode_len"] = bytecode_len
+            raw["aerodrome_factory_address"] = str(h.factory_address or "")
+            h.raw = raw
+            if metrics is not None:
+                record_verification_metrics(
+                    metrics, h, verified=False, reject_reason=bucket
+                )
+            return _annotate_recall_fields(
+                h,
+                recall_exists=False,
+                selection_fresh=False,
+                stale_bucket=STALE_POOL_NOT_FOUND,
+                existence_bucket=bucket,
+                verify_reject_reason=bucket,
+            ), bucket
+        bucket = FACTORY_MEMBERSHIP_FAIL
     elif _pool_has_bytecode(h, chain=chain):
         h.verify_method = VERIFY_BYTECODE
         h.hint_status = HINT_STALE
@@ -395,6 +427,8 @@ def verify_hints_for_recall(
     factory_no_pool_samples: List[Dict[str, Any]] = []
     dex_null_age_hist: Dict[str, int] = {}
     aero_variant_fallback_hist: Dict[str, int] = {}
+    unsupported_aerodrome_pool_hist: Dict[str, int] = {}
+    unsupported_aerodrome_pool_samples: List[Dict[str, Any]] = []
     reject_rows: List[Dict[str, Any]] = []
 
     for h in hints:
@@ -416,6 +450,23 @@ def verify_hints_for_recall(
         aero_fb = raw.get("aerodrome_variant_fallback")
         if aero_fb:
             aero_variant_fallback_hist[str(aero_fb)] = int(aero_variant_fallback_hist.get(str(aero_fb), 0)) + 1
+
+        if raw.get("existence_rca_bucket") == UNSUPPORTED_OR_MISLABELED_AERODROME_POOL:
+            key = f"{verified.dex_id}|{str(raw.get('aerodrome_factory_address') or verified.factory_address or 'unknown')[:42]}"
+            unsupported_aerodrome_pool_hist[key] = int(unsupported_aerodrome_pool_hist.get(key, 0)) + 1
+            if len(unsupported_aerodrome_pool_samples) < 20:
+                unsupported_aerodrome_pool_samples.append({
+                    "dex_id": str(verified.dex_id or ""),
+                    "raw_dex_id": str(raw.get("raw_dex_id") or ""),
+                    "normalized_dex_id": str(raw.get("normalized_dex_id") or ""),
+                    "factory_address": str(raw.get("aerodrome_factory_address") or verified.factory_address or "")[:42],
+                    "pool_address": str(verified.pool_address or "")[:42],
+                    "bytecode_len": raw.get("aerodrome_bytecode_len"),
+                    "created_at": verified.created_at,
+                    "created_at_source": raw.get("created_at_source"),
+                    "token0_addr": str(verified.token0_addr or "")[:42],
+                    "token1_addr": str(verified.token1_addr or "")[:42],
+                })
 
         reason_str = str(
             raw.get("verify_reject_reason")
@@ -474,4 +525,6 @@ def verify_hints_for_recall(
     metrics["factory_no_pool_samples"] = factory_no_pool_samples
     metrics["dex_null_age_histogram"] = dex_null_age_hist
     metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
+    metrics["unsupported_aerodrome_pool_histogram"] = unsupported_aerodrome_pool_hist
+    metrics["unsupported_aerodrome_pool_samples"] = unsupported_aerodrome_pool_samples
     return out, metrics, reject_rows

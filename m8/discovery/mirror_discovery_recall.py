@@ -283,6 +283,8 @@ def build_verify_rca(
         "factory_no_pool_samples": list(verify_metrics.get("factory_no_pool_samples") or []),
         "dex_null_age_histogram": dict(verify_metrics.get("dex_null_age_histogram") or {}),
         "aerodrome_variant_fallback_histogram": dict(verify_metrics.get("aerodrome_variant_fallback_histogram") or {}),
+        "unsupported_aerodrome_pool_histogram": dict(verify_metrics.get("unsupported_aerodrome_pool_histogram") or {}),
+        "unsupported_aerodrome_pool_samples": list(verify_metrics.get("unsupported_aerodrome_pool_samples") or []),
         "verification_metrics": verify_metrics,
         "reject_samples": reject_rows[:25],
     }
@@ -305,6 +307,8 @@ def verify_supported_hints(
     factory_no_pool_samples: List[Dict[str, Any]] = []
     dex_null_age_hist: Dict[str, int] = {}
     aero_variant_fallback_hist: Dict[str, int] = {}
+    unsupported_aerodrome_pool_hist: Dict[str, int] = {}
+    unsupported_aerodrome_pool_samples: List[Dict[str, Any]] = []
 
     if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
         for h in hints:
@@ -327,6 +331,8 @@ def verify_supported_hints(
         verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
         verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
         verify_metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
+        verify_metrics["unsupported_aerodrome_pool_histogram"] = unsupported_aerodrome_pool_hist
+        verify_metrics["unsupported_aerodrome_pool_samples"] = unsupported_aerodrome_pool_samples
         rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
         return out, rca, reject_rows
 
@@ -349,6 +355,23 @@ def verify_supported_hints(
             aero_fb = raw.get("aerodrome_variant_fallback")
             if aero_fb:
                 aero_variant_fallback_hist[str(aero_fb)] = int(aero_variant_fallback_hist.get(str(aero_fb), 0)) + 1
+
+            if raw.get("existence_rca_bucket") == "UNSUPPORTED_OR_MISLABELED_AERODROME_POOL":
+                key = f"{verified.dex_id}|{str(raw.get('aerodrome_factory_address') or verified.factory_address or 'unknown')[:42]}"
+                unsupported_aerodrome_pool_hist[key] = int(unsupported_aerodrome_pool_hist.get(key, 0)) + 1
+                if len(unsupported_aerodrome_pool_samples) < 20:
+                    unsupported_aerodrome_pool_samples.append({
+                        "dex_id": str(verified.dex_id or ""),
+                        "raw_dex_id": str(raw.get("raw_dex_id") or ""),
+                        "normalized_dex_id": str(raw.get("normalized_dex_id") or ""),
+                        "factory_address": str(raw.get("aerodrome_factory_address") or verified.factory_address or "")[:42],
+                        "pool_address": str(verified.pool_address or "")[:42],
+                        "bytecode_len": raw.get("aerodrome_bytecode_len"),
+                        "created_at": verified.created_at,
+                        "created_at_source": raw.get("created_at_source"),
+                        "token0_addr": str(verified.token0_addr or "")[:42],
+                        "token1_addr": str(verified.token1_addr or "")[:42],
+                    })
 
             reason_str = str(
                 raw.get("verify_reject_reason")
@@ -392,6 +415,8 @@ def verify_supported_hints(
     verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
     verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
     verify_metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
+    verify_metrics["unsupported_aerodrome_pool_histogram"] = unsupported_aerodrome_pool_hist
+    verify_metrics["unsupported_aerodrome_pool_samples"] = unsupported_aerodrome_pool_samples
     rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
     return out, rca, reject_rows
 

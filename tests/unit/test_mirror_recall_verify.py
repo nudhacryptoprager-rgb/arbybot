@@ -16,6 +16,7 @@ from m8.discovery.mirror_discovery_recall import (
 )
 from m8.discovery.mirror_recall_verify import (
     STALE_BUT_POOL_EXISTS,
+    UNSUPPORTED_OR_MISLABELED_AERODROME_POOL,
     mirror_age_bucket,
     verify_hint_for_recall,
 )
@@ -327,3 +328,71 @@ def test_dex_null_age_histogram_in_metrics():
 
     null_age = metrics.get("dex_null_age_histogram") or {}
     assert null_age.get("aerodrome") == 1
+
+
+@patch("m8.discovery.mirror_recall_verify.verify_factory_pool", return_value=(False, "FACTORY_NO_POOL"))
+@patch(
+    "m8.discovery.hint_verifier._try_aerodrome_slipstream_fallback",
+    return_value=(False, "", None),
+)
+@patch("m8.discovery.mirror_recall_verify._pool_bytecode_len", return_value=45)
+def test_aerodrome_factory_miss_with_bytecode_is_unsupported_tail(_mock_code, _mock_slip, _mock_factory):
+    """Aerodrome hint failing ve33 + slipstream but having bytecode is classified as unsupported tail."""
+    from m8.discovery.mirror_recall_verify import verify_hints_for_recall
+
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="aerodrome",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        factory_address="0x420dd381b31aef6683db6b902084cb0ffece40da",
+        created_at="2026-06-01T00:00:00Z",
+        raw={"support_status": "supported", "raw_dex_id": "aerodrome", "normalized_dex_id": "aerodrome"},
+    )
+    out, metrics, rejects = verify_hints_for_recall([hint], chain="base")
+    verified = out[0]
+    raw = verified.raw or {}
+    assert raw.get("existence_rca_bucket") == UNSUPPORTED_OR_MISLABELED_AERODROME_POOL
+    assert raw.get("verify_reject_reason") == UNSUPPORTED_OR_MISLABELED_AERODROME_POOL
+    assert raw.get("aerodrome_bytecode_len") == 45
+    assert metrics.get("existence_rca_bucket_histogram", {}).get(UNSUPPORTED_OR_MISLABELED_AERODROME_POOL) == 1
+    assert metrics.get("unsupported_aerodrome_pool_histogram", {}).get(
+        "aerodrome|0x420dd381b31aef6683db6b902084cb0ffece40da"
+    ) == 1
+    samples = metrics.get("unsupported_aerodrome_pool_samples") or []
+    assert len(samples) == 1
+    assert samples[0]["bytecode_len"] == 45
+    assert samples[0]["raw_dex_id"] == "aerodrome"
+    assert rejects[0].get("verify_reject_reason") == UNSUPPORTED_OR_MISLABELED_AERODROME_POOL
+
+
+@patch("m8.discovery.mirror_recall_verify.verify_factory_pool", return_value=(False, "FACTORY_NO_POOL"))
+@patch(
+    "m8.discovery.hint_verifier._try_aerodrome_slipstream_fallback",
+    return_value=(False, "", None),
+)
+@patch("m8.discovery.mirror_recall_verify._pool_bytecode_len", return_value=0)
+def test_aerodrome_factory_miss_without_bytecode_stays_factory_membership_fail(_mock_code, _mock_slip, _mock_factory):
+    """Aerodrome hint with no bytecode remains FACTORY_MEMBERSHIP_FAIL."""
+    from m8.discovery.mirror_recall_verify import verify_hints_for_recall, FACTORY_MEMBERSHIP_FAIL
+
+    hint = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="aerodrome",
+        pool_address="0x" + "a" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        factory_address="0x420dd381b31aef6683db6b902084cb0ffece40da",
+        created_at="2026-06-01T00:00:00Z",
+        raw={"support_status": "supported", "raw_dex_id": "aerodrome"},
+    )
+    out, metrics, _rejects = verify_hints_for_recall([hint], chain="base")
+    raw = out[0].raw or {}
+    assert raw.get("existence_rca_bucket") == FACTORY_MEMBERSHIP_FAIL
+    assert metrics.get("existence_rca_bucket_histogram", {}).get(FACTORY_MEMBERSHIP_FAIL) == 1
+    assert UNSUPPORTED_OR_MISLABELED_AERODROME_POOL not in (metrics.get("existence_rca_bucket_histogram") or {})

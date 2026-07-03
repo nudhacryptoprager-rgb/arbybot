@@ -77,7 +77,8 @@ def _eth_call(rpc_url: str, to: str, data: str) -> Optional[str]:
         return None
 
 
-def _eth_get_code(rpc_url: str, address: str) -> bool:
+def _eth_get_code(rpc_url: str, address: str) -> str:
+    """Return deployed bytecode hex string, or empty string if empty/error."""
     payload = json.dumps(
         {
             "jsonrpc": "2.0",
@@ -95,9 +96,13 @@ def _eth_get_code(rpc_url: str, address: str) -> bool:
         with urllib.request.urlopen(req, timeout=8) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         code = str((body.get("result") or "0x")).strip().lower()
-        return code not in ("0x", "")
+        return code if code not in ("0x", "") else ""
     except Exception:
-        return False
+        return ""
+
+
+def _pool_has_bytecode_from_code(code: str) -> bool:
+    return bool(code and code != "0x")
 
 
 def _encode_bytes32_arg(pool_id: str) -> str:
