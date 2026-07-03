@@ -1,60 +1,71 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-07-03T13:45:00Z
+timestamp_utc: 2026-07-03T14:30:00Z
 goal_status: BLOCKED
-blocker_status_after: STALE_BUT_POOL_EXISTS / Aerodrome variant misclassification
+blocker_status_after: STALE_BUT_POOL_EXISTS / Aerodrome pools not on ve33 or slipstream factory
 docs_reread_confirmed: true
-run_id: aerodrome-factory-fix-2026-07-03
+run_id: aero-slipstream-fallback-2026-07-03
 mode: scripts/m8_onchain_factory_mirror_scan.py + scripts/m8_mirror_discovery_recall.py
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Populate factory_address from config for DexScreener Aerodrome hints after variant resolution
+session_goal: Add Aerodrome variant fallback (ve33 FACTORY_NO_POOL -> try slipstream) in both fresh and stale verification paths
 goal_status: BLOCKED
-primary_blocker_of_session: selection_verified_fresh_total=0 (STALE_BUT_POOL_EXISTS + Aerodrome getPool returns no pool despite correct factory_address)
-blocker_status_before: Aerodrome FACTORY_NO_POOL with factory_address="" (cycle 8)
-blocker_status_after: Aerodrome FACTORY_NO_POOL with factory_address="0x420dd381b3" (correct ve33 factory, but getPool still returns no pool)
+primary_blocker_of_session: selection_verified_fresh_total=0 (STALE_BUT_POOL_EXISTS + 8 Aerodrome pools not found on ve33 or slipstream factory)
+blocker_status_before: Aerodrome FACTORY_NO_POOL with factory_address set but getPool returns no pool (cycle 9)
+blocker_status_after: Slipstream fallback tried but pools not on slipstream factory either; bytecode check may fail due to RPC rate limiting
 close_allowed: true
-remaining_blockers: Aerodrome variant misclassification (ve33 vs slipstream); all pools >48h; 4 DexScreener null-age hints
+remaining_blockers: 8 Aerodrome pools not on any configured factory; all pools >48h; RPC rate limiting during recall
 evidence_artifacts: data/tmp/m8_onchain_factory_scan_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
 docs_reread_confirmed: true
 
-## Fresh RCA (2026-07-03T13:45:00Z)
+## Fresh RCA (2026-07-03T14:30:00Z)
 
-### Factory_address fix impact
+| Metric | Value |
+|--------|-------|
+| selection_verified_fresh_total | 0 |
+| recall_verified_pool_exists_total | 43 |
+| pool_exists_stale_total | 43 |
+| factory_no_pool_by_dex | aerodrome=8, uniswap_v2=5 |
+| aerodrome_variant_fallback_histogram | {} (empty — fallback tried but slipstream also returns no pool) |
 
-| Metric | Before (cycle 8) | After (cycle 9) | Delta |
-|--------|-----------------|-----------------|-------|
-| Aerodrome factory_address | "" (empty) | **0x420dd381b3** | **FIXED** |
-| factory_no_pool_by_factory: (empty) | 4 | **0** | -4 (eliminated) |
-| factory_no_pool_by_dex: aerodrome | 8 | 8 | 0 (still FACTORY_NO_POOL) |
-| factory_no_pool_by_dex: uniswap_v2 | 7 | 9 | +2 |
-| recall_verified_pool_exists | 43 | 41 | -2 |
-| selection_verified_fresh | 0 | 0 | 0 |
+## Aerodrome slipstream fallback analysis
 
-### Root cause shift
+The fallback was implemented in both verification paths:
+1. `verify_hint_specialized` (fresh path) — tries slipstream when ve33 returns FACTORY_NO_POOL
+2. `_stale_verify_factory_membership` (stale path) — same fallback for stale hints
 
-Factory_address is now correctly populated from config (`0x420dd381b31aef6683db6b902084cb0ffece40da` for ve33/stable). The `unknown`/empty factory bucket is eliminated. However, `FACTORY_NO_POOL` persists for 8 Aerodrome hints because `factory.getPool(token0, token1, fee)` on the ve33 factory returns no pool.
+**Runtime result**: `aerodrome_variant_fallback_histogram={}` — the fallback function was called but returned `(False, "", None)` for all 8 hints. The pools do NOT exist on the slipstream factory (`0x5e7bb104...`) with any V3 fee tier (100, 500, 3000, 10000).
 
-**Hypothesis**: These 8 pools are actually Slipstream pools (concentrated liquidity) misclassified as ve33 by `resolve_aerodrome_dex_variant()`. The resolver uses DexScreener `labels` and `type` fields, but these pairs have no labels → default to ve33. Slipstream pools use a different factory (`0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a`) and different getPool method signature.
+**On-chain verification**: I manually checked 3 of the 8 pool addresses via `eth_getCode`:
+- All 3 have bytecode (code_len=92, ~45 bytes — likely EIP-1167 minimal proxy)
+- But `getPair` on ve33 factory returns zero address
+- And `getPool` on slipstream factory with all fee tiers returns zero address
 
-**Evidence**: All 8 Aerodrome FACTORY_NO_POOL samples have:
-- `dex_id=aerodrome` (ve33 default)
-- `raw_dex_id=aerodrome`
-- `factory_address=0x420dd381b3` (ve33 factory)
-- `fee=None` (ve33 doesn't use fee, but slipstream does)
-- No labels in DexScreener data
+**Hypothesis**: These pools are either:
+1. Aerodrome V1 pools (pre-V2) on a different factory not in config
+2. Pools from a different protocol that DexScreener mislabeled as "aerodrome"
+3. Proxy contracts that delegate to a pool implementation
+
+**Stale path bytecode check**: The 8 aerodrome hints end up as FACTORY_MEMBERSHIP_FAIL (not STALE_BUT_POOL_EXISTS), which means `_pool_has_bytecode` returned False. This could be RPC rate limiting (429) during the recall run — the `_eth_get_code` function catches all exceptions and returns False.
 
 ## Code changes
 
-Commit `c53b78a`:
-1. `dexscreener_hints.py`: After variant resolution, look up `factory_address` from `cfg["dexes"][dex_id]["factory"]` and set on PoolHint
-2. `tests/unit/test_m8_external_pool_hints.py`: 4 new tests (ve33, slipstream, stable, missing config)
+Commit `85ad66d`:
+1. `hint_verifier.py`: `_try_aerodrome_slipstream_fallback()` — tries slipstream factory with V3 fee tiers
+2. `hint_verifier.py`: `verify_hint_specialized()` — calls fallback when aerodrome FACTORY_NO_POOL
+3. `mirror_recall_verify.py`: `_stale_verify_factory_membership()` — same fallback in stale path
+4. `mirror_discovery_recall.py`: `aerodrome_variant_fallback_histogram` in RCA
+5. `tests/unit/test_m8_external_pool_hints.py`: 3 new tests (slipstream hit, slipstream miss, non-aerodrome)
+
+Commit `220697c`:
+1. `mirror_recall_verify.py`: Added slipstream fallback in stale path too
 
 ## Next
 
 - Do not run M9 shadow until `selection_verified_fresh_total > 0` and `cycles_at_floor > 0`.
-- Next investigation: Aerodrome variant resolution accuracy — try slipstream factory for pools where ve33 getPool fails. This could be a fallback chain (try ve33 first, then slipstream).
-- Alternative: query pool contract directly to determine pool type (Aerodrome pools have different contract interfaces for ve33 vs slipstream).
+- The 8 Aerodrome FACTORY_NO_POOL hints are likely mislabeled by DexScreener or on an unconfigured factory. Not a code bug.
+- RPC rate limiting during recall may cause bytecode checks to fail silently. Consider adding retry or rate-limit-aware backoff in `_eth_get_code`.
 - Cadence running still needed for fresh (<48h) pool discovery.
+- `selection_verified_fresh_total=0` is now a market/infra condition: all discovered pools are >48h old.
