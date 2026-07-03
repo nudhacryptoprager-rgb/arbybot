@@ -298,3 +298,101 @@ def test_v4_slot0_empty_falls_back_to_v3_factory_in_specialized():
         assert out.dex_id == "uniswap_v3"
         assert out.verify_method == "factory_getPool"
         mock_factory.assert_called_once()
+
+
+def _aero_config():
+    return {
+        "dexes": {
+            "aerodrome": {
+                "adapter_type": "uniswap_v2",
+                "factory": "0x420dd381b31aef6683db6b902084cb0ffece40da",
+                "enabled": True,
+            },
+            "aerodrome_slipstream": {
+                "adapter_type": "uniswap_v3",
+                "factory": "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a",
+                "enabled": True,
+            },
+            "aerodrome_v2_stable": {
+                "adapter_type": "uniswap_v2",
+                "factory": "0x420dd381b31aef6683db6b902084cb0ffece40da",
+                "enabled": True,
+            },
+        }
+    }
+
+
+def _aero_pair(labels=None, pair_type=None, fee_tier=None):
+    p = {
+        "chainId": "base",
+        "dexId": "aerodrome",
+        "pairAddress": "0x" + "a" * 40,
+        "baseToken": {"address": "0x" + "1" * 40},
+        "quoteToken": {"address": "0x" + "2" * 40},
+        "liquidity": {"usd": 5000},
+    }
+    if labels:
+        p["labels"] = labels
+    if pair_type:
+        p["type"] = pair_type
+    if fee_tier is not None:
+        p["feeTier"] = fee_tier
+    return p
+
+
+def test_pair_to_hint_aerodrome_ve33_factory_from_config():
+    """Default Aerodrome (ve33) gets factory_address from config."""
+    h = _pair_to_hint(
+        _aero_pair(),
+        chain="base",
+        focus_token="0x" + "1" * 40,
+        max_recall=True,
+        dex_config=_aero_config(),
+    )
+    assert h is not None
+    assert h.dex_id == "aerodrome"
+    assert h.factory_address == "0x420dd381b31aef6683db6b902084cb0ffece40da"
+    assert h.raw.get("factory_address_source") == "config_dexes"
+
+
+def test_pair_to_hint_aerodrome_slipstream_factory_from_config():
+    """Aerodrome Slipstream variant gets correct slipstream factory."""
+    h = _pair_to_hint(
+        _aero_pair(labels=["slipstream"]),
+        chain="base",
+        focus_token="0x" + "1" * 40,
+        max_recall=True,
+        dex_config=_aero_config(),
+    )
+    assert h is not None
+    assert h.dex_id == "aerodrome_slipstream"
+    assert h.factory_address == "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a"
+
+
+def test_pair_to_hint_aerodrome_stable_factory_from_config():
+    """Aerodrome stable variant gets correct factory (same as ve33)."""
+    h = _pair_to_hint(
+        _aero_pair(labels=["stable"]),
+        chain="base",
+        focus_token="0x" + "1" * 40,
+        max_recall=True,
+        dex_config=_aero_config(),
+    )
+    assert h is not None
+    assert h.dex_id == "aerodrome_v2_stable"
+    assert h.factory_address == "0x420dd381b31aef6683db6b902084cb0ffece40da"
+
+
+def test_pair_to_hint_no_factory_when_config_missing():
+    """When config doesn't have factory for dex, factory_address stays empty."""
+    cfg = {"dexes": {"aerodrome": {"adapter_type": "uniswap_v2", "enabled": True}}}
+    h = _pair_to_hint(
+        _aero_pair(),
+        chain="base",
+        focus_token="0x" + "1" * 40,
+        max_recall=True,
+        dex_config=cfg,
+    )
+    assert h is not None
+    assert h.factory_address == ""
+    assert h.raw.get("factory_address_source") == ""

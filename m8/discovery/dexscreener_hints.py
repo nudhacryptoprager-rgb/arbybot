@@ -235,11 +235,20 @@ def _pair_to_hint(
             support_status = "unknown_alias"
         if not dex_id:
             return None
+        factory_address = ""
+        factory_addr_source = ""
+        dex_entry = dexes.get(dex_id) or {}
+        fac = str(dex_entry.get("factory") or "")
+        if fac:
+            factory_address = fac.lower()
+            factory_addr_source = "config_dexes"
     else:
         dex_id = normalize_dex_id("dexscreener", raw_dex)
         normalized_dex_id = dex_id or ""
         uniswap_resolve_reason = None
         aero_resolve_reason = None
+        factory_address = ""
+        factory_addr_source = ""
         if not dex_id:
             return None
     pool_addr = str(pair.get("pairAddress") or "").lower()
@@ -285,6 +294,7 @@ def _pair_to_hint(
         pool_address=pool_addr,
         token0_addr=t0,
         token1_addr=t1,
+        factory_address=factory_address,
         created_at=created_at,
         liquidity_usd=liq_usd,
         volume_24h=vol_h24,
@@ -298,6 +308,7 @@ def _pair_to_hint(
             "normalized_dex_id": normalized_dex_id,
             "uniswap_resolve_reason": uniswap_resolve_reason,
             "aerodrome_resolve_reason": aero_resolve_reason,
+            "factory_address_source": factory_addr_source,
         },
         focus_token=focus_token,
     )
