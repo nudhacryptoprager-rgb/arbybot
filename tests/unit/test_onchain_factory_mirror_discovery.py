@@ -437,6 +437,51 @@ def test_load_factory_recall_hints_preserves_token_addresses(tmp_path, monkeypat
     assert h.created_at == "2026-07-01T00:00:00Z"
 
 
+def test_load_factory_recall_hints_preserves_provenance(tmp_path, monkeypatch):
+    """created_at_source and first_seen_block survive scan artifact round-trip."""
+    import json as _json
+
+    from m8.discovery.token_pool_universe import load_factory_recall_hints
+
+    scan = {
+        "chain": "base",
+        "verified_pools": [
+            {
+                "focus_token": "0x" + "1" * 40,
+                "dex_id": "uniswap_v3",
+                "pool_address": "0x" + "a" * 40,
+                "token0_addr": "0x" + "1" * 40,
+                "token1_addr": "0x" + "2" * 40,
+                "fee": 3000,
+                "factory_address": "0x" + "f" * 40,
+                "created_at": "2026-06-07T10:34:21Z",
+                "created_at_source": "first_seen_block_proxy",
+                "first_seen_block": 47019463,
+                "hint_status": "HINT_FACTORY_VERIFIED",
+                "source": "onchain_factory",
+            }
+        ],
+    }
+    scan_path = tmp_path / "scan_prov.json"
+    scan_path.write_text(_json.dumps(scan), encoding="utf-8")
+
+    hints_path = tmp_path / "hints_prov.json"
+    hints_path.write_text(
+        _json.dumps({"schema_version": "m8_external_pool_hints_v2", "hints": []}),
+        encoding="utf-8",
+    )
+
+    hints = load_factory_recall_hints(
+        {"0x" + "1" * 40},
+        scan_path=str(scan_path),
+        hints_path=str(hints_path),
+    )
+    assert len(hints) == 1
+    h = hints[0]
+    assert (h.raw or {}).get("created_at_source") == "first_seen_block_proxy"
+    assert (h.raw or {}).get("first_seen_block") == 47019463
+
+
 def test_load_factory_recall_hints_empty_tokens_when_scan_missing_fields(tmp_path):
     """Backward compat: scan artifact without token fields still loads (empty)."""
     import json as _json
@@ -471,45 +516,6 @@ def test_load_factory_recall_hints_empty_tokens_when_scan_missing_fields(tmp_pat
     assert len(hints) == 1
     assert hints[0].token0_addr == ""
     assert hints[0].token1_addr == ""
-
-
-def test_resolve_block_timestamps_returns_iso_format():
-    """_resolve_block_timestamps converts block numbers to ISO timestamps."""
-    import json as _json
-    from unittest.mock import MagicMock
-
-    block_num = 47019463
-    block_ts = 1748000000  # arbitrary Unix timestamp
-
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = _json.dumps(
-        {"result": {"timestamp": hex(block_ts)}}
-    ).encode("utf-8")
-    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-    mock_resp.__exit__ = MagicMock(return_value=False)
-
-    with patch("urllib.request.urlopen", return_value=mock_resp), patch(
-        "core.rpc_urls.get_rpc_url", return_value="http://rpc.test"
-    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
-        result = _resolve_block_timestamps({block_num}, chain="base")
-
-    assert block_num in result
-    ts = result[block_num]
-    assert ts.endswith("Z")
-    assert "2025" in ts or "2026" in ts
-
-
-def test_resolve_block_timestamps_empty_input():
-    """Empty block set returns empty dict without RPC calls."""
-    result = _resolve_block_timestamps(set(), chain="base")
-    assert result == {}
-
-
-def test_resolve_block_timestamps_skip_rpc():
-    """ARBY_SKIP_RPC=1 returns empty dict."""
-    with patch.dict("os.environ", {"ARBY_SKIP_RPC": "1"}, clear=False):
-        result = _resolve_block_timestamps({100}, chain="base")
-    assert result == {}
 
 
 def test_enrich_hints_from_subset_populates_created_at_from_first_seen_block():

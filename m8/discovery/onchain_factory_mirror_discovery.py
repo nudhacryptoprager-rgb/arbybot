@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,57 +109,7 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _resolve_block_timestamps(
-    block_numbers: Set[int],
-    *,
-    chain: str = "base",
-) -> Dict[int, str]:
-    """Batch-resolve block numbers to ISO-8601 timestamps via eth_getBlockByNumber.
-
-    Returns a mapping {block_number: "YYYY-MM-DDTHH:MM:SSZ"}.
-    Failed lookups are silently dropped (caller treats missing as stale).
-    """
-    if not block_numbers:
-        return {}
-    if os.environ.get("ARBY_SKIP_RPC") == "1":
-        return {}
-
-    from core.env import load_root_dotenv
-    from core.rpc_urls import get_rpc_url
-
-    load_root_dotenv()
-    rpc_url = get_rpc_url(chain)
-    if not rpc_url:
-        return {}
-
-    result: Dict[int, str] = {}
-    for block_num in block_numbers:
-        payload = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "eth_getBlockByNumber",
-                "params": [hex(block_num), False],
-            }
-        ).encode("utf-8")
-        req = urllib.request.Request(
-            rpc_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-            blk = body.get("result") or {}
-            ts_hex = blk.get("timestamp")
-            if ts_hex:
-                ts = int(ts_hex, 16)
-                result[block_num] = datetime.fromtimestamp(
-                    ts, tz=timezone.utc
-                ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
-            continue
-    return result
+from m8.discovery.block_timestamp_resolver import resolve_block_timestamps as _resolve_block_timestamps
 
 
 def _load_yaml_config(path: str | Path) -> Dict[str, Any]:
@@ -1021,6 +970,8 @@ def run_mirror_discovery(
                 "fee": h.fee,
                 "factory_address": h.factory_address,
                 "created_at": h.created_at,
+                "created_at_source": (h.raw or {}).get("created_at_source"),
+                "first_seen_block": (h.raw or {}).get("first_seen_block"),
                 "hint_status": h.hint_status,
                 "token_class": (h.raw or {}).get("token_class"),
                 "refresh_lane": (h.raw or {}).get("refresh_lane"),

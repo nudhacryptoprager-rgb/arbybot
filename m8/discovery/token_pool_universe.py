@@ -197,6 +197,8 @@ def load_factory_recall_hints(
                                 "pool_universe_type": FRESH_TOKEN_POOL,
                                 "from_scan_artifact": True,
                                 "raw_dex_id": str(row.get("dex_id") or ""),
+                                "created_at_source": row.get("created_at_source"),
+                                "first_seen_block": row.get("first_seen_block"),
                             },
                         ),
                         cfg,
