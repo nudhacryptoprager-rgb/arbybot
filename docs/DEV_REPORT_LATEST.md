@@ -1,81 +1,60 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-07-03T13:05:00Z
+timestamp_utc: 2026-07-03T13:45:00Z
 goal_status: BLOCKED
-blocker_status_after: STALE_BUT_POOL_EXISTS / Aerodrome factory_address missing
+blocker_status_after: STALE_BUT_POOL_EXISTS / Aerodrome variant misclassification
 docs_reread_confirmed: true
-run_id: rca-breakdown-2026-07-03
+run_id: aerodrome-factory-fix-2026-07-03
 mode: scripts/m8_onchain_factory_mirror_scan.py + scripts/m8_mirror_discovery_recall.py
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Add per-dex/per-factory RCA breakdown for FACTORY_NO_POOL + DexScreener null-age audit
+session_goal: Populate factory_address from config for DexScreener Aerodrome hints after variant resolution
 goal_status: BLOCKED
-primary_blocker_of_session: selection_verified_fresh_total=0 (STALE_BUT_POOL_EXISTS + Aerodrome factory_address="" for DexScreener hints)
-blocker_status_before: STALE_BUT_POOL_EXISTS / created_at enriched (cycle 6)
-blocker_status_after: STALE_BUT_POOL_EXISTS + RCA shows Aerodrome factory_address="" as root cause for 8 FACTORY_NO_POOL
+primary_blocker_of_session: selection_verified_fresh_total=0 (STALE_BUT_POOL_EXISTS + Aerodrome getPool returns no pool despite correct factory_address)
+blocker_status_before: Aerodrome FACTORY_NO_POOL with factory_address="" (cycle 8)
+blocker_status_after: Aerodrome FACTORY_NO_POOL with factory_address="0x420dd381b3" (correct ve33 factory, but getPool still returns no pool)
 close_allowed: true
-remaining_blockers: Aerodrome factory_address not populated for DexScreener hints; all pools >48h; 4 DexScreener null-age hints
+remaining_blockers: Aerodrome variant misclassification (ve33 vs slipstream); all pools >48h; 4 DexScreener null-age hints
 evidence_artifacts: data/tmp/m8_onchain_factory_scan_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
 docs_reread_confirmed: true
 
-## Fresh RCA (2026-07-03T13:05:00Z)
+## Fresh RCA (2026-07-03T13:45:00Z)
 
-### Overall metrics
+### Factory_address fix impact
 
-| Metric | Value |
-|--------|-------|
-| selection_verified_fresh_total | 0 |
-| recall_verified_pool_exists_total | 43 |
-| pool_exists_stale_total | 43 |
-| primary_blocker_recall | STALE_BUT_POOL_EXISTS |
+| Metric | Before (cycle 8) | After (cycle 9) | Delta |
+|--------|-----------------|-----------------|-------|
+| Aerodrome factory_address | "" (empty) | **0x420dd381b3** | **FIXED** |
+| factory_no_pool_by_factory: (empty) | 4 | **0** | -4 (eliminated) |
+| factory_no_pool_by_dex: aerodrome | 8 | 8 | 0 (still FACTORY_NO_POOL) |
+| factory_no_pool_by_dex: uniswap_v2 | 7 | 9 | +2 |
+| recall_verified_pool_exists | 43 | 41 | -2 |
+| selection_verified_fresh | 0 | 0 | 0 |
 
-### FACTORY_NO_POOL breakdown (new RCA)
+### Root cause shift
 
-| dex_id | count | root cause |
-|--------|-------|------------|
-| aerodrome | 8 | factory_address="" — DexScreener hints not enriched with Aerodrome factory |
-| uniswap_v2 | 7 | factory=0x8909dc15e4 set but getPool returns no pool |
+Factory_address is now correctly populated from config (`0x420dd381b31aef6683db6b902084cb0ffece40da` for ve33/stable). The `unknown`/empty factory bucket is eliminated. However, `FACTORY_NO_POOL` persists for 8 Aerodrome hints because `factory.getPool(token0, token1, fee)` on the ve33 factory returns no pool.
 
-| factory_address (prefix) | count | note |
-|--------------------------|-------|------|
-| (empty) | 4 | Aerodrome DexScreener hints — no factory |
-| 0x8909dc15e4 | 7 | Uniswap V2 factory — pool may not exist |
-| 0x420dd381b3 | 4 | Unknown factory |
+**Hypothesis**: These 8 pools are actually Slipstream pools (concentrated liquidity) misclassified as ve33 by `resolve_aerodrome_dex_variant()`. The resolver uses DexScreener `labels` and `type` fields, but these pairs have no labels → default to ve33. Slipstream pools use a different factory (`0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a`) and different getPool method signature.
 
-### factory_no_pool_samples (first 5)
-
-All 8 Aerodrome samples have `factory_address=""`, `fee=null`, `source=dexscreener`. This means DexScreener-sourced Aerodrome hints are not getting factory_address populated during hint creation. The `resolve_aerodrome_dex_variant()` resolver classifies the variant but doesn't set the factory address.
-
-Uniswap V2 samples have `factory_address="0x8909dc15e4..."`, `created_at_source="first_seen_block_proxy"`. Factory is set but getPool returns no pool — likely the pool doesn't exist on this factory.
-
-### DexScreener null-age histogram (new RCA)
-
-| dex_id | null_age_count |
-|--------|----------------|
-| aerodrome | 4 |
-
-4 DexScreener aerodrome hints have `created_at=None` (pairCreatedAt is null in DexScreener API response).
+**Evidence**: All 8 Aerodrome FACTORY_NO_POOL samples have:
+- `dex_id=aerodrome` (ve33 default)
+- `raw_dex_id=aerodrome`
+- `factory_address=0x420dd381b3` (ve33 factory)
+- `fee=None` (ve33 doesn't use fee, but slipstream does)
+- No labels in DexScreener data
 
 ## Code changes
 
-Commit `c0a34f5`:
-1. `mirror_recall_verify.py`: `verify_hints_for_recall()` — added `factory_no_pool_by_dex`, `factory_no_pool_by_factory`, `factory_no_pool_samples`, `dex_null_age_histogram` to metrics
-2. `mirror_discovery_recall.py`: `verify_supported_hints()` — same aggregation in the other entry point; `build_verify_rca()` — propagated new keys to RCA report
-3. `tests/unit/test_mirror_recall_verify.py` — 2 new tests: FACTORY_NO_POOL aggregation, dex_null_age histogram
-
-## Root cause analysis
-
-**Aerodrome FACTORY_NO_POOL (8 hints)**: DexScreener-sourced Aerodrome hints have `factory_address=""`. The `_pair_to_hint()` function in `dexscreener_hints.py` doesn't set `factory_address` for Aerodrome. The `resolve_aerodrome_dex_variant()` resolver determines the variant (ve33/slipstream/stable) but the factory address for each variant is not looked up from config.
-
-**Next code task**: In `dexscreener_hints.py` or `_pair_to_hint()`, after Aerodrome variant resolution, set `factory_address` from `config/exotic_base_anchor.yaml` dexes section. Aerodrome has different factories for ve33, slipstream, and stable variants.
-
-**uniswap_v2 FACTORY_NO_POOL (7 hints)**: Factory address is set but getPool returns no pool. These pools may genuinely not exist on the Uniswap V2 factory, or the factory address may be wrong for Base chain.
+Commit `c53b78a`:
+1. `dexscreener_hints.py`: After variant resolution, look up `factory_address` from `cfg["dexes"][dex_id]["factory"]` and set on PoolHint
+2. `tests/unit/test_m8_external_pool_hints.py`: 4 new tests (ve33, slipstream, stable, missing config)
 
 ## Next
 
 - Do not run M9 shadow until `selection_verified_fresh_total > 0` and `cycles_at_floor > 0`.
-- Next code task: populate `factory_address` for DexScreener Aerodrome hints from config after variant resolution.
-- Re-run scan + recall after factory_address fix to see if FACTORY_NO_POOL for Aerodrome drops.
+- Next investigation: Aerodrome variant resolution accuracy — try slipstream factory for pools where ve33 getPool fails. This could be a fallback chain (try ve33 first, then slipstream).
+- Alternative: query pool contract directly to determine pool type (Aerodrome pools have different contract interfaces for ve33 vs slipstream).
 - Cadence running still needed for fresh (<48h) pool discovery.
