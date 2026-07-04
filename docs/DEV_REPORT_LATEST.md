@@ -15,7 +15,7 @@ session_goal: Refresh rolling artifacts via canonical scanner and M8 mirror_reca
 goal_status: BLOCKED
 primary_blocker_of_session: selection_verified_fresh_total=0 (no fresh pools in DexScreener or 10000-block event lane window)
 blocker_status_before: Dashboard /api/summary stale (2026-05-12); M8 unsupported Aerodrome tail classifiable but not surfaced in full mirror_recall_fast due to RPC path
-dlocker_status_after: Canonical scanner refreshed long_scan_latest.json and run_summary_latest.json (2026-07-04T09:26:39Z); mirror_recall_fast re-run; dashboard /api/summary still stale because it reads m7_hot_rollup_latest.json (2026-06-01)
+blocker_status_after: Canonical scanner refreshed long_scan_latest.json and run_summary_latest.json (2026-07-04T09:26:39Z); mirror_recall_fast re-run; dashboard /api/summary still stale because it reads m7_hot_rollup_latest.json (2026-06-01)
 close_allowed: true
 remaining_blockers: selection_verified_fresh_total=0; m7_hot_rollup_latest.json stale; no fresh factory events in 10000-block window
 evidence_artifacts: data/runs/_rolling/long_scan_latest.json, data/runs/_rolling/run_summary_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json, data/tmp/m8_event_stream_lane_latest.json
