@@ -4,68 +4,84 @@
 timestamp_utc: 2026-07-04T09:26:39Z
 run_timestamp_utc: 2026-07-04T09:26:39Z
 goal_status: BLOCKED
-blocker_status_after: M9 fresh-selection blocked by market/cadence; rolling scanner refreshed but M7 hot rollup remains stale
+blocker_status_after: Fresh-delta admission still blocked; raw factory event discovery needed to find new long-tail tokens
 docs_reread_confirmed: true
-run_id: canonical-scanner-mirror-recall-fast-2026-07-04
-mode: start.py multi-chain scanner + start.py -mirror_recall_fast
-config: config/real_minimal.yaml,config/onboard_zksync_candidate.yaml,config/onboard_base_stage2.yaml,config/onboard_mantle_stage2.yaml,config/onboard_linea_stage1.yaml,config/onboard_scroll_stage1.yaml
+run_id: time-to-mirror-hot-delta-2026-07-04
+mode: start.py -time_to_mirror --hot, start.py -mirror_recall_fast
+config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Refresh rolling artifacts via canonical scanner and M8 mirror_recall_fast; restore dashboard-visible operational state
+session_goal: Run focused hot-delta time-to-mirror lane and mirror_recall_fast to isolate fresh-delta blocker
 goal_status: BLOCKED
-primary_blocker_of_session: selection_verified_fresh_total=0 (no fresh pools in DexScreener or 10000-block event lane window)
-blocker_status_before: Dashboard /api/summary stale (2026-05-12); M8 unsupported Aerodrome tail classifiable but not surfaced in full mirror_recall_fast due to RPC path
-blocker_status_after: Canonical scanner refreshed long_scan_latest.json and run_summary_latest.json (2026-07-04T09:26:39Z); mirror_recall_fast re-run; dashboard /api/summary still stale because it reads m7_hot_rollup_latest.json (2026-06-01)
+primary_blocker_of_session: selection_verified_fresh_total=0
+blocker_status_before: M8/M9 artifacts stale; unsupported Aerodrome tail classifiable but not surfaced; dashboard /api/summary stale
+blocker_status_after: Hot-delta lane partial run revealed factory_log events exist but are filtered out by token+anchor filter; mirror_recall_fast still selection_fresh=0; recall SLA exceeded
 close_allowed: true
-remaining_blockers: selection_verified_fresh_total=0; m7_hot_rollup_latest.json stale; no fresh factory events in 10000-block window
-evidence_artifacts: data/runs/_rolling/long_scan_latest.json, data/runs/_rolling/run_summary_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json, data/tmp/m8_event_stream_lane_latest.json
+remaining_blockers: selection_verified_fresh_total=0; no fresh factory events match tracked token set; M7 hot rollup stale
+evidence_artifacts: data/tmp/m8_event_stream_lane_latest.json, data/tmp/m8_onchain_factory_scan_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json, data/tmp/m8_time_to_mirror_sla_latest.json
 
-## Canonical multi-chain scanner results (2026-07-04T09:26:39Z)
+## Commands executed
 
-| Chain | Runs | PASS | NO_DATA | INFRA_FAIL | Signals | Net USDC | Notes |
-|-------|------|------|---------|------------|---------|----------|-------|
-| arbitrum_one | 3 | 3 | 0 | 0 | 36 | $96.36 | Only signal-producing chain |
-| base | 2 | 0 | 2 | 0 | 0 | $0.00 | NO_DATA |
-| zksync | 2 | 0 | 0 | 2 | 0 | $0.00 | INFRA_FAIL |
-| mantle | 2 | 0 | 0 | 2 | 0 | $0.00 | INFRA_FAIL |
-| linea | 2 | 0 | 0 | 2 | 0 | $0.00 | INFRA_FAIL |
-| scroll | 2 | 0 | 0 | 2 | 0 | $0.00 | Accepted fail |
-| **Total** | **13** | **3** | **2** | **8** | **36** | **$96.36** | Profitable RTs: 0 |
+```powershell
+py -3.11 scripts/check_rpc_endpoints.py --chain base --ws-timeout 15
+py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m8_event_stream_lane.py --chain base --max-tokens 713 --max-blocks 10000
+py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_zksync_candidate.yaml,config/onboard_base_stage2.yaml,config/onboard_mantle_stage2.yaml,config/onboard_linea_stage1.yaml,config/onboard_scroll_stage1.yaml --accepted-fail-chains scroll --max-fail-chains 5 --hours 0.10 --cycles 1 --sleep-seconds 0 --coverage-workers 2 --no-dashboard --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
+py -3.11 start.py -time_to_mirror --hot --no-dashboard --skip-shadow --force-rerun-steps
+py -3.11 start.py -mirror_recall_fast --no-dashboard --force-rerun-steps
+```
 
-Warnings:
-- CHAIN_ALL_POSITIVE [arbitrum_one]: 3 runs all PASS — check if data quality is real.
-- STATIC_PROBE_PATH [arbitrum_one]: same top pairs across last 3 runs — apparent stability may reflect narrow probe config, not market health.
+## Key findings from hot-delta lane
 
-## M8 event lane results
+### Event stream lane (500-block window, 50 tokens)
+- `logs_fetched`: 13
+- `pools_matched`: 0
+- `block_window`: 501
+- `rpc_lane_primary_source`: public_fallback
 
-- 10000 blocks / 713 tokens / Base chain: **0 factory events** caught.
-- 2000 blocks / 100 tokens / Base chain: **0 factory events** caught.
-- Conclusion: no fresh pool creations in the tracked token set for the last ~10000 blocks (~3.5h on Base).
+### On-chain factory scan (5001-block window, 50 tokens)
+- `factory_scan`: tokens=50, pools_found=50 (all existing/old pools)
+- `factory_log_scan`: logs_fetched=105, pools_matched=0
+- All discovered pools have `created_at` ~2026-06-07 and `first_seen_block` ~47M
+- Current head ~48.1M, so these pools are ~500k blocks old
 
-## M8 mirror_recall_fast results (latest run)
+### Interpretation
+Factory logs contain events (13 in 500 blocks, 105 in 5000 blocks), but **zero match the current tracked-token + anchor filter**. The tracked token set is stale and does not include tokens that are launching new pools. The system needs **raw factory event discovery first, token filtering second** to find fresh long-tail tokens.
 
-- all_dex_mirrors_total=75, supported=75, pool_exists=45, selection_fresh=0, stale_backlog=45.
-- existence_rca_bucket_histogram: FACTORY_MEMBERSHIP_FAIL=14, V4_POOLID_NOT_RESOLVED=16, STALE_BUT_POOL_EXISTS=43, V4_MISLABEL_V3_POOL=2.
-- factory_no_pool_by_dex: aerodrome=9, uniswap_v2=5.
-- unsupported_aerodrome_pool_histogram: {} in full run (single-token bootstrap test confirms classification works with productive RPC).
-- Primary blocker: selection_blocked_stale.
-- recall_sla_gate: blocked (latency_s=293.53 > max_s=180).
+## mirror_recall_fast results (latest run)
+
+- all_dex_mirrors_total=74, supported=74, pool_exists=43, selection_fresh=0, stale_backlog=43
+- existence_rca_bucket_histogram: FACTORY_MEMBERSHIP_FAIL=14, V4_POOLID_NOT_RESOLVED=16, STALE_BUT_POOL_EXISTS=43, V4_MISLABEL_V3_POOL=2
+- factory_no_pool_by_dex: aerodrome=9, uniswap_v2=5
+- unsupported_aerodrome_pool_histogram: {} (RPC path issue in full run)
+- recall_sla_gate: blocked (296.47s > 180s)
+- selection_verified_fresh_total=0
+
+## Multi-chain scanner results
+
+- 13 runs, PASS=3, NO_DATA=2, INFRA_FAIL=8
+- Signals only on arbitrum_one: 36 signals, net USDC $96.36
+- Profitable roundtrips: 0
+- Base: NO_DATA
 
 ## Dashboard state
 
-- Dashboard server alive at http://127.0.0.1:8099.
-- `/api/summary` still reports 2026-05-12 timestamp and `is_fresh=false` because it reads `data/runs/_rolling/m7_hot_rollup_latest.json` (last write 2026-06-01).
-- The canonical multi-chain scanner updates `long_scan_latest.json` and `run_summary_latest.json`, not `m7_hot_rollup_latest.json`.
-- `/api/m8/current` and `/api/m9/current` returned empty `timestamp`/`is_fresh`/`staleness_reason` after `mirror_recall_fast`; likely waiting for `-m8_m9` pipeline artifacts or a dashboard refresh.
+- `/api/summary` still stale (2026-05-12) because it reads `m7_hot_rollup_latest.json` (2026-06-01).
+- `/api/m8/current` and `/api/m9/current` return empty freshness fields.
 
-## Code changes this session
+## Breakthrough path
 
-- Commit `2dc2045`: `_eth_get_code` retry/backoff for transient RPC failures.
-- Worktree clean.
+The next code change should be a **raw factory log scanner** that:
+1. Scans factory PairCreated/PoolCreated logs without filtering by existing token set.
+2. Identifies new pools where one side is a known anchor (WETH, USDC, USDbC, cbBTC) and the other side is a new/untracked token.
+3. Adds new focus tokens to the watchlist with `refresh_lane=fresh_delta_lane`.
+4. Emits metric `fresh_factory_event_hints_total`.
+
+Without this, the system only re-verifies old pools for old tokens and cannot discover fresh long-tail mirrors.
 
 ## Next
 
-- Do not claim M9 REACHED: `selection_verified_fresh_total=0` and no fresh factory events.
-- To refresh dashboard `/api/summary`, the M7 hot runtime/soak must be run (produces `m7_hot_rollup_latest.json`). The multi-chain scanner is not the right tool for that panel.
-- Continue cadence running; a single 10000-block window cannot prove absence of fresh pools.
-- Update `Status_M9.md` only after `selection_verified_fresh_total > 0` and `fresh_long_tail_quote_ready > 0`.
+- Implement raw factory log discovery in `m8/discovery/onchain_factory_mirror_discovery.py`.
+- Add `fresh_factory_event_hints_total` to event_stream_lane and onchain_factory_scan artifacts.
+- Re-run `start.py -time_to_mirror --hot` after implementation.
+- Do not run M9 shadow until `selection_verified_fresh_total > 0`.
+- Update `Status_M9.md` only after fresh verified mirrors appear.
