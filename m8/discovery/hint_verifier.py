@@ -77,7 +77,7 @@ def _eth_call(rpc_url: str, to: str, data: str) -> Optional[str]:
         return None
 
 
-def _eth_get_code(rpc_url: str, address: str) -> str:
+def _eth_get_code(rpc_url: str, address: str, retries: int = 2) -> str:
     """Return deployed bytecode hex string, or empty string if empty/error."""
     payload = json.dumps(
         {
@@ -87,18 +87,26 @@ def _eth_get_code(rpc_url: str, address: str) -> str:
             "params": [address, "latest"],
         }
     ).encode("utf-8")
-    req = urllib.request.Request(
-        rpc_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        code = str((body.get("result") or "0x")).strip().lower()
-        return code if code not in ("0x", "") else ""
-    except Exception:
-        return ""
+    last_err: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(
+            rpc_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            code = str((body.get("result") or "0x")).strip().lower()
+            return code if code not in ("0x", "") else ""
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries:
+                import time
+
+                time.sleep(0.2 * (attempt + 1))
+            continue
+    return ""
 
 
 def _pool_has_bytecode_from_code(code: str) -> bool:
