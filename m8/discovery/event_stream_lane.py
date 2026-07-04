@@ -140,6 +140,7 @@ def run_incremental_factory_log_poll(
         "mode": "factory_log_poll",
         "events_emitted": len(events),
         "hints_from_poll": len(hints),
+        "fresh_factory_event_hints_total": len(events),
         "factory_log_stats": stats,
     }
 
