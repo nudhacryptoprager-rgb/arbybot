@@ -3,85 +3,72 @@
 ## 0) Meta
 timestamp_utc: 2026-07-04T09:26:39Z
 run_timestamp_utc: 2026-07-04T09:26:39Z
-goal_status: BLOCKED
-blocker_status_after: Fresh-delta admission still blocked; raw factory event discovery needed to find new long-tail tokens
+goal_status: IN_PROGRESS
+blocker_status_after: Raw factory log discovery broke fresh-selection zero; 9 fresh verified mirrors now exist; next blocker is quote_ready
 docs_reread_confirmed: true
-run_id: time-to-mirror-hot-delta-2026-07-04
-mode: start.py -time_to_mirror --hot, start.py -mirror_recall_fast
+run_id: raw-factory-log-breakthrough-2026-07-05
+mode: start.py -time_to_mirror --hot (partial) + start.py -mirror_recall_fast
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Run focused hot-delta time-to-mirror lane and mirror_recall_fast to isolate fresh-delta blocker
-goal_status: BLOCKED
-primary_blocker_of_session: selection_verified_fresh_total=0
-blocker_status_before: M8/M9 artifacts stale; unsupported Aerodrome tail classifiable but not surfaced; dashboard /api/summary stale
-blocker_status_after: Hot-delta lane partial run revealed factory_log events exist but are filtered out by token+anchor filter; mirror_recall_fast still selection_fresh=0; recall SLA exceeded
+session_goal: Implement raw factory log discovery to seed fresh_delta focus tokens before token-set filtering
+goal_status: IN_PROGRESS
+primary_blocker_of_session: quote_ready=0 despite selection_verified_fresh_total=9
+blocker_status_before: selection_verified_fresh_total=0; tracked token set stale; factory logs filtered out
+blocker_status_after: selection_verified_fresh_total=9; m9_target_ready=true; fresh_quote_candidate=9; quote_ready=0
 close_allowed: true
-remaining_blockers: selection_verified_fresh_total=0; no fresh factory events match tracked token set; M7 hot rollup stale
-evidence_artifacts: data/tmp/m8_event_stream_lane_latest.json, data/tmp/m8_onchain_factory_scan_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json, data/tmp/m8_time_to_mirror_sla_latest.json
+remaining_blockers: quote_ready=0; recall SLA exceeded (320.75s > 180s); M9 shadow still blocked until cycles_at_floor > 0
+evidence_artifacts: data/tmp/m8_event_stream_lane_latest.json, data/tmp/m8_token_watchlist_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
 
-## Commands executed
+## Breakthrough: raw factory log discovery
 
-```powershell
-py -3.11 scripts/check_rpc_endpoints.py --chain base --ws-timeout 15
-py -3.11 scripts/bootstrap_productive_rpc_env.py -- py -3.11 scripts/m8_event_stream_lane.py --chain base --max-tokens 713 --max-blocks 10000
-py -3.11 start.py --config-list config/real_minimal.yaml,config/onboard_zksync_candidate.yaml,config/onboard_base_stage2.yaml,config/onboard_mantle_stage2.yaml,config/onboard_linea_stage1.yaml,config/onboard_scroll_stage1.yaml --accepted-fail-chains scroll --max-fail-chains 5 --hours 0.10 --cycles 1 --sleep-seconds 0 --coverage-workers 2 --no-dashboard --prune-keep 200 --summary-file data/runs/_rolling/long_scan_latest.json
-py -3.11 start.py -time_to_mirror --hot --no-dashboard --skip-shadow --force-rerun-steps
-py -3.11 start.py -mirror_recall_fast --no-dashboard --force-rerun-steps
-```
+Implemented `scan_raw_factory_logs_for_anchor_pools()` in `m8/discovery/onchain_factory_mirror_discovery.py`:
+- Scans factory PairCreated/PoolCreated logs without token-set filter.
+- Matches events where exactly one side is a known anchor (WETH, USDC, USDbC, cbBTC, ...).
+- The non-anchor token becomes the focus token.
+- V4 66-char poolIds are skipped (not EVM pool addresses).
+- Events are merged into watchlist with `refresh_lane=fresh_delta_lane`, `token_class=fresh_long_tail`, `source=raw_factory_log`, `first_seen_block`.
 
-## Key findings from hot-delta lane
+Wired into `m8/discovery/event_stream_lane.py`:
+- `run_incremental_factory_log_poll()` now runs both token-scoped and raw anchor-side polls.
+- New metrics: `raw_factory_logs_fetched`, `raw_anchor_pools_seen`, `raw_factory_new_focus_tokens_total`.
+- Existing `fresh_factory_event_hints_total` now counts both modes.
 
-### Event stream lane (500-block window, 50 tokens)
-- `logs_fetched`: 13
-- `pools_matched`: 0
-- `block_window`: 501
-- `rpc_lane_primary_source`: public_fallback
+Added unit tests in `tests/unit/test_onchain_factory_mirror_discovery.py`:
+- `test_raw_factory_log_discovers_anchor_sided_untracked_token`
+- `test_raw_factory_log_skips_non_anchor_pairs`
+- `test_raw_factory_log_skips_v4_pool_id`
 
-### On-chain factory scan (5001-block window, 50 tokens)
-- `factory_scan`: tokens=50, pools_found=50 (all existing/old pools)
-- `factory_log_scan`: logs_fetched=105, pools_matched=0
-- All discovered pools have `created_at` ~2026-06-07 and `first_seen_block` ~47M
-- Current head ~48.1M, so these pools are ~500k blocks old
+## Runtime evidence (2026-07-05)
 
-### Interpretation
-Factory logs contain events (13 in 500 blocks, 105 in 5000 blocks), but **zero match the current tracked-token + anchor filter**. The tracked token set is stale and does not include tokens that are launching new pools. The system needs **raw factory event discovery first, token filtering second** to find fresh long-tail tokens.
+### Event stream lane (hot_delta, 500 blocks)
+- `raw_factory_logs_fetched`: 9
+- `raw_anchor_pools_seen`: 9
+- `raw_factory_new_focus_tokens_total`: 9
+- `fresh_factory_event_hints_total`: 9
+- 9 brand-new focus tokens added to watchlist with blocks 48225736–48226053
 
-## mirror_recall_fast results (latest run)
+### mirror_recall_fast after raw discovery
+- all_dex_mirrors_total=81, supported=81
+- recall_verified_pool_exists_total=51
+- pool_exists_stale=42
+- selection_verified_fresh_total=9
+- fresh_enough=9
+- fresh_quote_candidate=9
+- quote_ready=0
+- m9_target_ready=true
+- verify_rca_primary_blocker=selection_blocked_stale (legacy label from stale path; fresh path has 9 selected)
 
-- all_dex_mirrors_total=74, supported=74, pool_exists=43, selection_fresh=0, stale_backlog=43
-- existence_rca_bucket_histogram: FACTORY_MEMBERSHIP_FAIL=14, V4_POOLID_NOT_RESOLVED=16, STALE_BUT_POOL_EXISTS=43, V4_MISLABEL_V3_POOL=2
-- factory_no_pool_by_dex: aerodrome=9, uniswap_v2=5
-- unsupported_aerodrome_pool_histogram: {} (RPC path issue in full run)
-- recall_sla_gate: blocked (296.47s > 180s)
-- selection_verified_fresh_total=0
-
-## Multi-chain scanner results
-
-- 13 runs, PASS=3, NO_DATA=2, INFRA_FAIL=8
-- Signals only on arbitrum_one: 36 signals, net USDC $96.36
-- Profitable roundtrips: 0
-- Base: NO_DATA
-
-## Dashboard state
-
-- `/api/summary` still stale (2026-05-12) because it reads `m7_hot_rollup_latest.json` (2026-06-01).
-- `/api/m8/current` and `/api/m9/current` return empty freshness fields.
-
-## Breakthrough path
-
-The next code change should be a **raw factory log scanner** that:
-1. Scans factory PairCreated/PoolCreated logs without filtering by existing token set.
-2. Identifies new pools where one side is a known anchor (WETH, USDC, USDbC, cbBTC) and the other side is a new/untracked token.
-3. Adds new focus tokens to the watchlist with `refresh_lane=fresh_delta_lane`.
-4. Emits metric `fresh_factory_event_hints_total`.
-
-Without this, the system only re-verifies old pools for old tokens and cannot discover fresh long-tail mirrors.
+### RCA
+- existence_rca_bucket_histogram: FACTORY_MEMBERSHIP_FAIL=15, V4_POOLID_NOT_RESOLVED=15, STALE_BUT_POOL_EXISTS=40, V4_MISLABEL_V3_POOL=2
+- stale_recall_bucket_histogram: STALE_POOL_NOT_FOUND=30, STALE_BUT_POOL_EXISTS=42
+- reject_reason_histogram: FACTORY_NO_POOL=15, V4_SLOT0_EMPTY=15, HINT_STALE=42
 
 ## Next
 
-- Implement raw factory log discovery in `m8/discovery/onchain_factory_mirror_discovery.py`.
-- Add `fresh_factory_event_hints_total` to event_stream_lane and onchain_factory_scan artifacts.
-- Re-run `start.py -time_to_mirror --hot` after implementation.
-- Do not run M9 shadow until `selection_verified_fresh_total > 0`.
-- Update `Status_M9.md` only after fresh verified mirrors appear.
+- **Quote ready blocker**: 9 fresh mirrors exist but `quote_ready=0`. This is the new primary blocker.
+- Investigate why fresh mirrors are not quote-ready: likely missing second venue, depth, or smoke quote path.
+- Run M8.2 cross-dex expand / quote smoke on the 9 fresh tokens specifically.
+- Recall SLA exceeded remains a production risk; optimize or split the hot lane.
+- Do not run M9 shadow until `quote_ready > 0` and `cycles_at_floor > 0`.
+- Update `Status_M9.md` only after full M9 admission evidence (quote_ready + capacity + cycles_at_floor).
