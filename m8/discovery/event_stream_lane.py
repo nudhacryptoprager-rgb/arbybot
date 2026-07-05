@@ -92,6 +92,8 @@ def merge_events_into_watchlist(
             entry.setdefault("first_pool", pool)
         if ev.get("dex_id"):
             entry.setdefault("first_dex", ev.get("dex_id"))
+        if ev.get("source"):
+            entry.setdefault("source", ev.get("source"))
         if ev.get("block_number"):
             entry.setdefault("first_seen_block", int(ev["block_number"]))
         entry["event_stream_last_seen_ts"] = now_ts
