@@ -77,14 +77,23 @@ def merge_events_into_watchlist(
         focus = str(ev.get("focus_token") or ev.get("token") or "").lower()
         if not focus.startswith("0x"):
             continue
+        is_raw_factory = str(ev.get("source") or "").startswith("raw_factory")
         entry = dict(tokens.get(focus) or {})
         entry.setdefault("first_seen_ts", now_ts)
-        entry["refresh_lane"] = entry.get("refresh_lane") or "event_stream_lane"
-        entry["token_class"] = entry.get("token_class") or "fresh_long_tail"
+        # Raw factory-log focus tokens go straight to the fresh_delta lane;
+        # token-scoped poll events keep the generic event_stream_lane lane.
+        if is_raw_factory:
+            entry["refresh_lane"] = "fresh_delta_lane"
+            entry["token_class"] = "fresh_long_tail"
+        else:
+            entry["refresh_lane"] = entry.get("refresh_lane") or "event_stream_lane"
+            entry["token_class"] = entry.get("token_class") or "fresh_long_tail"
         if pool:
             entry.setdefault("first_pool", pool)
         if ev.get("dex_id"):
             entry.setdefault("first_dex", ev.get("dex_id"))
+        if ev.get("block_number"):
+            entry.setdefault("first_seen_block", int(ev["block_number"]))
         entry["event_stream_last_seen_ts"] = now_ts
         tokens[focus] = entry
         touched += 1
@@ -106,13 +115,23 @@ def run_incremental_factory_log_poll(
     max_blocks: int = 500,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Short-window getLogs poll for P0 factories (no full radar window)."""
+    """Short-window getLogs poll for P0 factories (no full radar window).
+
+    Polls in two modes:
+      1. Token-scoped: events for already tracked tokens (legacy behaviour).
+      2. Raw anchor-side: events where one token is a known anchor and the
+         other is an untracked focus token. This seeds the fresh_delta lane
+         with brand-new long-tail tokens before DexScreener sees them.
+    """
     from m8.discovery.onchain_factory_mirror_discovery import (
         load_expand_subset_tokens,
         scan_factory_logs_for_tokens,
+        scan_raw_factory_logs_for_anchor_pools,
     )
 
     config = _load_yaml_config(config_path)
+
+    # Legacy token-scoped poll.
     tokens = load_expand_subset_tokens(subset_path, max_tokens=max_tokens)
     hints, stats = scan_factory_logs_for_tokens(
         tokens,
@@ -132,16 +151,33 @@ def run_incremental_factory_log_poll(
                 "block_number": (h.raw or {}).get("block_number"),
             }
         )
-    if events:
-        merge_events_into_watchlist(events)
+
+    # New raw anchor-side poll: discover new focus tokens from factory logs.
+    raw_events, raw_stats = scan_raw_factory_logs_for_anchor_pools(
+        chain=chain,
+        config=config,
+        max_blocks=max_blocks,
+        dry_run=dry_run or os.environ.get("ARBY_SKIP_RPC") == "1",
+    )
+    if raw_events:
+        merge_events_into_watchlist(raw_events)
+        events.extend(raw_events)
+
+    all_events = events
     return {
         "schema_version": "m8_event_stream_lane_v1",
         "generated_at_utc": _iso_now(),
         "mode": "factory_log_poll",
-        "events_emitted": len(events),
+        "events_emitted": len(all_events),
         "hints_from_poll": len(hints),
-        "fresh_factory_event_hints_total": len(events),
+        "raw_factory_logs_fetched": raw_stats.get("logs_fetched", 0),
+        "raw_anchor_pools_seen": raw_stats.get("raw_anchor_pools_seen", 0),
+        "raw_factory_new_focus_tokens_total": raw_stats.get(
+            "raw_factory_new_focus_tokens_total", 0
+        ),
+        "fresh_factory_event_hints_total": len(all_events),
         "factory_log_stats": stats,
+        "raw_factory_log_stats": raw_stats,
     }
 
 

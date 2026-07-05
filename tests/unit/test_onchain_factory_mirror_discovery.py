@@ -297,6 +297,226 @@ def test_factory_log_get_logs_failover_after_alchemy_400():
     _merge_funnel_into_factory_log_stats(stats, funnel)
     assert logs == [{"log": "secondary"}]
     assert stats["log_chunks_ok"] == 1
+
+
+def test_raw_factory_log_discovers_anchor_sided_untracked_token():
+    """Raw factory scan returns focus_token = non-anchor token when anchor is present."""
+    from unittest.mock import MagicMock, patch
+    from dataclasses import replace
+
+    from discovery.new_pool_listener import FactoryConfig
+    from m8.discovery.onchain_factory_mirror_discovery import (
+        scan_raw_factory_logs_for_anchor_pools,
+    )
+
+    anchor_addr = "0x" + "a" * 40
+    untracked_addr = "0x" + "u" * 40
+    pool_addr = "0x" + "p" * 40
+
+    cfg = FactoryConfig(
+        chain="base",
+        dex="uniswap_v3",
+        adapter_type="uniswap_v3",
+        factory="0x" + "f" * 40,
+        event_name="PoolCreated",
+        event_signature="PoolCreated(address,address,uint24,int24,address)",
+        log_layout="v3_pool_created",
+        topic0="0x" + "t" * 64,
+        topic0_verified=True,
+        verification_from_block=10000,
+        verification_to_block=11000,
+    )
+
+    class _FakeEvent:
+        def __init__(self, token0, token1, pool):
+            self.token0 = token0
+            self.token1 = token1
+            self.pool = pool
+            self.block_number = 12345
+            self.tx_hash = "0x" + "x" * 64
+            self.log_index = 0
+            self.fee = 3000
+            self.tick_spacing = None
+            self.stable = None
+            self.hooks = None
+
+    fake_lane = MagicMock()
+    fake_lane.w3.is_connected.return_value = True
+    fake_lane.w3.eth.block_number = 13000
+    fake_lane.w3.to_checksum_address = lambda x: x
+    fake_lane.get_logs.return_value = ([{"raw": "log1"}], False, "")
+
+    with patch(
+        "m8.discovery.onchain_factory_mirror_discovery._anchor_pairs",
+        return_value=[("USDC", anchor_addr)],
+    ), patch(
+        "m8.discovery.onchain_factory_mirror_discovery._p0_dex_rows",
+        return_value=[{"dex_id": "uniswap_v3", "enabled_for_productive": True, "factory": "0x" + "f" * 40}],
+    ), patch(
+        "discovery.new_pool_listener.load_factory_config",
+        return_value=[cfg],
+    ), patch(
+        "m8.discovery.onchain_factory_mirror_discovery._build_factory_log_rpc_lane",
+        return_value=(fake_lane, MagicMock(), {}),
+    ), patch(
+        "discovery.new_pool_listener.parse_raw_log",
+        return_value=_FakeEvent(anchor_addr, untracked_addr, pool_addr),
+    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        events, stats = scan_raw_factory_logs_for_anchor_pools(
+            chain="base",
+            config={"anchor_tokens": ["USDC"]},
+            max_blocks=1000,
+        )
+
+    assert len(events) == 1
+    assert events[0]["focus_token"] == untracked_addr.lower()
+    assert events[0]["anchor_token"] == anchor_addr.lower()
+    assert events[0]["anchor_sym"] == "USDC"
+    assert events[0]["pool"] == pool_addr.lower()
+    assert events[0]["dex_id"] == "uniswap_v3"
+    assert stats["raw_anchor_pools_seen"] == 1
+    assert stats["raw_factory_new_focus_tokens_total"] == 1
+
+
+def test_raw_factory_log_skips_non_anchor_pairs():
+    """Raw scan ignores events where neither token is a known anchor."""
+    from unittest.mock import MagicMock, patch
+
+    from discovery.new_pool_listener import FactoryConfig
+    from m8.discovery.onchain_factory_mirror_discovery import (
+        scan_raw_factory_logs_for_anchor_pools,
+    )
+
+    cfg = FactoryConfig(
+        chain="base",
+        dex="uniswap_v3",
+        adapter_type="uniswap_v3",
+        factory="0x" + "f" * 40,
+        event_name="PoolCreated",
+        event_signature="PoolCreated(address,address,uint24,int24,address)",
+        log_layout="v3_pool_created",
+        topic0="0x" + "t" * 64,
+        topic0_verified=True,
+        verification_from_block=10000,
+        verification_to_block=11000,
+    )
+
+    class _FakeEvent:
+        def __init__(self):
+            self.token0 = "0x" + "a" * 40
+            self.token1 = "0x" + "b" * 40
+            self.pool = "0x" + "p" * 40
+            self.block_number = 12345
+            self.tx_hash = "0x" + "x" * 64
+            self.log_index = 0
+            self.fee = 3000
+            self.tick_spacing = None
+            self.stable = None
+            self.hooks = None
+
+    fake_lane = MagicMock()
+    fake_lane.w3.is_connected.return_value = True
+    fake_lane.w3.eth.block_number = 13000
+    fake_lane.w3.to_checksum_address = lambda x: x
+    fake_lane.get_logs.return_value = ([{"raw": "log1"}], False, "")
+
+    with patch(
+        "m8.discovery.onchain_factory_mirror_discovery._anchor_pairs",
+        return_value=[("USDC", "0x" + "c" * 40)],
+    ), patch(
+        "m8.discovery.onchain_factory_mirror_discovery._p0_dex_rows",
+        return_value=[{"dex_id": "uniswap_v3", "enabled_for_productive": True, "factory": "0x" + "f" * 40}],
+    ), patch(
+        "discovery.new_pool_listener.load_factory_config",
+        return_value=[cfg],
+    ), patch(
+        "m8.discovery.onchain_factory_mirror_discovery._build_factory_log_rpc_lane",
+        return_value=(fake_lane, MagicMock(), {}),
+    ), patch(
+        "discovery.new_pool_listener.parse_raw_log",
+        return_value=_FakeEvent(),
+    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        events, stats = scan_raw_factory_logs_for_anchor_pools(
+            chain="base",
+            config={"anchor_tokens": ["USDC"]},
+            max_blocks=1000,
+        )
+
+    assert events == []
+    assert stats["raw_anchor_pools_seen"] == 0
+
+
+def test_raw_factory_log_skips_v4_pool_id():
+    """Raw scan ignores V4-style 66-char poolIds (not EVM pool addresses)."""
+    from unittest.mock import MagicMock, patch
+
+    from discovery.new_pool_listener import FactoryConfig
+    from m8.discovery.onchain_factory_mirror_discovery import (
+        scan_raw_factory_logs_for_anchor_pools,
+    )
+
+    anchor_addr = "0x" + "a" * 40
+    untracked_addr = "0x" + "u" * 40
+    v4_pool_id = "0x" + "p" * 64
+
+    cfg = FactoryConfig(
+        chain="base",
+        dex="uniswap_v4",
+        adapter_type="uniswap_v4",
+        factory="0x" + "f" * 40,
+        event_name="Initialize",
+        event_signature="Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)",
+        log_layout="v4_initialize",
+        topic0="0x" + "t" * 64,
+        topic0_verified=True,
+        verification_from_block=10000,
+        verification_to_block=11000,
+        discovery_only=False,
+    )
+
+    class _FakeEvent:
+        def __init__(self):
+            self.token0 = anchor_addr
+            self.token1 = untracked_addr
+            self.pool = v4_pool_id
+            self.block_number = 12345
+            self.tx_hash = "0x" + "x" * 64
+            self.log_index = 0
+            self.fee = 3000
+            self.tick_spacing = None
+            self.stable = None
+            self.hooks = None
+
+    fake_lane = MagicMock()
+    fake_lane.w3.is_connected.return_value = True
+    fake_lane.w3.eth.block_number = 13000
+    fake_lane.w3.to_checksum_address = lambda x: x
+    fake_lane.get_logs.return_value = ([{"raw": "log1"}], False, "")
+
+    with patch(
+        "m8.discovery.onchain_factory_mirror_discovery._anchor_pairs",
+        return_value=[("USDC", anchor_addr)],
+    ), patch(
+        "m8.discovery.onchain_factory_mirror_discovery._p0_dex_rows",
+        return_value=[{"dex_id": "uniswap_v4", "enabled_for_productive": True, "factory": "0x" + "f" * 40}],
+    ), patch(
+        "discovery.new_pool_listener.load_factory_config",
+        return_value=[cfg],
+    ), patch(
+        "m8.discovery.onchain_factory_mirror_discovery._build_factory_log_rpc_lane",
+        return_value=(fake_lane, MagicMock(), {}),
+    ), patch(
+        "discovery.new_pool_listener.parse_raw_log",
+        return_value=_FakeEvent(),
+    ), patch.dict("os.environ", {"ARBY_SKIP_RPC": "0"}, clear=False):
+        events, stats = scan_raw_factory_logs_for_anchor_pools(
+            chain="base",
+            config={"anchor_tokens": ["USDC"]},
+            max_blocks=1000,
+        )
+
+    assert events == []
+    assert stats["raw_anchor_pools_seen"] == 0
     assert stats["log_fetch_errors"] == 0
     assert stats["log_provider_fallbacks"] >= 1
 

@@ -681,6 +681,163 @@ def scan_factory_logs_for_tokens(
     return hints, stats
 
 
+def scan_raw_factory_logs_for_anchor_pools(
+    chain: str,
+    config: Dict[str, Any],
+    *,
+    max_blocks: int = FACTORY_LOG_MAX_BLOCKS,
+    dry_run: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Scan factory logs without a token-set filter; return anchor-sided pools.
+
+    Strategy flip: discover new long-tail tokens from raw PairCreated/PoolCreated
+    events where one side is a known anchor (WETH, USDC, USDbC, cbBTC, ...).
+    The non-anchor token becomes the focus token and is seeded into the
+    fresh_delta lane. V4 Initialize events are skipped here because V4 poolId
+    is not an EVM pool address and needs separate handling.
+    """
+    if dry_run or os.environ.get("ARBY_SKIP_RPC") == "1":
+        return [], {"skipped": "dry_run_or_arby_skip_rpc"}
+
+    try:
+        from discovery.new_pool_listener import (
+            FactoryConfig,
+            load_factory_config,
+            parse_raw_log,
+        )
+    except ImportError as exc:
+        return [], {"error": f"import_failed:{exc}"}
+
+    productive = {d["dex_id"] for d in _p0_dex_rows(config)}
+    factories: List[FactoryConfig] = []
+    try:
+        for cfg in load_factory_config(
+            FACTORY_LOG_CONFIG_PATH,
+            chain_filter=chain,
+        ):
+            if cfg.discovery_only:
+                continue
+            if cfg.dex in productive:
+                factories.append(cfg)
+    except Exception as exc:
+        _log.warning("factory log config load failed: %s", exc)
+        return [], {"error": str(exc)}
+
+    anchor_set = {a.lower() for _, a in _anchor_pairs(config)}
+    if not anchor_set:
+        return [], {"error": "no_anchors_configured"}
+
+    try:
+        rpc_lane, funnel, rpc_diag = _build_factory_log_rpc_lane(chain)
+    except Exception as exc:
+        _log.warning("factory log rpc lane failed: %s", exc)
+        return [], {"error": f"rpc_lane_failed:{exc}"}
+
+    from web3 import Web3
+
+    w3 = rpc_lane.w3
+    if not w3.is_connected():
+        return [], {"error": "rpc_not_connected"}
+
+    head = int(w3.eth.block_number)
+    scan_from = max(1, head - int(max_blocks) + 1)
+
+    stats: Dict[str, Any] = {
+        "factories": len(factories),
+        "scan_from_block": scan_from,
+        "head_block": head,
+        "block_window": head - scan_from + 1,
+        "hot_chunk_blocks": FACTORY_LOG_HOT_CHUNK_BLOCKS,
+        "rpc_lane_primary_source": rpc_diag.get("primary_source"),
+        "rpc_lane_secondary_source": rpc_diag.get("secondary_source"),
+        **_empty_factory_log_stats(),
+    }
+    seen_pools: Set[str] = set()
+    events: List[Dict[str, Any]] = []
+    samples: List[Dict[str, Any]] = []
+    checksum = Web3.to_checksum_address
+
+    for fcfg in factories:
+        topic0 = fcfg.topic0
+        if not topic0:
+            stats["factories_skipped_no_topic0"] = int(
+                stats.get("factories_skipped_no_topic0") or 0
+            ) + 1
+            continue
+        logs = _fetch_factory_logs_chunked(
+            rpc_lane,
+            factory=fcfg.factory,
+            topic0=topic0,
+            from_block=scan_from,
+            to_block=head,
+            chunk_blocks=FACTORY_LOG_HOT_CHUNK_BLOCKS,
+            stats=stats,
+            checksum_fn=checksum,
+        )
+        stats["logs_fetched"] += len(logs)
+        for raw in logs:
+            ev = parse_raw_log(dict(raw), fcfg)
+            if ev is None:
+                continue
+            t0 = str(ev.token0 or "").lower()
+            t1 = str(ev.token1 or "").lower()
+            pool = str(ev.pool or "").lower()
+            # V4 poolId is 66 hex chars (0x + 32 bytes); it is not an EVM pool
+            # contract address and needs separate handling. Skip here.
+            if not pool or len(pool) != 42 or pool in seen_pools:
+                continue
+            # Require exactly one anchor side; the other token is the focus.
+            t0_is_anchor = t0 in anchor_set
+            t1_is_anchor = t1 in anchor_set
+            if t0_is_anchor and t1_is_anchor:
+                continue
+            if not t0_is_anchor and not t1_is_anchor:
+                continue
+            focus, anchor = (t1, t0) if t0_is_anchor else (t0, t1)
+            anchor_sym = next(
+                (s for s, a in _anchor_pairs(config) if a.lower() == anchor),
+                "",
+            )
+            seen_pools.add(pool)
+            event = {
+                "source": "raw_factory_log",
+                "focus_token": focus,
+                "anchor_token": anchor,
+                "anchor_sym": anchor_sym,
+                "pool": pool,
+                "pool_id": "",
+                "dex_id": fcfg.dex,
+                "factory_address": fcfg.factory,
+                "block_number": ev.block_number,
+                "tx_hash": ev.tx_hash,
+                "log_index": ev.log_index,
+                "fee": ev.fee,
+                "tick_spacing": ev.tick_spacing,
+                "stable": ev.stable,
+                "hooks": ev.hooks,
+            }
+            events.append(event)
+            if len(samples) < 20:
+                samples.append(
+                    {
+                        "dex_id": fcfg.dex,
+                        "pool": pool[:42],
+                        "token0_addr": t0[:42],
+                        "token1_addr": t1[:42],
+                        "anchor": anchor[:42],
+                        "focus_token": focus[:42],
+                        "anchor_sym": anchor_sym,
+                        "block_number": ev.block_number,
+                    }
+                )
+
+    _merge_funnel_into_factory_log_stats(stats, funnel)
+    stats["raw_anchor_pools_seen"] = len(events)
+    stats["raw_factory_new_focus_tokens_total"] = len({e["focus_token"] for e in events})
+    stats["samples"] = samples
+    return events, stats
+
+
 def minimal_verify_hints(
     hints: List[PoolHint],
     *,
