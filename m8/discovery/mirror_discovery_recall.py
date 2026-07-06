@@ -432,6 +432,7 @@ def run_mirror_discovery_recall(
     token_pool_universe: bool = True,
     graph_closure_only: bool = True,
     anchor_constrained: bool = False,
+    run_quote_smoke: bool = False,
 ) -> Tuple[List[PoolHint], Dict[str, Any]]:
     from m8.discovery.token_pool_universe import (
         anchor_addresses_from_config,
@@ -507,6 +508,8 @@ def run_mirror_discovery_recall(
     verified, rca, _reject_rows = verify_supported_hints(
         verify_order, chain=chain, dry_run=dry_run
     )
+    if run_quote_smoke:
+        run_fresh_mirror_quote_smoke(verified, chain=chain, config=cfg)
     mirrors = [mirror_row_from_hint(h) for h in verified]
     metrics = compute_recall_metrics(mirrors)
     recall_exists_total = sum(1 for row in mirrors if row.get("recall_verified_pool_exists"))
@@ -780,6 +783,7 @@ def _hint_to_smoke_route(hint: PoolHint) -> Dict[str, Any]:
     adapter = dex_id
     if dex_id == "aerodrome":
         adapter = "aerodrome_v2_stable"
+    focus = str(hint.focus_token or "").lower()
     return {
         "route_id": f"{hint.focus_token}:{hint.pool_address}:{dex_id}",
         "dex_id": dex_id,
@@ -789,6 +793,8 @@ def _hint_to_smoke_route(hint: PoolHint) -> Dict[str, Any]:
         "token0_addr": hint.token0_addr,
         "token1_addr": hint.token1_addr,
         "focus_token": hint.focus_token,
+        "focus_token_address": focus,
+        "focus_token_symbol": focus[:10],
         "quote_smoke_status": "not_run",
         "raw_dex_id": raw.get("raw_dex_id"),
     }
@@ -821,6 +827,46 @@ def run_stale_mirror_quote_smoke(
         pipeline_mode=True,
         force_retry=True,
     )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(json.dumps({**result, "routes": routes}, indent=2), encoding="utf-8")
+    return result
+
+
+def run_fresh_mirror_quote_smoke(
+    hints: List[PoolHint],
+    *,
+    chain: str = "base",
+    config: Optional[Dict[str, Any]] = None,
+    checkpoint_path: Path = Path("data/tmp/m8_mirror_recall_fresh_quote_smoke_latest.json"),
+) -> Dict[str, Any]:
+    """Targeted quote smoke for fresh pool_exists candidates (any source)."""
+    fresh_candidates = [
+        h
+        for h in hints
+        if _hint_raw_bool(h, "fresh_quote_candidate")
+    ]
+    if not fresh_candidates:
+        return {"attempted": 0, "quote_ok": 0, "skipped": len(hints), "reason": "NO_FRESH_CANDIDATES"}
+    routes = [_hint_to_smoke_route(h) for h in fresh_candidates]
+    from m8.discovery.mirror_quote_smoke import smoke_mirror_same_pair_routes
+
+    result = smoke_mirror_same_pair_routes(
+        routes,
+        chain=chain,
+        config=config,
+        checkpoint_path=str(checkpoint_path),
+        pipeline_mode=True,
+        force_retry=True,
+    )
+    from m8.discovery.mirror_quote_smoke import _status_quoteable
+
+    quote_ok_count = 0
+    for h, r in zip(fresh_candidates, routes):
+        if _status_quoteable(r.get("quote_smoke_status")):
+            h.hint_status = QUOTE_SMOKE_OK
+            (h.raw or {}).setdefault("quote_smoke_status", str(r.get("quote_smoke_status") or "QUOTE_OK"))
+            quote_ok_count += 1
+    result["quote_ready_candidates"] = quote_ok_count
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(json.dumps({**result, "routes": routes}, indent=2), encoding="utf-8")
     return result
@@ -941,6 +987,7 @@ def run_mirror_discovery_recall_from_subset(
     dry_run: bool = False,
     use_cache: bool = False,
     anchor_constrained: bool = False,
+    run_quote_smoke: bool = False,
 ) -> Dict[str, Any]:
     tokens = _load_token_list(subset_path, max_tokens=max_tokens)
     _hints, payload = run_mirror_discovery_recall(
@@ -948,6 +995,7 @@ def run_mirror_discovery_recall_from_subset(
         dry_run=dry_run,
         use_cache=use_cache,
         anchor_constrained=anchor_constrained,
+        run_quote_smoke=run_quote_smoke,
     )
     write_mirror_discovery_recall(payload, output_path=output_path)
     return payload

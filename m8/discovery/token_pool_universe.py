@@ -140,11 +140,18 @@ def load_factory_recall_hints(
     *,
     scan_path: str = _DEFAULT_SCAN_PATH,
     hints_path: str = "data/runs/_rolling/m8_external_pool_hints_latest.json",
+    event_stream_path: str = "data/tmp/m8_event_stream_lane_latest.json",
 ) -> List[PoolHint]:
-    """Merge factory-log / on-chain factory hints for fresh token subset."""
+    """Merge factory-log / on-chain factory hints for fresh token subset.
+
+    Also ingests raw anchor-sided factory-log events produced by the event
+    stream lane so that ``mirror_recall_fast`` (which skips the heavy on-chain
+    factory scan) can still see freshly created anchor pools.
+    """
     import json
     from pathlib import Path
 
+    from m8.discovery.block_timestamp_resolver import resolve_block_timestamps
     from m8.discovery.dex_coverage_gate import stamp_hint_support_status
     from m8.discovery.pool_hints import load_hints_artifact
 
@@ -205,6 +212,73 @@ def load_factory_recall_hints(
                     )
                 )
         except (json.JSONDecodeError, OSError):
+            pass
+
+    # Ingest raw factory-log events from the event stream lane. These are
+    # anchor-sided pools discovered without a token-set filter, so they seed
+    # the fresh_delta lane even when the on-chain scan artifact is stale.
+    esp = Path(event_stream_path)
+    if esp.is_file():
+        try:
+            ev_doc = json.loads(esp.read_text(encoding="utf-8"))
+            raw_events = ev_doc.get("raw_factory_log_stats", {}).get("samples") or []
+            # Prefer the full events list if present (newer schema), otherwise
+            # fall back to the sampled summary.
+            if not raw_events:
+                raw_events = [
+                    e
+                    for e in ev_doc.get("events_emitted", []) or []
+                    if str(e.get("source") or "").startswith("raw_factory")
+                ]
+            # Normalize source to canonical factory_log for downstream quote-smoke
+            # and selection passes.
+            for e in raw_events:
+                e["source"] = "factory_log"
+            block_numbers = {
+                int(e["block_number"])
+                for e in raw_events
+                if isinstance(e.get("block_number"), int)
+            }
+            block_ts = resolve_block_timestamps(block_numbers) if block_numbers else {}
+            for e in raw_events:
+                focus = _norm(e.get("focus_token"))
+                if not focus or focus not in fresh_tokens:
+                    continue
+                anchor = _norm(e.get("anchor_token") or e.get("anchor"))
+                pool = _norm(e.get("pool") or e.get("pool_address"))
+                if not pool or not anchor:
+                    continue
+                # Reconstruct token pair. Actual order does not matter for recall
+                # verification; focus must be one of the two sides.
+                t0, t1 = anchor, focus
+                block_num = e.get("block_number")
+                created_at = block_ts.get(int(block_num)) if isinstance(block_num, int) else None
+                out.append(
+                    stamp_hint_support_status(
+                        PoolHint(
+                            source="factory_log",
+                            chain="base",
+                            dex_id=str(e.get("dex_id") or ""),
+                            pool_address=pool,
+                            focus_token=focus,
+                            token0_addr=t0,
+                            token1_addr=t1,
+                            fee=e.get("fee") if isinstance(e.get("fee"), int) else None,
+                            factory_address=str(e.get("factory_address") or "").lower(),
+                            created_at=created_at,
+                            hint_status="HINT_FACTORY_VERIFIED",
+                            raw={
+                                "pool_universe_type": FRESH_TOKEN_POOL,
+                                "from_event_stream_lane": True,
+                                "raw_dex_id": str(e.get("dex_id") or ""),
+                                "created_at_source": "first_seen_block_proxy",
+                                "first_seen_block": block_num,
+                            },
+                        ),
+                        cfg,
+                    )
+                )
+        except (json.JSONDecodeError, OSError, KeyError):
             pass
     return out
 

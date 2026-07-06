@@ -248,6 +248,7 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "token_pool_universe": True,
         "graph_closure_only": True,
         "anchor_constrained": True,
+        "run_quote_smoke": True,
         "defer_heavy_verify": True,
     },
     "audit_full": {
@@ -1190,6 +1191,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         recall_only = bool(prof.get("recall_only"))
         defer_verify = bool(prof.get("defer_heavy_verify"))
         anchor_constrained = bool(prof.get("anchor_constrained"))
+        run_quote_smoke = bool(prof.get("run_quote_smoke"))
         verify_subset = _verify_token_subset_path()
         recall_cmd = _py_cmd(
             "scripts/m8_mirror_discovery_recall.py",
@@ -1205,6 +1207,8 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
         if anchor_constrained:
             recall_cmd.append("--anchor-constrained")
+        if run_quote_smoke:
+            recall_cmd.append("--run-quote-smoke")
         if hot_expand:
             steps.append(
                 _pipeline_step(

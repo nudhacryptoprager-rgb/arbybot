@@ -47,6 +47,11 @@ def main() -> int:
         help="Scan only fresh target tokens and accept only fresh_token↔configured_anchor pairs",
     )
     p.add_argument(
+        "--run-quote-smoke",
+        action="store_true",
+        help="Run lightweight quoter smoke on fresh factory-log candidates",
+    )
+    p.add_argument(
         "--write-supported-hints",
         action="store_true",
         help="Also write supported+verified hints to rolling artifact",
@@ -77,6 +82,7 @@ def main() -> int:
         token_pool_universe=bool(args.token_pool_universe),
         graph_closure_only=not bool(args.no_graph_closure_only),
         anchor_constrained=bool(args.anchor_constrained),
+        run_quote_smoke=bool(args.run_quote_smoke),
     )
     write_mirror_discovery_recall(payload, output_path=Path(args.output))
     if args.write_supported_hints:
