@@ -42,6 +42,11 @@ def main() -> int:
         help="Reuse DexScreener cache (default: live fetch for max recall diversity)",
     )
     p.add_argument(
+        "--anchor-constrained",
+        action="store_true",
+        help="Scan only fresh target tokens and accept only fresh_token↔configured_anchor pairs",
+    )
+    p.add_argument(
         "--write-supported-hints",
         action="store_true",
         help="Also write supported+verified hints to rolling artifact",
@@ -71,6 +76,7 @@ def main() -> int:
         use_cache=bool(args.use_cache),
         token_pool_universe=bool(args.token_pool_universe),
         graph_closure_only=not bool(args.no_graph_closure_only),
+        anchor_constrained=bool(args.anchor_constrained),
     )
     write_mirror_discovery_recall(payload, output_path=Path(args.output))
     if args.write_supported_hints:

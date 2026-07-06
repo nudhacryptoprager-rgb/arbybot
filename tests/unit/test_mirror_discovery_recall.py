@@ -5,6 +5,7 @@ import json
 
 from m8.discovery.dex_coverage_gate import classify_dex_support_status
 from m8.discovery.dexscreener_hints import _pair_to_hint
+from m8.discovery.dexscreener_hints import filter_anchor_mirror_pairs
 from m8.discovery.mirror_discovery_recall import (
     EXISTENCE_VERIFY_QUEUE_PATH,
     QUOTE_READY_QUEUE_PATH,
@@ -265,3 +266,67 @@ def test_m9_admission_gate_opens_with_quote_and_second_venue():
     })
     assert ok is True
     assert reason == "M9_ADMISSION_POSSIBLE"
+
+
+def test_filter_anchor_mirror_pairs_keeps_only_focus_anchor_pairs():
+    anchor = "0x" + "a" * 40
+    focus = "0x" + "f" * 40
+    random_tok = "0x" + "r" * 40
+    kept, metrics = filter_anchor_mirror_pairs(
+        [
+            PoolHint(
+                source="dexscreener",
+                chain="base",
+                dex_id="uniswap_v3",
+                pool_address="0x" + "p" * 40,
+                token0_addr=focus,
+                token1_addr=anchor,
+                focus_token=focus,
+            ),
+            PoolHint(
+                source="dexscreener",
+                chain="base",
+                dex_id="uniswap_v3",
+                pool_address="0x" + "q" * 40,
+                token0_addr=focus,
+                token1_addr=random_tok,
+                focus_token=focus,
+            ),
+            PoolHint(
+                source="dexscreener",
+                chain="base",
+                dex_id="uniswap_v3",
+                pool_address="0x" + "s" * 40,
+                token0_addr=anchor,
+                token1_addr=random_tok,
+                focus_token=anchor,
+            ),
+        ],
+        anchor_addrs={anchor},
+    )
+    assert len(kept) == 1
+    assert kept[0].focus_token == focus
+    assert metrics["dexscreener_pairs_seen"] == 3
+    assert metrics["anchor_pairs_seen"] == 1
+    assert metrics["anchor_pair_rejects"]["ANCHOR_UNKNOWN"] == 2
+    assert metrics["anchor_pair_rejects"]["PAIR_NOT_FOCUS_ANCHOR"] == 0
+
+
+def test_filter_anchor_mirror_pairs_rejects_missing_focus():
+    anchor = "0x" + "a" * 40
+    kept, metrics = filter_anchor_mirror_pairs(
+        [
+            PoolHint(
+                source="dexscreener",
+                chain="base",
+                dex_id="uniswap_v3",
+                pool_address="0x" + "p" * 40,
+                token0_addr=anchor,
+                token1_addr="0x" + "b" * 40,
+                focus_token="",
+            ),
+        ],
+        anchor_addrs={anchor},
+    )
+    assert kept == []
+    assert metrics["anchor_pair_rejects"]["FOCUS_MISSING"] == 1

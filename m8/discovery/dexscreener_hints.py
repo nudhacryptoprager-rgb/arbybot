@@ -6,7 +6,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from m8.discovery.dexscreener_cache import get_cached_pairs, set_cached_pairs
 from m8.discovery.pool_hints import PoolHint, normalize_dex_id
@@ -48,6 +48,44 @@ def _get_json(url: str, *, timeout_s: float = _DEFAULT_TIMEOUT_S) -> Dict[str, A
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def filter_anchor_mirror_pairs(
+    hints: List[PoolHint],
+    *,
+    anchor_addrs: Set[str],
+) -> Tuple[List[PoolHint], Dict[str, Any]]:
+    """Keep only DexScreener pairs where one side is the focus token and the other is a configured anchor.
+
+    Returns the kept hints and a metrics dict with reject taxonomy.
+    """
+    anchor_norm = {a.lower() for a in anchor_addrs if str(a).lower().startswith("0x")}
+    kept: List[PoolHint] = []
+    rejects: Dict[str, int] = {
+        "PAIR_NOT_FOCUS_ANCHOR": 0,
+        "ANCHOR_UNKNOWN": 0,
+        "FOCUS_MISSING": 0,
+    }
+    for h in hints:
+        focus = str(h.focus_token or "").lower()
+        t0 = str(h.token0_addr or "").lower()
+        t1 = str(h.token1_addr or "").lower()
+        if not focus.startswith("0x"):
+            rejects["FOCUS_MISSING"] += 1
+            continue
+        if focus not in (t0, t1):
+            rejects["PAIR_NOT_FOCUS_ANCHOR"] += 1
+            continue
+        other = t1 if focus == t0 else t0
+        if other not in anchor_norm:
+            rejects["ANCHOR_UNKNOWN"] += 1
+            continue
+        kept.append(h)
+    return kept, {
+        "dexscreener_pairs_seen": len(hints),
+        "anchor_pairs_seen": len(kept),
+        "anchor_pair_rejects": rejects,
+    }
 
 
 def fetch_token_hints(

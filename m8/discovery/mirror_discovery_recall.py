@@ -431,6 +431,7 @@ def run_mirror_discovery_recall(
     use_cache: bool = False,
     token_pool_universe: bool = True,
     graph_closure_only: bool = True,
+    anchor_constrained: bool = False,
 ) -> Tuple[List[PoolHint], Dict[str, Any]]:
     from m8.discovery.token_pool_universe import (
         anchor_addresses_from_config,
@@ -447,9 +448,19 @@ def run_mirror_discovery_recall(
     cfg = config or _load_yaml_config(DEFAULT_CONFIG_PATH)
     fresh_set = fresh_token_addresses(tokens)
     anchor_addrs = anchor_addresses_from_config(cfg)
+    # In anchor-constrained mode we scan DexScreener only for fresh target tokens
+    # (raw factory log seeds / pending single-venue watch), then accept only pairs
+    # where the other side is a configured anchor.
+    scan_tokens = list(fresh_set) if anchor_constrained else list(tokens)
+    anchor_filter_metrics: Dict[str, Any] = {
+        "anchor_constrained": anchor_constrained,
+        "fresh_targets_scanned": len(fresh_set) if anchor_constrained else 0,
+    }
     all_hints: List[PoolHint] = []
-    for i in range(0, len(tokens), DEXSCREENER_BATCH_MAX):
-        chunk = tokens[i : i + DEXSCREENER_BATCH_MAX]
+    dexscreener_pairs_seen = 0
+    anchor_pairs_seen = 0
+    for i in range(0, len(scan_tokens), DEXSCREENER_BATCH_MAX):
+        chunk = scan_tokens[i : i + DEXSCREENER_BATCH_MAX]
         batch = fetch_token_hints_batch(
             chunk,
             chain=chain,
@@ -459,7 +470,18 @@ def run_mirror_discovery_recall(
             use_cache=use_cache,
         )
         for rows in batch.values():
-            all_hints.extend(rows)
+            if anchor_constrained:
+                from m8.discovery.dexscreener_hints import filter_anchor_mirror_pairs
+
+                filtered, fm = filter_anchor_mirror_pairs(rows, anchor_addrs=anchor_addrs)
+                dexscreener_pairs_seen += int(fm.get("dexscreener_pairs_seen") or 0)
+                anchor_pairs_seen += int(fm.get("anchor_pairs_seen") or 0)
+                all_hints.extend(filtered)
+            else:
+                all_hints.extend(rows)
+    if anchor_constrained:
+        anchor_filter_metrics["dexscreener_pairs_seen"] = dexscreener_pairs_seen
+        anchor_filter_metrics["anchor_pairs_seen"] = anchor_pairs_seen
     if token_pool_universe:
         factory_hints = load_factory_recall_hints(fresh_set)
         all_hints.extend(factory_hints)
@@ -496,18 +518,25 @@ def run_mirror_discovery_recall(
         for h in verified
         if str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK
     )
+    # Second-pool / second-venue readiness is computed from verified on-chain
+    # pools. A focus token has a second pool if it has >=2 distinct verified
+    # pool addresses. It has a second venue if those pools are on distinct dexes.
+    focus_pools_main: Dict[str, Set[str]] = {}
     focus_dexes_main: Dict[str, Set[str]] = {}
     for h in verified:
-        if str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK:
+        if _hint_raw_bool(h, "recall_verified_pool_exists"):
             focus = str(h.focus_token or "").lower()
+            pool = str(h.pool_address or "").lower()
             dex = str(h.dex_id or "").lower()
+            if focus and pool:
+                focus_pools_main.setdefault(focus, set()).add(pool)
             if focus and dex:
                 focus_dexes_main.setdefault(focus, set()).add(dex)
+    second_pool_ready_total = sum(
+        1 for focus, pools in focus_pools_main.items() if len(pools) >= 2
+    )
     second_venue_ready_total = sum(
-        1
-        for h in verified
-        if (str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK)
-        and len(focus_dexes_main.get(str(h.focus_token or "").lower(), set())) >= 2
+        1 for focus, dexes in focus_dexes_main.items() if len(dexes) >= 2
     )
     age_buckets = Counter(str(row.get("mirror_age_bucket") or "unknown") for row in mirrors)
     fresh_age_buckets = Counter(_fresh_age_bucket(h.created_at) for h in verified if _hint_raw_bool(h, "selection_verified_fresh"))
@@ -542,8 +571,10 @@ def run_mirror_discovery_recall(
         "selection_verified_fresh_total": selection_fresh_total,
         "fresh_target_ready_total": selection_fresh_total,
         "quote_ready_total": quote_ready_total,
+        "second_pool_ready_total": second_pool_ready_total,
         "second_venue_ready_total": second_venue_ready_total,
         "supported_hints_verified": selection_fresh_total,
+        **anchor_filter_metrics,
         # Deprecated: m9_target_ready historically meant fresh target exists.
         # Use fresh_target_ready_total / fresh_target_ready for that and
         # m9_admission_ready for actual M9 bridge/shadow admission.
@@ -909,12 +940,14 @@ def run_mirror_discovery_recall_from_subset(
     output_path: Path = DEFAULT_RECALL_ARTIFACT,
     dry_run: bool = False,
     use_cache: bool = False,
+    anchor_constrained: bool = False,
 ) -> Dict[str, Any]:
     tokens = _load_token_list(subset_path, max_tokens=max_tokens)
     _hints, payload = run_mirror_discovery_recall(
         tokens,
         dry_run=dry_run,
         use_cache=use_cache,
+        anchor_constrained=anchor_constrained,
     )
     write_mirror_discovery_recall(payload, output_path=output_path)
     return payload
