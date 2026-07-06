@@ -65,11 +65,27 @@ Added unit tests in `tests/unit/test_onchain_factory_mirror_discovery.py`:
 - stale_recall_bucket_histogram: STALE_POOL_NOT_FOUND=30, STALE_BUT_POOL_EXISTS=42
 - reject_reason_histogram: FACTORY_NO_POOL=15, V4_SLOT0_EMPTY=15, HINT_STALE=42
 
+## Quote-ready RCA (2026-07-06)
+
+- `m8_mirror_quote_ready_queue_latest.json` contains 9 hints (the raw-factory tokens), but their `source` is `dexscreener` because the verified recall artifact stamped DexScreener as the discovery authority after the watchlist seed.
+- `m8_second_pool_transition_subset.json`: 50 tokens, all `same_pair_mirror_topology_fallback`, `transitions_1_to_2=0`, market state `MARKET_NO_1_TO_2_TRANSITION`.
+- `m8_second_pool_verify_progress.json`: processed 0 routes, exit class `no_quote_ready`.
+- `m8_mirror_quote_reprobe_progress.json`: processed 10 routes, quote_ok=0, quote_fail=10, exit class `no_quote_ready`.
+- `m8_2_acceptance_report_latest.json`: `handoff_ready=true`, `mirror_quote_ready_tokens=13`, but strict `goal_status=BLOCKED` with blockers:
+  - `EXPANSION_FRESHNESS_ORDER_VIOLATION`
+  - `EXTERNAL_HINTS_STALE`
+  - `HINTS_STALE`
+  - `SUBGRAPH_READY_LOW`
+
+### Root cause
+
+The 9 fresh tokens were discovered at pool creation (blocks 48225736–48226053). Each currently has **exactly one verified pool** (the one from the factory log). Mirror readiness and M9 admission require a **second venue** for the same token pair. The cross-dex expand / second-pool transition step reports `MARKET_NO_1_TO_2_TRANSITION` because these brand-new tokens have not yet been listed on a second DEX.
+
+This is a **market/cadence blocker**, not a code bug: the system now discovers fresh tokens correctly, but must wait (or run cadence) for a second pool to appear.
+
 ## Next
 
-- **Quote ready blocker**: 9 fresh mirrors exist but `quote_ready=0`. This is the new primary blocker.
-- Investigate why fresh mirrors are not quote-ready: likely missing second venue, depth, or smoke quote path.
-- Run M8.2 cross-dex expand / quote smoke on the 9 fresh tokens specifically.
-- Recall SLA exceeded remains a production risk; optimize or split the hot lane.
+- Run `mirror_recall_fast` / `time_to_mirror --hot` on cadence to catch the moment when one of the 9 tokens gets a second pool.
 - Do not run M9 shadow until `quote_ready > 0` and `cycles_at_floor > 0`.
+- Recall SLA exceeded remains a production risk; optimize or split the hot lane.
 - Update `Status_M9.md` only after full M9 admission evidence (quote_ready + capacity + cycles_at_floor).
