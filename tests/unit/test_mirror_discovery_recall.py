@@ -11,6 +11,7 @@ from m8.discovery.mirror_discovery_recall import (
     RECALL_CANDIDATES_PATH,
     build_dex_alias_backlog,
     compute_recall_metrics,
+    evaluate_m9_admission_gate,
     evaluate_mirror_recall_gate,
     evaluate_selection_verified_fresh_gate,
     hint_support_status,
@@ -186,3 +187,81 @@ def test_write_mirror_queue_artifacts_splits_queues(tmp_path, monkeypatch):
     assert (tmp_path / "existence_subset.json").is_file()
     existence = json.loads((tmp_path / "existence_queue.json").read_text(encoding="utf-8"))
     assert existence["queue_count"] == 1
+
+
+def test_quote_ready_queue_contains_only_quote_smoke_ok_hints(tmp_path, monkeypatch):
+    """Quote-ready queue must not include fresh-but-not-quote-ready tokens."""
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.RECALL_CANDIDATES_PATH",
+        tmp_path / "recall_candidates.json",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.EXISTENCE_VERIFY_QUEUE_PATH",
+        tmp_path / "existence_queue.json",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.QUOTE_READY_QUEUE_PATH",
+        tmp_path / "quote_ready.json",
+    )
+    monkeypatch.setattr(
+        "m8.discovery.mirror_discovery_recall.EXISTENCE_VERIFY_SUBSET_PATH",
+        tmp_path / "existence_subset.json",
+    )
+    fresh_not_ready = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "d" * 40,
+        token0_addr="0x" + "1" * 40,
+        token1_addr="0x" + "2" * 40,
+        focus_token="0x" + "1" * 40,
+        hint_status="HINT_FACTORY_VERIFIED",
+        raw={"support_status": "supported", "selection_verified_fresh": True},
+    )
+    quote_ready = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "e" * 40,
+        token0_addr="0x" + "3" * 40,
+        token1_addr="0x" + "4" * 40,
+        focus_token="0x" + "3" * 40,
+        hint_status="QUOTE_SMOKE_OK",
+        raw={"support_status": "supported", "selection_verified_fresh": True},
+    )
+    payload = {"mirrors": [{"token": "0x" + "1" * 40}, {"token": "0x" + "3" * 40}], "all_dex_mirrors_total": 2}
+    write_mirror_queue_artifacts(payload, hints=[fresh_not_ready, quote_ready], chain="base")
+    doc = json.loads((tmp_path / "quote_ready.json").read_text(encoding="utf-8"))
+    assert doc["queue_count"] == 1
+    assert doc["hints"][0]["focus_token"] == "0x" + "3" * 40
+
+
+def test_m9_admission_gate_blocks_without_quote_ready():
+    """Fresh target alone must not open M9 admission; quote-ready + second venue required."""
+    ok, reason = evaluate_m9_admission_gate({
+        "selection_verified_fresh_total": 9,
+        "quote_ready_total": 0,
+        "second_venue_ready_total": 0,
+    })
+    assert ok is False
+    assert reason == "QUOTE_READY_ZERO"
+
+
+def test_m9_admission_gate_blocks_without_second_venue():
+    ok, reason = evaluate_m9_admission_gate({
+        "selection_verified_fresh_total": 9,
+        "quote_ready_total": 3,
+        "second_venue_ready_total": 0,
+    })
+    assert ok is False
+    assert reason == "SECOND_VENUE_ZERO"
+
+
+def test_m9_admission_gate_opens_with_quote_and_second_venue():
+    ok, reason = evaluate_m9_admission_gate({
+        "selection_verified_fresh_total": 9,
+        "quote_ready_total": 3,
+        "second_venue_ready_total": 2,
+    })
+    assert ok is True
+    assert reason == "M9_ADMISSION_POSSIBLE"

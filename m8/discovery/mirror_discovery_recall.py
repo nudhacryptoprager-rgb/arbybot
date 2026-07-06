@@ -491,7 +491,26 @@ def run_mirror_discovery_recall(
     selection_fresh_total = sum(1 for row in mirrors if row.get("selection_verified_fresh"))
     pool_exists_stale_total = sum(1 for row in mirrors if row.get("pool_exists_stale"))
     fresh_quote_candidate_total = sum(1 for row in mirrors if row.get("fresh_quote_candidate"))
+    quote_ready_total = sum(
+        1
+        for h in verified
+        if str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK
+    )
+    focus_dexes_main: Dict[str, Set[str]] = {}
+    for h in verified:
+        if str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK:
+            focus = str(h.focus_token or "").lower()
+            dex = str(h.dex_id or "").lower()
+            if focus and dex:
+                focus_dexes_main.setdefault(focus, set()).add(dex)
+    second_venue_ready_total = sum(
+        1
+        for h in verified
+        if (str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK)
+        and len(focus_dexes_main.get(str(h.focus_token or "").lower(), set())) >= 2
+    )
     age_buckets = Counter(str(row.get("mirror_age_bucket") or "unknown") for row in mirrors)
+    fresh_age_buckets = Counter(_fresh_age_bucket(h.created_at) for h in verified if _hint_raw_bool(h, "selection_verified_fresh"))
     pool_universe_width = build_pool_universe_width(
         verified, mirrors, fresh_tokens=fresh_set
     )
@@ -515,13 +534,22 @@ def run_mirror_discovery_recall(
         "unsupported_dex_backlog": unsupported_backlog,
         "stale_mirror_backlog": build_stale_mirror_backlog(mirrors),
         "mirror_age_bucket_histogram": dict(age_buckets),
+        "fresh_age_bucket_histogram": dict(fresh_age_buckets),
         "verify_rca_path": str(DEFAULT_VERIFY_RCA_PATH),
         "recall_verified_pool_exists_total": recall_exists_total,
         "pool_exists_stale_total": pool_exists_stale_total,
         "fresh_quote_candidate_total": fresh_quote_candidate_total,
         "selection_verified_fresh_total": selection_fresh_total,
+        "fresh_target_ready_total": selection_fresh_total,
+        "quote_ready_total": quote_ready_total,
+        "second_venue_ready_total": second_venue_ready_total,
         "supported_hints_verified": selection_fresh_total,
+        # Deprecated: m9_target_ready historically meant fresh target exists.
+        # Use fresh_target_ready_total / fresh_target_ready for that and
+        # m9_admission_ready for actual M9 bridge/shadow admission.
         "m9_target_ready": selection_fresh_total > 0,
+        "fresh_target_ready": selection_fresh_total > 0,
+        "m9_admission_ready": quote_ready_total > 0 and second_venue_ready_total > 0,
         "mirror_recall_ready": int(metrics.get("mirrors_total") or 0) > 0,
         **metrics,
     }
@@ -565,7 +593,14 @@ def write_mirror_queue_artifacts(
         if hint_support_status(h) == SUPPORT_SUPPORTED
         and not _hint_raw_bool(h, "recall_verified_pool_exists")
     ]
-    quote_ready_hints = [h for h in hints if _hint_raw_bool(h, "selection_verified_fresh")]
+    # Quote-ready queue must contain only hints that passed quote smoke.
+    # Fresh-but-not-quote-ready tokens belong in the pending / second-venue
+    # watchlist, not in the quote-ready handoff queue.
+    quote_ready_hints = [
+        h
+        for h in hints
+        if str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK
+    ]
     existence_doc = {
         "schema_version": "m8_mirror_existence_verify_queue_v1",
         "generated_at_utc": _iso_now(),
@@ -657,6 +692,28 @@ def write_mirror_discovery_recall(
     return output_path
 
 
+def _fresh_age_bucket(created_at_iso: Optional[str]) -> str:
+    """Bucket a fresh token by age since created_at (or unknown)."""
+    if not created_at_iso:
+        return "unknown"
+    try:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(str(created_at_iso).replace("Z", "+00:00"))
+        age_s = (datetime.now(timezone.utc) - dt).total_seconds()
+        if age_s < 3600:
+            return "<1h"
+        if age_s < 6 * 3600:
+            return "1-6h"
+        if age_s < 24 * 3600:
+            return "6-24h"
+        if age_s < 48 * 3600:
+            return "24-48h"
+        return "expired"
+    except Exception:
+        return "unknown"
+
+
 def evaluate_selection_verified_fresh_gate(payload: Dict[str, Any]) -> Tuple[bool, str]:
     """Cross-dex expand and M8.3 require at least one selection-fresh verified mirror."""
     sel_fresh = int(payload.get("selection_verified_fresh_total") or 0)
@@ -666,10 +723,16 @@ def evaluate_selection_verified_fresh_gate(payload: Dict[str, Any]) -> Tuple[boo
 
 
 def evaluate_m9_admission_gate(payload: Dict[str, Any]) -> Tuple[bool, str]:
-    """M9 opens only when selection fresh + quote-ready + capacity (checked downstream)."""
+    """M9 bridge/shadow opens only when fresh + quote-ready + second venue exist."""
     sel_fresh = int(payload.get("selection_verified_fresh_total") or 0)
     if sel_fresh <= 0:
         return False, "SELECTION_VERIFIED_FRESH_ZERO"
+    quote_ready = int(payload.get("quote_ready_total") or 0)
+    if quote_ready <= 0:
+        return False, "QUOTE_READY_ZERO"
+    second_venue = int(payload.get("second_venue_ready_total") or 0)
+    if second_venue <= 0:
+        return False, "SECOND_VENUE_ZERO"
     return True, "M9_ADMISSION_POSSIBLE"
 
 
@@ -769,7 +832,19 @@ def run_mirror_selection_pass(
         if str(h.hint_status or "").upper().startswith("QUOTE")
         or h.hint_status == QUOTE_SMOKE_OK
     ]
+    # A token is second-venue ready only if it is quote-ready and has a verified
+    # second pool (same focus token, distinct dex_id). Without a second venue it
+    # cannot support an M9 arbitrage cycle.
+    focus_dexes: Dict[str, Set[str]] = {}
+    for h in quote_ready:
+        focus = str(h.focus_token or "").lower()
+        dex = str(h.dex_id or "").lower()
+        if focus and dex:
+            focus_dexes.setdefault(focus, set()).add(dex)
+    second_venue_ready = [h for h in quote_ready if len(focus_dexes.get(str(h.focus_token or "").lower(), set())) >= 2]
     handoff = quote_ready if quote_ready else fresh_enough
+    fresh_target_ready = len(fresh_enough) > 0
+    m9_admission_ready = len(quote_ready) > 0 and len(second_venue_ready) > 0
     artifact = build_artifact(
         hints=handoff,
         chain=str(recall_payload.get("chain") or "base"),
@@ -782,6 +857,9 @@ def run_mirror_selection_pass(
             "fresh_enough_count": len(fresh_enough),
             "fresh_quote_candidate_count": len(fresh_quote_candidate),
             "quote_ready_count": len(quote_ready),
+            "second_venue_ready_count": len(second_venue_ready),
+            "fresh_target_ready": fresh_target_ready,
+            "m9_admission_ready": m9_admission_ready,
             "recall_mirrors_total": int(recall_payload.get("mirrors_total") or 0),
         },
     )
@@ -795,9 +873,15 @@ def run_mirror_selection_pass(
         "fresh_enough_count": len(fresh_enough),
         "fresh_quote_candidate_count": len(fresh_quote_candidate),
         "quote_ready_count": len(quote_ready),
+        "second_venue_ready_count": len(second_venue_ready),
         "mirrors_selected": len(handoff),
         "output_path": str(output_path),
-        "m9_target_ready": len(handoff) > 0 and len(fresh_enough) > 0,
+        # Deprecated: m9_target_ready historically meant fresh target exists.
+        # Use fresh_target_ready for that semantics and m9_admission_ready for
+        # actual M9 bridge/shadow admission.
+        "m9_target_ready": fresh_target_ready,
+        "fresh_target_ready": fresh_target_ready,
+        "m9_admission_ready": m9_admission_ready,
         "narrow_bridge_ready": len(fresh_enough) > 0,
         "stale_quote_smoke": stale_smoke,
         "selection_stages": {
@@ -807,6 +891,9 @@ def run_mirror_selection_pass(
             "fresh_enough": len(fresh_enough),
             "fresh_quote_candidate": len(fresh_quote_candidate),
             "quote_ready": len(quote_ready),
+            "second_venue_ready": len(second_venue_ready),
+            "fresh_target_ready": len(fresh_enough),
+            "m9_admission_ready": len(quote_ready) if m9_admission_ready else 0,
             "narrow": len(handoff),
         },
     }
