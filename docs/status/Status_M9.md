@@ -2,17 +2,19 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **FAST_RECALL_SPLIT_RUNTIME_PROOF / M9_WAITING_FOR_SELECTION_VERIFIED_MIRRORS**
+**Current runtime line:** **M8_RAW_FACTORY_DISCOVERY_REACHED / M9_BLOCKED_BY_SECOND_VENUE_CADENCE**
 
 ```text
 TOKEN_SCOPED_POOL_UNIVERSE_ACTIVE / FAST_RECALL_SPLIT_RUNTIME_PROOF_REACHED
-mirror_recall_fast: recall_latency_s=39.58 recall_sla_pass=true all_dex_mirrors_total=80
-admission_width: supported_mirrors_total=80 unknown_alias_mirrors_total=0 (alias map fix)
-downstream_verify: verify_latency_s=225.39 verify_sla_pass=true (27-token existence subset)
-m9_admission_requires: selection_verified_fresh_total>0, fresh_long_tail_quote_ready>0,
-  target_universe_gate_blocked=false, cycles_at_floor>0
-current: selection_verified_fresh_total=0 recall_verified_pool_exists=2 -> M9 shadow NOT_STARTED (correct)
-rca_blocker: V4_POOLID_NOT_RESOLVED=23 STALE_BUT_POOL_EXISTS=2 selection_blocked_stale
+mirror_recall_fast: recall_latency_s=367.39 recall_sla_pass=false all_dex_mirrors_total=88
+admission_width: supported_mirrors_total=88 unknown_alias_mirrors_total=0
+fresh_target_discovery: selection_verified_fresh_total=8 fresh_target_ready_total=8
+m9_admission_requires: selection_verified_fresh_total>0, quote_ready_total>0,
+  second_venue_ready_total>0, target_universe_gate_blocked=false, cycles_at_floor>0
+current: selection_verified_fresh_total=8 quote_ready_total=0 second_venue_ready_total=0
+  m9_admission_ready=false -> M9 shadow NOT_STARTED (correct)
+rca_blocker: V4_POOLID_NOT_RESOLVED=15 STALE_BUT_POOL_EXISTS=40 FACTORY_MEMBERSHIP_FAIL=15
+fresh_age_bucket_histogram: {6-24h: 6, 24-48h: 2}
 ```
 
 ## Capacity blocker audit
