@@ -3,8 +3,8 @@
 ## 0) Meta
 timestamp_utc: 2026-07-04T09:26:39Z
 run_timestamp_utc: 2026-07-04T09:26:39Z
-goal_status: IN_PROGRESS
-blocker_status_after: Raw factory log discovery broke fresh-selection zero; 9 fresh verified mirrors now exist; next blocker is quote_ready
+goal_status: BLOCKED
+blocker_status_after: Raw factory log discovery broke fresh-selection zero; 9 fresh verified mirrors now exist; blocked on quote_ready=0
 docs_reread_confirmed: true
 run_id: raw-factory-log-breakthrough-2026-07-05
 mode: start.py -time_to_mirror --hot (partial) + start.py -mirror_recall_fast
@@ -12,11 +12,12 @@ config: config/exotic_base_anchor.yaml
 
 ## Session Completion
 session_goal: Implement raw factory log discovery to seed fresh_delta focus tokens before token-set filtering
-goal_status: IN_PROGRESS
+goal_status: BLOCKED
 primary_blocker_of_session: quote_ready=0 despite selection_verified_fresh_total=9
 blocker_status_before: selection_verified_fresh_total=0; tracked token set stale; factory logs filtered out
 blocker_status_after: selection_verified_fresh_total=9; m9_target_ready=true; fresh_quote_candidate=9; quote_ready=0
 close_allowed: true
+close_reason: BLOCKED — session reached a real downstream blocker (quote_ready=0); fix requires separate quote smoke / second venue / depth RCA
 remaining_blockers: quote_ready=0; recall SLA exceeded (320.75s > 180s); M9 shadow still blocked until cycles_at_floor > 0
 evidence_artifacts: data/tmp/m8_event_stream_lane_latest.json, data/tmp/m8_token_watchlist_latest.json, data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
 
