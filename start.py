@@ -249,6 +249,8 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "graph_closure_only": True,
         "anchor_constrained": True,
         "run_quote_smoke": True,
+        "quote_smoke_max_candidates": 25,
+        "use_dexscreener": False,
         "defer_heavy_verify": True,
     },
     "audit_full": {
@@ -1209,6 +1211,11 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             recall_cmd.append("--anchor-constrained")
         if run_quote_smoke:
             recall_cmd.append("--run-quote-smoke")
+            qmax = int(prof.get("quote_smoke_max_candidates") or 0)
+            if qmax > 0:
+                recall_cmd.extend(["--quote-smoke-max-candidates", str(qmax)])
+        if not bool(prof.get("use_dexscreener", True)):
+            recall_cmd.append("--no-dexscreener")
         if hot_expand:
             steps.append(
                 _pipeline_step(

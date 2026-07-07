@@ -6,16 +6,18 @@
 
 ```text
 ANCHOR_CONSTRAINED_FAST_RECALL_ACTIVE / M9_BLOCKED_BY_SECOND_VENUE_CADENCE
-mirror_recall_fast: recall_latency_s=152.19 recall_sla_pass=true all_dex_mirrors_total=48
-admission_width: supported_mirrors_total=48 unknown_alias_mirrors_total=0
-fresh_target_discovery: selection_verified_fresh_total=30 fresh_target_ready_total=30
-quote_readiness: fresh_quote_candidate_total=30 quote_ready_total=30 (30/30 QUOTE_OK_MIRROR_SMOKE)
+mirror_recall_fast: recall_latency_s=152.19 recall_sla_pass=true all_dex_mirrors_total=30
+admission_width: supported_mirrors_total=30 unknown_alias_mirrors_total=0
+factory_listener: productive_factories_scanned=4 observer_factories_scanned=8
+raw_factory_scan: raw_anchor_pools_seen=49 observer_anchor_pools_seen=3
+fresh_target_discovery: selection_verified_fresh_total=6 fresh_target_ready_total=6
+quote_readiness: fresh_quote_candidate_total=6 quote_ready_total=5
 m9_admission_requires: selection_verified_fresh_total>0, quote_ready_total>0,
   second_venue_ready_total>0, target_universe_gate_blocked=false, cycles_at_floor>0
-current: selection_verified_fresh_total=30 quote_ready_total=30 second_venue_ready_total=0
+current: selection_verified_fresh_total=6 quote_ready_total=5 second_venue_ready_total=0
   second_pool_ready_total=0 m9_admission_ready=false -> M9 shadow NOT_STARTED (correct)
 rca_blocker: SECOND_VENUE_READY_ZERO
-fresh_age_bucket_histogram: {1-6h: 30}
+fresh_age_bucket_histogram: {1-6h: 5, <1h: 1}
 ```
 
 ## Capacity blocker audit

@@ -11,11 +11,12 @@ from m8.discovery.pool_hints import PoolHint, QUOTE_SMOKE_OK, hint_is_stale
 FRESH_TOKEN_POOL = "fresh_token_pool"
 CONNECTOR_CLOSURE_POOL = "connector_closure_pool"
 ANCHOR_CLOSURE_POOL = "anchor_closure_pool"
+SECOND_POOL_HINT = "second_pool_hint"
 RECALL_CANDIDATE = "recall_candidate"
 ADMISSION_CANDIDATE = "admission_candidate"
 
 _DEFAULT_SCAN_PATH = "data/tmp/m8_onchain_factory_scan_latest.json"
-_FACTORY_SOURCES = frozenset({"onchain_factory", "factory_log"})
+_FACTORY_SOURCES = frozenset({"onchain_factory", "factory_log", "observer_factory_log"})
 
 
 def _norm(addr: str) -> str:
@@ -217,67 +218,80 @@ def load_factory_recall_hints(
     # Ingest raw factory-log events from the event stream lane. These are
     # anchor-sided pools discovered without a token-set filter, so they seed
     # the fresh_delta lane even when the on-chain scan artifact is stale.
+    def _events_from_field(ev_doc: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
+        """Extract raw factory events from full events list or samples."""
+        if field == "observer_factory_events":
+            return list(ev_doc.get(field) or [])
+        # Prefer the full raw_factory_events list; fall back to samples / events_emitted.
+        events = list(ev_doc.get("raw_factory_events") or [])
+        if not events:
+            events = (ev_doc.get("raw_factory_log_stats") or {}).get("samples") or []
+        if not events:
+            events = [
+                e
+                for e in ev_doc.get("events_emitted", []) or []
+                if str(e.get("source") or "").startswith("raw_factory")
+            ]
+        return events
+
+    def _hint_from_factory_event(
+        e: Dict[str, Any], *, observer: bool = False
+    ) -> Optional[PoolHint]:
+        focus = _norm(e.get("focus_token"))
+        if not focus or focus not in fresh_tokens:
+            return None
+        anchor = _norm(e.get("anchor_token") or e.get("anchor"))
+        pool = _norm(e.get("pool") or e.get("pool_address"))
+        if not pool or not anchor:
+            return None
+        block_num = e.get("block_number")
+        created_at = None
+        if isinstance(block_num, int):
+            created_at = block_ts.get(block_num)
+        return PoolHint(
+            source="observer_factory_log" if observer else "factory_log",
+            chain="base",
+            dex_id=str(e.get("dex_id") or ""),
+            pool_address=pool,
+            focus_token=focus,
+            token0_addr=anchor,
+            token1_addr=focus,
+            fee=e.get("fee") if isinstance(e.get("fee"), int) else None,
+            factory_address=str(e.get("factory_address") or "").lower(),
+            created_at=created_at,
+            hint_status="HINT_FACTORY_VERIFIED",
+            raw={
+                "pool_universe_type": SECOND_POOL_HINT if observer else FRESH_TOKEN_POOL,
+                "from_event_stream_lane": True,
+                "is_observer_second_venue": observer,
+                "raw_dex_id": str(e.get("dex_id") or ""),
+                "created_at_source": "first_seen_block_proxy",
+                "first_seen_block": block_num,
+            },
+        )
+
     esp = Path(event_stream_path)
     if esp.is_file():
         try:
             ev_doc = json.loads(esp.read_text(encoding="utf-8"))
-            raw_events = ev_doc.get("raw_factory_log_stats", {}).get("samples") or []
-            # Prefer the full events list if present (newer schema), otherwise
-            # fall back to the sampled summary.
-            if not raw_events:
-                raw_events = [
-                    e
-                    for e in ev_doc.get("events_emitted", []) or []
-                    if str(e.get("source") or "").startswith("raw_factory")
-                ]
-            # Normalize source to canonical factory_log for downstream quote-smoke
-            # and selection passes.
-            for e in raw_events:
-                e["source"] = "factory_log"
-            block_numbers = {
-                int(e["block_number"])
-                for e in raw_events
-                if isinstance(e.get("block_number"), int)
-            }
+            block_numbers: Set[int] = set()
+            for field in ("raw_factory_log_stats", "observer_factory_events"):
+                for e in _events_from_field(ev_doc, field):
+                    if isinstance(e.get("block_number"), int):
+                        block_numbers.add(int(e["block_number"]))
             block_ts = resolve_block_timestamps(block_numbers) if block_numbers else {}
-            for e in raw_events:
-                focus = _norm(e.get("focus_token"))
-                if not focus or focus not in fresh_tokens:
-                    continue
-                anchor = _norm(e.get("anchor_token") or e.get("anchor"))
-                pool = _norm(e.get("pool") or e.get("pool_address"))
-                if not pool or not anchor:
-                    continue
-                # Reconstruct token pair. Actual order does not matter for recall
-                # verification; focus must be one of the two sides.
-                t0, t1 = anchor, focus
-                block_num = e.get("block_number")
-                created_at = block_ts.get(int(block_num)) if isinstance(block_num, int) else None
-                out.append(
-                    stamp_hint_support_status(
-                        PoolHint(
-                            source="factory_log",
-                            chain="base",
-                            dex_id=str(e.get("dex_id") or ""),
-                            pool_address=pool,
-                            focus_token=focus,
-                            token0_addr=t0,
-                            token1_addr=t1,
-                            fee=e.get("fee") if isinstance(e.get("fee"), int) else None,
-                            factory_address=str(e.get("factory_address") or "").lower(),
-                            created_at=created_at,
-                            hint_status="HINT_FACTORY_VERIFIED",
-                            raw={
-                                "pool_universe_type": FRESH_TOKEN_POOL,
-                                "from_event_stream_lane": True,
-                                "raw_dex_id": str(e.get("dex_id") or ""),
-                                "created_at_source": "first_seen_block_proxy",
-                                "first_seen_block": block_num,
-                            },
-                        ),
-                        cfg,
-                    )
-                )
+
+            for e in _events_from_field(ev_doc, "raw_factory_log_stats"):
+                e["source"] = "factory_log"
+                h = _hint_from_factory_event(e, observer=False)
+                if h:
+                    out.append(stamp_hint_support_status(h, cfg))
+
+            for e in _events_from_field(ev_doc, "observer_factory_events"):
+                e["source"] = "observer_factory_log"
+                h = _hint_from_factory_event(e, observer=True)
+                if h:
+                    out.append(stamp_hint_support_status(h, cfg))
         except (json.JSONDecodeError, OSError, KeyError):
             pass
     return out

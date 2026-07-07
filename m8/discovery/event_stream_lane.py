@@ -165,6 +165,25 @@ def run_incremental_factory_log_poll(
         merge_events_into_watchlist(raw_events)
         events.extend(raw_events)
 
+    # Observer-mode scan: look for second venues on discovery_only factories for
+    # tokens that are already in the watchlist/pending queue.
+    from m8.discovery.token_watchlist import load_watchlist
+
+    watchlist = load_watchlist(DEFAULT_WATCHLIST_PATH)
+    focus_tokens = list((watchlist.get("tokens") or {}).keys())
+    observer_events, observer_stats = scan_raw_factory_logs_for_anchor_pools(
+        chain=chain,
+        config=config,
+        max_blocks=max_blocks,
+        dry_run=dry_run or os.environ.get("ARBY_SKIP_RPC") == "1",
+        observer_mode=True,
+        focus_tokens=focus_tokens,
+    )
+    if observer_events:
+        # Do not overwrite first_pool/first_dex; observer events are second venues.
+        merge_events_into_watchlist(observer_events)
+        events.extend(observer_events)
+
     all_events = events
     return {
         "schema_version": "m8_event_stream_lane_v1",
@@ -177,9 +196,19 @@ def run_incremental_factory_log_poll(
         "raw_factory_new_focus_tokens_total": raw_stats.get(
             "raw_factory_new_focus_tokens_total", 0
         ),
+        "observer_factory_logs_fetched": observer_stats.get("logs_fetched", 0),
+        "observer_anchor_pools_seen": observer_stats.get("raw_anchor_pools_seen", 0),
+        "observer_factory_new_focus_tokens_total": observer_stats.get(
+            "raw_factory_new_focus_tokens_total", 0
+        ),
+        "productive_factories_scanned": raw_stats.get("productive_factories_scanned", 0),
+        "observer_factories_scanned": observer_stats.get("observer_factories_scanned", 0),
         "fresh_factory_event_hints_total": len(all_events),
         "factory_log_stats": stats,
         "raw_factory_log_stats": raw_stats,
+        "observer_factory_log_stats": observer_stats,
+        "observer_factory_events": observer_events,
+        "raw_factory_events": raw_events,
     }
 
 

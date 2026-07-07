@@ -74,6 +74,23 @@ def _load_token_list(path: Path, *, max_tokens: int) -> List[str]:
     return tokens[: max(1, int(max_tokens))]
 
 
+def _count_fresh_delta_lane_tokens(path: Path, *, max_tokens: int) -> int:
+    """Count tokens explicitly tagged as fresh_delta_lane in expand subset."""
+    if not path.is_file():
+        return 0
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return 0
+    if isinstance(doc, list):
+        return 0
+    count = 0
+    for item in (doc.get("tokens") or [])[: max(1, int(max_tokens))]:
+        if isinstance(item, dict) and str(item.get("refresh_lane") or "") == "fresh_delta_lane":
+            count += 1
+    return count
+
+
 def hint_support_status(hint: PoolHint) -> str:
     raw = hint.raw or {}
     status = str(raw.get("support_status") or "")
@@ -433,6 +450,9 @@ def run_mirror_discovery_recall(
     graph_closure_only: bool = True,
     anchor_constrained: bool = False,
     run_quote_smoke: bool = False,
+    quote_smoke_max_candidates: int = 0,
+    use_dexscreener: bool = True,
+    subset_path: Optional[Path] = None,
 ) -> Tuple[List[PoolHint], Dict[str, Any]]:
     from m8.discovery.token_pool_universe import (
         anchor_addresses_from_config,
@@ -456,33 +476,40 @@ def run_mirror_discovery_recall(
     anchor_filter_metrics: Dict[str, Any] = {
         "anchor_constrained": anchor_constrained,
         "fresh_targets_scanned": len(fresh_set) if anchor_constrained else 0,
+        "fresh_targets_actual_scanned": (
+            _count_fresh_delta_lane_tokens(subset_path, max_tokens=len(tokens))
+            if anchor_constrained and subset_path
+            else 0
+        ),
     }
     all_hints: List[PoolHint] = []
     dexscreener_pairs_seen = 0
     anchor_pairs_seen = 0
-    for i in range(0, len(scan_tokens), DEXSCREENER_BATCH_MAX):
-        chunk = scan_tokens[i : i + DEXSCREENER_BATCH_MAX]
-        batch = fetch_token_hints_batch(
-            chunk,
-            chain=chain,
-            max_recall=True,
-            dex_config=cfg,
-            cache_lane=cache_lane,
-            use_cache=use_cache,
-        )
-        for rows in batch.values():
-            if anchor_constrained:
-                from m8.discovery.dexscreener_hints import filter_anchor_mirror_pairs
+    if use_dexscreener:
+        for i in range(0, len(scan_tokens), DEXSCREENER_BATCH_MAX):
+            chunk = scan_tokens[i : i + DEXSCREENER_BATCH_MAX]
+            batch = fetch_token_hints_batch(
+                chunk,
+                chain=chain,
+                max_recall=True,
+                dex_config=cfg,
+                cache_lane=cache_lane,
+                use_cache=use_cache,
+            )
+            for rows in batch.values():
+                if anchor_constrained:
+                    from m8.discovery.dexscreener_hints import filter_anchor_mirror_pairs
 
-                filtered, fm = filter_anchor_mirror_pairs(rows, anchor_addrs=anchor_addrs)
-                dexscreener_pairs_seen += int(fm.get("dexscreener_pairs_seen") or 0)
-                anchor_pairs_seen += int(fm.get("anchor_pairs_seen") or 0)
-                all_hints.extend(filtered)
-            else:
-                all_hints.extend(rows)
+                    filtered, fm = filter_anchor_mirror_pairs(rows, anchor_addrs=anchor_addrs)
+                    dexscreener_pairs_seen += int(fm.get("dexscreener_pairs_seen") or 0)
+                    anchor_pairs_seen += int(fm.get("anchor_pairs_seen") or 0)
+                    all_hints.extend(filtered)
+                else:
+                    all_hints.extend(rows)
     if anchor_constrained:
         anchor_filter_metrics["dexscreener_pairs_seen"] = dexscreener_pairs_seen
         anchor_filter_metrics["anchor_pairs_seen"] = anchor_pairs_seen
+        anchor_filter_metrics["use_dexscreener"] = use_dexscreener
     if token_pool_universe:
         factory_hints = load_factory_recall_hints(fresh_set)
         all_hints.extend(factory_hints)
@@ -509,7 +536,12 @@ def run_mirror_discovery_recall(
         verify_order, chain=chain, dry_run=dry_run
     )
     if run_quote_smoke:
-        run_fresh_mirror_quote_smoke(verified, chain=chain, config=cfg)
+        run_fresh_mirror_quote_smoke(
+            verified,
+            chain=chain,
+            config=cfg,
+            max_candidates=quote_smoke_max_candidates,
+        )
     mirrors = [mirror_row_from_hint(h) for h in verified]
     metrics = compute_recall_metrics(mirrors)
     recall_exists_total = sum(1 for row in mirrors if row.get("recall_verified_pool_exists"))
@@ -541,6 +573,17 @@ def run_mirror_discovery_recall(
     second_venue_ready_total = sum(
         1 for focus, dexes in focus_dexes_main.items() if len(dexes) >= 2
     )
+    second_pool_hints_by_dex: Dict[str, int] = Counter()
+    verified_second_venues_by_dex: Dict[str, int] = Counter()
+    for focus, dexes in focus_dexes_main.items():
+        if len(dexes) >= 2:
+            for dex in dexes:
+                verified_second_venues_by_dex[dex] += 1
+    for h in verified:
+        if _hint_raw_bool(h, "recall_verified_pool_exists"):
+            dex = str(h.dex_id or "").lower()
+            if dex:
+                second_pool_hints_by_dex[dex] += 1
     age_buckets = Counter(str(row.get("mirror_age_bucket") or "unknown") for row in mirrors)
     fresh_age_buckets = Counter(_fresh_age_bucket(h.created_at) for h in verified if _hint_raw_bool(h, "selection_verified_fresh"))
     pool_universe_width = build_pool_universe_width(
@@ -576,6 +619,8 @@ def run_mirror_discovery_recall(
         "quote_ready_total": quote_ready_total,
         "second_pool_ready_total": second_pool_ready_total,
         "second_venue_ready_total": second_venue_ready_total,
+        "second_pool_hints_by_dex": dict(second_pool_hints_by_dex),
+        "verified_second_venues_by_dex": dict(verified_second_venues_by_dex),
         "supported_hints_verified": selection_fresh_total,
         **anchor_filter_metrics,
         # Deprecated: m9_target_ready historically meant fresh target exists.
@@ -844,14 +889,31 @@ def run_stale_mirror_quote_smoke(
     return result
 
 
+def _fresh_candidate_priority(hint: PoolHint) -> float:
+    """Newer candidates first; missing created_at sorts last."""
+    created_at = hint.created_at
+    if not created_at:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def run_fresh_mirror_quote_smoke(
     hints: List[PoolHint],
     *,
     chain: str = "base",
     config: Optional[Dict[str, Any]] = None,
+    max_candidates: int = 0,
     checkpoint_path: Path = Path("data/tmp/m8_mirror_recall_fresh_quote_smoke_latest.json"),
 ) -> Dict[str, Any]:
-    """Targeted quote smoke for fresh pool_exists candidates (any source)."""
+    """Targeted quote smoke for fresh pool_exists candidates (any source).
+
+    ``max_candidates`` bounds the number of quote smokes in fast cadence; 0 = unlimited.
+    Candidates are sorted newest-first so the hottest tokens get smoke first.
+    """
     fresh_candidates = [
         h
         for h in hints
@@ -859,6 +921,9 @@ def run_fresh_mirror_quote_smoke(
     ]
     if not fresh_candidates:
         return {"attempted": 0, "quote_ok": 0, "skipped": len(hints), "reason": "NO_FRESH_CANDIDATES"}
+    fresh_candidates = sorted(fresh_candidates, key=_fresh_candidate_priority, reverse=True)
+    if max_candidates and max_candidates > 0:
+        fresh_candidates = fresh_candidates[:max_candidates]
     routes = [_hint_to_smoke_route(h) for h in fresh_candidates]
     from m8.discovery.mirror_quote_smoke import smoke_mirror_same_pair_routes
 
@@ -1000,6 +1065,7 @@ def run_mirror_discovery_recall_from_subset(
     use_cache: bool = False,
     anchor_constrained: bool = False,
     run_quote_smoke: bool = False,
+    quote_smoke_max_candidates: int = 0,
 ) -> Dict[str, Any]:
     tokens = _load_token_list(subset_path, max_tokens=max_tokens)
     _hints, payload = run_mirror_discovery_recall(
@@ -1008,6 +1074,8 @@ def run_mirror_discovery_recall_from_subset(
         use_cache=use_cache,
         anchor_constrained=anchor_constrained,
         run_quote_smoke=run_quote_smoke,
+        quote_smoke_max_candidates=quote_smoke_max_candidates,
+        subset_path=subset_path,
     )
     write_mirror_discovery_recall(payload, output_path=output_path)
     return payload

@@ -52,6 +52,17 @@ def main() -> int:
         help="Run lightweight quoter smoke on fresh factory-log candidates",
     )
     p.add_argument(
+        "--quote-smoke-max-candidates",
+        type=int,
+        default=0,
+        help="Max fresh candidates to quote smoke (0 = unlimited)",
+    )
+    p.add_argument(
+        "--no-dexscreener",
+        action="store_true",
+        help="Skip DexScreener fetch; use only factory/observer hints",
+    )
+    p.add_argument(
         "--write-supported-hints",
         action="store_true",
         help="Also write supported+verified hints to rolling artifact",
@@ -83,6 +94,9 @@ def main() -> int:
         graph_closure_only=not bool(args.no_graph_closure_only),
         anchor_constrained=bool(args.anchor_constrained),
         run_quote_smoke=bool(args.run_quote_smoke),
+        quote_smoke_max_candidates=int(args.quote_smoke_max_candidates or 0),
+        use_dexscreener=not bool(args.no_dexscreener),
+        subset_path=subset,
     )
     write_mirror_discovery_recall(payload, output_path=Path(args.output))
     if args.write_supported_hints:
