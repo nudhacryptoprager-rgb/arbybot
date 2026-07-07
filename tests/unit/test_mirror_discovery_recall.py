@@ -17,9 +17,11 @@ from m8.discovery.mirror_discovery_recall import (
     evaluate_selection_verified_fresh_gate,
     hint_support_status,
     mirror_row_from_hint,
+    run_fresh_mirror_quote_smoke,
+    run_mirror_selection_pass,
     write_mirror_queue_artifacts,
 )
-from m8.discovery.pool_hints import PoolHint
+from m8.discovery.pool_hints import PoolHint, QUOTE_SMOKE_OK
 
 
 def _config():
@@ -330,3 +332,65 @@ def test_filter_anchor_mirror_pairs_rejects_missing_focus():
     )
     assert kept == []
     assert metrics["anchor_pair_rejects"]["FOCUS_MISSING"] == 1
+
+
+def test_fresh_quote_smoke_updates_hint_status_and_selection():
+    focus = "0x" + "f" * 40
+    anchor = "0x" + "a" * 40
+    h = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "p" * 40,
+        token0_addr=anchor,
+        token1_addr=focus,
+        focus_token=focus,
+        hint_status="HINT_FACTORY_VERIFIED",
+        raw={
+            "support_status": "supported",
+            "recall_verified_pool_exists": True,
+            "selection_verified_fresh": True,
+            "fresh_quote_candidate": True,
+        },
+    )
+    # Simulate the smoke update path without RPC.
+    h.hint_status = QUOTE_SMOKE_OK
+    (h.raw or {})["quote_smoke_status"] = "QUOTE_OK_MIRROR_SMOKE"
+
+    payload = {
+        "chain": "base",
+        "all_dex_mirrors_total": 1,
+        "mirrors_total": 1,
+    }
+    sel = run_mirror_selection_pass(payload, hints=[h], run_stale_quote_smoke=False)
+    assert sel["quote_ready_count"] == 1
+    assert sel["fresh_target_ready"] is True
+    assert sel["m9_admission_ready"] is False
+    assert sel["selection_stages"]["quote_ready"] == 1
+    assert sel["selection_stages"]["second_venue_ready"] == 0
+
+
+def test_fresh_quote_smoke_skips_when_arby_skip_rpc():
+    import os
+
+    old = os.environ.get("ARBY_SKIP_RPC")
+    os.environ["ARBY_SKIP_RPC"] = "1"
+    try:
+        h = PoolHint(
+            source="factory_log",
+            chain="base",
+            dex_id="uniswap_v3",
+            pool_address="0x" + "p" * 40,
+            token0_addr="0x" + "a" * 40,
+            token1_addr="0x" + "f" * 40,
+            focus_token="0x" + "f" * 40,
+            raw={"fresh_quote_candidate": True},
+        )
+        result = run_fresh_mirror_quote_smoke([h], chain="base")
+        assert result["reason"] == "NO_FRESH_CANDIDATES" or result.get("skipped")
+        assert h.hint_status != QUOTE_SMOKE_OK
+    finally:
+        if old is None:
+            os.environ.pop("ARBY_SKIP_RPC", None)
+        else:
+            os.environ["ARBY_SKIP_RPC"] = old

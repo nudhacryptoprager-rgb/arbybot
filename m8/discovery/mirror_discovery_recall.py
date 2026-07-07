@@ -591,13 +591,23 @@ def run_mirror_discovery_recall(
     write_recall_hints_checkpoint(verified, chain=chain)
     queue_paths = write_mirror_queue_artifacts(payload, hints=verified, chain=chain)
     payload["queue_artifacts"] = queue_paths
+    m9_blocker = "NONE"
+    if quote_ready_total == 0 and selection_fresh_total > 0:
+        m9_blocker = "QUOTE_READY_ZERO"
+    elif quote_ready_total > 0 and second_venue_ready_total == 0:
+        m9_blocker = "SECOND_VENUE_READY_ZERO"
+    elif quote_ready_total > 0 and second_venue_ready_total > 0 and second_pool_ready_total == 0:
+        m9_blocker = "SECOND_POOL_READY_ZERO"
     payload["verify_rca"] = {
         "supported_hints_total": rca.get("supported_hints_total"),
         "recall_verified_pool_exists_total": rca.get("recall_verified_pool_exists_total"),
         "selection_verified_fresh_total": rca.get("selection_verified_fresh_total"),
         "supported_hints_verified": rca.get("selection_verified_fresh_total"),
         "primary_blocker": rca.get("primary_blocker"),
-        "primary_blocker_selection": rca.get("primary_blocker_selection"),
+        "primary_blocker_selection": (
+            m9_blocker if m9_blocker != "NONE" else rca.get("primary_blocker_selection")
+        ),
+        "m9_admission_blocker": m9_blocker,
         "stale_recall_bucket_histogram": rca.get("stale_recall_bucket_histogram"),
         "existence_rca_bucket_histogram": rca.get("existence_rca_bucket_histogram"),
         "pool_exists_stale_total": rca.get("pool_exists_stale_total"),

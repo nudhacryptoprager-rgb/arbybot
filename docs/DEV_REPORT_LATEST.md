@@ -50,8 +50,8 @@ evidence_artifacts: data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8
 
 | Metric | Value |
 |--------|-------|
-| all_dex_mirrors_total | 49 |
-| supported_mirrors_total | 49 |
+| all_dex_mirrors_total | 48 |
+| supported_mirrors_total | 48 |
 | recall_verified_pool_exists_total | 43 |
 | selection_verified_fresh_total | 30 |
 | fresh_target_ready_total | 30 |

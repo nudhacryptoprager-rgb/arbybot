@@ -93,17 +93,20 @@ def test_pool_universe_width_metrics():
 
 
 def test_verify_priority_fresh_before_stale():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
     fresh = _hint(
         focus="0x" + "1" * 40,
         t0="0x" + "1" * 40,
         t1="0x" + "2" * 40,
     )
-    fresh.created_at = "2026-06-29T12:00:00Z"
+    fresh.created_at = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     stale = _hint(
         focus="0x" + "3" * 40,
         t0="0x" + "3" * 40,
         t1="0x" + "2" * 40,
     )
-    stale.created_at = "2025-01-01T00:00:00Z"
+    stale.created_at = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     ordered = sort_hints_for_verify([stale, fresh])
     assert ordered[0].focus_token == fresh.focus_token
