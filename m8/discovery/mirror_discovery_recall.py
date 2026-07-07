@@ -603,7 +603,9 @@ def run_mirror_discovery_recall(
         "recall_verified_pool_exists_total": rca.get("recall_verified_pool_exists_total"),
         "selection_verified_fresh_total": rca.get("selection_verified_fresh_total"),
         "supported_hints_verified": rca.get("selection_verified_fresh_total"),
-        "primary_blocker": rca.get("primary_blocker"),
+        "primary_blocker": (
+            m9_blocker if m9_blocker != "NONE" else rca.get("primary_blocker")
+        ),
         "primary_blocker_selection": (
             m9_blocker if m9_blocker != "NONE" else rca.get("primary_blocker_selection")
         ),
