@@ -394,3 +394,53 @@ def test_fresh_quote_smoke_skips_when_arby_skip_rpc():
             os.environ.pop("ARBY_SKIP_RPC", None)
         else:
             os.environ["ARBY_SKIP_RPC"] = old
+
+
+def test_second_venue_ready_counts_productive_plus_observer():
+    focus = "0x" + "f" * 40
+    anchor = "0x" + "a" * 40
+    productive = PoolHint(
+        source="factory_log",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "p" * 40,
+        token0_addr=anchor,
+        token1_addr=focus,
+        focus_token=focus,
+        hint_status="HINT_FACTORY_VERIFIED",
+        raw={
+            "support_status": "supported",
+            "recall_verified_pool_exists": True,
+            "selection_verified_fresh": True,
+            "fresh_quote_candidate": True,
+        },
+    )
+    observer = PoolHint(
+        source="observer_factory_log",
+        chain="base",
+        dex_id="uniswap_v2",
+        pool_address="0x" + "q" * 40,
+        token0_addr=anchor,
+        token1_addr=focus,
+        focus_token=focus,
+        hint_status="HINT_FACTORY_VERIFIED",
+        raw={
+            "support_status": "supported",
+            "recall_verified_pool_exists": True,
+            "selection_verified_fresh": True,
+            "fresh_quote_candidate": True,
+        },
+    )
+    payload = {"chain": "base", "all_dex_mirrors_total": 2, "mirrors_total": 2}
+    sel = run_mirror_selection_pass(payload, hints=[productive, observer], run_stale_quote_smoke=False)
+    assert sel["second_venue_ready_count"] == 1
+    assert sel["selection_stages"]["second_venue_ready"] == 1
+    assert sel["m9_admission_ready"] is False  # quote_ready still empty
+
+    # Mark both quote-ready -> admission opens.
+    productive.hint_status = QUOTE_SMOKE_OK
+    observer.hint_status = QUOTE_SMOKE_OK
+    sel2 = run_mirror_selection_pass(payload, hints=[productive, observer], run_stale_quote_smoke=False)
+    assert sel2["quote_ready_count"] == 2
+    assert sel2["second_venue_ready_count"] == 1
+    assert sel2["m9_admission_ready"] is True

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 from typing import Any, Dict, Optional, Set, Tuple
 
@@ -287,6 +288,22 @@ def verify_factory_pool(
     )
     if pool:
         return True, VERIFY_FACTORY_GET_POOL
+    # One retry for transient RPC failures, especially for hints sourced from
+    # trusted factory logs where the event itself is strong evidence.
+    time.sleep(0.25)
+    pool = verify_pool_exists(
+        chain,
+        dex,
+        t0,
+        t1,
+        fee_tier=fee,
+        rpc_url=rpc_url,
+    )
+    if pool:
+        return True, VERIFY_FACTORY_GET_POOL
+    source = str(hint.source or "").lower()
+    if source in {"factory_log", "observer_factory_log", "onchain_factory"}:
+        return False, "RPC_TRANSIENT_FACTORY_MEMBERSHIP_FAIL"
     return False, "FACTORY_NO_POOL"
 
 

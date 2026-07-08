@@ -425,6 +425,7 @@ def verify_hints_for_recall(
     factory_no_pool_by_dex: Dict[str, int] = {}
     factory_no_pool_by_factory: Dict[str, int] = {}
     factory_no_pool_samples: List[Dict[str, Any]] = []
+    rpc_transient_factory_fail_total: int = 0
     dex_null_age_hist: Dict[str, int] = {}
     aero_variant_fallback_hist: Dict[str, int] = {}
     unsupported_aerodrome_pool_hist: Dict[str, int] = {}
@@ -475,6 +476,8 @@ def verify_hints_for_recall(
             or verified.hint_status
         )
 
+        if reason_str == "RPC_TRANSIENT_FACTORY_MEMBERSHIP_FAIL":
+            rpc_transient_factory_fail_total += 1
         if reason_str == "FACTORY_NO_POOL":
             dex_key = str(verified.dex_id or "unknown")
             fac_key = str(verified.factory_address or (raw.get("factory_address") or "unknown"))
@@ -523,6 +526,7 @@ def verify_hints_for_recall(
     metrics["factory_no_pool_by_dex"] = factory_no_pool_by_dex
     metrics["factory_no_pool_by_factory"] = factory_no_pool_by_factory
     metrics["factory_no_pool_samples"] = factory_no_pool_samples
+    metrics["rpc_transient_factory_membership_fail_total"] = rpc_transient_factory_fail_total
     metrics["dex_null_age_histogram"] = dex_null_age_hist
     metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
     metrics["unsupported_aerodrome_pool_histogram"] = unsupported_aerodrome_pool_hist

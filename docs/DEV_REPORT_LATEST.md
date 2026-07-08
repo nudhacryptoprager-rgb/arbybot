@@ -1,88 +1,109 @@
 # DEV REPORT
 
 ## 0) Meta
-timestamp_utc: 2026-07-06T10:48:27.689861Z
-run_timestamp_utc: 2026-07-06T10:48:27.689861Z
+timestamp_utc: 2026-07-08T08:18:55.543880Z
+run_timestamp_utc: 2026-07-08T08:18:55.543880Z
 goal_status: BLOCKED
-blocker_status_after: M9 admission blocked by second_venue_ready=0; fresh target discovery and quote readiness now proven in mirror_recall_fast
+blocker_status_after: M9 admission blocked by second_venue_ready=0; observer-mode second-venue coverage implemented, fresh evidence pending RPC latency fix
 docs_reread_confirmed: true
-run_id: m9-admission-anchor-constrained-2026-07-06
-mode: start.py -mirror_recall_fast
+run_id: m9-admission-observer-mode-2026-07-08
+mode: start.py -mirror_recall_fast, direct recall script
 config: config/exotic_base_anchor.yaml
 
 ## Session Completion
-session_goal: Implement anchor-constrained mirror recall so M9 admission gate can be evaluated on fresh anchor pairs with quote smoke
+session_goal: Add observer-mode second-venue factory scan, clean blocker taxonomy, and bound hot-lane quote smoke to protect SLA
 goal_status: BLOCKED
-primary_blocker_of_session: second_venue_ready=0 despite selection_verified_fresh_total=30 and quote_ready_total=30
-blocker_status_before: quote_ready=0 because mirror_recall_fast skipped quote smoke and fresh anchor pools from event stream lane were not feeding recall
-blocker_status_after: quote_ready=30; m9_admission_ready=false only because every fresh token still has a single verified pool/venue
+primary_blocker_of_session: second_venue_ready=0 despite active observer coverage; fresh live evidence blocked by Base RPC latency/preflight archive probe timeout
+blocker_status_before: quote_ready reached but second_venue_ready=0; only 4 productive factories scanned, 8 discovery_only factories ignored
+blocker_status_after: observer mode scans all 12 factories; `SECOND_VENUE_READY_ZERO` is explicit primary blocker; live recall script exceeds SLA due to RPC latency
 close_allowed: true
-close_reason: BLOCKED — M9 admission requires second_venue_ready>0; current fresh tokens are single-venue only
-remaining_blockers: second_venue_ready=0; second_pool_ready=0
-evidence_session_run_dirs: data/runs/ci_m5_gate_arbitrum_one_20260706_124639_025704
-evidence_artifacts: data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_event_stream_lane_latest.json, data/tmp/m8_mirror_recall_fresh_quote_smoke_latest.json
+close_reason: BLOCKED — M9 admission requires second_venue_ready>0; current live evidence is stale/pending due to Base RPC timeouts
+remaining_blockers: second_venue_ready=0; second_pool_ready=0; Base RPC archive probe timeout; direct recall script latency >300s
+evidence_session_run_dirs: data/runs/ci_m5_gate_arbitrum_one_20260708_101645_712808
+evidence_artifacts: data/tmp/m8_mirror_discovery_recall_latest.json, data/tmp/m8_event_stream_lane_latest.json, data/tmp/m8_mirror_recall_verify_rca_latest.json
 
 ## Code changes
 
-1. `m8/discovery/dexscreener_hints.py`:
-   - Added `filter_anchor_mirror_pairs()` to keep only `fresh_token↔configured_anchor` DexScreener pairs and emit reject taxonomy.
+1. `m8/discovery/onchain_factory_mirror_discovery.py`:
+   - `scan_raw_factory_logs_for_anchor_pools()` gained `observer_mode=True` and `focus_tokens` parameters.
+   - Observer mode scans the 8 `discovery_only` factories for second venues.
+   - Events are tagged `observer_only=True`; metrics report `productive_factories_scanned` and `observer_factories_scanned`.
 
-2. `m8/discovery/mirror_discovery_recall.py`:
-   - `run_mirror_discovery_recall()`: added `anchor_constrained` mode (scan only fresh targets, accept only anchor pairs), `run_quote_smoke` mode, and anchor-constrained metrics (`fresh_targets_scanned`, `dexscreener_pairs_seen`, `anchor_pairs_seen`).
-   - Added `run_fresh_mirror_quote_smoke()` for lightweight quoter smoke on fresh candidates inside the recall step.
-   - `_hint_to_smoke_route()` now includes `focus_token_address` and `focus_token_symbol` so `mirror_quote_smoke` recognizes same-pair routes.
-   - Payload includes `second_pool_ready_total` and second-venue / second-pool readiness computed from verified pools.
+2. `m8/discovery/event_stream_lane.py`:
+   - Runs observer scan after productive scan, restricted to current watchlist focus tokens.
+   - Stores full event lists: `raw_factory_events` and `observer_factory_events`.
+   - New metrics: `observer_factory_logs_fetched`, `observer_anchor_pools_seen`, `observer_factory_new_focus_tokens_total`.
 
 3. `m8/discovery/token_pool_universe.py`:
-   - `load_factory_recall_hints()` now ingests raw anchor-sided factory-log events from `m8_event_stream_lane_latest.json`, resolves block timestamps, and surfaces them as `factory_log` hints so `mirror_recall_fast` can see fresh anchor pools without running the heavy on-chain factory scan.
+   - Added `SECOND_POOL_HINT` constant.
+   - `_FACTORY_SOURCES` includes `observer_factory_log`.
+   - `load_factory_recall_hints()` ingests observer events as `source="observer_factory_log"` hints.
 
-4. `scripts/m8_mirror_discovery_recall.py`:
-   - Added `--anchor-constrained` and `--run-quote-smoke` CLI flags.
+4. `m8/discovery/mirror_discovery_recall.py`:
+   - Added `use_dexscreener` flag (hot lane can skip DexScreener to protect SLA).
+   - Added `quote_smoke_max_candidates` to bound fresh quote smoke to the hottest tokens.
+   - `run_mirror_selection_pass()` now computes `second_venue_ready` from all fresh_enough hints, not only quote-ready hints.
+   - Top-level payload exposes `m9_admission_blocker`.
+   - New metrics: `verified_pool_count_by_dex`, `second_pool_count_by_dex`, `verified_second_venues_by_dex`, `observer_focus_tokens_total`, `observer_overlap_fresh_total`, `observer_overlap_quote_total`, `observer_second_venue_candidate_total`, `observer_verified_second_venue_total`, `fresh_targets_actual_scanned`, `fresh_targets_non_delta_scanned`.
 
-5. `start.py`:
-   - `mirror_recall_fast` profile sets `anchor_constrained=True` and `run_quote_smoke=True`.
-   - Recall command builder appends `--anchor-constrained` and `--run-quote-smoke` when profile flags are set.
+5. `m8/discovery/hint_verifier.py`:
+   - `verify_factory_pool()` now retries once on `FACTORY_NO_POOL`.
+   - Factory-log/observer hints that still fail are bucketed as `RPC_TRANSIENT_FACTORY_MEMBERSHIP_FAIL` instead of being misclassified as real `FACTORY_NO_POOL`.
 
-6. `tests/unit/test_mirror_discovery_recall.py`:
-   - Added tests for `filter_anchor_mirror_pairs()` reject taxonomy.
+6. `m8/discovery/mirror_recall_verify.py` and `m8/discovery/mirror_discovery_recall.py`:
+   - Track `rpc_transient_factory_membership_fail_total` in verification metrics and RCA.
 
-## Fresh runtime evidence (2026-07-06T10:48:27.689861Z)
+7. `scripts/m8_mirror_discovery_recall.py`:
+   - CLI flags: `--no-dexscreener`, `--quote-smoke-max-candidates`.
+
+8. `start.py`:
+   - `mirror_recall_fast` profile: `anchor_constrained=True`, `run_quote_smoke=True`, `quote_smoke_max_candidates=25`, `use_dexscreener=False`.
+
+9. `tests/unit/test_mirror_discovery_recall.py`:
+   - Regression test: productive V3 + observer V2 for same focus token yields `second_venue_ready_count=1`; admission opens only when both are quote-ready.
+
+## Fresh runtime evidence (2026-07-07T09:29:08Z)
 
 | Metric | Value |
 |--------|-------|
-| all_dex_mirrors_total | 48 |
-| supported_mirrors_total | 48 |
-| recall_verified_pool_exists_total | 43 |
-| selection_verified_fresh_total | 30 |
-| fresh_target_ready_total | 30 |
-| quote_ready_total | 30 |
+| all_dex_mirrors_total | 30 |
+| supported_mirrors_total | 30 |
+| recall_verified_pool_exists_total | 16 |
+| selection_verified_fresh_total | 6 |
+| fresh_target_ready_total | 6 |
+| quote_ready_total | 5 |
 | second_pool_ready_total | 0 |
 | second_venue_ready_total | 0 |
 | m9_target_ready | true |
 | fresh_target_ready | true |
 | m9_admission_ready | false |
-| fresh_age_bucket_histogram | {1-6h: 30} |
-| recall_latency_s | 152.19 |
-| recall_sla_pass | true |
-| fresh_quote_smoke | 30/30 QUOTE_OK_MIRROR_SMOKE |
+| m9_admission_blocker | SECOND_VENUE_READY_ZERO |
+| factory_listener | productive=4, observer=8 |
+| raw_anchor_pools_seen | 49 |
+| observer_anchor_pools_seen | 3 |
+| fresh_age_bucket_histogram | {1-6h: 5, <1h: 1} |
+| fresh_targets_scanned | 753 |
+| fresh_targets_actual_scanned | 746 |
+| fresh_targets_non_delta_scanned | 7 |
 
 ## Interpretation
 
-- Fresh target discovery works under anchor-constrained mode: 30 verified fresh mirrors, all 1–6 hours old.
-- Quote smoke passes on all 30 fresh candidates (Uniswap V3 anchor pairs); V4 pairs still fail as expected.
-- `m9_target_ready` / `fresh_target_ready` correctly signal fresh targets exist.
-- `m9_admission_ready` correctly stays false because no focus token has a second verified pool or venue.
-- `mirror_recall_fast` now completes under the 180s SLA.
+- Observer mode is active: all 12 factories (4 productive + 8 discovery_only) are now scanned.
+- 3 observer anchor pools were seen in the latest event window, but none created a verified second venue for the current fresh tokens.
+- `second_venue_ready_total=0` is the explicit, clean M9 admission blocker.
+- Hot lane skips DexScreener and bounds quote smoke to protect the 180s SLA.
+- Fresh live evidence is pending because the direct recall script now hangs/times out against Base RPC; preflight archive probe also fails with HTTP 408.
 
 ## Pipeline
 
-- `py -3.11 -m pytest -q`: 7035 passed, 19 skipped, 0 failed.
+- `py -3.11 -m pytest -q`: 7038 passed, 19 skipped, 0 failed.
 - `py -3.11 scripts/check_repo_safety.py`: PASS.
 - `py -3.11 scripts/ci_full_pipeline.py --mode ci`: ALL REQUIRED GATES PASSED.
+- `py -3.11 scripts/ci_m5_0_gate.py --online --config config/real_minimal.yaml --refresh-rolling`: PASS.
 
 ## Next
 
-- Run cadence on `start.py -mirror_recall_fast` and `scripts/m8_event_stream_lane.py` to catch the moment when one of the 30 fresh tokens gets a second verified pool/venue.
-- Do not run M9 shadow until `m9_admission_ready=true` (quote_ready>0 and second_venue_ready>0) and downstream capacity/cycles evidence exists.
-- Consider moving DexScreener/wide recall to a warm/audit lane if hot SLA pressure returns.
-- Update `Status_M9.md` with current blocker line.
+- Resolve Base RPC latency / archive probe timeout so `start.py -mirror_recall_fast` and direct recall script complete reliably.
+- Continue cadence once recall script completes: run `m8_event_stream_lane.py` periodically and `mirror_recall_fast` to catch a verified second venue.
+- Do not run M9 shadow until `m9_admission_ready=true` (quote_ready>0 and second_venue_ready>0) plus downstream capacity/cycles evidence.
+- Update `Status_M9.md` only when blocker state changes.
