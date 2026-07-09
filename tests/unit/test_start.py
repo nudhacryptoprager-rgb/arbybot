@@ -586,6 +586,7 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertIn(str(start.MIRROR_RECALL_WIDE_PATH), joined)
         self.assertNotIn("--no-dexscreener", joined)
         self.assertIn("--run-quote-smoke", joined)
+        self.assertIn("--anchor-constrained", joined)
         gate_step = next(s for s in steps if s["name"] == "gate_mirror_recall")
         self.assertIn(str(start.MIRROR_RECALL_WIDE_PATH), " ".join(gate_step["cmd"]))
 

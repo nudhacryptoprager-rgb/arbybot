@@ -266,7 +266,7 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "recall_only": True,
         "token_pool_universe": True,
         "graph_closure_only": True,
-        "anchor_constrained": False,
+        "anchor_constrained": True,
         "run_quote_smoke": True,
         "quote_smoke_max_candidates": 25,
         "use_dexscreener": True,
