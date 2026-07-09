@@ -2,23 +2,24 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_OBSERVER_BACKLOG_STALE / M9_BLOCKED_BY_SELECTION_FRESH_ZERO**
+**Current runtime line:** **M8_FRESH_QUOTE_READY_REACHED / M9_BLOCKED_BY_SECOND_VENUE_READY_ZERO**
 
 ```text
-ANCHOR_CONSTRAINED_FAST_RECALL_ACTIVE / M9_BLOCKED_BY_SELECTION_FRESH_ZERO
-mirror_recall_fast: run_timestamp=2026-07-09T10:21:55Z recall_latency_s=75.19 recall_sla_pass=true
-admission_width: all_dex_mirrors_total=52 supported_mirrors_total=52 unknown_alias_mirrors_total=0
-pool_existence: recall_verified_pool_exists_total=50 pool_exists_stale_total=50 selection_verified_fresh_total=0
-quote_readiness: fresh_quote_candidate_total=0 quote_ready_total=0
+ANCHOR_CONSTRAINED_FAST_RECALL_ACTIVE / M9_BLOCKED_BY_SECOND_VENUE_READY_ZERO
+mirror_recall_fast: run_timestamp=2026-07-09T12:27:36Z recall_latency_s=66.86 recall_sla_pass=true
+admission_width: all_dex_mirrors_total=65 supported_mirrors_total=65 unknown_alias_mirrors_total=0
+pool_existence: recall_verified_pool_exists_total=65 selection_verified_fresh_total=15
+quote_readiness: fresh_quote_candidate_total=15 quote_ready_total=15
 second_venue: second_pool_ready_total=0 second_venue_ready_total=0 quote_ready_second_venue_total=0
-observer_coverage: observer_focus_tokens_total=3 observer_overlap_fresh_total=0
-  observer_verified_second_venue_total=0 observer_overlap_quote_total=0
-event_stream_generated_at=2026-07-07T09:23:55Z
+event_stream_generated_at=2026-07-09T11:49:48Z
+event_stream_coverage: raw_factory_logs_fetched=15 raw_anchor_pools_seen=15
+  raw_factory_new_focus_tokens_total=15 observer_factory_logs_fetched=110 observer_anchor_pools_seen=0
 m9_admission_requires: selection_verified_fresh_total>0, quote_ready_total>0,
   quote_ready_second_venue_total>0, target_universe_gate_blocked=false, cycles_at_floor>0
-current: selection_verified_fresh_total=0 m9_target_ready=false m9_admission_ready=false -> M9 shadow NOT_STARTED (correct)
-rca_blocker: selection_blocked_stale
-rpc_transient_factory_membership_fail_total=2
+current: m9_target_ready=true fresh_target_ready=true m9_admission_ready=false -> M9 shadow NOT_STARTED (correct)
+rca_blocker: SECOND_VENUE_READY_ZERO
+runtime_note: start.py -m_8 produced fresh sniper evidence but hard-timed-out at 2400s;
+  start.py -time_to_mirror --hot hard-timed-out in m8_2_cross_dex_expand at 1800s.
 ```
 
 ## Capacity blocker audit

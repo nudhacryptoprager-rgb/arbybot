@@ -11,7 +11,9 @@ from m8.discovery.mirror_discovery_recall import (
     EXISTENCE_VERIFY_QUEUE_PATH,
     QUOTE_READY_QUEUE_PATH,
     RECALL_CANDIDATES_PATH,
+    build_coverage_matrix,
     build_dex_alias_backlog,
+    build_second_venue_rca,
     compute_recall_metrics,
     evaluate_m9_admission_gate,
     evaluate_mirror_recall_gate,
@@ -543,3 +545,75 @@ def test_run_recall_payload_has_top_level_m9_admission_blocker(monkeypatch):
     assert payload["quote_ready_total"] == 0
     assert payload["m9_admission_blocker"] == "QUOTE_READY_ZERO"
     assert payload["verify_rca"]["m9_admission_blocker"] == "QUOTE_READY_ZERO"
+
+
+def _hint(
+    *,
+    focus: str,
+    dex: str,
+    source: str = "factory_log",
+    pool: str = "0x" + "p" * 40,
+    quote_ready: bool = False,
+    verified: bool = True,
+) -> PoolHint:
+    return PoolHint(
+        source=source,
+        chain="base",
+        dex_id=dex,
+        pool_address=pool,
+        token0_addr=focus,
+        token1_addr="0x" + "a" * 40,
+        focus_token=focus,
+        hint_status=QUOTE_SMOKE_OK if quote_ready else "HINT_FACTORY_VERIFIED",
+        raw={"recall_verified_pool_exists": verified, "selection_verified_fresh": verified},
+    )
+
+
+def test_build_coverage_matrix_counts_by_source_and_dex():
+    focus = "0x" + "f" * 40
+    hints = [
+        _hint(focus=focus, dex="uniswap_v3", source="factory_log", pool="0x11"),
+        _hint(focus=focus, dex="uniswap_v3", source="dexscreener", pool="0x22", quote_ready=True),
+        _hint(focus=focus, dex="alien_base_v2", source="observer_factory_log", pool="0x33"),
+    ]
+    cfg = _config()
+    matrix = build_coverage_matrix(hints, cfg)
+    assert matrix["schema_version"] == "m8_recall_coverage_matrix_v1"
+    rows = {r["dex_id"]: r for r in matrix["rows"]}
+    assert rows["uniswap_v3"]["verified_total"] == 2
+    assert rows["uniswap_v3"]["verified_by_source"]["factory_log"] == 1
+    assert rows["uniswap_v3"]["verified_by_source"]["dexscreener"] == 1
+    assert rows["uniswap_v3"]["quote_ready_total"] == 1
+    assert rows["alien_base_v2"]["verified_total"] == 1
+    assert rows["alien_base_v2"]["verified_by_source"]["observer_factory_log"] == 1
+    assert "uniswap_v3" in matrix["quote_ready_dexes"]
+    assert matrix["source_totals"]["factory_log"] == 1
+    assert matrix["source_totals"]["dexscreener"] == 1
+    assert matrix["source_totals"]["observer_factory_log"] == 1
+
+
+def test_build_second_venue_rca_records_quote_blocker():
+    focus = "0x" + "f" * 40
+    hints = [
+        _hint(focus=focus, dex="uniswap_v3", source="factory_log", quote_ready=True),
+        _hint(focus=focus, dex="alien_base_v2", source="dexscreener"),
+    ]
+    rca = build_second_venue_rca(hints)
+    assert len(rca) == 1
+    row = rca[0]
+    assert row["focus_token"] == focus
+    assert row["verified_dexes"] == ["alien_base_v2", "uniswap_v3"]
+    assert row["quote_ready_dexes"] == ["uniswap_v3"]
+    assert row["blocker_reason"] == "QUOTE_READY_SINGLE_VENUE"
+
+
+def test_build_second_venue_rca_skips_fully_ready_and_single_venue():
+    focus_ready = "0x" + "a" * 40
+    focus_single = "0x" + "b" * 40
+    hints = [
+        _hint(focus=focus_ready, dex="uniswap_v3", quote_ready=True),
+        _hint(focus=focus_ready, dex="alien_base_v2", quote_ready=True),
+        _hint(focus=focus_single, dex="uniswap_v3"),
+    ]
+    rca = build_second_venue_rca(hints)
+    assert len(rca) == 0

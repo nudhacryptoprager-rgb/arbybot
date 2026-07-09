@@ -443,6 +443,111 @@ def verify_supported_hints(
     return out, rca, reject_rows
 
 
+def _source_bucket(source: Optional[str]) -> str:
+    s = str(source or "").lower()
+    if s == "factory_log":
+        return "factory_log"
+    if s == "observer_factory_log":
+        return "observer_factory_log"
+    if s == "dexscreener":
+        return "dexscreener"
+    return "other"
+
+
+def build_coverage_matrix(
+    hints: List[PoolHint],
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Runtime coverage matrix: which DEX was seen/verified/quoted by which source."""
+    dexes = config.get("dexes") or {}
+    enabled_dexes = sorted(did for did, dcfg in dexes.items() if bool(dcfg.get("enabled", True)))
+    source_buckets = ("factory_log", "observer_factory_log", "dexscreener", "other")
+    verified_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    quote_ready_counts: Dict[str, int] = defaultdict(int)
+    for h in hints:
+        if not _hint_raw_bool(h, "recall_verified_pool_exists"):
+            continue
+        dex = str(h.dex_id or "").lower()
+        bucket = _source_bucket(h.source)
+        if dex:
+            verified_counts[dex][bucket] += 1
+        status = str(h.hint_status or "").upper()
+        if status.startswith("QUOTE") or status == QUOTE_SMOKE_OK:
+            if dex:
+                quote_ready_counts[dex] += 1
+
+    rows = []
+    for did in enabled_dexes:
+        cfg = dexes.get(did) or {}
+        rows.append({
+            "dex_id": did,
+            "adapter_type": str(cfg.get("adapter_type") or ""),
+            "enabled": bool(cfg.get("enabled", True)),
+            "verified_by_source": dict(verified_counts.get(did, {})),
+            "verified_total": sum(verified_counts.get(did, {}).values()),
+            "quote_ready_total": quote_ready_counts.get(did, 0),
+        })
+    source_totals = {
+        bucket: sum(int(r["verified_by_source"].get(bucket, 0)) for r in rows)
+        for bucket in source_buckets
+    }
+    return {
+        "schema_version": "m8_recall_coverage_matrix_v1",
+        "dex_count": len(enabled_dexes),
+        "covered_dexes": sorted({r["dex_id"] for r in rows if r["verified_total"] > 0}),
+        "quote_ready_dexes": sorted({r["dex_id"] for r in rows if r["quote_ready_total"] > 0}),
+        "source_totals": source_totals,
+        "rows": rows,
+    }
+
+
+def build_second_venue_rca(hints: List[PoolHint]) -> List[Dict[str, Any]]:
+    """Per-token RCA for focus tokens with verified second venue but not quote-ready second venue."""
+    focus_dexes: Dict[str, Set[str]] = defaultdict(set)
+    focus_quote_dexes: Dict[str, Set[str]] = defaultdict(set)
+    focus_pools: Dict[str, Dict[str, List[str]]] = defaultdict(lambda: defaultdict(list))
+    focus_quote_status: Dict[str, Dict[str, str]] = defaultdict(dict)
+    for h in hints:
+        if not _hint_raw_bool(h, "recall_verified_pool_exists"):
+            continue
+        focus = str(h.focus_token or "").lower()
+        dex = str(h.dex_id or "").lower()
+        if not focus or not dex:
+            continue
+        focus_dexes[focus].add(dex)
+        pool = str(h.pool_address or "").lower()
+        if pool:
+            focus_pools[focus][dex].append(pool)
+        status = str(h.hint_status or "").upper()
+        if status.startswith("QUOTE") or status == QUOTE_SMOKE_OK:
+            focus_quote_dexes[focus].add(dex)
+            focus_quote_status[focus][dex] = str(h.hint_status or "")
+
+    rca_rows = []
+    for focus, dexes in focus_dexes.items():
+        if len(dexes) < 2:
+            continue
+        quote_dexes = focus_quote_dexes.get(focus, set())
+        if len(quote_dexes) >= 2:
+            continue
+        blocker = (
+            "QUOTE_READY_ZERO"
+            if not quote_dexes
+            else "QUOTE_READY_SINGLE_VENUE"
+        )
+        rca_rows.append({
+            "focus_token": focus,
+            "verified_dexes": sorted(dexes),
+            "quote_ready_dexes": sorted(quote_dexes),
+            "verified_pools_per_dex": {
+                dex: sorted(set(pools)) for dex, pools in focus_pools[focus].items()
+            },
+            "quote_status_per_dex": dict(focus_quote_status.get(focus, {})),
+            "blocker_reason": blocker,
+        })
+    return sorted(rca_rows, key=lambda x: x["focus_token"])
+
+
 def run_mirror_discovery_recall(
     tokens: List[str],
     *,
@@ -681,6 +786,8 @@ def run_mirror_discovery_recall(
         "rpc_transient_factory_membership_fail_total": rca.get(
             "verification_metrics", {}
         ).get("rpc_transient_factory_membership_fail_total", 0),
+        "coverage_matrix": build_coverage_matrix(verified, cfg),
+        "second_venue_rca": build_second_venue_rca(verified),
         "supported_hints_verified": selection_fresh_total,
         **anchor_filter_metrics,
         # Deprecated: m9_target_ready historically meant fresh target exists.

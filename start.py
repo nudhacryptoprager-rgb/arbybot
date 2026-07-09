@@ -122,6 +122,7 @@ TIME_TO_MIRROR_STEP_TIMINGS_PATH = Path(
 )
 EVENT_STREAM_LANE_ARTIFACT = Path("data/tmp/m8_event_stream_lane_latest.json")
 MIRROR_DISCOVERY_RECALL_PATH = Path("data/tmp/m8_mirror_discovery_recall_latest.json")
+MIRROR_RECALL_WIDE_PATH = Path("data/tmp/m8_mirror_recall_wide_latest.json")
 EXISTENCE_VERIFY_SUBSET_PATH = Path("data/tmp/m8_existence_verify_subset.json")
 RECALL_SLA_MAX_S = 180
 VERIFY_SLA_MAX_S = 900
@@ -251,6 +252,24 @@ HOT_LANE_PROFILES: dict[str, dict[str, Any]] = {
         "run_quote_smoke": True,
         "quote_smoke_max_candidates": 25,
         "use_dexscreener": False,
+        "defer_heavy_verify": True,
+    },
+    "mirror_recall_wide": {
+        "max_radar_tokens": 753,
+        "skip_secondary": True,
+        "verify_subset_max": 0,
+        "hot_sla_max_s": 600,
+        "recall_sla_max_s": 300,
+        "verify_sla_max_s": 900,
+        "hot_expand": True,
+        "mirror_discovery_max_recall": True,
+        "recall_only": True,
+        "token_pool_universe": True,
+        "graph_closure_only": True,
+        "anchor_constrained": False,
+        "run_quote_smoke": True,
+        "quote_smoke_max_candidates": 25,
+        "use_dexscreener": True,
         "defer_heavy_verify": True,
     },
     "audit_full": {
@@ -683,6 +702,8 @@ def _resolve_time_to_mirror_profile(args: argparse.Namespace) -> dict[str, Any]:
     pipeline = str(getattr(args, "pipeline", "") or "")
     if pipeline == "mirror_recall_fast":
         lane = "mirror_recall_fast"
+    elif pipeline == "mirror_recall_wide":
+        lane = "mirror_recall_wide"
     else:
         explicit_lane = getattr(args, "hot_lane", None)
         hot_flag = bool(getattr(args, "time_to_mirror_hot", False))
@@ -1154,7 +1175,12 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
 
-    def add_m82(*, hot_expand: bool = False, profile: dict[str, Any] | None = None) -> None:
+    def add_m82(
+        *,
+        hot_expand: bool = False,
+        profile: dict[str, Any] | None = None,
+        recall_output_path: Path = MIRROR_DISCOVERY_RECALL_PATH,
+    ) -> None:
         prof = profile or {}
         radar_cmd = _py_cmd(
             "scripts/m8_radar_two_phase_refresh.py",
@@ -1204,7 +1230,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             "--max-tokens",
             str(max_radar),
             "--output",
-            str(MIRROR_DISCOVERY_RECALL_PATH),
+            str(recall_output_path),
             "--write-supported-hints",
         )
         if anchor_constrained:
@@ -1246,7 +1272,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                             "scripts/m9_production_refresh_gates.py",
                             "mirror_recall",
                             "--recall",
-                            str(MIRROR_DISCOVERY_RECALL_PATH),
+                            str(recall_output_path),
                         ),
                         allow_exit_codes=(0, 2),
                     )
@@ -1728,7 +1754,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_m83()
 
     def add_mirror_recall_fast() -> None:
-        """Contour A only: DexScreener token-scoped recall (≤180s SLA)."""
+        """Contour A only: on-chain/factory token-scoped recall (≤180s SLA)."""
         profile = ttm_profile or dict(HOT_LANE_PROFILES["mirror_recall_fast"])
         print(
             f"mirror_recall_fast max_radar={profile.get('max_radar_tokens')} "
@@ -1736,6 +1762,21 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             flush=True,
         )
         add_m82(hot_expand=True, profile=profile)
+
+    def add_mirror_recall_wide() -> None:
+        """M8.2 wide sidecar: batched DexScreener recall over fresh_delta+pending tokens."""
+        profile = ttm_profile or dict(HOT_LANE_PROFILES["mirror_recall_wide"])
+        print(
+            f"mirror_recall_wide max_radar={profile.get('max_radar_tokens')} "
+            f"recall_sla_max_s={profile.get('recall_sla_max_s')} "
+            f"use_dexscreener=True",
+            flush=True,
+        )
+        add_m82(
+            hot_expand=True,
+            profile=profile,
+            recall_output_path=MIRROR_RECALL_WIDE_PATH,
+        )
 
     def add_time_to_mirror() -> None:
         """Lane A: fresh delta + top pending only (minutes-scale hot path)."""
@@ -1991,6 +2032,8 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_time_to_mirror()
     elif mode == "mirror_recall_fast":
         add_mirror_recall_fast()
+    elif mode == "mirror_recall_wide":
+        add_mirror_recall_wide()
     elif mode == "m8_audit":
         add_m8_audit()
     elif mode == "patient_lane":
@@ -2120,7 +2163,7 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             else True
         )
         selection_fresh_allowed = True
-        record_ttm_timings = pipeline_mode in ("time_to_mirror", "mirror_recall_fast")
+        record_ttm_timings = pipeline_mode in ("time_to_mirror", "mirror_recall_fast", "mirror_recall_wide")
         ttm_profile = (
             _resolve_time_to_mirror_profile(args) if record_ttm_timings else None
         )
@@ -2339,7 +2382,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="pipeline",
         action="store_const",
         const="mirror_recall_fast",
-        help="Fast recall-only lane: pending→expand→DexScreener recall (≤180s SLA)",
+        help="Fast recall-only lane: pending→expand→on-chain/factory recall (≤180s SLA)",
+    )
+    pg.add_argument(
+        "-mirror_recall_wide",
+        "--mirror-recall-wide",
+        dest="pipeline",
+        action="store_const",
+        const="mirror_recall_wide",
+        help="Wide DexScreener sidecar: fresh_delta+pending→expand→batched DexScreener recall (≤300s SLA)",
     )
     pg.add_argument(
         "--patient-lane",
@@ -2368,7 +2419,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hot-lane",
         choices=tuple(HOT_LANE_PROFILES.keys()),
         default=None,
-        help="time_to_mirror lane budget: hot_delta (50), warm_recall (150), mirror_recall (753 wide), mirror_recall_fast, audit_full (753+)",
+        help="time_to_mirror lane budget: hot_delta (50), warm_recall (150), mirror_recall (753 wide), mirror_recall_fast, mirror_recall_wide, audit_full (753+)",
     )
     ap.add_argument(
         "--skip-secondary",

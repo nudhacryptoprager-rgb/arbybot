@@ -571,6 +571,24 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertNotIn("m8_1_stable_anchor_fresh_delta", names)
         self.assertNotIn("m8_2_acceptance_strict", names)
 
+    def test_mirror_recall_wide_plan_uses_wide_output_and_dexscreener(self):
+        args = start.parse_args(["-mirror_recall_wide", "--dry-run", "--no-dashboard"])
+        steps = start.build_project_pipeline_steps(args)
+        names = [s["name"] for s in steps]
+        self.assertIn("m8_time_to_mirror_pending_queue", names)
+        self.assertIn("m8_time_to_mirror_expand_subset", names)
+        self.assertIn("m8_mirror_discovery_recall", names)
+        self.assertIn("gate_mirror_recall", names)
+        self.assertIn("gate_recall_sla", names)
+        self.assertNotIn("m8_onchain_factory_mirror_scan", names)
+        recall_step = next(s for s in steps if s["name"] == "m8_mirror_discovery_recall")
+        joined = " ".join(recall_step["cmd"])
+        self.assertIn(str(start.MIRROR_RECALL_WIDE_PATH), joined)
+        self.assertNotIn("--no-dexscreener", joined)
+        self.assertIn("--run-quote-smoke", joined)
+        gate_step = next(s for s in steps if s["name"] == "gate_mirror_recall")
+        self.assertIn(str(start.MIRROR_RECALL_WIDE_PATH), " ".join(gate_step["cmd"]))
+
     def test_pipeline_markers_are_namespaced_by_mode(self):
         import tempfile
 
