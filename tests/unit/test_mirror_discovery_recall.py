@@ -336,7 +336,7 @@ def test_filter_anchor_mirror_pairs_rejects_missing_focus():
     assert metrics["anchor_pair_rejects"]["FOCUS_MISSING"] == 1
 
 
-def test_fresh_quote_smoke_updates_hint_status_and_selection():
+def test_fresh_quote_smoke_updates_hint_status_and_selection(tmp_path):
     focus = "0x" + "f" * 40
     anchor = "0x" + "a" * 40
     h = PoolHint(
@@ -364,7 +364,13 @@ def test_fresh_quote_smoke_updates_hint_status_and_selection():
         "all_dex_mirrors_total": 1,
         "mirrors_total": 1,
     }
-    sel = run_mirror_selection_pass(payload, hints=[h], run_stale_quote_smoke=False)
+    sel = run_mirror_selection_pass(
+        payload,
+        hints=[h],
+        output_path=tmp_path / "selection_hints.json",
+        selection_artifact_path=tmp_path / "selection_latest.json",
+        run_stale_quote_smoke=False,
+    )
     assert sel["quote_ready_count"] == 1
     assert sel["fresh_target_ready"] is True
     assert sel["m9_admission_ready"] is False
@@ -372,7 +378,7 @@ def test_fresh_quote_smoke_updates_hint_status_and_selection():
     assert sel["selection_stages"]["second_venue_ready"] == 0
 
 
-def test_fresh_quote_smoke_skips_when_arby_skip_rpc():
+def test_fresh_quote_smoke_skips_when_arby_skip_rpc(tmp_path):
     import os
 
     old = os.environ.get("ARBY_SKIP_RPC")
@@ -388,7 +394,11 @@ def test_fresh_quote_smoke_skips_when_arby_skip_rpc():
             focus_token="0x" + "f" * 40,
             raw={"fresh_quote_candidate": True},
         )
-        result = run_fresh_mirror_quote_smoke([h], chain="base")
+        result = run_fresh_mirror_quote_smoke(
+            [h],
+            chain="base",
+            checkpoint_path=tmp_path / "fresh_quote_smoke.json",
+        )
         assert result["reason"] == "NO_FRESH_CANDIDATES" or result.get("skipped")
         assert h.hint_status != QUOTE_SMOKE_OK
     finally:
@@ -398,7 +408,7 @@ def test_fresh_quote_smoke_skips_when_arby_skip_rpc():
             os.environ["ARBY_SKIP_RPC"] = old
 
 
-def test_second_venue_ready_counts_productive_plus_observer():
+def test_second_venue_ready_counts_productive_plus_observer(tmp_path):
     focus = "0x" + "f" * 40
     anchor = "0x" + "a" * 40
     productive = PoolHint(
@@ -434,7 +444,13 @@ def test_second_venue_ready_counts_productive_plus_observer():
         },
     )
     payload = {"chain": "base", "all_dex_mirrors_total": 2, "mirrors_total": 2}
-    sel = run_mirror_selection_pass(payload, hints=[productive, observer], run_stale_quote_smoke=False)
+    sel = run_mirror_selection_pass(
+        payload,
+        hints=[productive, observer],
+        output_path=tmp_path / "selection_hints_1.json",
+        selection_artifact_path=tmp_path / "selection_latest_1.json",
+        run_stale_quote_smoke=False,
+    )
     assert sel["second_venue_ready_count"] == 1
     assert sel["selection_stages"]["second_venue_ready"] == 1
     assert sel["quote_ready_second_venue_count"] == 0
@@ -442,7 +458,11 @@ def test_second_venue_ready_counts_productive_plus_observer():
 
     productive.hint_status = QUOTE_SMOKE_OK
     sel_quote_one = run_mirror_selection_pass(
-        payload, hints=[productive, observer], run_stale_quote_smoke=False
+        payload,
+        hints=[productive, observer],
+        output_path=tmp_path / "selection_hints_2.json",
+        selection_artifact_path=tmp_path / "selection_latest_2.json",
+        run_stale_quote_smoke=False,
     )
     assert sel_quote_one["quote_ready_count"] == 1
     assert sel_quote_one["second_venue_ready_count"] == 1
@@ -452,7 +472,13 @@ def test_second_venue_ready_counts_productive_plus_observer():
     # Mark both venues quote-ready for the same focus token -> admission opens.
     productive.hint_status = QUOTE_SMOKE_OK
     observer.hint_status = QUOTE_SMOKE_OK
-    sel2 = run_mirror_selection_pass(payload, hints=[productive, observer], run_stale_quote_smoke=False)
+    sel2 = run_mirror_selection_pass(
+        payload,
+        hints=[productive, observer],
+        output_path=tmp_path / "selection_hints_3.json",
+        selection_artifact_path=tmp_path / "selection_latest_3.json",
+        run_stale_quote_smoke=False,
+    )
     assert sel2["quote_ready_count"] == 2
     assert sel2["second_venue_ready_count"] == 1
     assert sel2["quote_ready_second_venue_count"] == 1
