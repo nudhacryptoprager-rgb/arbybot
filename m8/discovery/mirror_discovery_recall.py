@@ -324,6 +324,7 @@ def verify_supported_hints(
     factory_no_pool_samples: List[Dict[str, Any]] = []
     rpc_transient_factory_fail_total: int = 0
     dex_null_age_hist: Dict[str, int] = {}
+    aero_variant_fallback_hist: Dict[str, int] = {}
     unsupported_aerodrome_pool_hist: Dict[str, Any] = {}
     unsupported_aerodrome_pool_samples: List[Dict[str, Any]] = []
 
@@ -348,7 +349,7 @@ def verify_supported_hints(
         verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
         verify_metrics["rpc_transient_factory_membership_fail_total"] = rpc_transient_factory_fail_total
         verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
-        verify_metrics["aerodrome_variant_fallback_histogram"] = unsupported_aerodrome_pool_hist
+        verify_metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
         verify_metrics["unsupported_aerodrome_pool_histogram"] = unsupported_aerodrome_pool_hist
         verify_metrics["unsupported_aerodrome_pool_samples"] = unsupported_aerodrome_pool_samples
         rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
@@ -372,7 +373,7 @@ def verify_supported_hints(
 
             aero_fb = raw.get("aerodrome_variant_fallback")
             if aero_fb:
-                unsupported_aerodrome_pool_hist[str(aero_fb)] = int(unsupported_aerodrome_pool_hist.get(str(aero_fb), 0)) + 1
+                aero_variant_fallback_hist[str(aero_fb)] = int(aero_variant_fallback_hist.get(str(aero_fb), 0)) + 1
 
             if raw.get("existence_rca_bucket") == "UNSUPPORTED_OR_MISLABELED_AERODROME_POOL":
                 key = f"{verified.dex_id}|{str(raw.get('aerodrome_factory_address') or verified.factory_address or 'unknown')[:42]}"
@@ -435,7 +436,7 @@ def verify_supported_hints(
     verify_metrics["factory_no_pool_samples"] = factory_no_pool_samples
     verify_metrics["rpc_transient_factory_membership_fail_total"] = rpc_transient_factory_fail_total
     verify_metrics["dex_null_age_histogram"] = dex_null_age_hist
-    verify_metrics["aerodrome_variant_fallback_histogram"] = unsupported_aerodrome_pool_hist
+    verify_metrics["aerodrome_variant_fallback_histogram"] = aero_variant_fallback_hist
     verify_metrics["unsupported_aerodrome_pool_histogram"] = unsupported_aerodrome_pool_hist
     verify_metrics["unsupported_aerodrome_pool_samples"] = unsupported_aerodrome_pool_samples
     rca = build_verify_rca(hints=out, verify_metrics=verify_metrics, reject_rows=reject_rows)
@@ -561,25 +562,38 @@ def run_mirror_discovery_recall(
         for h in verified
         if str(h.hint_status or "").upper().startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK
     )
-    # Second-pool / second-venue readiness is computed from verified on-chain
-    # pools. A focus token has a second pool if it has >=2 distinct verified
-    # pool addresses. It has a second venue if those pools are on distinct dexes.
-    focus_pools_main: Dict[str, Set[str]] = {}
-    focus_dexes_main: Dict[str, Set[str]] = {}
+    # Second-pool / second-venue readiness is computed from selection-fresh
+    # verified pools. M9 admission additionally requires the same focus token
+    # to have quote-ready pools on >=2 distinct dexes.
+    focus_pools_ready: Dict[str, Set[str]] = {}
+    focus_dexes_ready: Dict[str, Set[str]] = {}
+    focus_quote_dexes_ready: Dict[str, Set[str]] = {}
     for h in verified:
-        if _hint_raw_bool(h, "recall_verified_pool_exists"):
+        if _hint_raw_bool(h, "recall_verified_pool_exists") and _hint_raw_bool(h, "selection_verified_fresh"):
             focus = str(h.focus_token or "").lower()
             pool = str(h.pool_address or "").lower()
             dex = str(h.dex_id or "").lower()
             if focus and pool:
-                focus_pools_main.setdefault(focus, set()).add(pool)
+                focus_pools_ready.setdefault(focus, set()).add(pool)
             if focus and dex:
-                focus_dexes_main.setdefault(focus, set()).add(dex)
+                focus_dexes_ready.setdefault(focus, set()).add(dex)
+            if (
+                focus
+                and dex
+                and (
+                    str(h.hint_status or "").upper().startswith("QUOTE")
+                    or h.hint_status == QUOTE_SMOKE_OK
+                )
+            ):
+                focus_quote_dexes_ready.setdefault(focus, set()).add(dex)
     second_pool_ready_total = sum(
-        1 for focus, pools in focus_pools_main.items() if len(pools) >= 2
+        1 for focus, pools in focus_pools_ready.items() if len(pools) >= 2
     )
     second_venue_ready_total = sum(
-        1 for focus, dexes in focus_dexes_main.items() if len(dexes) >= 2
+        1 for focus, dexes in focus_dexes_ready.items() if len(dexes) >= 2
+    )
+    quote_ready_second_venue_total = sum(
+        1 for focus, dexes in focus_quote_dexes_ready.items() if len(dexes) >= 2
     )
     verified_pool_count_by_dex: Dict[str, int] = Counter()
     second_pool_count_by_dex: Dict[str, int] = Counter()
@@ -597,17 +611,18 @@ def run_mirror_discovery_recall(
                 verified_pool_count_by_dex[dex] += 1
             if str(h.source or "").lower() == "observer_factory_log" and focus:
                 observer_focus_tokens.add(focus)
-                if focus in focus_pools_main and len(focus_pools_main[focus]) >= 2:
+                if focus in focus_pools_ready and len(focus_pools_ready[focus]) >= 2:
                     second_pool_count_by_dex[dex] += 1
                 if _hint_raw_bool(h, "selection_verified_fresh"):
                     observer_overlap_fresh.add(focus)
                 if h.hint_status == QUOTE_SMOKE_OK:
                     observer_overlap_quote.add(focus)
-                if focus in focus_pools_main and len(focus_pools_main[focus]) >= 2:
+                if focus in focus_pools_ready and len(focus_pools_ready[focus]) >= 2:
                     observer_second_venue_candidates.add(focus)
-    for focus, dexes in focus_dexes_main.items():
+    for focus, dexes in focus_dexes_ready.items():
         if len(dexes) >= 2:
-            observer_verified_second_venues.add(focus)
+            if focus in observer_focus_tokens:
+                observer_verified_second_venues.add(focus)
             for dex in dexes:
                 verified_second_venues_by_dex[dex] += 1
     age_buckets = Counter(str(row.get("mirror_age_bucket") or "unknown") for row in mirrors)
@@ -617,6 +632,15 @@ def run_mirror_discovery_recall(
     )
     unsupported_backlog = build_unsupported_dex_backlog(mirrors, config=cfg)
     recall_run_id = _iso_now()
+    m9_blocker = "NONE"
+    if quote_ready_total == 0 and selection_fresh_total > 0:
+        m9_blocker = "QUOTE_READY_ZERO"
+    elif quote_ready_total > 0 and second_venue_ready_total == 0:
+        m9_blocker = "SECOND_VENUE_READY_ZERO"
+    elif quote_ready_total > 0 and second_venue_ready_total > 0 and quote_ready_second_venue_total == 0:
+        m9_blocker = "QUOTE_READY_SECOND_VENUE_ZERO"
+    elif quote_ready_total > 0 and second_venue_ready_total > 0 and second_pool_ready_total == 0:
+        m9_blocker = "SECOND_POOL_READY_ZERO"
     payload = {
         "schema_version": "m8_mirror_discovery_recall_v5",
         "generated_at_utc": recall_run_id,
@@ -645,6 +669,7 @@ def run_mirror_discovery_recall(
         "quote_ready_total": quote_ready_total,
         "second_pool_ready_total": second_pool_ready_total,
         "second_venue_ready_total": second_venue_ready_total,
+        "quote_ready_second_venue_total": quote_ready_second_venue_total,
         "verified_pool_count_by_dex": dict(verified_pool_count_by_dex),
         "second_pool_count_by_dex": dict(second_pool_count_by_dex),
         "verified_second_venues_by_dex": dict(verified_second_venues_by_dex),
@@ -653,6 +678,9 @@ def run_mirror_discovery_recall(
         "observer_overlap_quote_total": len(observer_overlap_quote),
         "observer_second_venue_candidate_total": len(observer_second_venue_candidates),
         "observer_verified_second_venue_total": len(observer_verified_second_venues),
+        "rpc_transient_factory_membership_fail_total": rca.get(
+            "verification_metrics", {}
+        ).get("rpc_transient_factory_membership_fail_total", 0),
         "supported_hints_verified": selection_fresh_total,
         **anchor_filter_metrics,
         # Deprecated: m9_target_ready historically meant fresh target exists.
@@ -660,7 +688,7 @@ def run_mirror_discovery_recall(
         # m9_admission_ready for actual M9 bridge/shadow admission.
         "m9_target_ready": selection_fresh_total > 0,
         "fresh_target_ready": selection_fresh_total > 0,
-        "m9_admission_ready": quote_ready_total > 0 and second_venue_ready_total > 0,
+        "m9_admission_ready": quote_ready_second_venue_total > 0,
         "m9_admission_blocker": m9_blocker,
         "mirror_recall_ready": int(metrics.get("mirrors_total") or 0) > 0,
         **metrics,
@@ -669,13 +697,6 @@ def run_mirror_discovery_recall(
     write_recall_hints_checkpoint(verified, chain=chain)
     queue_paths = write_mirror_queue_artifacts(payload, hints=verified, chain=chain)
     payload["queue_artifacts"] = queue_paths
-    m9_blocker = "NONE"
-    if quote_ready_total == 0 and selection_fresh_total > 0:
-        m9_blocker = "QUOTE_READY_ZERO"
-    elif quote_ready_total > 0 and second_venue_ready_total == 0:
-        m9_blocker = "SECOND_VENUE_READY_ZERO"
-    elif quote_ready_total > 0 and second_venue_ready_total > 0 and second_pool_ready_total == 0:
-        m9_blocker = "SECOND_POOL_READY_ZERO"
     payload["verify_rca"] = {
         "supported_hints_total": rca.get("supported_hints_total"),
         "recall_verified_pool_exists_total": rca.get("recall_verified_pool_exists_total"),
@@ -691,6 +712,9 @@ def run_mirror_discovery_recall(
         "stale_recall_bucket_histogram": rca.get("stale_recall_bucket_histogram"),
         "existence_rca_bucket_histogram": rca.get("existence_rca_bucket_histogram"),
         "pool_exists_stale_total": rca.get("pool_exists_stale_total"),
+        "rpc_transient_factory_membership_fail_total": rca.get(
+            "verification_metrics", {}
+        ).get("rpc_transient_factory_membership_fail_total", 0),
     }
     return verified, payload
 
@@ -1032,9 +1056,18 @@ def run_mirror_selection_pass(
         focus for focus, dexes in focus_dexes.items() if len(dexes) >= 2
     }
     second_venue_ready = [h for h in fresh_enough if str(h.focus_token or "").lower() in second_venue_ready_focuses]
+    quote_ready_dexes: Dict[str, Set[str]] = {}
+    for h in quote_ready:
+        focus = str(h.focus_token or "").lower()
+        dex = str(h.dex_id or "").lower()
+        if focus and dex:
+            quote_ready_dexes.setdefault(focus, set()).add(dex)
+    quote_ready_second_venue_focuses = {
+        focus for focus, dexes in quote_ready_dexes.items() if len(dexes) >= 2
+    }
     handoff = quote_ready if quote_ready else fresh_enough
     fresh_target_ready = len(fresh_enough) > 0
-    m9_admission_ready = len(quote_ready) > 0 and len(second_venue_ready) > 0
+    m9_admission_ready = len(quote_ready_second_venue_focuses) > 0
     artifact = build_artifact(
         hints=handoff,
         chain=str(recall_payload.get("chain") or "base"),
@@ -1048,6 +1081,7 @@ def run_mirror_selection_pass(
             "fresh_quote_candidate_count": len(fresh_quote_candidate),
             "quote_ready_count": len(quote_ready),
             "second_venue_ready_count": len(second_venue_ready_focuses),
+            "quote_ready_second_venue_count": len(quote_ready_second_venue_focuses),
             "fresh_target_ready": fresh_target_ready,
             "m9_admission_ready": m9_admission_ready,
             "recall_mirrors_total": int(recall_payload.get("mirrors_total") or 0),
@@ -1064,6 +1098,7 @@ def run_mirror_selection_pass(
         "fresh_quote_candidate_count": len(fresh_quote_candidate),
         "quote_ready_count": len(quote_ready),
         "second_venue_ready_count": len(second_venue_ready_focuses),
+        "quote_ready_second_venue_count": len(quote_ready_second_venue_focuses),
         "mirrors_selected": len(handoff),
         "output_path": str(output_path),
         # Deprecated: m9_target_ready historically meant fresh target exists.
@@ -1082,6 +1117,7 @@ def run_mirror_selection_pass(
             "fresh_quote_candidate": len(fresh_quote_candidate),
             "quote_ready": len(quote_ready),
             "second_venue_ready": len(second_venue_ready_focuses),
+            "quote_ready_second_venue": len(quote_ready_second_venue_focuses),
             "fresh_target_ready": len(fresh_enough),
             "m9_admission_ready": len(quote_ready) if m9_admission_ready else 0,
             "narrow": len(handoff),

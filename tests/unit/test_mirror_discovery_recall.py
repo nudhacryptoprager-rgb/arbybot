@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from m8.discovery.dex_coverage_gate import classify_dex_support_status
 from m8.discovery.dexscreener_hints import _pair_to_hint
@@ -17,6 +18,7 @@ from m8.discovery.mirror_discovery_recall import (
     evaluate_selection_verified_fresh_gate,
     hint_support_status,
     mirror_row_from_hint,
+    run_mirror_discovery_recall,
     run_fresh_mirror_quote_smoke,
     run_mirror_selection_pass,
     write_mirror_queue_artifacts,
@@ -435,12 +437,83 @@ def test_second_venue_ready_counts_productive_plus_observer():
     sel = run_mirror_selection_pass(payload, hints=[productive, observer], run_stale_quote_smoke=False)
     assert sel["second_venue_ready_count"] == 1
     assert sel["selection_stages"]["second_venue_ready"] == 1
+    assert sel["quote_ready_second_venue_count"] == 0
     assert sel["m9_admission_ready"] is False  # quote_ready still empty
 
-    # Mark both quote-ready -> admission opens.
+    productive.hint_status = QUOTE_SMOKE_OK
+    sel_quote_one = run_mirror_selection_pass(
+        payload, hints=[productive, observer], run_stale_quote_smoke=False
+    )
+    assert sel_quote_one["quote_ready_count"] == 1
+    assert sel_quote_one["second_venue_ready_count"] == 1
+    assert sel_quote_one["quote_ready_second_venue_count"] == 0
+    assert sel_quote_one["m9_admission_ready"] is False
+
+    # Mark both venues quote-ready for the same focus token -> admission opens.
     productive.hint_status = QUOTE_SMOKE_OK
     observer.hint_status = QUOTE_SMOKE_OK
     sel2 = run_mirror_selection_pass(payload, hints=[productive, observer], run_stale_quote_smoke=False)
     assert sel2["quote_ready_count"] == 2
     assert sel2["second_venue_ready_count"] == 1
+    assert sel2["quote_ready_second_venue_count"] == 1
     assert sel2["m9_admission_ready"] is True
+
+
+def test_run_recall_payload_has_top_level_m9_admission_blocker(monkeypatch):
+    import m8.discovery.mirror_discovery_recall as recall_mod
+    import m8.discovery.token_pool_universe as token_universe
+
+    focus = "0x" + "f" * 40
+    anchor = "0x" + "a" * 40
+    created_at = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    hint = PoolHint(
+        source="factory_log",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0x" + "1" * 40,
+        token0_addr=anchor,
+        token1_addr=focus,
+        focus_token=focus,
+        created_at=created_at,
+        hint_status="HINT_FACTORY_VERIFIED",
+        raw={"support_status": "supported"},
+    )
+
+    monkeypatch.setattr(
+        token_universe,
+        "load_factory_recall_hints",
+        lambda *args, **kwargs: [hint],
+    )
+    monkeypatch.setattr(recall_mod, "write_verify_rca", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        recall_mod,
+        "write_recall_hints_checkpoint",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        recall_mod,
+        "write_mirror_queue_artifacts",
+        lambda *args, **kwargs: {},
+    )
+
+    _hints, payload = run_mirror_discovery_recall(
+        [focus],
+        config={
+            "tokens": {"WETH": {"address": anchor}},
+            "dexes": {"uniswap_v3": {"enabled": True, "adapter_type": "uniswap_v3"}},
+        },
+        dry_run=True,
+        use_dexscreener=False,
+        token_pool_universe=True,
+        graph_closure_only=True,
+    )
+
+    assert payload["selection_verified_fresh_total"] == 1
+    assert payload["quote_ready_total"] == 0
+    assert payload["m9_admission_blocker"] == "QUOTE_READY_ZERO"
+    assert payload["verify_rca"]["m9_admission_blocker"] == "QUOTE_READY_ZERO"

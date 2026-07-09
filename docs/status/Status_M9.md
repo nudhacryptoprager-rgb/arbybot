@@ -2,22 +2,22 @@
 
 **Reporting split:** M8.2 gates → `scripts/m8_2_acceptance_report.py` + [Status_M8_2.md](Status_M8_2.md). M8.3 gates → `scripts/m8_3_acceptance_report.py` + [Status_M8_3.md](Status_M8_3.md). M9 gates → `scripts/m9_lane_acceptance_report.py`.
 
-**Current runtime line:** **M8_RAW_FACTORY_DISCOVERY_REACHED / M9_BLOCKED_BY_SECOND_VENUE_CADENCE**
+**Current runtime line:** **M8_OBSERVER_SECOND_VENUE_REACHED / M9_BLOCKED_BY_QUOTE_READY_SECOND_VENUE**
 
 ```text
-ANCHOR_CONSTRAINED_FAST_RECALL_ACTIVE / M9_BLOCKED_BY_SECOND_VENUE_CADENCE
-mirror_recall_fast: recall_latency_s=152.19 recall_sla_pass=true all_dex_mirrors_total=30
-admission_width: supported_mirrors_total=30 unknown_alias_mirrors_total=0
-factory_listener: productive_factories_scanned=4 observer_factories_scanned=8
-raw_factory_scan: raw_anchor_pools_seen=49 observer_anchor_pools_seen=3
-fresh_target_discovery: selection_verified_fresh_total=6 fresh_target_ready_total=6
-quote_readiness: fresh_quote_candidate_total=6 quote_ready_total=5
+ANCHOR_CONSTRAINED_FAST_RECALL_ACTIVE / M9_BLOCKED_BY_QUOTE_READY_SECOND_VENUE
+mirror_recall_fast: run_timestamp=2026-07-09T08:27:04Z recall_latency_s=78.56 recall_sla_pass=true
+admission_width: all_dex_mirrors_total=52 supported_mirrors_total=52 unknown_alias_mirrors_total=0
+pool_existence: recall_verified_pool_exists_total=48 selection_verified_fresh_total=21
+quote_readiness: fresh_quote_candidate_total=21 quote_ready_total=17
+second_venue: second_pool_ready_total=1 second_venue_ready_total=1 quote_ready_second_venue_total=0
+observer_coverage: observer_focus_tokens_total=3 observer_overlap_fresh_total=1
+  observer_verified_second_venue_total=1 observer_overlap_quote_total=0
 m9_admission_requires: selection_verified_fresh_total>0, quote_ready_total>0,
-  second_venue_ready_total>0, target_universe_gate_blocked=false, cycles_at_floor>0
-current: selection_verified_fresh_total=6 quote_ready_total=5 second_venue_ready_total=0
-  second_pool_ready_total=0 m9_admission_ready=false -> M9 shadow NOT_STARTED (correct)
-rca_blocker: SECOND_VENUE_READY_ZERO
-fresh_age_bucket_histogram: {1-6h: 5, <1h: 1}
+  quote_ready_second_venue_total>0, target_universe_gate_blocked=false, cycles_at_floor>0
+current: quote_ready_second_venue_total=0 m9_admission_ready=false -> M9 shadow NOT_STARTED (correct)
+rca_blocker: QUOTE_READY_SECOND_VENUE_ZERO
+rpc_transient_factory_membership_fail_total=0
 ```
 
 ## Capacity blocker audit
