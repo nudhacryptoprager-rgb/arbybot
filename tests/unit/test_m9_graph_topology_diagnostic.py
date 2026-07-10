@@ -73,6 +73,51 @@ def test_summarize_topology_reports_cycles():
     assert topo["cycles_by_length"]["3"] >= 1
 
 
+def test_summarize_topology_degree_fields_are_parser_safe_arrays():
+    """Regression: token symbols that differ only by case must not become
+    JSON object keys. PowerShell ConvertFrom-Json treats those as duplicates.
+    """
+    from m9.graph_arb.models import GraphEdge
+
+    def _e(a: str, b: str) -> GraphEdge:
+        return GraphEdge(
+            token_in_sym=a,
+            token_out_sym=b,
+            token_in_addr="0x" + "1" * 40,
+            token_out_addr="0x" + "2" * 40,
+            token_in_decimals=18,
+            token_out_decimals=18,
+            route_id=f"r_{a}_{b}",
+            dex_id="uniswap_v3",
+            adapter_type="uniswap_v3",
+            fee=3000,
+            tick_spacing=60,
+            quoter_addr="0x" + "3" * 40,
+            pool_address="0x" + "4" * 40,
+            fee_bps=30.0,
+            factory_class="EFFICIENT_BASELINE",
+            pair_id=f"{a}_{b}",
+            factory_verified=True,
+        )
+
+    topo = summarize_topology(
+        {
+            "FOMO": {"USDC": [_e("FOMO", "USDC")]},
+            "Fomo": {"WETH": [_e("Fomo", "WETH")]},
+        },
+        cycle_lengths=(2, 3, 4),
+    )
+
+    for key in ("out_degree", "in_degree"):
+        assert isinstance(topo[key], list)
+        assert all(set(row) == {"token", "degree"} for row in topo[key])
+        tokens = [row["token"] for row in topo[key]]
+        assert "FOMO" in tokens
+        assert "Fomo" in tokens
+        assert not isinstance(topo[key], dict)
+    json.dumps(topo)
+
+
 def test_run_topology_diagnostic_on_min_inventory(tmp_path: Path):
     from m9.graph_arb.topology_diagnostic import run_topology_diagnostic
 
@@ -105,5 +150,6 @@ def test_run_topology_diagnostic_on_min_inventory(tmp_path: Path):
         lanes=("discovery",),
     )
     assert report["active_routes_count"] == 1
+    assert report["schema_version"] == "m9_graph_topology_diagnostic.2"
     assert "lanes" in report
     assert "discovery" in report["lanes"]

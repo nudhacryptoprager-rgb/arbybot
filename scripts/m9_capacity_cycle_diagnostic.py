@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -15,6 +17,30 @@ _DEFAULT_BRIDGE = "data/tmp/m9_bridge_inventory_graph_handoff_latest.json"
 _DEFAULT_OUTPUT = "data/tmp/m9_capacity_cycle_diagnostic_latest.json"
 _DEFAULT_CONFIG = "config/exotic_base_anchor.yaml"
 _DEFAULT_TARGETS = "data/tmp/m9_capacity_enrichment_targets_latest.json"
+
+
+def _iso_now() -> str:
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def stamp_capacity_provenance(
+    report: Dict[str, Any],
+    *,
+    now_utc: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Stamp the capacity diagnostic artifact with provenance (Patch 4).
+
+    Schema-additive: only sets ``generated_at_utc`` (and keeps any existing
+    value untouched when the caller does not pass ``now_utc``). The empty /
+    no-graph path (``blocker_hint == "NO_GRAPH_OR_NO_CYCLES"``) and the normal
+    success path both receive the same provenance stamp so the M9 lane
+    freshness gate (Patch 3) never sees a missing capacity timestamp.
+
+    ``now_utc`` is accepted as an injection seam for deterministic unit tests
+    so they do not depend on wall-clock time.
+    """
+    report["generated_at_utc"] = now_utc or _iso_now()
+    return report
 
 
 def _parse_cycle_lengths(raw: str) -> tuple[int, ...]:
@@ -137,6 +163,7 @@ def main() -> int:
         qpath.write_text(json.dumps(qrca, indent=2), encoding="utf-8")
         report["quarantine_depth_rca_path"] = str(qpath)
     out.parent.mkdir(parents=True, exist_ok=True)
+    stamp_capacity_provenance(report)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     summary = {

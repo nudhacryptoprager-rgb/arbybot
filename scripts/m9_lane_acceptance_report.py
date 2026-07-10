@@ -15,6 +15,180 @@ if str(REPO_ROOT) not in sys.path:
 
 from monitoring.sniper_artifacts import M9_SNIPER_BLOCKER, assess_sniper_artifact_for_m9
 
+# ---------------------------------------------------------------------------
+# Freshness / provenance gate (Patch 3)
+#
+# Cross-artifact freshness contract: M8.2, M8.3, bridge, shadow and capacity
+# artifacts must come from a single coherent runtime window before any M9
+# claim can be accepted. Mixed runtime windows are an explicit blocker even
+# when individual upstream gates pass.
+#
+# Staleness thresholds are conservative ceilings keyed on the same artifact
+# ``generated_at_utc`` already published by upstream scripts. Defaults are
+# intentionally generous (production runtime windows in this project refresh
+# on the order of tens of minutes to hours): the goal is to catch *mixed*
+# provenance and gross staleness, not to enforce a tight SLA here.
+# ---------------------------------------------------------------------------
+FRESHNESS_STALE_SECONDS = {
+    "m8_2": 6 * 3600,     # 6h
+    "m8_3": 6 * 3600,     # 6h
+    "bridge": 6 * 3600,   # 6h
+    "shadow": 24 * 3600,  # 1d (shadow runs are bounded sessions)
+    "capacity": 24 * 3600,
+    "sniper": 30 * 60,    # 30m (sniper is the hottest upstream input)
+}
+
+# Allow artifacts to be up to this far apart in wall-clock time and still
+# count as one runtime window. Guards against stitching unrelated runs.
+FRESHNESS_MISMATCH_SECONDS = 30 * 60  # 30 min
+
+FRESHNESS_BLOCKER_BY_KEY = {
+    "m8_2": "M8_2_STALE",
+    "m8_3": "M8_3_STALE",
+    "bridge": "BRIDGE_STALE",
+    "shadow": "SHADOW_STALE",
+    "capacity": "CAPACITY_STALE",
+    "sniper": "M8_SNIPER_STALE",
+}
+
+
+def _parse_iso_ts(ts: Optional[str]) -> Optional[Any]:
+    """Parse an ISO-8601 timestamp (with optional trailing Z) into a
+    timezone-aware datetime. Returns None on missing/unparseable input."""
+    if not ts:
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _now_utc() -> Any:
+    from datetime import datetime, timezone
+
+    return datetime.now(tz=timezone.utc)
+
+
+def _artifact_timestamps(
+    *,
+    sniper: Optional[Dict[str, Any]],
+    bridge: Optional[Dict[str, Any]],
+    shadow: Optional[Dict[str, Any]],
+    m8_2_report: Optional[Dict[str, Any]],
+    m8_3_registry: Optional[Dict[str, Any]],
+    capacity_metrics: Optional[Dict[str, Any]],
+) -> Dict[str, Optional[str]]:
+    """Collect the canonical ``generated_at_utc`` (or equivalent) timestamp
+    from each cross-artifact input. Missing inputs yield None (explicit
+    blocker downstream, not a silent pass)."""
+    bsm = (bridge or {}).get("bridge_source_metrics") or {}
+    return {
+        "sniper": (
+            bsm.get("sniper_generated_at_utc")
+            or (sniper or {}).get("generated_at_utc")
+        ),
+        "m8_2": (
+            (m8_2_report or {}).get("generated_at_utc")
+            or (m8_2_report or {}).get("provenance", {}).get("generated_at_utc")
+        ),
+        "m8_3": (m8_3_registry or {}).get("generated_at_utc"),
+        "bridge": (bridge or {}).get("generated_at_utc"),
+        "shadow": (
+            (shadow or {}).get("generated_at_utc")
+            or (shadow or {}).get("run_timestamp")
+        ),
+        "capacity": (
+            (capacity_metrics or {}).get("generated_at_utc")
+            or (capacity_metrics or {}).get("run_timestamp")
+        ),
+    }
+
+
+def _freshness_gate(
+    *,
+    sniper: Optional[Dict[str, Any]],
+    bridge: Optional[Dict[str, Any]],
+    shadow: Optional[Dict[str, Any]],
+    m8_2_report: Optional[Dict[str, Any]],
+    m8_3_registry: Optional[Dict[str, Any]],
+    capacity_metrics: Optional[Dict[str, Any]],
+    now: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Cross-artifact freshness/provenance gate (Patch 3).
+
+    Verdicts:
+      * ``PASS`` - every available artifact carries a parseable timestamp,
+        none are stale, and all pairwise deltas are within
+        ``FRESHNESS_MISMATCH_SECONDS``.
+      * ``BLOCKED`` - at least one artifact is stale, missing a timestamp, or
+        artifacts come from clearly different runtime windows.
+
+    The gate is additive: it never weakens existing upstream gates. When
+    blocked, callers MUST surface the returned blockers to upstream_blockers
+    so ``goal_status`` stays ``BLOCKED``.
+    """
+    ts_raw = _artifact_timestamps(
+        sniper=sniper,
+        bridge=bridge,
+        shadow=shadow,
+        m8_2_report=m8_2_report,
+        m8_3_registry=m8_3_registry,
+        capacity_metrics=capacity_metrics,
+    )
+    parsed = {k: _parse_iso_ts(v) for k, v in ts_raw.items()}
+    now_dt = now or _now_utc()
+
+    blockers: List[str] = []
+    per_artifact: Dict[str, Dict[str, Any]] = {}
+    for key, ts_str in ts_raw.items():
+        ts_dt = parsed.get(key)
+        entry: Dict[str, Any] = {"generated_at_utc": ts_str}
+        if ts_dt is None:
+            entry["status"] = "MISSING_TIMESTAMP"
+            entry["blocker"] = f"{key.upper()}_TIMESTAMP_MISSING"
+            blockers.append(f"{key.upper()}_TIMESTAMP_MISSING")
+            per_artifact[key] = entry
+            continue
+        age_s = (now_dt - ts_dt).total_seconds()
+        entry["age_seconds"] = round(age_s, 1)
+        threshold = FRESHNESS_STALE_SECONDS.get(key)
+        entry["stale_threshold_seconds"] = threshold
+        if threshold is not None and age_s > threshold:
+            entry["status"] = "STALE"
+            entry["blocker"] = FRESHNESS_BLOCKER_BY_KEY.get(key, f"{key.upper()}_STALE")
+            blockers.append(entry["blocker"])
+        else:
+            entry["status"] = "FRESH"
+            entry["blocker"] = None
+        per_artifact[key] = entry
+
+    # Mixed runtime window: pairwise deltas among present timestamps must all
+    # be within FRESHNESS_MISMATCH_SECONDS.
+    present = {k: v for k, v in parsed.items() if v is not None}
+    if len(present) >= 2:
+        max_delta = 0.0
+        keys_present = list(present.keys())
+        for i in range(len(keys_present)):
+            for j in range(i + 1, len(keys_present)):
+                delta = abs(
+                    (present[keys_present[i]] - present[keys_present[j]]).total_seconds()
+                )
+                if delta > max_delta:
+                    max_delta = delta
+        if max_delta > FRESHNESS_MISMATCH_SECONDS:
+            blockers.append("MIXED_RUNTIME_WINDOW")
+
+    return {
+        "freshness_status": "PASS" if not blockers else "BLOCKED",
+        "blockers": sorted(set(blockers)),
+        "thresholds_seconds": dict(FRESHNESS_STALE_SECONDS),
+        "mismatch_threshold_seconds": FRESHNESS_MISMATCH_SECONDS,
+        "per_artifact": per_artifact,
+    }
+
+
 _DEFAULT_PATHS = {
     "sniper": REPO_ROOT / "data/runs/_rolling/new_pool_sniper_latest.json",
     "anchor": REPO_ROOT / "data/runs/_rolling/m8_1_stable_anchor_latest.json",
@@ -828,6 +1002,20 @@ def build_acceptance_report(
     elif int(bsm.get("routes_decimals_unknown") or 0) == 0:
         m9_blockers = [b for b in m9_blockers if b != "DECIMALS_ENRICHMENT_REQUIRED"]
 
+    # Cross-artifact freshness gate (Patch 3). Additive: never weakens
+    # existing upstream gates. When blocked, the freshness blockers are
+    # surfaced into upstream_blockers so goal_status stays BLOCKED.
+    freshness_gate = _freshness_gate(
+        sniper=sniper,
+        bridge=bridge,
+        shadow=shadow,
+        m8_2_report=m8_2_report,
+        m8_3_registry=m8_3_registry,
+        capacity_metrics=capacity_metrics,
+    )
+    if freshness_gate["freshness_status"] == "BLOCKED":
+        upstream_blockers.extend(freshness_gate["blockers"])
+
     m9_quote_validation_blockers: List[str] = []
     if m8_2_report and m8_2_report.get("handoff_ready") and shadow is not None:
         if shadow_cycles_found == 0:
@@ -912,6 +1100,7 @@ def build_acceptance_report(
         "quote_lane_adapter_errors": (rca or {}).get("by_adapter_family_leg_errors"),
         "m8_2_upstream": m8_2_upstream,
         "m8_3_upstream": m8_3_upstream,
+        "freshness_gate": freshness_gate,
         "m9_blockers": m9_blockers,
         "m9_quote_validation_blockers": sorted(set(m9_quote_validation_blockers)),
         "m9_economics_status": (

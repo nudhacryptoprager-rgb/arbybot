@@ -1570,7 +1570,6 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
                     "--output",
                     PRODUCTION_BRIDGE,
-                    "--no-enforce-m8-provenance",
                 ),
                 env={"ARBY_CURVE_POOL_INDICES": "data/runs/_rolling/m9_curve_pool_indices_latest.json"},
             )

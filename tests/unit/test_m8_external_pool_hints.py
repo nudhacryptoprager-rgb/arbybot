@@ -7,6 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from m8.discovery.dexscreener_hints import _pair_to_hint
+from m8.discovery.dexscreener_mirror_layer import (
+    DEXSCREENER_MIRROR_LAYER,
+    build_dexscreener_mirror_artifact,
+)
 from m8.discovery.hint_verifier import is_bytes32_hex, verify_v4_pool_id
 from m8.discovery.pool_hints import (
     BRIDGE_ELIGIBLE_HINT_STATUSES,
@@ -54,6 +58,54 @@ def test_pair_to_hint_dexscreener():
     assert h.source == "dexscreener"
     assert h.dex_id == "uniswap_v3"
     assert h.liquidity_usd == 12000.0
+
+
+def test_dexscreener_mirror_layer_classifies_all_mirrors():
+    token = "0xabc0000000000000000000000000000000000001"
+    supported = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0xpool1111111111111111111111111111111111111111",
+        token0_addr=token,
+        token1_addr="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        focus_token=token,
+        raw={"dexId": "uniswap"},
+    )
+    unsupported = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="hydrex",
+        pool_address="0xpool2222222222222222222222222222222222222222",
+        token0_addr=token,
+        token1_addr="0x4200000000000000000000000000000000000006",
+        focus_token=token,
+        raw={"dexId": "hydrex"},
+    )
+    artifact = build_dexscreener_mirror_artifact(
+        [token],
+        config={
+            "dexes": {
+                "uniswap_v3": {
+                    "adapter_type": "uniswap_v3",
+                    "factory": "0xfactory",
+                    "quoter": "0xquoter",
+                    "enabled": True,
+                }
+            }
+        },
+        fetched_hints_by_token={token: [supported, unsupported]},
+    )
+
+    metrics = artifact["metrics"]
+    assert artifact["sources"] == [DEXSCREENER_MIRROR_LAYER]
+    assert metrics["dexscreener_all_mirrors_total"] == 2
+    assert metrics["dexscreener_supported_mirrors_total"] == 1
+    assert metrics["dexscreener_unknown_alias_mirrors_total"] == 1
+    assert all(
+        h["raw"]["mirror_recall_layer"] == DEXSCREENER_MIRROR_LAYER
+        for h in artifact["hints"]
+    )
 
 
 def test_dedupe_hints():
@@ -256,6 +308,79 @@ def test_expand_token_neighborhood_merges_verified_hint(mock_verify):
     assert nh["hint_metrics"]["eligible_hint_routes"] >= 1
     assert nh["token_seen_on_dexes"] >= 2
     mock_verify.assert_not_called()
+
+
+@patch("m8.discovery.pool_hints.verify_hint_onchain")
+def test_expand_token_neighborhood_rejects_invalid_dexscreener_mirrors(mock_verify):
+    token = "0xabc0000000000000000000000000000000000001"
+    registry = {
+        "tokens": {
+            token: {
+                "symbol": "FOO",
+                "venues": {
+                    "v4::0xp1": {
+                        "dex": "uniswap_v4",
+                        "pool": "0xp100000000000000000000000000000000000001",
+                        "token0": token,
+                        "token1": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                        "token0_symbol": "FOO",
+                        "token1_symbol": "USDC",
+                    }
+                },
+            }
+        }
+    }
+    hint_only = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="uniswap_v3",
+        pool_address="0xpool3333333333333333333333333333333333333333",
+        token0_addr=token,
+        token1_addr="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        hint_status=HINT_ONLY,
+    )
+    unsupported = PoolHint(
+        source="dexscreener",
+        chain="base",
+        dex_id="hydrex",
+        pool_address="0xpool4444444444444444444444444444444444444444",
+        token0_addr=token,
+        token1_addr="0x4200000000000000000000000000000000000006",
+        hint_status=HINT_ONLY,
+    )
+    mock_verify.return_value = hint_only
+
+    hints_art = build_artifact(chain="base", sources=["dexscreener"], hints=[hint_only, unsupported])
+    cfg = {
+        "chain": "base",
+        "tokens": {"USDC": {"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"}},
+        "dexes": {
+            "uniswap_v4": {"adapter_type": "uniswap_v4", "enabled": True},
+            "uniswap_v3": {"adapter_type": "uniswap_v3", "enabled": True},
+        },
+        "m9_dex_productivity": {
+            "uniswap_v4": {"enabled_for_discovery": True, "enabled_for_productive": True},
+            "uniswap_v3": {"enabled_for_discovery": True, "enabled_for_productive": True},
+        },
+    }
+    mirror = MagicMock()
+    mirror.find_pools_containing_token.return_value = []
+
+    nh = expand_token_neighborhood(
+        chain="base",
+        config=cfg,
+        registry=registry,
+        exotic_address=token,
+        exotic_symbol="FOO",
+        dry_run=False,
+        mirror_index=mirror,
+        external_hints_artifact=hints_art,
+    )
+
+    assert nh["hint_metrics"].get("eligible_hint_routes", 0) == 0
+    assert nh["hint_metrics"]["hint_rejected"] >= 2
+    assert nh["hint_metrics"]["hint_rejected_hint_only"] >= 1
+    assert nh["hint_metrics"]["hint_rejected_unsupported_dex"] >= 1
 
 
 def test_graph_hints_import():

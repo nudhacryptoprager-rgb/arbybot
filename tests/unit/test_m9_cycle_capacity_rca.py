@@ -66,6 +66,43 @@ def test_shadow_gate_blocked_when_zero_cycles_at_floor():
     assert "ZERO_CYCLES_AT_FLOOR" in reason
 
 
+def test_shadow_gate_unblocked_when_cycles_at_production_floor_positive():
+    """Regression: cycles_total>0 AND cycles_at_production_floor>0 must NOT
+    report ``M9_CAPACITY_BLOCKED_BY_ZERO_CYCLES_TOTAL`` (Codex Patch 5 issue #5).
+
+    Prior to the fix, ``run_capacity_cycle_diagnostic`` called
+    ``shadow_gate_blocked`` without ``cycles_total``, so the gate saw 0 and
+    returned ``ZERO_CYCLES_TOTAL`` even when the report had thousands of cycles.
+    """
+    blocked, reason = shadow_gate_blocked(
+        {
+            "cycles_total": 3751,
+            "cycles_by_profile": {
+                "production_conservative": {"cycles_at_floor": 2},
+            },
+            "cycles_at_production_floor": 2,
+            "active_economics_profile": "production_conservative",
+        }
+    )
+    assert blocked is False
+    assert "ZERO_CYCLES_TOTAL" not in reason
+
+
+def test_shadow_gate_unblocked_when_active_profile_has_cycles_at_floor():
+    blocked, reason = shadow_gate_blocked(
+        {
+            "cycles_total": 5,
+            "cycles_by_profile": {
+                "base_realistic": {"cycles_at_floor": 1},
+            },
+            "cycles_at_production_floor": 0,
+            "active_economics_profile": "base_realistic",
+        }
+    )
+    assert blocked is False
+    assert "cycles_at_floor>0" in reason
+
+
 def test_top_bottleneck_legs_unknown_depth_reason():
     cycle = GraphCycle(
         edges=(

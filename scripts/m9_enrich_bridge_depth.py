@@ -214,7 +214,13 @@ def main() -> int:
 
     from m9.graph_arb.depth_telemetry import depth_known_rate, economics_blocked_by_depth_telemetry
 
-    _dkr = depth_known_rate(routes)
+    # Codex Patch 5 issue #3/#4: metrics must be recomputed over ALL active
+    # routes in the inventory (the probes mutated ``effective_depth_usd`` in
+    # place on shared route dict references), not over the targeted probe
+    # subset. Otherwise the summary stays stale after a targeted enrichment
+    # pass even though the underlying route depth values were refreshed.
+    all_routes = inventory.get("active_routes", [])
+    _dkr = depth_known_rate(all_routes)
     log.info(
         "Depth enrichment: candidates=%d force_reprobe=%d probed_ok=%d distinct_ok=%d failed=%d "
         "no_anchor=%d skipped_v4=%d toxic=%d low_depth=%d depth_known_rate=%.4f "
@@ -229,9 +235,9 @@ def main() -> int:
     metrics = inventory.setdefault("bridge_source_metrics", {})
     metrics["depth_known_rate"] = _dkr
     metrics["depth_known_count"] = sum(
-        1 for r in routes if r.get("effective_depth_usd") is not None
+        1 for r in all_routes if r.get("effective_depth_usd") is not None
     )
-    metrics["depth_active_routes"] = len(routes)
+    metrics["depth_active_routes"] = len(all_routes)
     metrics["depth_force_reprobe_enabled"] = force_reprobe
     metrics["depth_prioritize_false_positive_reprobe"] = bool(
         args.prioritize_false_positive_reprobe
@@ -246,7 +252,7 @@ def main() -> int:
     try:
         from m9.graph_arb.bridge_builder import _route_capacity_histogram
 
-        metrics["route_capacity_histogram"] = _route_capacity_histogram(routes)
+        metrics["route_capacity_histogram"] = _route_capacity_histogram(all_routes)
         log.info(
             "route_capacity_histogram: %s",
             metrics["route_capacity_histogram"],
@@ -256,17 +262,46 @@ def main() -> int:
     try:
         from m9.graph_arb.pool_quality import annotate_routes_pool_quality
 
-        metrics["pool_quality_histogram"] = annotate_routes_pool_quality(routes)
+        metrics["pool_quality_histogram"] = annotate_routes_pool_quality(all_routes)
     except Exception:
         pass
 
     from m9.graph_arb.depth_contract import normalize_route_depth_contract
     from m9.graph_arb.narrow_universe_gate import depth_probe_status_histogram
 
-    for route in routes:
+    for route in all_routes:
         normalize_route_depth_contract(route)
 
-    inventory["depth_probe_status_histogram"] = depth_probe_status_histogram(routes)
+    inventory["depth_probe_status_histogram"] = depth_probe_status_histogram(all_routes)
+
+    # Codex Patch 5 issue #3: recompute pre_shadow_blockers from the refreshed
+    # depth_known_rate so downstream lane acceptance / shadow runner do not see
+    # stale gates after a successful re-enrichment pass.
+    try:
+        from m9.graph_arb.depth_telemetry import pre_shadow_bridge_blockers
+
+        existing_pre = list(metrics.get("pre_shadow_blockers") or [])
+        # Preserve M8.3-derived blockers / cross-mechanic blockers etc. that
+        # are not driven by depth_known_rate by recomputing only the depth-side
+        # blocker set fresh and merging.
+        fresh_pre_shadow = pre_shadow_bridge_blockers(
+            depth_known_rate_value=_dkr,
+            routes_decimals_unknown=int(metrics.get("routes_decimals_unknown") or 0),
+            active_route_count=len(all_routes),
+            m8_3_authority_applied=bool(metrics.get("m8_3_authority_applied")),
+        )
+        # Remove depth-driven blockers we own, then extend with fresh ones so
+        # non-depth pre_shadow_blockers survive.
+        depth_driven = {"DEPTH_ENRICHMENT_REQUIRED", "DECIMALS_ENRICHMENT_REQUIRED"}
+        preserved = [b for b in existing_pre if b not in depth_driven]
+        metrics["pre_shadow_blockers"] = sorted(set(preserved + fresh_pre_shadow))
+        log.info(
+            "pre_shadow_blockers recomputed: %s (depth_known_rate=%.4f)",
+            metrics["pre_shadow_blockers"],
+            _dkr,
+        )
+    except Exception:
+        pass
 
     if args.dry_run:
         log.info("Dry-run: not writing inventory")

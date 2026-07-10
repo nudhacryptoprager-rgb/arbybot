@@ -748,6 +748,7 @@ def run_capacity_cycle_diagnostic(
 
     shadow_blocked, shadow_block_reason = shadow_gate_blocked(
         {
+            "cycles_total": len(all_cycles),
             "cycles_by_profile": cycles_by_profile,
             "cycles_at_production_floor": cycles_at_prod,
             "active_economics_profile": active_profile,

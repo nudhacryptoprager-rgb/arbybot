@@ -62,6 +62,13 @@ def _degree_maps(
     return dict(out_degree), dict(in_degree)
 
 
+def _degree_entries(degree_map: Dict[str, int]) -> List[Dict[str, Any]]:
+    return [
+        {"token": token, "degree": degree}
+        for token, degree in sorted(degree_map.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+
+
 def weak_components(
     adjacency: Dict[str, Dict[str, List[GraphEdge]]],
 ) -> List[List[str]]:
@@ -298,8 +305,8 @@ def summarize_topology(
         "unique_tokens": len(_all_tokens(adjacency)),
         "directed_edge_count": graph_edge_count(adjacency),
         "unique_routes_in_graph": graph_route_count(adjacency),
-        "out_degree": dict(sorted(out_deg.items(), key=lambda kv: (-kv[1], kv[0]))),
-        "in_degree": dict(sorted(in_deg.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "out_degree": _degree_entries(out_deg),
+        "in_degree": _degree_entries(in_deg),
         "weak_component_count": len(wcomps),
         "weak_components_top": wcomps[:8],
         "strong_component_count": len(scomps),
@@ -422,7 +429,7 @@ def run_topology_diagnostic(
         blocker_hint = "TOPOLOGY_CYCLES_PRESENT"
 
     return {
-        "schema_version": "m9_graph_topology_diagnostic.1",
+        "schema_version": "m9_graph_topology_diagnostic.2",
         "inventory_path": str(inv_path),
         "active_routes_count": len(active_routes),
         "active_routes_by_dex": dict(dex_hist.most_common()),

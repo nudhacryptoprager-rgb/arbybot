@@ -12,6 +12,11 @@ pyyaml>=6.0.1
 httpx>=0.25.0
 python-dotenv>=1.0.0
 
+# Build backend (required for deterministic wheel-smoke in tests/unit/test_packaging_contract.py).
+# Matches [build-system].requires in pyproject.toml.
+setuptools>=61.0
+wheel>=0.40.0
+
 # Testing
 pytest>=7.4.0
 pytest-cov>=4.1.0

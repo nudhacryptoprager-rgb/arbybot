@@ -165,12 +165,174 @@ def test_m9_report_upstream_m8_2_not_ready(tmp_path):
         m8_2_report=m8_2,
         m8_3_registry_path=str(bad_registry),
     )
-    assert report["upstream_blockers"] == [
-        "UPSTREAM_M8_2_NOT_READY",
-        "UPSTREAM_M8_3_NOT_READY",
-    ]
+    # Patch 3: freshness gate now additively surfaces MISSING blockers when
+    # artifacts lack timestamps. Use membership instead of exact equality.
+    assert "UPSTREAM_M8_2_NOT_READY" in report["upstream_blockers"]
+    assert "UPSTREAM_M8_3_NOT_READY" in report["upstream_blockers"]
     assert "SUBGRAPH_READY_LOW" in report["m8_2_upstream"]["blockers"]
     assert report["m9_goal_status"] == "NOT_EVALUATED"
+
+
+def test_build_acceptance_report_freshness_gate_stale_blocks():
+    """Patch 3: stale cross-artifact timestamps -> freshness BLOCKED +
+    goal_status BLOCKED with explicit freshness blockers surfaced."""
+    from datetime import datetime, timedelta, timezone
+
+    # Fresh reference clock; all artifacts older than their thresholds.
+    now = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
+    stale_shadow = (now - timedelta(hours=48)).isoformat().replace("+00:00", "Z")
+    stale_bridge = (now - timedelta(hours=8)).isoformat().replace("+00:00", "Z")
+    stale_m8_3 = (now - timedelta(hours=8)).isoformat().replace("+00:00", "Z")
+    report = build_acceptance_report(
+        sniper={
+            "status": "ACTIVE",
+            "generated_at_utc": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+            "metrics": {},
+            "recent_events": [],
+        },
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "generated_at_utc": stale_bridge,
+            "active_routes": [],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 1,
+                "sniper_generated_at_utc": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+            },
+        },
+        shadow={
+            "generated_at_utc": stale_shadow,
+            "cycles_found": 10,
+            "cycles_quoteable": 0,
+            "cycles_positive_gross": 0,
+        },
+        rca=None,
+        m8_2_report={"goal_status": "REACHED", "handoff_ready": True},
+    )
+    fg = report["freshness_gate"]
+    assert fg["freshness_status"] == "BLOCKED"
+    assert "SHADOW_STALE" in fg["blockers"]
+    assert "BRIDGE_STALE" in fg["blockers"]
+    assert report["goal_status"] == "BLOCKED"
+    # Freshness blockers must be surfaced into upstream_blockers.
+    for b in fg["blockers"]:
+        assert b in report["upstream_blockers"]
+
+
+def test_build_acceptance_report_freshness_gate_mixed_window_blocks():
+    """Patch 3: mixed runtime windows (timestamps far apart) -> BLOCKED."""
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "generated_at_utc": "2026-07-09T11:00:00Z",
+            "active_routes": [],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 1,
+                "sniper_generated_at_utc": "2026-07-09T11:00:00Z",
+            },
+        },
+        shadow={
+            "generated_at_utc": "2026-07-09T11:05:00Z",
+            "cycles_found": 10,
+            "cycles_quoteable": 10,
+            "cycles_positive_gross": 0,
+        },
+        rca=None,
+        m8_2_report={
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+            "generated_at_utc": "2026-07-08T10:00:00Z",  # >30min off
+        },
+    )
+    fg = report["freshness_gate"]
+    assert fg["freshness_status"] == "BLOCKED"
+    assert "MIXED_RUNTIME_WINDOW" in fg["blockers"]
+
+
+def test_build_acceptance_report_freshness_gate_aligned_passes(monkeypatch, tmp_path):
+    """Patch 3: aligned fresh timestamps -> freshness PASS, no freshness blockers."""
+    from datetime import datetime, timezone
+
+    aligned = "2026-07-09T11:49:48Z"
+    # Pin "now" to 1 min after the artifact timestamps so all are FRESH.
+    now_fixed = datetime(2026, 7, 9, 11, 50, 48, tzinfo=timezone.utc)
+    import scripts.m9_lane_acceptance_report as mod
+
+    monkeypatch.setattr(mod, "_now_utc", lambda: now_fixed)
+
+    # Use a fresh inline M8.3 registry so the default rolling registry (which
+    # is days old relative to ``now_fixed``) does not force STALE.
+    fresh_registry = tmp_path / "registry.json"
+    fresh_registry.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.98}},"generated_at_utc":"'
+        + aligned
+        + '"}',
+        encoding="utf-8",
+    )
+
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "generated_at_utc": aligned, "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "generated_at_utc": aligned,
+            "active_routes": [],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 1,
+                "sniper_generated_at_utc": aligned,
+            },
+        },
+        shadow={
+            "generated_at_utc": aligned,
+            "cycles_found": 10,
+            "cycles_quoteable": 10,
+            "cycles_positive_gross": 0,
+        },
+        rca=None,
+        m8_2_report={"goal_status": "REACHED", "handoff_ready": True, "generated_at_utc": aligned},
+        capacity_metrics={"generated_at_utc": aligned},
+        m8_3_registry_path=str(fresh_registry),
+    )
+    fg = report["freshness_gate"]
+    assert fg["freshness_status"] == "PASS"
+    assert fg["blockers"] == []
+    # No freshness-derived blockers should leak into upstream_blockers.
+    assert not any(
+        b.endswith("_STALE")
+        or b == "MIXED_RUNTIME_WINDOW"
+        or b.endswith("_TIMESTAMP_MISSING")
+        for b in report["upstream_blockers"]
+    )
+
+
+def test_build_acceptance_report_freshness_gate_missing_timestamp_blocks(tmp_path):
+    """Patch 3: missing timestamps must NOT crash; must produce explicit
+    MISSING blockers instead of silently passing."""
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.98}},"generated_at_utc":"2026-07-09T11:49:48Z"}',
+        encoding="utf-8",
+    )
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},  # no ts
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},  # no ts
+        shadow={"cycles_found": 10, "cycles_quoteable": 10, "cycles_positive_gross": 0},  # no ts
+        rca=None,
+        m8_2_report={"goal_status": "REACHED", "handoff_ready": True},  # no ts
+        m8_3_registry_path=str(registry_path),
+    )
+    fg = report["freshness_gate"]
+    assert fg["freshness_status"] == "BLOCKED"
+    assert any(b.endswith("_TIMESTAMP_MISSING") for b in fg["blockers"])
+    assert report["goal_status"] == "BLOCKED"
 
 
 def test_build_acceptance_report_quote_liveness_qsr_liveness_consistency():

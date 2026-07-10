@@ -729,6 +729,10 @@ def _merge_external_hints(
     for hint in token_hints:
         if hint.dex_id not in allowed_dex_ids:
             hint.hint_status = HINT_DEX_UNSUPPORTED
+            hint_metrics["hint_rejected"] = int(hint_metrics.get("hint_rejected", 0)) + 1
+            hint_metrics["hint_rejected_unsupported_dex"] = int(
+                hint_metrics.get("hint_rejected_unsupported_dex", 0)
+            ) + 1
             continue
         if dry_run:
             verified = hint
@@ -741,8 +745,18 @@ def _merge_external_hints(
             )
         if verified.hint_status in (HINT_ONLY, HINT_STALE, HINT_DEX_UNSUPPORTED):
             hint_metrics["hint_rejected"] = int(hint_metrics.get("hint_rejected", 0)) + 1
+            reject_key = {
+                HINT_ONLY: "hint_rejected_hint_only",
+                HINT_STALE: "hint_rejected_stale",
+                HINT_DEX_UNSUPPORTED: "hint_rejected_unsupported_dex",
+            }.get(verified.hint_status, "hint_rejected_other")
+            hint_metrics[reject_key] = int(hint_metrics.get(reject_key, 0)) + 1
             continue
         if verified.hint_status not in BRIDGE_ELIGIBLE_HINT_STATUSES:
+            hint_metrics["hint_rejected"] = int(hint_metrics.get("hint_rejected", 0)) + 1
+            hint_metrics["hint_rejected_not_bridge_eligible"] = int(
+                hint_metrics.get("hint_rejected_not_bridge_eligible", 0)
+            ) + 1
             continue
         if verified.dex_id in existing_dexes:
             hint_metrics["hint_duplicate_dex"] = int(

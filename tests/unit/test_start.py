@@ -119,6 +119,40 @@ class TestProjectPipelineModes(unittest.TestCase):
         self.assertIn("m9_shadow_10m", names)
         self.assertLess(names.index("gate_capacity_shadow"), names.index("m9_shadow_10m"))
 
+    def test_m9_production_bridge_enforces_m8_provenance(self):
+        """Regression: production M9 bridge must NOT disable m8_provenance_enforced.
+
+        The shadow runner (m9/graph_arb/runner.py BRIDGE_SHADOW_PROVENANCE_GATE)
+        requires ``bridge_source_metrics.m8_provenance_enforced=true``. Production
+        orchestration in ``start.py -m8_m9`` must therefore build the bridge with
+        ``m9_bridge_build.py`` default (enforce ON). Passing
+        ``--no-enforce-m8-provenance`` to the production bridge step is a direct
+        contract mismatch (Codex Patch 5 issue #1).
+        """
+        args = start.parse_args(["-m8_m9", "--dry-run", "--no-dashboard"])
+        steps = start.build_project_pipeline_steps(args)
+        prod_bridge = next(
+            (s for s in steps if s["name"] == "m9_bridge_production"), None
+        )
+        self.assertIsNotNone(prod_bridge, "m9_bridge_production step must exist")
+        cmd = prod_bridge["cmd"]
+        self.assertNotIn(
+            "--no-enforce-m8-provenance",
+            cmd,
+            "production m9_bridge step must not pass --no-enforce-m8-provenance",
+        )
+        self.assertIn("scripts/m9_bridge_build.py", cmd)
+        # The curve-probe bridge is exploration/debug and MAY still disable provenance.
+        curve_probe = next(
+            (s for s in steps if s["name"] == "m9_bridge_curve_probe_for_indices"), None
+        )
+        if curve_probe is not None:
+            self.assertIn(
+                "--no-enforce-m8-provenance",
+                curve_probe["cmd"],
+                "curve-probe exploration bridge intentionally disables provenance",
+            )
+
     def test_m9_skip_shadow_omits_runner(self):
         args = start.parse_args(["-m_9", "--skip-shadow", "--dry-run", "--no-dashboard"])
         names = [step["name"] for step in start.build_project_pipeline_steps(args)]
