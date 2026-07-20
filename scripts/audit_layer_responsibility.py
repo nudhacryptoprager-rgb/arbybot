@@ -45,6 +45,78 @@ _ALLOWLIST = frozenset(
     }
 )
 
+# ---------------------------------------------------------------------------
+# Import boundary rules (clean-architecture direction):
+#   core is the lowest layer; state/application are infrastructure layers.
+#   Milestone packages (m8/m8_1/m9) and scripts sit above them and may be
+#   imported BY them never.  Compatibility shims (thin re-exports) are the
+#   allowed migration pattern, not new downward imports.
+# ---------------------------------------------------------------------------
+_IMPORT_BOUNDARY_RULES = [
+    (
+        "core",
+        ("scripts", "m8", "m8_1", "m9"),
+        "CORE_FORBIDDEN_IMPORT",
+        "core/ is the lowest layer; it must not import scripts or milestone packages",
+    ),
+    (
+        "state",
+        ("scripts", "m8", "m8_1", "m9", "monitoring.dashboard_server"),
+        "STATE_FORBIDDEN_IMPORT",
+        "state/ is the persistence layer; it must not import scripts, milestone packages, or the dashboard",
+    ),
+    (
+        "application",
+        ("scripts", "m8", "m8_1", "m9", "monitoring.dashboard_server"),
+        "APPLICATION_FORBIDDEN_IMPORT",
+        "application/ is orchestration infrastructure; it must not import scripts, milestone packages, or the dashboard",
+    ),
+    (
+        "api",
+        ("scripts", "m8", "m8_1", "m9", "monitoring.dashboard_server"),
+        "API_FORBIDDEN_IMPORT",
+        "api/ is the read-only serving layer; it must not import scripts, milestone packages, or the dashboard",
+    ),
+]
+
+_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)")
+
+
+def check_import_boundaries(repo_root: Path = REPO) -> list[dict]:
+    """Static import-boundary scan for infrastructure layers.
+
+    Returns violation dicts; empty list means every infrastructure package
+    imports only from allowed (same-or-lower) layers.
+    """
+    violations: list[dict] = []
+    for pkg_root, forbidden_prefixes, rule_id, message in _IMPORT_BOUNDARY_RULES:
+        pkg_dir = repo_root / pkg_root
+        if not pkg_dir.is_dir():
+            continue
+        for path in sorted(pkg_dir.rglob("*.py")):
+            rel = str(path.relative_to(repo_root)).replace("\\", "/")
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for lineno, line in enumerate(lines, start=1):
+                m = _IMPORT_RE.match(line)
+                if not m:
+                    continue
+                module = m.group(1)
+                for prefix in forbidden_prefixes:
+                    if module == prefix or module.startswith(prefix + "."):
+                        violations.append(
+                            {
+                                "rule_id": rule_id,
+                                "path": rel,
+                                "lines": [lineno],
+                                "message": f"{message} (imports {module})",
+                            }
+                        )
+                        break
+    return violations
+
 
 def _scan_file(path: Path, pattern: str) -> list[int]:
     if not path.is_file():
@@ -120,6 +192,9 @@ def run_audit(*, strict: bool = True) -> dict:
                     "message": "M8.3 dex workers must not write canonical registry",
                 }
             )
+
+    # Import boundary rules (core/state/application must not import upward).
+    violations.extend(check_import_boundaries(REPO))
 
     ok = not violations
     return {"ok": ok, "violations": violations, "strict": strict}

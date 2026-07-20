@@ -153,7 +153,14 @@ def _iso_now() -> str:
 
 
 class AsyncRpcBatchClient:
-    """Bounded async JSON-RPC batch client (httpx) with 429 backoff."""
+    """Bounded async JSON-RPC batch client (httpx) with 429 backoff.
+
+    Optional ``quota_limiter`` adds per-provider quota throttling
+    (``chains.provider_quota.AsyncProviderQuotaLimiter``); ``provider_ids``
+    labels each RPC URL so the limiter can apply the right budget.  When no
+    limiter is provided the client behaves exactly as before (global
+    semaphore only).
+    """
 
     def __init__(
         self,
@@ -161,11 +168,25 @@ class AsyncRpcBatchClient:
         *,
         max_concurrency: int = 4,
         timeout_s: float = 12.0,
+        quota_limiter: Optional[Any] = None,
+        provider_ids: Optional[List[str]] = None,
     ):
         self.rpc_urls = [u for u in rpc_urls if u]
         self._sem = asyncio.Semaphore(max(1, max_concurrency))
         self.timeout_s = timeout_s
+        self._quota_limiter = quota_limiter
+        self._provider_ids: List[str] = list(provider_ids or [])
+        if self._provider_ids and len(self._provider_ids) != len(self.rpc_urls):
+            raise ValueError("provider_ids must align 1:1 with rpc_urls")
         self.stats = {"requests": 0, "batches": 0, "429": 0, "errors": 0}
+        # Typed failure outcomes per attempt (additive observability; the
+        # legacy return contract is unchanged).
+        self.last_outcomes: List[Any] = []
+
+    def _provider_id_for(self, index: int) -> Optional[str]:
+        if 0 <= index < len(self._provider_ids):
+            return self._provider_ids[index]
+        return None
 
     async def batch_call(
         self,
@@ -181,13 +202,24 @@ class AsyncRpcBatchClient:
         ]
         async with self._sem:
             self.stats["batches"] += 1
-            for url in self.rpc_urls:
+            self.last_outcomes = []
+            for idx, url in enumerate(self.rpc_urls):
+                provider_id = self._provider_id_for(idx)
                 try:
                     async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-                        resp = await client.post(url, json=body)
+                        if self._quota_limiter is not None and provider_id is not None:
+                            async with self._quota_limiter.acquire(provider_id):
+                                resp = await client.post(url, json=body)
+                        else:
+                            resp = await client.post(url, json=body)
                         self.stats["requests"] += 1
                         if resp.status_code == 429:
                             self.stats["429"] += 1
+                            from core.typed_outcomes import outcome_from_http_status
+
+                            self.last_outcomes.append(
+                                outcome_from_http_status(429, provider=provider_id or url)
+                            )
                             await asyncio.sleep(min(2.0 ** self.stats["429"], 8.0))
                             continue
                         resp.raise_for_status()
@@ -195,6 +227,11 @@ class AsyncRpcBatchClient:
                         return data if isinstance(data, list) else [data]
                 except Exception as exc:
                     self.stats["errors"] += 1
+                    from core.typed_outcomes import outcome_from_exception
+
+                    self.last_outcomes.append(
+                        outcome_from_exception(exc, provider=provider_id or url)
+                    )
                     _log.debug("async rpc batch failed url=%s: %s", url[:40], exc)
         return []
 

@@ -1,15 +1,16 @@
 """Canonical multi-provider RPC router for all ARBY subsystems.
 
-Wraps :class:`m9.graph_arb.provider_router.ProviderRouter` with env aliases
-``BASE_RPC_PRIMARY`` / ``BASE_RPC_SECONDARY`` and dedicated-RPC policy.
+Thin env-alias wrapper over the canonical implementation in
+``core.provider_router_impl`` (``BASE_RPC_PRIMARY`` / ``BASE_RPC_SECONDARY``
+aliases + dedicated-RPC policy).
 """
 from __future__ import annotations
 
 import os
 from typing import Optional
 
-from m9.graph_arb.provider_router import ProviderRouter as ProviderRouter  # re-export
-from m9.graph_arb.provider_router import _ProviderStats as _ProviderStats  # noqa: F401
+from core.provider_router_impl import ProviderRouter as ProviderRouter  # re-export
+from core.provider_router_impl import _ProviderStats as _ProviderStats  # noqa: F401
 
 _PRIMARY_ENV = {
     "base": ("BASE_RPC_PRIMARY", "BASE_RPC"),

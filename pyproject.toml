@@ -47,6 +47,12 @@ include = [
     "m8_1.*",
     "m9",
     "m9.*",
+    "state",
+    "state.*",
+    "application",
+    "application.*",
+    "api",
+    "api.*",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +67,11 @@ dev = [
     # (tests/unit/test_packaging_contract.py::TestWheelShipsAllActivePackages).
     "setuptools>=61.0",
     "wheel>=0.40.0",
+]
+postgres = [
+    # Optional production driver for state.postgres.PostgresStateRepository.
+    # Imported lazily; offline CI never requires it.
+    "psycopg[binary]>=3.1",
 ]
 
 [tool.pytest.ini_options]

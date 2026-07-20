@@ -78,6 +78,9 @@ from strategy.rolling_outputs import (  # noqa: F401
     FULL_SWEEP_INTERVAL,
     LIVE_STREAM_MAX_EVENTS,
 )
+from application.checkpoint_store import CheckpointStore  # noqa: F401
+from application.pipeline_stage import PipelineStage, StageResult  # noqa: F401
+from application.stage_runner import run_stage_subprocess, run_with_retries  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Orchestrator constants
@@ -450,60 +453,38 @@ def _productive_rpc_cmd(*parts: str) -> list[str]:
     ]
 
 
+def _checkpoint_store() -> CheckpointStore:
+    """Control-plane checkpoint store over the current markers dir.
+
+    Constructed lazily so tests can monkeypatch PIPELINE_STEP_MARKERS_DIR.
+    """
+    return CheckpointStore(PIPELINE_STEP_MARKERS_DIR)
+
+
 def _step_marker_paths(
     step_name: str,
     *,
     pipeline_mode: str | None = None,
 ) -> tuple[Path, Path]:
-    base = PIPELINE_STEP_MARKERS_DIR
-    if pipeline_mode:
-        base = base / pipeline_mode
-    base.mkdir(parents=True, exist_ok=True)
-    return (
-        base / f"{step_name}.done",
-        base / f"{step_name}.fail",
-    )
+    return _checkpoint_store().marker_paths(step_name, pipeline_mode=pipeline_mode)
 
 
 def _clear_stale_fail_markers(pipeline_mode: str, step_names: list[str]) -> int:
     """Drop prior .fail markers for this mode/plan so aborted runs cannot block reruns."""
-    cleared = 0
-    for name in step_names:
-        _, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
-        try:
-            fail_marker.unlink()
-            cleared += 1
-        except FileNotFoundError:
-            pass
-    return cleared
+    return _checkpoint_store().clear_fail_markers(pipeline_mode, step_names)
 
 
 def _clear_recall_downstream_markers(pipeline_mode: str) -> int:
     """Drop downstream verify markers after a fresh recall so resume reruns verify."""
-    cleared = 0
-    for name in RECALL_DOWNSTREAM_MARKER_STEPS:
-        done_marker, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
-        for marker in (done_marker, fail_marker):
-            try:
-                marker.unlink()
-                cleared += 1
-            except FileNotFoundError:
-                pass
-    return cleared
+    return _checkpoint_store().clear_markers(pipeline_mode, RECALL_DOWNSTREAM_MARKER_STEPS)
 
 
 def _checkpoint_activity_since(step_name: str, since_wall_ts: float) -> bool:
     """True when a watched checkpoint file was touched after the step started."""
-    for rel in STEP_QUIET_CHECKPOINTS.get(step_name, ()):
-        path = Path(rel)
-        if not path.is_file():
-            continue
-        try:
-            if path.stat().st_mtime >= since_wall_ts - 1.0:
-                return True
-        except OSError:
-            continue
-    return False
+    return CheckpointStore.checkpoint_activity_since(
+        STEP_QUIET_CHECKPOINTS.get(step_name, ()),
+        since_wall_ts,
+    )
 
 
 def patient_lane_shadow_env() -> dict[str, str]:
@@ -630,21 +611,7 @@ def _collect_checkpoint_progress(
     *,
     pipeline_mode: str | None = None,
 ) -> dict[str, Any]:
-    done_steps: list[str] = []
-    failed_steps: list[str] = []
-    for name in step_names:
-        done_marker, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
-        if done_marker.exists():
-            done_steps.append(name)
-        elif fail_marker.exists():
-            failed_steps.append(name)
-    return {
-        "done_steps": done_steps,
-        "failed_steps": failed_steps,
-        "done_count": len(done_steps),
-        "failed_count": len(failed_steps),
-        "marker_namespace": pipeline_mode,
-    }
+    return _checkpoint_store().collect_progress(step_names, pipeline_mode=pipeline_mode)
 
 
 def _write_pipeline_current(payload: dict[str, Any]) -> None:
@@ -1057,72 +1024,33 @@ def _run_pipeline_step_subprocess(
     cmd = list(step["cmd"])
     env = os.environ.copy()
     env.update(step.get("env") or {})
-    proc = subprocess.Popen(
+
+    pid_holder: dict[str, int | None] = {"pid": None}
+
+    def _on_spawn(proc: subprocess.Popen) -> None:
+        pid_holder["pid"] = proc.pid
+        _touch_current(proc.pid)
+
+    def _on_output(line: str) -> None:
+        sys.stdout.write(line)
+        log_fh.write(line)
+
+    def _on_heartbeat() -> None:
+        heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
+        _touch_current(pid_holder["pid"])
+
+    rc, fail_reason = run_stage_subprocess(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
         env=env,
+        timeout_s=timeout_s,
+        heartbeat_stale_s=heartbeat_stale_s,
+        on_output=_on_output,
+        on_heartbeat=_on_heartbeat,
+        has_external_activity=lambda: _checkpoint_activity_since(name, started_wall_ts),
+        on_spawn=_on_spawn,
     )
-    assert proc.stdout is not None
-    _touch_current(proc.pid)
-
-    import queue as _queue
-
-    line_queue: _queue.Queue[tuple[str, str | None]] = _queue.Queue()
-
-    def _reader() -> None:
-        try:
-            for line in proc.stdout:
-                line_queue.put(("line", line))
-        finally:
-            line_queue.put(("done", None))
-
-    threading.Thread(target=_reader, daemon=True).start()
-    start_mono = time.monotonic()
-    last_output_mono = start_mono
-    fail_reason: str | None = None
-
-    while True:
-        try:
-            kind, payload = line_queue.get(timeout=1.0)
-        except _queue.Empty:
-            kind = None
-            payload = None
-
-        now_mono = time.monotonic()
-        if kind == "line" and payload is not None:
-            last_output_mono = now_mono
-            heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
-            sys.stdout.write(payload)
-            log_fh.write(payload)
-            _touch_current(proc.pid)
-        elif kind == "done":
-            break
-        elif kind is None and _checkpoint_activity_since(name, started_wall_ts):
-            last_output_mono = now_mono
-            heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
-            _touch_current(proc.pid)
-
-        if proc.poll() is not None and line_queue.empty():
-            break
-
-        if timeout_s > 0 and (now_mono - start_mono) > timeout_s:
-            proc.kill()
-            fail_reason = f"hard_timeout_{timeout_s}s"
-            break
-        if heartbeat_stale_s > 0 and (now_mono - last_output_mono) > heartbeat_stale_s:
-            proc.kill()
-            fail_reason = f"stale_heartbeat_{int(heartbeat_stale_s)}s"
-            break
-
-    try:
-        rc = proc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        rc = 3
     heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
-    _touch_current(proc.pid, status="failed" if fail_reason else "finished")
+    _touch_current(pid_holder["pid"], status="failed" if fail_reason else "finished")
     log_fh.write(f"<<< {name}: exit={rc}" + (f" reason={fail_reason}" if fail_reason else "") + "\n")
     if fail_reason:
         return rc or 1, fail_reason

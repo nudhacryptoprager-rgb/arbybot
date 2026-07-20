@@ -53,6 +53,9 @@ REQUIRED_RUNTIME_ROOTS = [
     "m8",
     "m8_1",
     "m9",
+    "state",
+    "application",
+    "api",
 ]
 
 # Backwards-compatible alias for the public contract surface used by other
