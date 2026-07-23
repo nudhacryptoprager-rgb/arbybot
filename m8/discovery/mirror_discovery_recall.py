@@ -39,13 +39,238 @@ EXISTENCE_VERIFY_QUEUE_PATH = Path("data/tmp/m8_mirror_existence_verify_queue_la
 QUOTE_READY_QUEUE_PATH = Path("data/tmp/m8_mirror_quote_ready_queue_latest.json")
 EXISTENCE_VERIFY_SUBSET_PATH = Path("data/tmp/m8_existence_verify_subset.json")
 
+# Step 10 fix: persistence for verified second-venue candidates BEFORE
+# quote reprobe so they can be re-probed in a following short-scan instead
+# of being silently dropped when the live quote smoke fails. The file lives
+# alongside the mirror recall queue artifacts and is overwritten on every
+# recall — it is NOT a runtime bundle, so it stays out of git.
+SECOND_VENUE_CANDIDATES_PATH = Path(
+    "data/tmp/m8_mirror_recall_second_venue_candidates_latest.json"
+)
+
 SUPPORT_SUPPORTED = "supported"
 SUPPORT_UNSUPPORTED = "unsupported"
 SUPPORT_UNKNOWN_ALIAS = "unknown_alias"
 
+# Step 10 fix:并不会 store-and-sidecar freshness gate for the wide recall
+# lane. When the upstream M8 sniper artifact (or any focus-token source) is
+# older than this, the wide lane must refuse admission so operators are not
+# presented with a stale-tainted handoff. The strict value mirrors the
+# runtime-truth-gate sniper staleness threshold (30 minutes).
+WIDE_LANE_UPSTREAM_FRESHNESS_S = 30 * 60
+
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def evaluate_upstream_freshness_gate(
+    *,
+    sniper_artifact: Optional[Dict[str, Any]],
+    now: Optional[Any] = None,
+    threshold_s: int = WIDE_LANE_UPSTREAM_FRESHNESS_S,
+) -> Tuple[bool, List[str], Dict[str, Any]]:
+    """Refuse wide-recall admission when the upstream M8 sniper artifact is
+    stale past ``threshold_s`` (Step 10 fix).
+
+    Returns ``(ok, blockers, audit)``. ``ok=False`` means the wide-lane
+    payload should not be admitted to the next stage (the per-token funnel
+    is meaningless when the focus-token universe itself is stale). The
+    audit dict carries the parsed timestamp + age so operators can see why.
+    Always falls back to ``ok=True`` when no sniper artifact is supplied —
+    absence is a config gap, not an evidence failure; the runtime-truth
+    gate handles strictness on its own.
+    """
+    audit: Dict[str, Any] = {"threshold_seconds": int(threshold_s)}
+    if not sniper_artifact:
+        audit["status"] = "no_sniper_artifact"
+        return True, [], audit
+    rc = sniper_artifact.get("run_context")
+    ts_str = None
+    if isinstance(rc, dict):
+        ts_str = rc.get("run_timestamp")
+    if not ts_str:
+        ts_str = sniper_artifact.get("generated_at_utc")
+    audit["timestamp"] = ts_str
+    if not ts_str:
+        audit["status"] = "no_timestamp"
+        return False, ["SNIPER_TIMESTAMP_MISSING"], audit
+    try:
+        ts_dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+    except ValueError:
+        audit["status"] = "unparseable_timestamp"
+        return False, ["SNIPER_TIMESTAMP_UNPARSEABLE"], audit
+    if ts_dt.tzinfo is None:
+        ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+    ts_dt = ts_dt.astimezone(timezone.utc)
+    now_dt = now or datetime.now(tz=timezone.utc)
+    age_s = (now_dt - ts_dt).total_seconds()
+    audit["age_seconds"] = round(age_s, 1)
+    if age_s > threshold_s:
+        audit["status"] = "stale"
+        return False, ["SNIPER_STALE"], audit
+    audit["status"] = "fresh"
+    return True, [], audit
+
+
+def build_per_token_per_dex_funnel(
+    hints: List[PoolHint],
+) -> Dict[str, Any]:
+    """Step 10 fix: split the M8.2 recall funnel into per-token + per-DEX
+    metrics so operators can tell *which* token / *which* DEX is leaking
+    the funnel instead of seeing only an aggregate number.
+
+    Sections per token:
+      ``recall_candidates``           — hint rows that survived DexScreener
+                                        filter (raw count per token).
+      ``onchain_verified``            — verified on-chain (pool_exists=True).
+      ``quote_ready``                 — quote smoke status begins with QUOTE.
+      ``channels`` per-DEX            — which DEXes admitted the token at
+                                        each stage.
+
+    The token-scoped DexScreener recall metric stays additive (existing
+    payload keys are unchanged); this section is purely additive and only
+    appears when ``hints`` are non-empty.
+    """
+    per_token: Dict[str, Dict[str, Any]] = {}
+    for h in hints or []:
+        focus = str(h.focus_token or "").lower()
+        if not focus:
+            continue
+        dex = str(h.dex_id or "").lower() or "unknown"
+        bucket = per_token.setdefault(
+            focus,
+            {
+                "recall_candidates_total": 0,
+                "onchain_verified_total": 0,
+                "quote_ready_total": 0,
+                "second_venue_ready_total": 0,
+                "dexes": defaultdict(lambda: {
+                    "recall_candidates": 0,
+                    "onchain_verified": 0,
+                    "quote_ready": 0,
+                }),
+                "verified_dex_count": 0,
+                "quote_ready_dex_count": 0,
+            },
+        )
+        bucket["recall_candidates_total"] += 1
+        bucket["dexes"][dex]["recall_candidates"] += 1
+        if _hint_raw_bool(h, "recall_verified_pool_exists"):
+            bucket["onchain_verified_total"] += 1
+            bucket["dexes"][dex]["onchain_verified"] += 1
+        status = str(h.hint_status or "").upper()
+        if status.startswith("QUOTE") or h.hint_status == QUOTE_SMOKE_OK:
+            bucket["quote_ready_total"] += 1
+            bucket["dexes"][dex]["quote_ready"] += 1
+    # Compute remaining aggregations + finalize dexes back to plain dicts.
+    per_token_final: Dict[str, Any] = {}
+    for focus, b in per_token.items():
+        verified_dexes: List[str] = []
+        quote_ready_dexes: List[str] = []
+        for dex, ddata in sorted(b["dexes"].items()):
+            if ddata["onchain_verified"] > 0:
+                verified_dexes.append(dex)
+            if ddata["quote_ready"] > 0:
+                quote_ready_dexes.append(dex)
+        per_token_final[focus] = {
+            "recall_candidates_total": b["recall_candidates_total"],
+            "onchain_verified_total": b["onchain_verified_total"],
+            "quote_ready_total": b["quote_ready_total"],
+            "verified_dex_count": len(verified_dexes),
+            "quote_ready_dex_count": len(quote_ready_dexes),
+            "second_venue_ready": len(verified_dexes) >= 2,
+            "dexes": {dex: dict(stats) for dex, stats in sorted(b["dexes"].items())},
+        }
+    return per_token_final
+
+
+def second_venue_candidate_records(hints: List[PoolHint]) -> List[Dict[str, Any]]:
+    """Surface verified second-venue candidates BEFORE quote reprobe so
+    they can be persisted to disk and re-probed in a subsequent scan.
+
+    A row is admitted when the focus token has at least two on-chain
+    verified supported pools (``recall_verified_pool_exists=True``) on
+    distinct DEXes. The quote status is *not* required to be READY here —
+    the whole point is to keep these candidates alive through a quote
+    re-probe cycle rather than losing them after the first smoke failed.
+    """
+    by_focus: Dict[str, Dict[str, List[Dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for h in hints or []:
+        if not _hint_raw_bool(h, "recall_verified_pool_exists"):
+            continue
+        focus = str(h.focus_token or "").lower()
+        dex = str(h.dex_id or "").lower()
+        # Step 10 fix: the second-venue candidate record must NOT include
+        # explicitly-unsupported DEXes (we cannot quote them), but must
+        # admit pools whose support_status is "unknown_alias" (often a
+        # fresh pool that has not yet been classified) so verification +
+        # quote-reprobe can resolve them on the next sweep.
+        if hint_support_status(h) == SUPPORT_UNSUPPORTED:
+            continue
+        by_focus[focus][dex].append(
+            {
+                "pool_address": str(h.pool_address or "").lower(),
+                "dex_id": dex,
+                "hint_status": str(h.hint_status or ""),
+                "supported": True,
+                "factory_address": str(h.factory_address or "").lower() or None,
+            }
+        )
+    rows: List[Dict[str, Any]] = []
+    for focus, dexes in by_focus.items():
+        if len(dexes) < 2:
+            continue
+        rows.append(
+            {
+                "focus_token": focus,
+                "verified_dexes": sorted(dexes.keys()),
+                "verified_dex_count": len(dexes),
+                "verified_pools_per_dex": {
+                    dex: sorted(set((p["pool_address"] for p in pools if p["pool_address"])))
+                    for dex, pools in sorted(dexes.items())
+                },
+                "quote_status_per_dex": {
+                    dex: (pools[0]["hint_status"] if pools else "")
+                    for dex, pools in sorted(dexes.items())
+                },
+                "second_venue_verified": True,
+                "quote_ready_second_venue": any(
+                    str(p["hint_status"]).upper().startswith("QUOTE")
+                    or p["hint_status"] == QUOTE_SMOKE_OK
+                    for pools in dexes.values()
+                    for p in pools
+                ),
+            }
+        )
+    return sorted(rows, key=lambda r: (r["verified_dex_count"] * -1, r["focus_token"]))
+
+
+def write_second_venue_candidates(
+    candidates: List[Dict[str, Any]],
+    *,
+    chain: str = "base",
+    source_artifact_run_timestamp: Optional[str] = None,
+) -> Path:
+    """Persist verified second-venue candidates so they survive the
+    recall→quote reprobe cycle (Step 10 fix). The artifact is overwritten
+    on each recall rather than multiplied per-run.
+    """
+    doc = {
+        "schema_version": "m8_mirror_recall_second_venue_candidates_v1",
+        "generated_at_utc": _iso_now(),
+        "source_artifact_run_timestamp": source_artifact_run_timestamp,
+        "chain": chain,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+    }
+    SECOND_VENUE_CANDIDATES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SECOND_VENUE_CANDIDATES_PATH.write_text(
+        json.dumps(doc, indent=2), encoding="utf-8"
+    )
+    return SECOND_VENUE_CANDIDATES_PATH
 
 
 def _load_yaml_config(path: Path) -> Dict[str, Any]:
@@ -796,14 +1021,37 @@ def run_mirror_discovery_recall(
         "m9_target_ready": selection_fresh_total > 0,
         "fresh_target_ready": selection_fresh_total > 0,
         "m9_admission_ready": quote_ready_second_venue_total > 0,
-        "m9_admission_blocker": m9_blocker,
+"m9_admission_blocker": m9_blocker,
         "mirror_recall_ready": int(metrics.get("mirrors_total") or 0) > 0,
+        # Step 10 fix: per-token + per-DEX funnel split (additive). Lets
+        # operators see exactly which token / DEX is leaking the funnel
+        # instead of one aggregate number. Existing aggregate metrics stay
+        # unchanged.
+        "per_token_per_dex_funnel": build_per_token_per_dex_funnel(verified),
+        # Step 10 fix: second-venue verified candidates BEFORE quote
+        # reprobe — surfaced so they survive a quote re-probe cycle rather
+        # than being dropped after the first smoke failed.
+        "second_venue_verified_candidates": second_venue_candidate_records(verified),
         **metrics,
     }
     write_verify_rca(rca)
     write_recall_hints_checkpoint(verified, chain=chain)
     queue_paths = write_mirror_queue_artifacts(payload, hints=verified, chain=chain)
     payload["queue_artifacts"] = queue_paths
+    # Step 10 fix: persist verified second-venue candidates so they can be
+    # re-probed for quotes in a subsequent short scan. Overwritten on every
+    # recall — not multiplied per-run.
+    try:
+        sv_path = write_second_venue_candidates(
+            payload["second_venue_verified_candidates"],
+            chain=chain,
+            source_artifact_run_timestamp=recall_run_id,
+        )
+        payload["second_venue_candidates_artifact"] = str(sv_path)
+    except OSError:
+        # Persistence failure must not break the recall; the queue artifact
+        # already carries the candidate rows inline above as well.
+        pass
     payload["verify_rca"] = {
         "supported_hints_total": rca.get("supported_hints_total"),
         "recall_verified_pool_exists_total": rca.get("recall_verified_pool_exists_total"),

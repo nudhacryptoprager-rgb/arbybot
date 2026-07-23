@@ -132,13 +132,17 @@ def main() -> int:
     load_root_dotenv()
     rpc_url: Optional[str] = None
     try:
-        from core.rpc_urls import apply_productive_rpc_env, is_public_rpc_url, resolve_productive_http_rpc
+        from core.rpc_urls import (
+            apply_productive_rpc_env,
+            is_public_rpc_url,
+            resolve_productive_http_rpc,
+        )
 
         os.environ.update(apply_productive_rpc_env(args.chain))
         rpc_url = resolve_productive_http_rpc(args.chain)
         _resolved_is_public = is_public_rpc_url(rpc_url)
     except RuntimeError:
-        from core.rpc_urls import is_public_rpc_url, resolve_rpc_http, _CHAIN_KEY_TO_ID
+        from core.rpc_urls import _CHAIN_KEY_TO_ID, is_public_rpc_url, resolve_rpc_http
 
         chain_id = _CHAIN_KEY_TO_ID.get(args.chain.lower())
         rpc_url, _, _ = resolve_rpc_http(

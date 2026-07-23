@@ -13,7 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from monitoring.sniper_artifacts import M9_SNIPER_BLOCKER, assess_sniper_artifact_for_m9
+from monitoring.sniper_artifacts import (  # noqa: E402
+    M9_SNIPER_BLOCKER,
+    assess_sniper_artifact_for_m9,
+)
 
 # ---------------------------------------------------------------------------
 # Freshness / provenance gate (Patch 3)
@@ -58,7 +61,7 @@ def _parse_iso_ts(ts: Optional[str]) -> Optional[Any]:
     if not ts:
         return None
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
     except Exception:
@@ -323,7 +326,7 @@ def _shadow_bridge_stale_or_mismatch(
     shadow_ts = shadow.get("generated_at_utc") or shadow.get("run_timestamp")
     if bridge_ts and shadow_ts:
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
 
             def _parse(ts: str) -> datetime:
                 return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
@@ -382,7 +385,6 @@ def _m9_economics_blockers(
     blockers: List[str] = []
     eprof = economics_profile or {}
     profile_role = str(eprof.get("role") or "production")
-    claim_status = str(eprof.get("profit_claim_status") or "runtime_conditional")
     active_profile = str(eprof.get("active_economics_profile") or "production_conservative")
     shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
     qsr_econ = (shadow or {}).get("qsr_econ")
@@ -796,7 +798,6 @@ def build_acceptance_report(
 
     shadow_cycles_found = int((shadow or {}).get("cycles_found") or 0)
     shadow_cycles_quoteable = int((shadow or {}).get("cycles_quoteable") or 0)
-    shadow_qsr = float((shadow or {}).get("qsr") or 0.0)
     shadow_cycles_with_m8 = int((shadow or {}).get("cycles_with_m8_pool") or 0)
     cm_found = int(
         (shadow or {}).get("cross_mechanic_cycles_found")

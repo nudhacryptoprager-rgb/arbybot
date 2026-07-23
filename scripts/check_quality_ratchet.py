@@ -115,11 +115,29 @@ def check_tool(tool: str, *, update_baseline: bool = False) -> bool:
     return delta <= 0
 
 
-def run_pip_audit() -> bool:
-    """Optional supply-chain audit; SKIP (not FAIL) when pip-audit absent."""
+def run_pip_audit(*, fail_closed: bool = True) -> bool:
+    """Supply-chain audit.
+
+    Behavior:
+      * pip-audit installed  -> run; return success iff exit 0.
+      * pip-audit absent     -> with ``fail_closed=True`` (default) the gate
+        FAILs so CI cannot silently drop the supply-chain check; with
+        ``fail_closed=False`` (legacy ``--pip-audit-optional``) it SKIPs.
+
+    Rationale: a supply-chain gate that silently passes when the auditor is
+    missing is unsafe for CI. The canonical operator path is to install
+    pip-audit via ``requirements-dev.txt`` and run ``--pip-audit``.
+    """
     try:
         import pip_audit  # noqa: F401
     except ImportError:
+        if fail_closed:
+            print(
+                "[pip-audit] FAIL: pip-audit not installed "
+                "(install via `pip install -r requirements-dev.txt`); "
+                "use --pip-audit-optional to SKIP instead"
+            )
+            return False
         print("[pip-audit] SKIP: pip-audit not installed (optional supply-chain gate)")
         return True
     proc = subprocess.run(
@@ -143,10 +161,16 @@ def main() -> int:
         action="store_true",
         help="rewrite baselines with current counts (ratchet down intentionally)",
     )
-    ap.add_argument(
+    pip_group = ap.add_mutually_exclusive_group()
+    pip_group.add_argument(
         "--pip-audit",
         action="store_true",
-        help="also run pip-audit when installed (SKIP when absent)",
+        help="run pip-audit; FAIL (not SKIP) when pip-audit is absent (fail-closed)",
+    )
+    pip_group.add_argument(
+        "--pip-audit-optional",
+        action="store_true",
+        help="run pip-audit; SKIP when pip-audit is absent (legacy permissive mode)",
     )
     args = ap.parse_args()
 
@@ -155,7 +179,9 @@ def main() -> int:
     for tool in tools:
         ok = check_tool(tool, update_baseline=bool(args.update_baseline)) and ok
     if args.pip_audit:
-        ok = run_pip_audit() and ok
+        ok = run_pip_audit(fail_closed=True) and ok
+    elif args.pip_audit_optional:
+        ok = run_pip_audit(fail_closed=False) and ok
     print("quality ratchet:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

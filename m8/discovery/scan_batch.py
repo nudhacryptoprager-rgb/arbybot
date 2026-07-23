@@ -160,6 +160,19 @@ class AsyncRpcBatchClient:
     labels each RPC URL so the limiter can apply the right budget.  When no
     limiter is provided the client behaves exactly as before (global
     semaphore only).
+
+    HTTP client reuse (Step 6 fix): the client now keeps one shared
+    ``httpx.AsyncClient`` instead of creating a new one per attempt. The
+    client is lazily created on first ``batch_call`` and closed via the
+    async ``close()`` context. A single client covering a long-lived
+    resolver keeps connection pooling warm and removes the per-attempt
+    ``httpx.AsyncClient.__init__`` overhead that previously ran inside the
+    hot batch loop.
+
+    The ``from_config`` classmethod loads the quota limiter from the
+    canonical ``config/provider_quotas.yaml`` (with ``ARBY_QUOTA_<PID>``
+    env overrides), wiring *real provider configuration* into the
+    production resolver path (review issue 6).
     """
 
     def __init__(
@@ -182,6 +195,46 @@ class AsyncRpcBatchClient:
         # Typed failure outcomes per attempt (additive observability; the
         # legacy return contract is unchanged).
         self.last_outcomes: List[Any] = []
+        # Reused HTTP client — created on first batch_call, closed via
+        # close() (Step 6 fix: avoid per-attempt client creation).
+        self._http_client: Any = None
+
+    @classmethod
+    def from_config(
+        cls,
+        rpc_urls: List[str],
+        *,
+        timeout_s: float = 12.0,
+        quota_yaml: Optional[Any] = None,
+        provider_ids: Optional[List[str]] = None,
+    ) -> "AsyncRpcBatchClient":
+        """Build a client with a quota limiter loaded from real provider
+        configuration (``config/provider_quotas.yaml`` +
+        ``ARBY_QUOTA_<PID>`` env overrides).
+
+        When ``provider_ids`` is not supplied the limiter still picks up
+        the per-provider budgets via the limiter's default quota; calling
+        code that already labels URLs (e.g. ``iter_dedicated_http_providers``)
+        can pass through provider ids to apply per-provider throttling.
+        """
+        from chains.provider_quota import build_limiter_from_provider_config
+
+        limiter = build_limiter_from_provider_config(
+            Path(quota_yaml) if quota_yaml is not None else None
+        )
+        return cls(
+            rpc_urls,
+            timeout_s=timeout_s,
+            quota_limiter=limiter,
+            provider_ids=provider_ids,
+        )
+
+    async def _ensure_client(self) -> Any:
+        if self._http_client is None:
+            import httpx
+
+            self._http_client = httpx.AsyncClient(timeout=self.timeout_s)
+        return self._http_client
 
     def _provider_id_for(self, index: int) -> Optional[str]:
         if 0 <= index < len(self._provider_ids):
@@ -194,7 +247,6 @@ class AsyncRpcBatchClient:
     ) -> List[Dict[str, Any]]:
         if not payloads or not self.rpc_urls:
             return []
-        import httpx
 
         body = [
             {"jsonrpc": "2.0", "id": i, "method": p["method"], "params": p.get("params", [])}
@@ -203,28 +255,28 @@ class AsyncRpcBatchClient:
         async with self._sem:
             self.stats["batches"] += 1
             self.last_outcomes = []
+            client = await self._ensure_client()
             for idx, url in enumerate(self.rpc_urls):
                 provider_id = self._provider_id_for(idx)
                 try:
-                    async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-                        if self._quota_limiter is not None and provider_id is not None:
-                            async with self._quota_limiter.acquire(provider_id):
-                                resp = await client.post(url, json=body)
-                        else:
+                    if self._quota_limiter is not None and provider_id is not None:
+                        async with self._quota_limiter.acquire(provider_id):
                             resp = await client.post(url, json=body)
-                        self.stats["requests"] += 1
-                        if resp.status_code == 429:
-                            self.stats["429"] += 1
-                            from core.typed_outcomes import outcome_from_http_status
+                    else:
+                        resp = await client.post(url, json=body)
+                    self.stats["requests"] += 1
+                    if resp.status_code == 429:
+                        self.stats["429"] += 1
+                        from core.typed_outcomes import outcome_from_http_status
 
-                            self.last_outcomes.append(
-                                outcome_from_http_status(429, provider=provider_id or url)
-                            )
-                            await asyncio.sleep(min(2.0 ** self.stats["429"], 8.0))
-                            continue
-                        resp.raise_for_status()
-                        data = resp.json()
-                        return data if isinstance(data, list) else [data]
+                        self.last_outcomes.append(
+                            outcome_from_http_status(429, provider=provider_id or url)
+                        )
+                        await asyncio.sleep(min(2.0 ** self.stats["429"], 8.0))
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return data if isinstance(data, list) else [data]
                 except Exception as exc:
                     self.stats["errors"] += 1
                     from core.typed_outcomes import outcome_from_exception
@@ -236,6 +288,40 @@ class AsyncRpcBatchClient:
         return []
 
     async def close(self) -> None:
+        if self._http_client is not None:
+            try:
+                await self._http_client.aclose()
+            except Exception:  # pragma: no cover - depends on httpx internals
+                _log.debug("httpx.AsyncClient.aclose raised; ignoring")
+            self._http_client = None
+
+    def last_failure_summary(self) -> Optional[Any]:
+        """Return the highest-severity typed Outcome from the last batch_call.
+
+        Returns ``None`` when the last batch succeeded (or when no typed
+        outcomes were recorded — e.g. an empty batch was a no-op, not a
+        failure). Callers that previously treated ``batch_call() == []``
+        as "no data" can now distinguish:
+
+          * ``last_failure_summary() is None``               -> no data found
+          * ``last_failure_summary().retryable == True``     -> transient; can
+            be retried (rate-limited / timeout) up to the stage's budget
+          * ``last_failure_summary().retryable == False``    -> hard stage
+            FAILED. Surface this through StageResult.typed_outcome via
+            ``application.pipeline_stage.classify_typed_outcome`` so a
+            non-retryable failure does not masquerade as "no data".
+
+        This is the Step 7 fix: typed outcomes become part of the stage
+        result instead of being silently swallowed by the legacy
+        ``return []`` contract.
+        """
+        outcomes = self.last_outcomes or []
+        non_retryable = [o for o in outcomes if not getattr(o, "retryable", True)]
+        if non_retryable:
+            return non_retryable[-1]
+        retryable = [o for o in outcomes if getattr(o, "retryable", True)]
+        if retryable:
+            return retryable[-1]
         return None
 
 
@@ -380,8 +466,9 @@ class FactoryBatchResolver:
     def _encode_algebra_pool_by_pair(
         self, factory: str, token_a: str, token_b: str
     ) -> bytes:
-        from discovery.index_factories import ALGEBRA_FACTORY_ABI
         from web3 import Web3
+
+        from discovery.index_factories import ALGEBRA_FACTORY_ABI
 
         if self._w3 is None:
             self._w3 = self._batcher._w3  # type: ignore[union-attr]
@@ -527,7 +614,7 @@ class FactoryBatchResolver:
                 out.setdefault((dex_id, anchor_sym), (None, "NO_POOL"))
             return out
 
-        for key, (ok, ret_bytes) in zip(call_keys, results):
+        for key, (ok, ret_bytes) in zip(call_keys, results, strict=False):
             dex_id, anchor_sym, fee_tag = key
             if (dex_id, anchor_sym) in out and out[(dex_id, anchor_sym)][0]:
                 continue

@@ -4,10 +4,14 @@ The repository (``state.repository.StateRepository``) is the system of
 record; JSON artifacts under ``data/**`` are *exports* rendered from
 repository rows for operators and for the downstream tools that already
 consume the canonical rolling artifacts.  Exports are written atomically
-via ``core.json_io.atomic_write_json``.
+via ``core.json_io.atomic_write_json`` using the money-safe
+``decimal_mode="str"`` serializer (Roadmap В§3.2: no float money).
 
 No float money: numeric amounts are exported as integer strings (wei) or
-Decimal-as-string.
+Decimal-as-string.  ``Decimal`` amounts stored in ``PoolRecord.extra``,
+``RouteRecord.extra``, or ``JobRecord.payload`` are serialized as exact
+fixed-point strings so a re-import / re-projection cannot silently turn
+a precise ``Decimal("0.000000000000000001")`` into ``0.0``.
 """
 from __future__ import annotations
 
@@ -84,6 +88,15 @@ def export_rows_to_json(
     *,
     envelope: str = "items",
 ) -> Path:
-    """Render repository rows to a canonical operator-facing JSON export."""
+    """Render repository rows to a canonical operator-facing JSON export.
+
+    Money-safe: ``Decimal`` values inside any row's ``extra``/``payload``
+    are serialized via ``decimal_mode="str"`` so a subsequent re-import
+    cannot silently lose precision (Roadmap В§3.2: no float money).
+    """
     items: List[Dict[str, Any]] = [dict(r) for r in rows]
-    return atomic_write_json(Path(path), {envelope: items})
+    return atomic_write_json(
+        Path(path),
+        {envelope: items},
+        decimal_mode="str",
+    )

@@ -103,6 +103,17 @@ def main():
                         help="Enable strict validation in E2E mode (default: True)")
     parser.add_argument("--allow-intent-edit", action="store_true",
                         help="Allow uncommitted intent.txt changes (passed to repo safety gate)")
+    parser.add_argument(
+        "--skip-quality-ratchet",
+        action="store_true",
+        help="Skip scripts/check_quality_ratchet.py (ruff/mypy/pip-audit ratchet)",
+    )
+    parser.add_argument(
+        "--quality-ratchet-optional-pip-audit",
+        action="store_true",
+        help="Pass --pip-audit-optional to the ratchet (SKIP when pip-audit absent). "
+             "Default is --pip-audit (fail-closed when pip-audit absent).",
+    )
     args = parser.parse_args()
     
     is_e2e = args.mode == "e2e"
@@ -131,6 +142,22 @@ def main():
         if exit_code != 0:
             print(f"\n[FAIL] PIPELINE FAILED at pytest (exit code 1)")
             return 1
+
+    # ================================================================
+    # 1.1 QUALITY RATCHET (ruff/mypy/pip-audit)
+    # ================================================================
+    if not args.skip_quality_ratchet:
+        ratchet_cmd = [sys.executable, "scripts/check_quality_ratchet.py"]
+        ratchet_cmd.append(
+            "--pip-audit-optional"
+            if args.quality_ratchet_optional_pip_audit
+            else "--pip-audit"
+        )
+        exit_code = run_command(ratchet_cmd, "Quality Ratchet (ruff/mypy/pip-audit)")
+        results["quality_ratchet"] = exit_code
+        if exit_code != 0:
+            print(f"\n[FAIL] PIPELINE FAILED at quality ratchet (exit code 6)")
+            return 6
     
     # ================================================================
     # 1.5 DOC VERIFICATION (fast, no RPC)
@@ -267,6 +294,8 @@ def main():
     required_keys = ["m5_0_offline", "m4_smoke", "m4_profit"]
     if not args.skip_tests:
         required_keys.append("pytest")
+    if not args.skip_quality_ratchet:
+        required_keys.append("quality_ratchet")
     
     all_required_pass = all(results.get(k, 0) in (0, -1) for k in required_keys)
     

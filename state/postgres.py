@@ -4,13 +4,32 @@ Production adapter.  The driver (``psycopg`` v3) is an optional dependency:
 install with ``pip install -e ".[postgres]"``.  Offline CI never imports the
 driver — the import happens lazily inside ``connect()``.
 
-Guarantees:
+Guarantees (locked by ``tests/unit/test_postgres_idempotency_contract.py``
+and ``tests/integration/test_postgres_monotonic_contract.py`` when a real
+PostgreSQL is available):
 
-* ``ensure_schema()`` creates the minimal production tables (runs, tokens,
-  pools, routes, pool_states, quotes, cycles, opportunities, simulations,
-  execution_attempts, provider_health, artifact_pointers, jobs).
+* ``ensure_schema()`` applies the ordered migration set in
+  ``MIGRATIONS`` via the ``schema_migrations`` ledger; migrations are
+  idempotent ``CREATE TABLE IF NOT EXISTS`` / ``ALTER TABLE`` blocks and
+  never run twice.  The legacy ``SCHEMA_DDL`` constant is preserved as
+  the union of all migrations for backward compatibility with existing
+  schema-introspection tests.
 * Every write is an idempotent upsert keyed by the ``IdempotencyKey``
-  digest; replays never create duplicates.
+  digest; replays never create duplicates. ``pools``/``routes``/``tokens``
+  additionally carry a UNIQUE constraint on ``idempotency_key`` (added in
+  migration 0002) so a same-observation replay is a hard no-op rather
+  than a silent overwrite.
+* Monotonic guards: ``upsert_pool``/``upsert_route``/``upsert_token``
+  only overwrite the existing row when the incoming observation's
+  ``observed_block`` is greater than or equal to the stored
+  ``observed_block``.  This prevents an older replay (e.g. a re-delivered
+  bridge row from a previous block) from clobbering a newer observation
+  that has already landed.
+* ``latest_artifact_pointer()`` reconstructs the original
+  ``IdempotencyKey`` from the stored ``idempotency_chain_id``,
+  ``idempotency_block``, ``idempotency_entity_id`` and
+  ``idempotency_input_revision`` columns so the caller sees the same
+  key that was originally written, not a zeroed placeholder.
 * ``transaction()`` gives commit/rollback semantics; a failed stage leaves
   no partial state.
 * ``claim_jobs`` uses ``FOR UPDATE SKIP LOCKED`` so multiple workers can
@@ -19,7 +38,7 @@ Guarantees:
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from state.repository import (
     ArtifactPointer,
@@ -30,7 +49,12 @@ from state.repository import (
     StateRepository,
 )
 
-__all__ = ["PostgresStateRepository", "SCHEMA_DDL", "POSTGRES_EXTRA_MISSING"]
+__all__ = [
+    "PostgresStateRepository",
+    "SCHEMA_DDL",
+    "MIGRATIONS",
+    "POSTGRES_EXTRA_MISSING",
+]
 
 
 POSTGRES_EXTRA_MISSING = (
@@ -39,7 +63,25 @@ POSTGRES_EXTRA_MISSING = (
 )
 
 
-SCHEMA_DDL = """
+# ---------------------------------------------------------------------------
+# Ordered migration set
+# ---------------------------------------------------------------------------
+#
+# Each migration is ``(migration_id, name, sql)``. ``ensure_schema()`` applies
+# every migration whose id is not yet recorded in ``schema_migrations`` in
+# ascending id order, inside one transaction. Migrations MUST be idempotent
+# at the DDL level (use ``CREATE TABLE IF NOT EXISTS`` / ``ALTER TABLE ...
+# ADD COLUMN IF NOT EXISTS``) so a partially-applied ledger can be resumed.
+#
+# Migration 0001 — initial schema (matches the original ``SCHEMA_DDL``).
+# Migration 0002 — monotonic idempotency: add UNIQUE on
+#   ``pools.idempotency_key`` / ``routes.idempotency_key`` /
+#   ``tokens.idempotency_key`` and add ``observed_block`` columns so the
+#   upserts can guard against older-over-newer replays. Also persist the
+#   full ``IdempotencyKey`` components for ``artifact_pointers`` so
+#   ``latest_artifact_pointer()`` can reconstruct the original key.
+
+_MIGRATION_0001_DDL = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id              TEXT PRIMARY KEY,
     chain_id            INTEGER NOT NULL,
@@ -195,6 +237,61 @@ CREATE INDEX IF NOT EXISTS jobs_pending_idx
     WHERE status = 'pending';
 """
 
+_MIGRATION_0002_DDL = """
+-- Monotonic idempotency for pools/routes/tokens: store the block at which
+-- the row was observed so a later replay from an older block cannot
+-- clobber a newer observation. Also add UNIQUE on idempotency_key so a
+-- same-observation replay is a hard no-op (the DO UPDATE branch now
+-- carries a WHERE guard).
+ALTER TABLE pools
+    ADD COLUMN IF NOT EXISTS observed_block BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE routes
+    ADD COLUMN IF NOT EXISTS observed_block BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tokens
+    ADD COLUMN IF NOT EXISTS observed_block BIGINT NOT NULL DEFAULT 0;
+
+-- Unique idempotency_key constraints. Drop-then-create is idempotent and
+-- tolerates deployments that already have the constraint under a different
+-- name (the original migration 0001 only had UNIQUE on idempotency_key for
+-- pool_states / quotes / opportunities / simulations / execution_attempts /
+-- artifact_pointers / jobs; pools / routes / tokens did not).
+ALTER TABLE pools
+    DROP CONSTRAINT IF EXISTS pools_idempotency_key_key;
+ALTER TABLE pools
+    ADD CONSTRAINT pools_idempotency_key_key UNIQUE (idempotency_key);
+ALTER TABLE routes
+    DROP CONSTRAINT IF EXISTS routes_idempotency_key_key;
+ALTER TABLE routes
+    ADD CONSTRAINT routes_idempotency_key_key UNIQUE (idempotency_key);
+ALTER TABLE tokens
+    DROP CONSTRAINT IF EXISTS tokens_idempotency_key_key;
+ALTER TABLE tokens
+    ADD CONSTRAINT tokens_idempotency_key_key UNIQUE (idempotency_key);
+
+-- Persist the full IdempotencyKey components for artifact_pointers so
+-- latest_artifact_pointer() can reconstruct the original key instead of
+-- returning a zeroed placeholder. The four columns are nullable so older
+-- rows (written before migration 0002) survive an in-place upgrade.
+ALTER TABLE artifact_pointers
+    ADD COLUMN IF NOT EXISTS idempotency_chain_id INTEGER;
+ALTER TABLE artifact_pointers
+    ADD COLUMN IF NOT EXISTS idempotency_block BIGINT;
+ALTER TABLE artifact_pointers
+    ADD COLUMN IF NOT EXISTS idempotency_entity_id TEXT;
+ALTER TABLE artifact_pointers
+    ADD COLUMN IF NOT EXISTS idempotency_input_revision TEXT;
+"""
+
+MIGRATIONS: List[Tuple[int, str, str]] = [
+    (1, "initial_schema", _MIGRATION_0001_DDL),
+    (2, "monotonic_idempotency", _MIGRATION_0002_DDL),
+]
+
+# Backward-compat: scripts/tests that introspect the union schema still see
+# one DDL block. New deployments must go through ``MIGRATIONS`` instead of
+# this constant.
+SCHEMA_DDL = "\n\n".join(sql for _, _, sql in MIGRATIONS)
+
 
 class PostgresStateRepository(StateRepository):
     """StateRepository backed by PostgreSQL (psycopg v3)."""
@@ -219,8 +316,36 @@ class PostgresStateRepository(StateRepository):
         self._conn = psycopg.connect(self._conninfo, autocommit=False)
 
     def ensure_schema(self) -> None:
+        """Apply all pending migrations in id order.
+
+        Idempotent: each migration is recorded in ``schema_migrations``;
+        re-running ``ensure_schema`` only applies migrations that have not
+        yet been recorded. The whole apply pass runs inside one
+        transaction so a failed migration rolls back the ledger update
+        too (no partial migration state).
+        """
         with self.transaction():
-            self._conn.execute(SCHEMA_DDL)
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    migration_id INTEGER PRIMARY KEY,
+                    name         TEXT NOT NULL,
+                    applied_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur = self._conn.execute(
+                "SELECT migration_id FROM schema_migrations ORDER BY migration_id"
+            )
+            applied = {int(row[0]) for row in cur.fetchall()}
+            for migration_id, name, sql in MIGRATIONS:
+                if migration_id in applied:
+                    continue
+                self._conn.execute(sql)
+                self._conn.execute(
+                    "INSERT INTO schema_migrations (migration_id, name) VALUES (%s, %s)",
+                    (migration_id, name),
+                )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -240,12 +365,14 @@ class PostgresStateRepository(StateRepository):
     # -- inventory -----------------------------------------------------------
 
     def upsert_pool(self, pool: PoolRecord) -> None:
+        observed_block = int(pool.idempotency.block_number or 0)
         self._conn.execute(
             """
             INSERT INTO pools (
                 chain_id, pool_address, dex_id, token0, token1,
-                pool_type, fee, status, idempotency_key, extra
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                pool_type, fee, status, idempotency_key, extra,
+                observed_block
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (chain_id, pool_address) DO UPDATE SET
                 dex_id = EXCLUDED.dex_id,
                 token0 = EXCLUDED.token0,
@@ -255,7 +382,9 @@ class PostgresStateRepository(StateRepository):
                 status = EXCLUDED.status,
                 idempotency_key = EXCLUDED.idempotency_key,
                 extra = EXCLUDED.extra,
+                observed_block = EXCLUDED.observed_block,
                 updated_at = now()
+            WHERE pools.observed_block <= EXCLUDED.observed_block
             """,
             (
                 pool.chain_id,
@@ -268,16 +397,19 @@ class PostgresStateRepository(StateRepository):
                 pool.status,
                 pool.idempotency.digest(),
                 _jsonb(pool.extra),
+                observed_block,
             ),
         )
 
     def upsert_route(self, route: RouteRecord) -> None:
+        observed_block = int(route.idempotency.block_number or 0)
         self._conn.execute(
             """
             INSERT INTO routes (
                 chain_id, route_id, dex_id, token_in, token_out,
-                pool_address, status, idempotency_key, extra
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                pool_address, status, idempotency_key, extra,
+                observed_block
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (chain_id, route_id) DO UPDATE SET
                 dex_id = EXCLUDED.dex_id,
                 token_in = EXCLUDED.token_in,
@@ -286,7 +418,9 @@ class PostgresStateRepository(StateRepository):
                 status = EXCLUDED.status,
                 idempotency_key = EXCLUDED.idempotency_key,
                 extra = EXCLUDED.extra,
+                observed_block = EXCLUDED.observed_block,
                 updated_at = now()
+            WHERE routes.observed_block <= EXCLUDED.observed_block
             """,
             (
                 route.chain_id,
@@ -298,6 +432,7 @@ class PostgresStateRepository(StateRepository):
                 route.status,
                 route.idempotency.digest(),
                 _jsonb(route.extra),
+                observed_block,
             ),
         )
 
@@ -310,17 +445,22 @@ class PostgresStateRepository(StateRepository):
         symbol: Optional[str],
         idempotency: IdempotencyKey,
     ) -> None:
+        observed_block = int(idempotency.block_number or 0)
         self._conn.execute(
             """
-            INSERT INTO tokens (chain_id, address, decimals, symbol, idempotency_key)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO tokens (
+                chain_id, address, decimals, symbol, idempotency_key,
+                observed_block
+            ) VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (chain_id, address) DO UPDATE SET
                 decimals = COALESCE(EXCLUDED.decimals, tokens.decimals),
                 symbol = COALESCE(EXCLUDED.symbol, tokens.symbol),
                 idempotency_key = EXCLUDED.idempotency_key,
+                observed_block = EXCLUDED.observed_block,
                 updated_at = now()
+            WHERE tokens.observed_block <= EXCLUDED.observed_block
             """,
-            (chain_id, address, decimals, symbol, idempotency.digest()),
+            (chain_id, address, decimals, symbol, idempotency.digest(), observed_block),
         )
 
     # -- artifact pointers ----------------------------------------------------
@@ -330,12 +470,18 @@ class PostgresStateRepository(StateRepository):
             """
             INSERT INTO artifact_pointers (
                 artifact_family, artifact_path, run_timestamp,
-                content_digest, idempotency_key
-            ) VALUES (%s, %s, %s, %s, %s)
+                content_digest, idempotency_key,
+                idempotency_chain_id, idempotency_block,
+                idempotency_entity_id, idempotency_input_revision
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (artifact_family, run_timestamp) DO UPDATE SET
                 artifact_path = EXCLUDED.artifact_path,
                 content_digest = EXCLUDED.content_digest,
-                idempotency_key = EXCLUDED.idempotency_key
+                idempotency_key = EXCLUDED.idempotency_key,
+                idempotency_chain_id = EXCLUDED.idempotency_chain_id,
+                idempotency_block = EXCLUDED.idempotency_block,
+                idempotency_entity_id = EXCLUDED.idempotency_entity_id,
+                idempotency_input_revision = EXCLUDED.idempotency_input_revision
             """,
             (
                 pointer.artifact_family,
@@ -343,6 +489,10 @@ class PostgresStateRepository(StateRepository):
                 pointer.run_timestamp,
                 pointer.content_digest,
                 pointer.idempotency.digest(),
+                int(pointer.idempotency.chain_id or 0),
+                int(pointer.idempotency.block_number or 0),
+                str(pointer.idempotency.entity_id or ""),
+                str(pointer.idempotency.input_revision or ""),
             ),
         )
 
@@ -350,7 +500,9 @@ class PostgresStateRepository(StateRepository):
         cur = self._conn.execute(
             """
             SELECT artifact_family, artifact_path, run_timestamp,
-                   content_digest, idempotency_key
+                   content_digest, idempotency_key,
+                   idempotency_chain_id, idempotency_block,
+                   idempotency_entity_id, idempotency_input_revision
             FROM artifact_pointers
             WHERE artifact_family = %s
             ORDER BY run_timestamp DESC
@@ -361,13 +513,20 @@ class PostgresStateRepository(StateRepository):
         row = cur.fetchone()
         if row is None:
             return None
+        chain_id = int(row[5]) if row[5] is not None else 0
+        block_number = int(row[6]) if row[6] is not None else 0
+        entity_id = str(row[7]) if row[7] is not None else str(row[0])
+        input_revision = str(row[8]) if row[8] is not None else str(row[4])
         return ArtifactPointer(
             artifact_family=row[0],
             artifact_path=row[1],
             run_timestamp=str(row[2]),
             content_digest=row[3],
             idempotency=IdempotencyKey(
-                chain_id=0, block_number=0, entity_id=row[0], input_revision=str(row[4])
+                chain_id=chain_id,
+                block_number=block_number,
+                entity_id=entity_id,
+                input_revision=input_revision,
             ),
         )
 

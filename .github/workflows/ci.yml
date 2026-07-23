@@ -22,10 +22,14 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]" || pip install -e . || true; fi
+          pip install -r requirements-dev.txt
           pip install pytest
 
       - name: Repo safety check
         run: python scripts/check_repo_safety.py
+
+      - name: Quality ratchet (ruff/mypy/pip-audit, fail-closed)
+        run: python scripts/check_quality_ratchet.py --pip-audit
 
       - name: Run unit tests
         run: pytest tests/unit -q

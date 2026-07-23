@@ -189,9 +189,30 @@ def test_transaction_commits_on_success_and_rolls_back_on_error():
 
 
 def test_ensure_schema_executes_ddl_in_one_transaction():
+    """ensure_schema now applies the migration set via the schema_migrations
+    ledger. The union of migrations still equals SCHEMA_DDL (backward-compat
+    introspection constant), but the first executed statement creates the
+    ledger table; subsequent statements apply each pending migration."""
+    from state.postgres import MIGRATIONS
+
     repo = _repo_with_fake()
     repo.ensure_schema()
-    assert repo._conn.executed[0][0] == SCHEMA_DDL
+    # First statement creates the migration ledger table.
+    first_sql = repo._conn.executed[0][0]
+    assert "schema_migrations" in first_sql
+    # All migration DDL is applied (one execute per migration).
+    migration_sqls = [sql for sql, _ in repo._conn.executed]
+    for _mid, _name, sql in MIGRATIONS:
+        assert sql in migration_sqls, (
+            f"migration {_mid} DDL was not executed by ensure_schema()"
+        )
+    # Each applied migration is followed by an INSERT into the ledger.
+    ledger_inserts = [
+        sql for sql, params in repo._conn.executed
+        if "INSERT INTO schema_migrations" in sql
+    ]
+    assert len(ledger_inserts) == len(MIGRATIONS)
+    # Transaction committed exactly once.
     assert repo._conn.commits == 1
 
 

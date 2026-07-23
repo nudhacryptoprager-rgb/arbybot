@@ -56,3 +56,19 @@ def test_update_baseline_rewrites(tmp_path, monkeypatch):
     monkeypatch.setattr(ratchet, "run_tool", lambda tool: (77, "ok"))
     assert ratchet.check_tool("ruff", update_baseline=True) is True
     assert ratchet.read_baseline("ruff") == 77
+
+
+def test_pip_audit_fail_closed_when_absent(monkeypatch):
+    """pip-audit gate must FAIL when pip-audit is absent and fail_closed=True."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "pip_audit":
+            raise ImportError("simulated absent pip-audit")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+    assert ratchet.run_pip_audit(fail_closed=True) is False
+    assert ratchet.run_pip_audit(fail_closed=False) is True

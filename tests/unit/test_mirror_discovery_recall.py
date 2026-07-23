@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from m8.discovery.dex_coverage_gate import classify_dex_support_status
 from m8.discovery.dexscreener_hints import _pair_to_hint
@@ -617,3 +618,173 @@ def test_build_second_venue_rca_skips_fully_ready_and_single_venue():
     ]
     rca = build_second_venue_rca(hints)
     assert len(rca) == 0
+
+
+# ---------------------------------------------------------------------------
+# Step 10 — wide-recall funnel split + freshness gate + second-venue persistence
+# ---------------------------------------------------------------------------
+
+
+def test_build_per_token_per_dex_funnel_splits_recall_and_quote():
+    """The per-token / per-DEX funnel must let operators see which token
+    leaks at which stage (recall / onchain verified / quote-ready)."""
+    from m8.discovery.mirror_discovery_recall import build_per_token_per_dex_funnel
+
+    f1 = "0x" + "a" * 40
+    f2 = "0x" + "b" * 40
+    hints = [
+        _hint(focus=f1, dex="uniswap_v3", quote_ready=True, verified=True),
+        _hint(focus=f1, dex="alien_base_v2", quote_ready=False, verified=True),
+        _hint(focus=f2, dex="uniswap_v3", quote_ready=False, verified=True),
+        # Third hint for f2 is verified=False so it should count toward
+        # recall_candidates but NOT onchain_verified.
+        _hint(focus=f2, dex="alien_base_v2", quote_ready=False, verified=False),
+    ]
+    funnel = build_per_token_per_dex_funnel(hints)
+    f1_row = funnel[f1]
+    assert f1_row["recall_candidates_total"] == 2
+    assert f1_row["onchain_verified_total"] == 2
+    assert f1_row["quote_ready_total"] == 1
+    assert f1_row["verified_dex_count"] == 2  # second venue verified
+    assert f1_row["quote_ready_dex_count"] == 1
+    assert f1_row["second_venue_ready"] is True
+    f2_row = funnel[f2]
+    # f2 has recall_candidates=2, onchain_verified=1 (the verified=False one drops)
+    assert f2_row["recall_candidates_total"] == 2
+    assert f2_row["onchain_verified_total"] == 1
+    assert f2_row["verified_dex_count"] == 1
+    assert f2_row["second_venue_ready"] is False
+
+
+def test_second_venue_candidate_records_keeps_verified_candidates_without_quote():
+    """Step 10 fix: verified second-venue candidates must be persisted
+    BEFORE quote reprobe so a failing quote smoke does not discard them."""
+    from m8.discovery.mirror_discovery_recall import second_venue_candidate_records
+
+    f1 = "0x" + "a" * 40
+    f2 = "0x" + "b" * 40
+    f3 = "0x" + "c" * 40
+    hints = [
+        # f1 has two verified DEXes; only one quote-ready. Must still surface
+        # as a second-venue candidate (the missing quote is the next-step
+        # reprobe target, not a discard reason).
+        _hint(focus=f1, dex="uniswap_v3", quote_ready=True, verified=True),
+        _hint(focus=f1, dex="alien_base_v2", quote_ready=False, verified=True),
+        # f2 has only one verified DEX; must NOT surface.
+        _hint(focus=f2, dex="uniswap_v3", verified=True),
+        # f3 has two DEXes but one is not verified; must NOT surface.
+        _hint(focus=f3, dex="uniswap_v3", verified=True),
+        _hint(focus=f3, dex="alien_base_v2", verified=False),
+    ]
+    rows = second_venue_candidate_records(hints)
+    focuses = sorted(r["focus_token"] for r in rows)
+    assert focuses == [f1]
+    f1_row = rows[0]
+    assert f1_row["verified_dex_count"] == 2
+    assert sorted(f1_row["verified_dexes"]) == ["alien_base_v2", "uniswap_v3"]
+    assert f1_row["second_venue_verified"] is True
+    assert f1_row["quote_ready_second_venue"] is True
+
+
+def test_write_second_venue_candidates_overwrites_artifact(tmp_path, monkeypatch):
+    """Step 10 fix: candidate persistence is overwritten (rolling), not
+    multiplied per recall run."""
+    from m8.discovery import mirror_discovery_recall as mdr
+
+    out_path = tmp_path / "second_venue_latest.json"
+    monkeypatch.setattr(mdr, "SECOND_VENUE_CANDIDATES_PATH", out_path)
+    candidates = [
+        {
+            "focus_token": "0x" + "a" * 40,
+            "verified_dexes": ["uniswap_v3", "alien_base_v2"],
+            "verified_dex_count": 2,
+            "verified_pools_per_dex": {
+                "uniswap_v3": ["0x" + "1" * 40],
+                "alien_base_v2": ["0x" + "2" * 40],
+            },
+            "quote_status_per_dex": {
+                "uniswap_v3": "QUOTE_SMOKE_OK",
+                "alien_base_v2": "HINT_FACTORY_VERIFIED",
+            },
+            "second_venue_verified": True,
+            "quote_ready_second_venue": True,
+        }
+    ]
+    p = mdr.write_second_venue_candidates(candidates, chain="base", source_artifact_run_timestamp="2026-07-19T10:00:00Z")
+    assert Path(p) == out_path
+    raw1 = json.loads(out_path.read_text(encoding="utf-8"))
+    assert raw1["candidate_count"] == 1
+    # Overwrite (rolling) — second call does not multiply.
+    p = mdr.write_second_venue_candidates([], chain="base")
+    raw2 = json.loads(out_path.read_text(encoding="utf-8"))
+    assert raw2["candidate_count"] == 0
+    assert raw2["chain"] == "base"
+
+
+def test_evaluate_upstream_freshness_gate_blocks_stale_sniper():
+    """Wide-lane recall must refuse admission when the upstream M8 sniper
+    artifact is older than 30 minutes (Step 10 fix)."""
+    from m8.discovery.mirror_discovery_recall import evaluate_upstream_freshness_gate
+
+    now = datetime(2026, 7, 19, 12, 0, 0, tzinfo=timezone.utc)
+    fresh_ts = "2026-07-19T11:50:00Z"  # 10 min old
+    stale_ts = "2026-07-19T10:00:00Z"  # 2h old
+    ok, blockers, audit = evaluate_upstream_freshness_gate(
+        sniper_artifact={"generated_at_utc": fresh_ts}, now=now
+    )
+    assert ok is True
+    assert blockers == []
+    assert audit["status"] == "fresh"
+    ok, blockers, audit = evaluate_upstream_freshness_gate(
+        sniper_artifact={"generated_at_utc": stale_ts}, now=now
+    )
+    assert ok is False
+    assert "SNIPER_STALE" in blockers
+    assert audit["status"] == "stale"
+    assert audit["age_seconds"] > 30 * 60
+
+
+def test_evaluate_upstream_freshness_gate_prefers_run_timestamp():
+    """run_context.run_timestamp is canonical; generated_at_utc is fallback."""
+    from m8.discovery.mirror_discovery_recall import evaluate_upstream_freshness_gate
+
+    now = datetime(2026, 7, 19, 12, 0, 0, tzinfo=timezone.utc)
+    fresh_rt = "2026-07-19T11:55:00Z"
+    stale_gat = "2026-07-19T09:00:00Z"
+    ok, blockers, audit = evaluate_upstream_freshness_gate(
+        sniper_artifact={
+            "run_context": {"run_timestamp": fresh_rt},
+            "generated_at_utc": stale_gat,
+        },
+        now=now,
+    )
+    assert ok is True
+    assert audit["timestamp"] == fresh_rt
+    assert audit["status"] == "fresh"
+
+
+def test_evaluate_upstream_freshness_gate_returns_ok_when_no_sniper():
+    """Absence of a sniper artifact is a config gap, not an evidence
+    failure — the strict runtime-truth gate handles the strict path. The
+    wide-lane freshness gate must not block when no artifact is supplied."""
+    from m8.discovery.mirror_discovery_recall import evaluate_upstream_freshness_gate
+
+    ok, blockers, audit = evaluate_upstream_freshness_gate(sniper_artifact=None)
+    assert ok is True
+    assert blockers == []
+    assert audit["status"] == "no_sniper_artifact"
+
+
+def test_evaluate_upstream_freshness_gate_blocks_missing_or_unparseable_timestamp():
+    from m8.discovery.mirror_discovery_recall import evaluate_upstream_freshness_gate
+
+    ok, blockers, _ = evaluate_upstream_freshness_gate(
+        sniper_artifact={"no_timestamp_here": True}
+    )
+    assert ok is False
+    assert "SNIPER_TIMESTAMP_MISSING" in blockers
+    ok, blockers, _ = evaluate_upstream_freshness_gate(
+        sniper_artifact={"generated_at_utc": "not-a-timestamp"}
+    )
+    assert ok is False
+    assert "SNIPER_TIMESTAMP_UNPARSEABLE" in blockers

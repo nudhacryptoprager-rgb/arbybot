@@ -12,21 +12,42 @@ Design:
 * ``AsyncProviderQuotaLimiter`` — asyncio limiter holding one semaphore and
   one rate window per provider id.  ``acquire(provider_id)`` is an async
   context manager; throttling is counted in ``stats``.
+* ``build_limiter_from_provider_config`` — load per-provider budgets from a
+  canonical ``config/provider_quotas.yaml`` file or an in-process dict so
+  the production resolver/clients construct the limiter from *real provider
+  configuration* (Step 6 of the production-readiness review) instead of
+  leaving ``AsyncProviderQuotaLimiter`` unreferenced outside tests.
 
 The limiter is dependency-free and offline-testable.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Optional
+from pathlib import Path
+from typing import Any, AsyncIterator, Dict, Mapping, Optional
 
 __all__ = [
     "ProviderQuota",
     "AsyncProviderQuotaLimiter",
+    "build_limiter_from_provider_config",
+    "DEFAULT_PROVIDER_QUOTAS_YAML",
+    "DEFAULT_PROVIDER_ID",
 ]
+
+
+# Default path for the canonical per-provider quota config. The file is
+# optional — when absent the limiter falls back to ``ProviderQuota()``
+# (max_concurrent=4, no rate window).
+DEFAULT_PROVIDER_QUOTAS_YAML = Path("config") / "provider_quotas.yaml"
+
+# Provider id used when no explicit provider mapping is supplied. Callers
+# can label every RPC URL with this id so the limiter applies *some*
+# throttling even without per-provider budgets.
+DEFAULT_PROVIDER_ID = "default"
 
 
 @dataclass(frozen=True)
@@ -48,6 +69,89 @@ class ProviderQuota:
             raise ValueError("max_requests must be >= 0")
         if self.window_s <= 0:
             raise ValueError("window_s must be > 0")
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ProviderQuota":
+        """Permissive builder: ignore unknown keys; coerce major fields."""
+        try:
+            max_concurrent = int(data.get("max_concurrent", 4))
+        except (TypeError, ValueError):
+            max_concurrent = 4
+        try:
+            max_requests = int(data.get("max_requests", 0))
+        except (TypeError, ValueError):
+            max_requests = 0
+        try:
+            window_s = float(data.get("window_s", 1.0))
+        except (TypeError, ValueError):
+            window_s = 1.0
+        return cls(
+            max_concurrent=max_concurrent,
+            max_requests=max_requests,
+            window_s=window_s,
+        )
+
+
+def build_limiter_from_provider_config(
+    yaml_path: Optional[Path] = None,
+    *,
+    env: Optional[Mapping[str, str]] = None,
+) -> AsyncProviderQuotaLimiter:
+    """Build an ``AsyncProviderQuotaLimiter`` from provider configuration.
+
+    Loads a YAML mapping of ``provider_id -> {max_concurrent, max_requests,
+    window_s}``. When the file is missing or unparseable, the limiter
+    falls back to a single ``DEFAULT_PROVIDER_ID`` quota of 4 concurrent /
+    no rate window — still better than no limiter, and resilient.
+
+    Environment overrides (per-provider ``ARBY_QUOTA_<PROVIDER_ID>`` of the
+    form ``max_concurrent:max_requests:window_s``) take precedence over the
+    YAML file so operators can tune a quota without editing the repo.
+    """
+    quotas: Dict[str, ProviderQuota] = {}
+    path = Path(yaml_path) if yaml_path is not None else DEFAULT_PROVIDER_QUOTAS_YAML
+    try:
+        import yaml  # type: ignore
+
+        with open(path, encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, ValueError, ImportError):
+        data = {}
+
+    if isinstance(data, Mapping):
+        for key, value in data.items():
+            if not isinstance(value, Mapping):
+                continue
+            try:
+                quotas[str(key)] = ProviderQuota.from_dict(value)
+            except ValueError:
+                continue
+
+    env_map = env if env is not None else os.environ
+    for ek, ev in env_map.items():
+        if not ek.startswith("ARBY_QUOTA_"):
+            continue
+        pid = ek[len("ARBY_QUOTA_"):].lower()
+        if not pid:
+            continue
+        parts = str(ev).split(":")
+        if len(parts) < 2:
+            continue
+        try:
+            mc = int(parts[0])
+            mr = int(parts[1])
+            ws = float(parts[2]) if len(parts) >= 3 else 1.0
+            quotas[pid] = ProviderQuota(
+                max_concurrent=mc, max_requests=mr, window_s=ws
+            )
+        except ValueError:
+            continue
+
+    default_quota = quotas.pop(DEFAULT_PROVIDER_ID, None) or ProviderQuota()
+    return AsyncProviderQuotaLimiter(
+        quotas=quotas,
+        default_quota=default_quota,
+    )
 
 
 @dataclass

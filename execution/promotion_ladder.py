@@ -74,6 +74,10 @@ class LadderEvidence:
     kill_switch_active: bool = True
     execution_enabled: bool = False
     human_unlock: bool = False
+    # Step 9 fix: audit-only diagnostic fields. The ladder logic never reads
+    # these — they exist so the verdict payload can carry the M4/M9 split
+    # produced by scripts.check_promotion_ladder.build_evidence.
+    extra: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

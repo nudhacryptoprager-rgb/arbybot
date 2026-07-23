@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from monitoring.runtime_truth_gate import (  # noqa: E402
+    SESSION_WINDOW_SECONDS,
     WINDOW_MISMATCH_SECONDS,
     evaluate_runtime_truth_gate,
 )
@@ -59,7 +60,16 @@ def main() -> int:
         "--window-seconds",
         type=int,
         default=WINDOW_MISMATCH_SECONDS,
-        help="Max pairwise generated_at_utc delta for one runtime window",
+        help="Max pairwise run_timestamp delta for one runtime window when no "
+             "shared session_id binds the artifacts (default 48 min).",
+    )
+    ap.add_argument(
+        "--session-window-seconds",
+        type=int,
+        default=SESSION_WINDOW_SECONDS,
+        help="Max pairwise run_timestamp delta when a shared session_id binds "
+             "the artifacts (default 90 min, allows serial M8->M8.1->M8.2->"
+             "M8.3->bridge pipelines).",
     )
     ap.add_argument(
         "--output",
@@ -75,6 +85,7 @@ def main() -> int:
         m8_3_registry=_load(Path(args.m8_3_registry)),
         bridge=_load(Path(args.bridge)),
         window_seconds=int(args.window_seconds),
+        session_window_seconds=int(args.session_window_seconds),
     )
 
     out = Path(args.output)
@@ -84,6 +95,8 @@ def main() -> int:
     print("truth_status:", verdict["truth_status"])
     print("blocker_class:", verdict["blocker_class"])
     print("blockers:", verdict["blockers"])
+    print("session_id:", verdict.get("session_id"))
+    print("window_seconds:", verdict.get("window_seconds"))
     print("written:", out)
     return 0 if verdict["truth_status"] == "PASS" else 1
 

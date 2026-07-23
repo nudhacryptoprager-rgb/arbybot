@@ -201,7 +201,7 @@ class ProviderRouter:
         load_root_dotenv()
 
         try:
-            from core.rpc_urls import resolve_rpc_http, _CHAIN_KEY_TO_ID
+            from core.rpc_urls import _CHAIN_KEY_TO_ID, resolve_rpc_http
             chain_id = _CHAIN_KEY_TO_ID.get(chain.lower())
             primary_url, _, _ = resolve_rpc_http(
                 chain_id=chain_id,

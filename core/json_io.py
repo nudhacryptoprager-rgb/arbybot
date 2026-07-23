@@ -1,4 +1,4 @@
-# PATH: core/json_io.py
+﻿# PATH: core/json_io.py
 """Atomic JSON I/O utilities.
 
 Provides safe atomic file writing to prevent partial/corrupt artifacts.
@@ -32,11 +32,11 @@ def _exact_decimal_serializer(obj: Any) -> Any:
     """Money-safe serializer: Decimal is emitted as an exact string.
 
     Canonical money artifacts (amounts, PnL, gas, slippage) must not lose
-    precision through binary float conversion (Roadmap §3.2: no float
+    precision through binary float conversion (Roadmap В§3.2: no float
     money).  ``Decimal`` values serialize as exact decimal strings; large
     wei integers already serialize exactly via JSON int.  Float telemetry
     stays allowed only in UI-facing payloads, never in canonical money
-    artifacts — those must use this mode.
+    artifacts вЂ” those must use this mode.
     """
     if isinstance(obj, Decimal):
         # Fixed-point notation: exact and free of scientific-notation
@@ -108,14 +108,14 @@ def atomic_write_json(
         serializer = _exact_decimal_serializer
     else:
         serializer = _default_serializer
-    
+
     # Create temp file in same directory (required for atomic os.replace)
     fd, temp_path = tempfile.mkstemp(
         suffix=".tmp",
         prefix=f".{path.name}.",
         dir=path.parent,
     )
-    
+
     try:
         # Write JSON to temp file
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -123,8 +123,8 @@ def atomic_write_json(
             f.write("\n")  # Trailing newline for POSIX compliance
             f.flush()
             os.fsync(f.fileno())  # Force write to disk
-        
-        # Atomic replace — on Windows, antivirus can briefly lock the .tmp
+
+        # Atomic replace вЂ” on Windows, antivirus can briefly lock the .tmp
         # file between write and rename, causing PermissionError; retry.
         import time as _time
 
@@ -137,9 +137,9 @@ def atomic_write_json(
                     _time.sleep(0.5 * (_attempt + 1))
                 else:
                     raise
-        
+
         return path
-        
+
     except Exception:
         # Clean up temp file on failure
         try:
@@ -152,13 +152,13 @@ def atomic_write_json(
 def read_json(path: Union[str, Path]) -> Any:
     """
     Read JSON from file with proper error handling.
-    
+
     Args:
         path: File path to read
-        
+
     Returns:
         Parsed JSON data
-        
+
     Raises:
         FileNotFoundError: If file doesn't exist
         json.JSONDecodeError: If file contains invalid JSON
@@ -171,11 +171,11 @@ def read_json(path: Union[str, Path]) -> Any:
 def safe_read_json(path: Union[str, Path], default: Any = None) -> Any:
     """
     Read JSON with fallback to default on any error.
-    
+
     Args:
         path: File path to read
         default: Value to return on error (default: None)
-        
+
     Returns:
         Parsed JSON data or default
     """
@@ -194,7 +194,7 @@ def write_money_json(
     """Atomic JSON write for canonical money artifacts.
 
     Forces ``decimal_mode="str"`` so ``Decimal`` amounts/PnL/gas/slippage
-    keep exact precision (no float money, Roadmap §3.2).
+    keep exact precision (no float money, Roadmap В§3.2).
     """
     return atomic_write_json(
         path,

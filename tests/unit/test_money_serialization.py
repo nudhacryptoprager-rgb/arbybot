@@ -91,3 +91,44 @@ def test_float_mode_degrades_but_money_mode_does_not(tmp_path):
     assert json.loads(out_money.read_text(encoding="utf-8"))["v"] == "9007199254740993"
     float_v = json.loads(out_float.read_text(encoding="utf-8"))["v"]
     assert int(float_v) == 9007199254740992  # degraded by exactly 1 wei
+
+
+def test_export_rows_to_json_preserves_decimal_in_extra(tmp_path):
+    """state.json_export.export_rows_to_json must serialize Decimal inside
+    extra/payload as exact strings, not float. Regression for the
+    production-readiness review finding that the canonical JSON export
+    lost money precision through legacy atomic_write_json()."""
+    from state.json_export import export_rows_to_json
+
+    rows = [
+        {
+            "chain_id": 8453,
+            "pool_address": "0x" + "ab" * 20,
+            "extra": {
+                "liquidity_usd": Decimal("123456789.000000000000000001"),
+                "price_quote_to_base": Decimal("0.000000000000000001"),
+                "fee_bps": Decimal("12.5"),
+            },
+        }
+    ]
+    out = export_rows_to_json(rows, tmp_path / "export.json")
+    raw = json.loads(out.read_text(encoding="utf-8"))
+    extra = raw["items"][0]["extra"]
+    assert extra["liquidity_usd"] == "123456789.000000000000000001"
+    assert extra["price_quote_to_base"] == "0.000000000000000001"
+    assert extra["fee_bps"] == "12.5"
+    assert safe_decimal(extra["liquidity_usd"]) == Decimal("123456789.000000000000000001")
+    assert safe_decimal(extra["price_quote_to_base"]) == Decimal("0.000000000000000001")
+
+
+def test_export_rows_to_json_rejects_float_for_decimal(tmp_path):
+    """The Decimal-as-str export must never silently emit a float for a
+    Decimal input even at 2^53+1."""
+    from state.json_export import export_rows_to_json
+
+    rows = [{"extra": {"amount": Decimal("9007199254740993")}}]
+    out = export_rows_to_json(rows, tmp_path / "exp.json")
+    raw = json.loads(out.read_text(encoding="utf-8"))
+    v = raw["items"][0]["extra"]["amount"]
+    assert v == "9007199254740993"
+    assert isinstance(v, str)

@@ -6,13 +6,19 @@ size)``; a changed file is re-read exactly once.  Every projection carries
 an ETag (weak content hash) so clients can use ``If-None-Match``.
 
 Read-only: this module never writes to ``data/**``.
+
+Thread-safety (Step 8 fix): the API is served through
+``ThreadingHTTPServer``. The cache is now guarded with a ``threading.Lock``
+so concurrent ``get`` calls cannot lose hit/miss counter updates or
+overwrite each other's projection entry mid-parses.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Union
 
 __all__ = ["Projection", "ProjectionCache"]
 
@@ -37,6 +43,11 @@ class ProjectionCache:
         self._cache: Dict[str, Projection] = {}
         self.hits: int = 0
         self.misses: int = 0
+        # Locks both the _cache dict and the hits/misses counters. acquire()
+        # is intentionally fine-grained per get() call so concurrent lookups
+        # of different paths still proceed in parallel outside the critical
+        # section (the I/O happens outside the lock).
+        self._lock = threading.Lock()
 
     @staticmethod
     def _etag_for(raw: bytes) -> str:
@@ -54,12 +65,19 @@ class ProjectionCache:
         try:
             stat = p.stat()
         except OSError:
-            self._cache.pop(key, None)
+            with self._lock:
+                self._cache.pop(key, None)
             return None
-        cached = self._cache.get(key)
-        if cached is not None and cached.mtime == stat.st_mtime and cached.size == stat.st_size:
-            self.hits += 1
-            return cached
+        # Cache-hit fast path under lock; I/O (file read) happens outside.
+        with self._lock:
+            cached = self._cache.get(key)
+            if (
+                cached is not None
+                and cached.mtime == stat.st_mtime
+                and cached.size == stat.st_size
+            ):
+                self.hits += 1
+                return cached
         try:
             raw = p.read_bytes()
             data = json.loads(raw.decode("utf-8"))
@@ -72,13 +90,15 @@ class ProjectionCache:
             mtime=stat.st_mtime,
             size=stat.st_size,
         )
-        self._cache[key] = projection
-        self.misses += 1
+        with self._lock:
+            self._cache[key] = projection
+            self.misses += 1
         return projection
 
     def stats(self) -> Dict[str, int]:
-        return {
-            "entries": len(self._cache),
-            "hits": self.hits,
-            "misses": self.misses,
-        }
+        with self._lock:
+            return {
+                "entries": len(self._cache),
+                "hits": self.hits,
+                "misses": self.misses,
+            }

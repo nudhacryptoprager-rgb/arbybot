@@ -171,3 +171,132 @@ async def test_batch_client_without_limiter_keeps_legacy_behavior(monkeypatch):
 def test_batch_client_provider_ids_must_align():
     with pytest.raises(ValueError):
         AsyncRpcBatchClient(["http://a", "http://b"], provider_ids=["only-one"])
+
+
+def test_provider_quota_from_dict_permissive():
+    from chains.provider_quota import ProviderQuota
+
+    pq = ProviderQuota.from_dict({"max_concurrent": 8, "max_requests": 120, "window_s": 1.0})
+    assert pq.max_concurrent == 8
+    assert pq.max_requests == 120
+    assert pq.window_s == 1.0
+    # Coerces bad fields back to defaults
+    pq2 = ProviderQuota.from_dict({"max_concurrent": "nonsense", "unknown": 1})
+    assert pq2.max_concurrent == 4
+    assert pq2.max_requests == 0
+
+
+def test_build_limiter_from_provider_config_reads_yaml(tmp_path):
+    """Step 6 fix: a real per-provider config in
+    config/provider_quotas.yaml should drive the AsyncProviderQuotaLimiter
+    instead of leaving it unreachable from production code."""
+    from chains.provider_quota import (
+        DEFAULT_PROVIDER_ID,
+        build_limiter_from_provider_config,
+    )
+
+    yaml_path = tmp_path / "provider_quotas.yaml"
+    yaml_path.write_text(
+        """
+default:
+  max_concurrent: 4
+  max_requests: 0
+alchemy:
+  max_concurrent: 8
+  max_requests: 120
+  window_s: 1.0
+drpc:
+  max_concurrent: 4
+  max_requests: 60
+  window_s: 1.0
+""",
+        encoding="utf-8",
+    )
+    limiter = build_limiter_from_provider_config(yaml_path, env={})
+    assert limiter.quota_for("alchemy").max_concurrent == 8
+    assert limiter.quota_for("alchemy").max_requests == 120
+    assert limiter.quota_for("drpc").max_requests == 60
+    # Unknown providers fall back to default quota (preserved via DEFAULT).
+    assert limiter.quota_for(DEFAULT_PROVIDER_ID).max_concurrent == 4
+
+
+def test_build_limiter_env_overrides_yaml(tmp_path):
+    from chains.provider_quota import build_limiter_from_provider_config
+
+    yaml_path = tmp_path / "pq.yaml"
+    yaml_path.write_text(
+        "alchemy:\n  max_concurrent: 8\n  max_requests: 120\n", encoding="utf-8"
+    )
+    env = {"ARBY_QUOTA_ALCHEMY": "2:5:1.0"}
+    limiter = build_limiter_from_provider_config(yaml_path, env=env)
+    assert limiter.quota_for("alchemy").max_concurrent == 2
+    assert limiter.quota_for("alchemy").max_requests == 5
+
+
+def test_build_limiter_handles_missing_file_and_invalid_yaml(tmp_path):
+    """Missing/unreadable YAML -> fallback default quota; never crashes."""
+    from chains.provider_quota import build_limiter_from_provider_config
+
+    limiter = build_limiter_from_provider_config(
+        tmp_path / "doesn_exist.yaml", env={}
+    )
+    # Default ProviderQuota = 4 concurrent, no rate window
+    pq = limiter.quota_for("any_unknown_provider_id")
+    assert pq.max_concurrent == 4
+    assert pq.max_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_client_from_config_wires_real_limiter(tmp_path):
+    """AsyncRpcBatchClient.from_config loads quotas from yaml so the
+    production resolver path no longer constructs a limiter only in tests
+    (production-readiness review issue 6)."""
+    from chains.provider_quota import AsyncProviderQuotaLimiter  # noqa: F401
+
+    yaml_path = tmp_path / "pq.yaml"
+    yaml_path.write_text(
+        "alchemy:\n  max_concurrent: 8\n  max_requests: 120\n  window_s: 1.0\n",
+        encoding="utf-8",
+    )
+    client = AsyncRpcBatchClient.from_config(
+        ["http://alchemy.invalid"],
+        quota_yaml=yaml_path,
+        provider_ids=["alchemy"],
+    )
+    assert client._quota_limiter is not None
+    assert client._quota_limiter.quota_for("alchemy").max_concurrent == 8
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_batch_client_reuses_http_client_across_batches(monkeypatch):
+    """Step 6 fix: the same httpx.AsyncClient must serve consecutive
+    batch_call() invocations (no per-attempt client construction)."""
+    creation_count = {"n": 0}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return [{"jsonrpc": "2.0", "id": 0, "result": "0x1"}]
+
+    class _FakeClient:
+        def __init__(self, timeout: float = 0) -> None:
+            creation_count["n"] += 1
+
+        async def post(self, url: str, json=None):
+            return _FakeResponse()
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeClient)
+    client = AsyncRpcBatchClient(["http://x.invalid"])
+    await client.batch_call([{"method": "eth_blockNumber", "params": []}])
+    await client.batch_call([{"method": "eth_blockNumber", "params": []}])
+    await client.batch_call([{"method": "eth_blockNumber", "params": []}])
+    assert creation_count["n"] == 1, "httpx.AsyncClient created once and reused"
+    await client.close()

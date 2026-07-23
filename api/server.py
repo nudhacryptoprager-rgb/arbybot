@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Tuple
+from typing import Any
 
 from api.app import ApiApp
 

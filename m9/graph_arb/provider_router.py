@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from core.provider_router_impl import (  # noqa: F401
     ProviderRouter,
-    _ProviderStats,
     _mask,
+    _ProviderStats,
 )
 
 __all__ = ["ProviderRouter", "_ProviderStats", "_mask"]

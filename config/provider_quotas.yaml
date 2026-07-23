@@ -1,0 +1,35 @@
+# config/provider_quotas.yaml
+# Canonical per-provider quota budgets for chains.provider_quota.
+#
+# Optional: this file is loaded by build_limiter_from_provider_config(). When
+# it is absent or unparseable, the limiter falls back to ProviderQuota defaults
+# (max_concurrent=4, no rate window).
+#
+# Environment overrides (per provider id, lowercased):
+#   ARBY_QUOTA_ALCHEMY=8:120:1.0    -> alchemy: 8 concurrent, 120 req/s
+#   ARBY_QUOTA_DRPC=4:60:1.0        -> drpc:     4 concurrent,  60 req/s
+# These take precedence over the values declared below.
+#
+# Provider ids must match the labels produced by core.rpc_urls.
+# iter_dedicated_http_providers() (e.g. "alchemy", "drpc", "public_base").
+
+# Default quota for any provider with no explicit entry below.
+default:
+  max_concurrent: 4
+  max_requests: 0   # 0 disables the rate window
+  window_s: 1.0
+
+alchemy:
+  max_concurrent: 8
+  max_requests: 120
+  window_s: 1.0
+
+drpc:
+  max_concurrent: 4
+  max_requests: 60
+  window_s: 1.0
+
+public_base:
+  max_concurrent: 2
+  max_requests: 5
+  window_s: 5.0

@@ -19,68 +19,71 @@ This file retains ONLY:
 from __future__ import annotations
 
 import argparse
-from collections import deque
 import json
+import os
+import re
 import subprocess
 import sys
-import os
-import time
 import threading
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-import re
 
 import yaml
+
+from application.checkpoint_store import CheckpointStore  # noqa: F401
+from application.pipeline_stage import PipelineStage, StageResult  # noqa: F401
+from application.stage_runner import run_stage_subprocess, run_with_retries  # noqa: F401
+from strategy.chain_stats import (  # noqa: F401
+    SANE_ROUNDTRIP_PNL_BPS_MAX,
+    SANE_ROUNDTRIP_PNL_BPS_MIN,
+    _compute_blocker_evidence,
+    check_guardrails,
+    classify_run,
+    new_chain_stats,
+    update_chain_stats,
+)
+from strategy.long_scan_summary import (  # noqa: F401
+    _compute_frontier_ranking,
+    _compute_kpi_separation,
+    _compute_median,
+    _compute_per_chain_drift_summary,
+    _compute_profit_truth_summary,
+    _compute_truth_path_alignment,
+    _compute_universe_split,
+    _roundtrip_accounting_is_sane,
+    build_summary,
+    classify_chain_profit_state,
+)
+from strategy.rolling_outputs import (  # noqa: F401
+    FULL_SWEEP_INTERVAL,
+    HOT_LOOP_LATEST,
+    LIVE_STREAM_MAX_EVENTS,
+    _micro_requote_hot_pairs,
+    _serialize_live_stream,
+    print_summary,
+    write_hot_loop_snapshot,
+    write_summary_file,
+)
 
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility (existing tests import from start)
 # ---------------------------------------------------------------------------
 from strategy.run_artifact_extract import (  # noqa: F401
-    extract_run_summary,
+    CI_M5_DIR_RE,
+    delete_if_empty_run_dir,
     extract_gate_result,
+    extract_run_summary,
     extract_scan_stats,
     extract_truth_report,
-    validate_chain_id_match as _validate_chain_id_match,
-    delete_if_empty_run_dir,
     prune_run_dirs,
-    CI_M5_DIR_RE,
 )
-from strategy.chain_stats import (  # noqa: F401
-    classify_run,
-    new_chain_stats,
-    _compute_blocker_evidence,
-    update_chain_stats,
-    check_guardrails,
-    SANE_ROUNDTRIP_PNL_BPS_MAX,
-    SANE_ROUNDTRIP_PNL_BPS_MIN,
+from strategy.run_artifact_extract import (
+    validate_chain_id_match as _validate_chain_id_match,
 )
-from strategy.long_scan_summary import (  # noqa: F401
-    _roundtrip_accounting_is_sane,
-    classify_chain_profit_state,
-    _compute_median,
-    build_summary,
-    _compute_truth_path_alignment,
-    _compute_per_chain_drift_summary,
-    _compute_universe_split,
-    _compute_kpi_separation,
-    _compute_profit_truth_summary,
-    _compute_frontier_ranking,
-)
-from strategy.rolling_outputs import (  # noqa: F401
-    print_summary,
-    write_summary_file,
-    _micro_requote_hot_pairs,
-    write_hot_loop_snapshot,
-    _serialize_live_stream,
-    HOT_LOOP_LATEST,
-    FULL_SWEEP_INTERVAL,
-    LIVE_STREAM_MAX_EVENTS,
-)
-from application.checkpoint_store import CheckpointStore  # noqa: F401
-from application.pipeline_stage import PipelineStage, StageResult  # noqa: F401
-from application.stage_runner import run_stage_subprocess, run_with_retries  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Orchestrator constants
@@ -577,6 +580,7 @@ def _pipeline_step(
     env: dict[str, str] | None = None,
     timeout_seconds: int | None = None,
     internal: str | None = None,
+    description: str | None = None,
 ) -> dict[str, Any]:
     step: dict[str, Any] = {
         "name": name,
@@ -588,6 +592,8 @@ def _pipeline_step(
         step["timeout_seconds"] = int(timeout_seconds)
     if internal:
         step["internal"] = internal
+    if description:
+        step["description"] = description
     return step
 
 
@@ -1457,6 +1463,26 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
 
     def add_m9() -> None:
+        # Runtime truth admission gate (Step 2 fix): mandatory step that
+        # refuses the M8 -> M9 bundle before any bridge/shadow step runs
+        # when the upstream evidence is a stub, stale, or stitched from
+        # mixed runtime windows / mismatched session_ids. Cited artifacts
+        # follow the same defaults as scripts/m8_m9_runtime_truth_gate.py.
+        steps.append(
+            _pipeline_step(
+                "m8_m9_runtime_truth_gate",
+                _py_cmd(
+                    "scripts/m8_m9_runtime_truth_gate.py",
+                    "--output",
+                    "data/tmp/m8_m9_runtime_truth_gate_latest.json",
+                ),
+                allow_exit_codes=(0,),
+                description=(
+                    "Refuses upstream bundle when M8 sniper is stub/stale or "
+                    "when artifacts come from mixed runtime windows."
+                ),
+            )
+        )
         steps.append(_pipeline_step("m9_curve_discovery", _productive_rpc_cmd("scripts/m9_curve_discovery.py")))
         steps.append(
             _pipeline_step(
@@ -2591,7 +2617,7 @@ def _warn_missing_chains(config_meta: dict[str, dict[str, Any]], *, allow_partia
         else:
             print(f"  FATAL: chains.yaml defines {sorted(all_chains)} but config-list covers only {sorted(config_chains)}")
             print(f"  FATAL: missing chains: {missing}")
-            print(f"  Add configs for missing chains or remove them from chains.yaml.")
+            print("  Add configs for missing chains or remove them from chains.yaml.")
             sys.exit(1)
 
 
@@ -2640,7 +2666,6 @@ def _run_scan_loop(args: argparse.Namespace, configs: list[str]) -> int:
             per_chain[chain]["blocker_reason"] = config_meta[cfg].get("blocker_reason")
 
     total_runs = 0
-    empty_deleted = 0
     wall_start = time.monotonic()
 
     # R28.11: WebSocket dirty-set tracker — only re-scan chains with new blocks

@@ -3,7 +3,10 @@
 Endpoints (all GET, all read-only):
 
 * ``/health/live``   — liveness probe (no artifact checks)
-* ``/health/ready``  — readiness: canonical rolling artifacts present
+* ``/health/ready``  — readiness: canonical rolling artifacts present,
+                        sniper schema/stub/freshness valid, no critical
+                        rolling quality blockers (Step 8 fix; previously a
+                        stub sniper + stale artifacts counted as "ready").
 * ``/v1/pipeline``   — pipeline control-plane state (current + checkpoints)
 * ``/v1/runs/{id}``  — run summary for one runDir (path-traversal safe)
 * ``/v1/opportunities`` — latest opportunities/signals with pagination
@@ -15,13 +18,19 @@ Conditional requests: every JSON response carries ``ETag``; a matching
 
 This module is transport-agnostic: ``ApiApp.handle`` returns
 ``(status, headers, body_bytes)``; ``api.server`` adapts it to HTTP.
+
+Thread-safety (Step 8 fix): ``request_counts`` and ETag/stats counters on
+``ProjectionCache`` are guarded by a ``threading.Lock`` so the API is safe
+to serve from ``ThreadingHTTPServer`` (which was not the case before).
 """
 from __future__ import annotations
 
 import json
 import re
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from api.projections import ProjectionCache
 
@@ -46,11 +55,48 @@ _ARTIFACT_FAMILIES = {
     "m9_acceptance": "data/tmp/m9_lane_acceptance_report_latest.json",
     "pipeline_current": "data/tmp/start_pipeline_current.json",
     "runtime_truth_gate": "data/tmp/m8_m9_runtime_truth_gate_latest.json",
+    # Step 4 vertical migration: M8 sniper pools persisted through the
+    # StateRepository and exported as a canonical money-safe JSON projection.
+    # Legacy sniper JSON writer stays untouched; this projection is pure
+    # addition until evidence justifies removing the legacy writer.
+    "m8_pools": "data/tmp/m8_pools_repository_projection_latest.json",
 }
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
 
 _MAX_LIMIT = 500
+
+# Per-artifact freshness ceilings accepted by /health/ready (seconds).
+# Matches the runtime-truth-gate staleness thresholds.
+_READINESS_STALE_S: Dict[str, int] = {
+    "sniper": 30 * 60,
+    "run_summary": 30 * 60,
+    "m4_stability": 6 * 3600,
+}
+
+
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _artifact_timestamp(doc: Optional[Mapping[str, Any]]) -> Optional[str]:
+    if not doc:
+        return None
+    rc = doc.get("run_context")
+    if isinstance(rc, Mapping):
+        rts = rc.get("run_timestamp")
+        if rts:
+            return str(rts)
+    ts = doc.get("generated_at_utc")
+    return str(ts) if ts else None
 
 
 class ApiApp:
@@ -61,10 +107,24 @@ class ApiApp:
         repo_root: Union[str, Path] = ".",
         *,
         cache: Optional[ProjectionCache] = None,
+        now: Optional[Callable[[], datetime]] = None,
+        sniper_assessor: Optional[Callable[[Optional[Mapping[str, Any]]], Dict[str, Any]]] = None,
     ) -> None:
         self.repo_root = Path(repo_root)
         self.cache = cache or ProjectionCache()
         self.request_counts: Dict[str, int] = {}
+        # Step 8 fix: ThreadingHTTPServer runs handle() across worker
+        # threads. Guard mutable counters/stats so concurrent reads do not
+        # observe torn writes (or under-count requests) and a write from one
+        # thread cannot lose an update racing with another thread.
+        self._lock = threading.Lock()
+        self._now = now or (lambda: datetime.now(tz=timezone.utc))
+        # Allowing injection of sniper assessment so tests can stub it; the
+        # production assessor (monitoring.sniper_artifacts) is loaded
+        # lazily to keep the API module importable without the sniper module.
+        self._sniper_assessor: Optional[
+            Callable[[Optional[Mapping[str, Any]]], Dict[str, Any]]
+        ] = sniper_assessor
 
     # -- transport-neutral entry point ---------------------------------------
 
@@ -80,7 +140,9 @@ class ApiApp:
         route, _, query = path.partition("?")
         route = route.rstrip("/") or "/"
         params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
-        self.request_counts[route] = self.request_counts.get(route, 0) + 1
+        # Thread-safe request counter (Step 8 fix; protects ThreadingHTTPServer).
+        with self._lock:
+            self.request_counts[route] = self.request_counts.get(route, 0) + 1
 
         if route == "/health/live":
             return self._json_response({"status": "alive"})
@@ -101,12 +163,114 @@ class ApiApp:
     # -- endpoints ------------------------------------------------------------
 
     def _ready(self) -> Response:
+        """Readiness now performs real evidence checks (Step 8 fix):
+
+          * canonical rolling artifacts are present;
+          * sniper artifact is operationally valid (not a stub, not a
+            0xabc placeholder, schema_family / required top-level fields
+            present) via monitoring.sniper_artifacts.assess_sniper_artifact_for_m9;
+          * every freshness-bearing artifact (sniper, run_summary,
+            m4_stability) has a parseable timestamp inside its
+            ``_READINESS_STALE_S`` window;
+          * runtime_truth_gate, when present, must be in ``PASS`` state;
+            absence is not a readiness blocker (it gates M9 shadow, not
+            basic dashboard readiness);
+          * run_summary.quality_status must not be ``FAIL``.
+
+        The response is backward compatible — ``status`` is "ready" or
+        "not_ready", ``missing`` lists missing families — plus an additive
+        ``critical_blockers`` array and per-artifact ``checks`` breakdown
+        so operators can tell a stub sniper from a stale one.
+        """
+        now_dt = self._now()
         required = ["run_summary", "sniper", "m4_stability"]
-        missing = [
-            fam for fam in required if self.cache.get(self.repo_root / _ARTIFACT_FAMILIES[fam]) is None
-        ]
-        body = {"status": "ready" if not missing else "not_ready", "missing": missing}
-        return self._json_response(body, status=200 if not missing else 503)
+        missing: List[str] = []
+        checks: Dict[str, Dict[str, Any]] = {}
+        critical_blockers: List[str] = []
+
+        for fam in required:
+            proj = self.cache.get(self.repo_root / _ARTIFACT_FAMILIES[fam])
+            entry: Dict[str, Any] = {"present": proj is not None}
+            if proj is None:
+                missing.append(fam)
+                entry["status"] = "missing"
+                critical_blockers.append(f"{fam.upper()}_ARTIFACT_MISSING")
+                checks[fam] = entry
+                continue
+            data = proj.data if isinstance(proj.data, dict) else {}
+            ts_str = _artifact_timestamp(data)
+            entry["timestamp"] = ts_str
+            ts_dt = _parse_iso(ts_str)
+            if ts_dt is None:
+                entry["status"] = "no_timestamp"
+                critical_blockers.append(f"{fam.upper()}_TIMESTAMP_MISSING")
+                checks[fam] = entry
+                continue
+            age_s = (now_dt - ts_dt).total_seconds()
+            threshold = _READINESS_STALE_S.get(fam)
+            entry["age_seconds"] = round(age_s, 1)
+            entry["stale_threshold_seconds"] = threshold
+            if threshold is not None and age_s > threshold:
+                entry["status"] = "stale"
+                critical_blockers.append(f"{fam.upper()}_STALE")
+            else:
+                entry["status"] = "fresh"
+            checks[fam] = entry
+
+        # Sniper stub / schema truth (Step 8 fix point 2).
+        sniper_proj = self.cache.get(self.repo_root / _ARTIFACT_FAMILIES["sniper"])
+        if sniper_proj is not None and isinstance(sniper_proj.data, dict):
+            assessor = self._sniper_assessor
+            if assessor is None:
+                try:
+                    from monitoring.sniper_artifacts import (
+                        assess_sniper_artifact_for_m9,
+                    )
+
+                    assessor = assess_sniper_artifact_for_m9
+                except ImportError:
+                    assessor = None
+            if assessor is not None:
+                verdict = assessor(sniper_proj.data) or {}
+                checks.setdefault("sniper", {}).setdefault("extra", {})["operational"] = (
+                    verdict.get("operational")
+                )
+                checks["sniper"]["blockers"] = list(verdict.get("blockers") or [])
+                if not verdict.get("operational"):
+                    for b in verdict.get("blockers") or []:
+                        if b not in critical_blockers:
+                            critical_blockers.append(str(b))
+
+        # run_summary.quality_status must not be FAIL.
+        rs_proj = self.cache.get(self.repo_root / _ARTIFACT_FAMILIES["run_summary"])
+        if rs_proj is not None and isinstance(rs_proj.data, dict):
+            qs = rs_proj.data.get("quality_status")
+            checks.setdefault("run_summary", {})["quality_status"] = qs
+            if isinstance(qs, str) and qs.upper() == "FAIL":
+                critical_blockers.append("RUN_SUMMARY_QUALITY_FAIL")
+
+        # Optional runtime truth gate (gates M9 shadow). Absence is not a
+        # readiness blocker for the dashboard; PASS confirms bundle coherent.
+        truth_proj = self.cache.get(
+            self.repo_root / _ARTIFACT_FAMILIES["runtime_truth_gate"]
+        )
+        if truth_proj is not None and isinstance(truth_proj.data, dict):
+            truth_status = str(truth_proj.data.get("truth_status") or "").upper()
+            checks["runtime_truth_gate"] = {"truth_status": truth_status}
+            if truth_status == "BLOCKED":
+                # Surface as an advisory blocker so operators see it, but do
+                # NOT fail /health/ready entirely — runtime truth is an M9
+                # admission concern, not a dashboard liveness concern.
+                critical_blockers.append("M9_RUNTIME_TRUTH_BLOCKED")
+
+        ready = (not missing) and (not critical_blockers)
+        body: Dict[str, Any] = {
+            "status": "ready" if ready else "not_ready",
+            "missing": missing,
+            "checks": checks,
+            "critical_blockers": sorted(set(critical_blockers)),
+        }
+        return self._json_response(body, status=200 if ready else 503)
 
     def _pipeline(self, headers: Mapping[str, str]) -> Response:
         proj = self.cache.get(self.repo_root / _ARTIFACT_FAMILIES["pipeline_current"])

@@ -1,0 +1,16 @@
+{
+  "schema_version": "m9_shadow_promotion_golden.1",
+  "run_context": {
+    "run_timestamp": "2026-07-19T10:10:00Z",
+    "session_id": "session-shadow-soak-1"
+  },
+  "runner_outcome": "COMPLETED",
+  "duration_fulfilled": true,
+  "cycles_found": 604,
+  "cycles_quoteable": 225,
+  "cycles_positive_gross": 0,
+  "economic_size_floor_usd": 180.0,
+  "economics_blocker_class": "MARKET_NO_POSITIVE_GROSS",
+  "depth_known_rate": 0.42,
+  "elapsed_s": 604
+}

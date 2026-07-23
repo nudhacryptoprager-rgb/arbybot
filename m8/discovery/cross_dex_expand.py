@@ -6,7 +6,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from m8.discovery.token_subset import load_token_subset_file
 
@@ -1219,7 +1219,6 @@ def expand_token_neighborhood(
         load_candidate_dex_registry,
     )
     from m8.discovery.mirror_index import MirrorIndex
-
     from m8.discovery.token_normalize import TOKEN_ADDRESS_UNRESOLVED, is_valid_eth_address
 
     exotic_address = exotic_address.lower()
@@ -1814,7 +1813,6 @@ def _build_route(
         pair.get("exotic_address") or pair.get("focus_token_address") or ""
     ).lower()
     exotic_sym = pair.get("exotic_symbol") or pair.get("focus_token_symbol") or ""
-    anchor_sym = pair.get("anchor_symbol") or ""
     from m8.discovery.mirror_quote_smoke import _BASE_ANCHOR_ADDRS, _normalize_eth_alias
 
     if not t0a:
@@ -1847,8 +1845,6 @@ def _build_route(
         "pool_address": pool_addr,
         "factory_verified": bool(pool_entry.get("factory_verified")),
         "source": "m8_cross_dex_expansion",
-        "focus_token_address": pair.get("focus_token_address") or pair.get("exotic_address"),
-        "focus_token_symbol": pair.get("focus_token_symbol") or pair.get("exotic_symbol"),
         "fee": pool_entry.get("fee"),
         "tick_spacing": pool_entry.get("tick_spacing"),
         "hooks": pool_entry.get("hooks"),
@@ -1947,12 +1943,12 @@ def _expand_batch_token_neighborhood(
     same_pair_mirror_token_count = 0
     mirror_ready_debug: List[Dict[str, Any]] = []
     seen_route_keys: Set[Tuple[str, str, str, str]] = set()
-    from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
     from m8.discovery.candidate_dex_registry import (
         build_registry_summary,
         candidate_dex_rows_for_scan,
         load_candidate_dex_registry,
     )
+    from m8.discovery.pool_hints import artifact_hint_summary, hints_for_token
     from m8.discovery.scan_batch import (
         ExpandProgress,
         FactoryBatchResolver,

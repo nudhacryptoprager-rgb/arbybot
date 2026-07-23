@@ -528,11 +528,11 @@ def narrow_routes_by_econ_capacity_closure(
     max_cycles: int = 8000,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Keep routes participating in at least one cycle with usable capacity >= floor."""
+    from m9.graph_arb.builder import build_graph_from_inventory
     from m9.graph_arb.topology_diagnostic import (
         _write_temp_inventory,
         collect_cycle_route_ids_from_routes,
     )
-    from m9.graph_arb.builder import build_graph_from_inventory
 
     cm = load_cost_model(config_path)
     if floor_usd is not None:

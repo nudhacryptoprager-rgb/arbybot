@@ -137,3 +137,94 @@ def test_window_budget_is_configurable():
     verdict = evaluate_runtime_truth_gate(now=NOW, window_seconds=3 * 3600, **bundle)
     assert "MIXED_RUNTIME_WINDOW" not in verdict["blockers"]
     assert verdict["truth_status"] == "PASS"
+
+
+def test_run_timestamp_is_canonical_over_generated_at_utc():
+    """run_context.run_timestamp must be used when present; generated_at_utc
+    is a legacy fallback only."""
+    bundle = _coherent_bundle()
+    bundle["bridge"] = {
+        "run_context": {"run_timestamp": _iso(NOW - timedelta(minutes=5))},
+        "generated_at_utc": _iso(NOW - timedelta(hours=5)),  # would be stale
+    }
+    verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
+    assert "BRIDGE_STALE" not in verdict["blockers"]
+    assert (
+        verdict["per_artifact"]["bridge"]["timestamp_source"]
+        == "run_context.run_timestamp"
+    )
+    assert verdict["truth_status"] == "PASS"
+
+
+def test_shared_session_id_widens_window_for_serial_pipeline():
+    """A serial M8->M8.1->M8.2->M8.3->bridge pipeline legitimately runs
+    longer than the ad-hoc 48 min proximity threshold. When all
+    session-bearing artifacts share a session_id, the window is widened to
+    session_window_seconds (default 90 min) so a 44-min serial bundle still
+    counts as one runtime window."""
+    bundle = _coherent_bundle()
+    # Sniper is fresh; bridge is 44 min older — would exceed the default
+    # 48-min ad-hoc window only just barely, but the 30-min default from
+    # the old gate would have failed it. Here we use 70 min to prove the
+    # session-widened budget (90 min) admits it while the ad-hoc budget
+    # (48 min) would not.
+    fresh_ts = _iso(NOW - timedelta(minutes=2))
+    older_ts = _iso(NOW - timedelta(minutes=72))
+    shared_sid = "session-2026-07-19-serial-1"
+    for key in ("sniper", "anchor", "hints", "expansion", "m8_3_registry", "bridge"):
+        doc = dict(bundle[key])
+        doc["run_context"] = {"session_id": shared_sid, "run_timestamp": older_ts if key == "bridge" else fresh_ts}
+        bundle[key] = doc
+    # Without session widening (window_seconds=48*60) this would BLOCK.
+    verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
+    assert verdict["session_id"] == shared_sid
+    assert "MIXED_RUNTIME_WINDOW" not in verdict["blockers"]
+    assert verdict["truth_status"] == "PASS"
+    # And the effective window is the session window:
+    assert verdict["window_seconds"] == 90 * 60
+
+
+def test_session_id_mismatch_is_hard_blocker():
+    """Artifacts declaring different session_id values cannot be stitched
+    even when temporally close."""
+    bundle = _coherent_bundle()
+    bundle["bridge"] = {
+        **bundle["bridge"],
+        "run_context": {
+            "session_id": "session-A",
+            "run_timestamp": _iso(NOW - timedelta(minutes=5)),
+        },
+    }
+    bundle["expansion"] = {
+        **bundle["expansion"],
+        "run_context": {
+            "session_id": "session-B",
+            "run_timestamp": _iso(NOW - timedelta(minutes=5)),
+        },
+    }
+    verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
+    assert "SESSION_ID_MISMATCH" in verdict["blockers"]
+    assert verdict["truth_status"] == "BLOCKED"
+    assert verdict["blocker_class"] == BLOCKER_CLASS_CODE_ARTIFACT_CONTRACT
+
+
+def test_serial_bundle_with_2645s_delta_passes_with_session_id():
+    """Regression for the review finding: a real serial bundle with delta
+    2645s was rejected by the old fixed 1800s window. With session_id
+    binding and the 90-min session window, this exact delta must PASS."""
+    bundle = _coherent_bundle()
+    shared_sid = "session-2026-07-19-serial-2645s"
+    sniper_ts = _iso(NOW - timedelta(minutes=5))
+    bridge_ts = _iso(NOW - timedelta(seconds=2645 + 5 * 60))  # 44 min older
+    for key in ("sniper", "anchor", "hints", "expansion", "m8_3_registry"):
+        doc = dict(bundle[key])
+        doc["run_context"] = {"session_id": shared_sid, "run_timestamp": sniper_ts}
+        bundle[key] = doc
+    bundle["bridge"] = {
+        **bundle["bridge"],
+        "run_context": {"session_id": shared_sid, "run_timestamp": bridge_ts},
+    }
+    verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
+    assert "MIXED_RUNTIME_WINDOW" not in verdict["blockers"]
+    assert verdict["truth_status"] == "PASS"
+    assert verdict["window_max_delta_seconds"] >= 2645
