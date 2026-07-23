@@ -631,6 +631,13 @@ def load_registry(path: str = DEFAULT_REGISTRY_PATH) -> Optional[Dict[str, Any]]
 
 
 def save_registry(doc: Dict[str, Any], path: str = DEFAULT_REGISTRY_PATH) -> Path:
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    ts = doc.get("generated_at_utc")
+    if not ts:
+        rc = doc.get("run_context") or {}
+        ts = rc.get("run_timestamp") if isinstance(rc, dict) else None
+    doc = apply_pipeline_provenance(doc, run_timestamp=ts)
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(doc, indent=2), encoding="utf-8")

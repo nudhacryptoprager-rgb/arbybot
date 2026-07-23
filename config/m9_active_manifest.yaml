@@ -35,6 +35,8 @@ active_configs:
     role: M8_2_CANDIDATE_DEX_REGISTRY
   - path: config/m9_token_baselines.yaml
     role: M9_TOKEN_BASELINES
+  - path: config/provider_quotas.yaml
+    role: PROVIDER_QUOTA_REGISTRY
 
 adapter_metadata_policy:
   production_include_config_seed: false

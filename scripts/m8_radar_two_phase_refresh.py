@@ -74,6 +74,18 @@ def main() -> int:
         help="DexScreener enrichment after on-chain scan; empty DS pairs are non-blocking",
     )
     p.add_argument(
+        "--token-concurrency",
+        type=int,
+        default=4,
+        help="Concurrent token workers for hint refresh phases (default 4)",
+    )
+    p.add_argument(
+        "--verify-async-workers",
+        type=int,
+        default=6,
+        help="Async verify workers for on-chain subset phase",
+    )
+    p.add_argument(
         "--merge-existing-hints",
         action="store_true",
         help="Merge DexScreener phase into existing on-chain hints artifact",
@@ -132,6 +144,8 @@ def main() -> int:
         "20",
         "--no-resume",
         "--no-retry-single-venue",
+        "--token-concurrency",
+        str(max(1, int(args.token_concurrency))),
     ]
     if token_subset_file:
         phase1_cmd.extend(["--token-subset-file", token_subset_file])
@@ -185,7 +199,7 @@ def main() -> int:
             "--use-multicall",
             "--ws-head",
             "--verify-async-workers",
-            "6",
+            str(max(1, int(args.verify_async_workers))),
             "--skip-route-liveness",
             "--skip-defillama-weights",
             "--no-resume",
@@ -238,6 +252,11 @@ def main() -> int:
                     "--sleep-ms",
                     "80",
                     "--fetch-async",
+                    "--use-multicall",
+                    "--verify-async-workers",
+                    str(max(1, int(args.verify_async_workers))),
+                    "--token-concurrency",
+                    str(max(1, int(args.token_concurrency))),
                     "--skip-route-liveness",
                     "--no-resume",
                 ],

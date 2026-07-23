@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,6 +44,16 @@ from core.logging import get_logger, setup_logging
 from m8_1.stable_anchor.config_loader import load_config
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
+from core.pipeline_provenance import ENV_PIPELINE_SESSION_ID
+from core.quote_lane_limiter import QuoteLaneLimiter
+from m8_1.stable_anchor.quote_negative_cache import (
+    PersistentQuoteNegativeCache,
+    QuoteNegativeCache,
+    block_bucket,
+    quote_cache_key,
+)
+
+_PROBE_METRICS_PATH = Path("data/tmp/m8_1_probe_metrics_latest.json")
 from m8_1.stable_anchor.quote_probe import QuoteResult, probe_quote, size_usd_to_amount_in
 
 _log = get_logger(__name__)
@@ -164,90 +175,257 @@ def _enumerate_routes(cfg: Any) -> List[DexRoute]:
     return routes
 
 
+def _resolve_probe_amount(
+    route: DexRoute,
+    t0: TokenInfo,
+    t1: TokenInfo,
+    size_usd: float,
+) -> Optional[Tuple[TokenInfo, TokenInfo, int]]:
+    if route.adapter_type == "curve_stable":
+        _c0 = route.curve_coin0_sym
+        _c1 = getattr(route, "curve_coin1_sym", None)
+        _expected_in_sym = _c0 if route.token_in_index == 0 else _c1
+        _expected_out_sym = _c1 if route.token_out_index == 1 else _c0
+        if t0.symbol == _expected_in_sym and t1.symbol == _expected_out_sym:
+            token_in = t0
+            token_out = t1
+        elif t1.symbol == _expected_in_sym and t0.symbol == _expected_out_sym:
+            token_in = t1
+            token_out = t0
+        else:
+            return None
+        return token_in, token_out, size_usd_to_amount_in(token_in, size_usd)
+    return t0, t1, size_usd_to_amount_in(t0, size_usd)
+
+
+def _probe_one(
+    w3: Any,
+    route: DexRoute,
+    t0: TokenInfo,
+    t1: TokenInfo,
+    size_usd: float,
+    *,
+    neg_cache: QuoteNegativeCache,
+    bucket_id: str,
+    lane_limiter: Optional[QuoteLaneLimiter] = None,
+    rpc_url: str = "",
+) -> Tuple[bool, Optional[str], bool]:
+    resolved = _resolve_probe_amount(route, t0, t1, size_usd)
+    if resolved is None:
+        return False, "PAIR_INCOMPATIBLE", False
+    token_in, token_out, amount_in = resolved
+    route_id = f"{route.dex_id}:f{route.fee}"
+    quoter = str(route.quoter or route.pool_id or route.vault_address or route_id)
+    cache_key = quote_cache_key(
+        route_id=route_id,
+        quoter=quoter,
+        token_in=token_in.address,
+        token_out=token_out.address,
+        size_usd=size_usd,
+        direction="exact_in",
+        fee=route.fee,
+        tick_spacing=route.tick_spacing,
+        block_bucket_id=bucket_id,
+    )
+    cached = neg_cache.get(cache_key)
+    if cached:
+        return False, cached, False
+
+    def _do_probe() -> QuoteResult:
+        return probe_quote(w3, route, t0, t1, amount_in)
+
+    try:
+        if lane_limiter is not None and rpc_url:
+            result = lane_limiter.call(rpc_url, _do_probe)
+        else:
+            result = _do_probe()
+        if result.ok:
+            return True, None, False
+        reason = result.reject_reason or "UNKNOWN"
+        if reason != "QUOTE_RPC_ERROR":
+            neg_cache.put(cache_key, reason)
+        return False, reason, reason == "QUOTE_RPC_ERROR"
+    except Exception:
+        return False, "QUOTE_RPC_ERROR", True
+
+
 def _probe_all(
     w3: Any,
     pairs: List[Tuple[TokenInfo, TokenInfo]],
     routes: List[DexRoute],
     sizes_usd: List[float],
     deadline_ts: float,
+    *,
+    async_max_workers: int = 1,
+    neg_cache: Optional[QuoteNegativeCache] = None,
+    lane_limiter: Optional[QuoteLaneLimiter] = None,
+    rpc_url: str = "",
 ) -> Tuple[List[dict], Dict[str, Any]]:
-    """Probe all pair×route×size combinations up to ``deadline_ts``.
+    """Probe pair×route×size with minimal-size-first and bounded async workers."""
+    neg_cache = neg_cache or PersistentQuoteNegativeCache()
+    probe_t0 = time.time()
+    try:
+        head_block = int(w3.eth.block_number)
+    except Exception:
+        head_block = None
+    bucket_id = block_bucket(head_block)
 
-    Returns (near_miss_routes, metrics).
-    """
     candidates_total = 0
     passes_total = 0
     rpc_errors = 0
     quote_fails = 0
     reject_histogram: Dict[str, int] = {}
     near_miss: List[dict] = []
+    workers = max(1, int(async_max_workers or 1))
+    min_size = sizes_usd[0] if sizes_usd else 50.0
+    extra_sizes = list(sizes_usd[1:]) if len(sizes_usd) > 1 else []
 
-    for t0, t1 in pairs:
-        for route in routes:
-            for size_usd in sizes_usd:
+    def _record_near_miss(
+        t0: TokenInfo,
+        t1: TokenInfo,
+        route: DexRoute,
+        size_usd: float,
+        reason: str,
+    ) -> None:
+        if len(near_miss) >= 50:
+            return
+        near_miss.append({
+            "pair_id": f"{t0.symbol}_{t1.symbol}",
+            "route_a_id": f"{route.dex_id}:f{route.fee}",
+            "route_b_id": "N/A",
+            "size_usd": size_usd,
+            "verdict": "REJECT",
+            "reject_reason": reason,
+            "net_usd": None,
+            "net_bps": None,
+            "gross_bps": None,
+        })
+
+    def _run_batch(tasks: List[Tuple[TokenInfo, TokenInfo, DexRoute, float]]) -> Dict[
+        Tuple[str, str, str], bool
+    ]:
+        nonlocal candidates_total, passes_total, rpc_errors, quote_fails
+        passed: Dict[Tuple[str, str, str], bool] = {}
+        if not tasks:
+            return passed
+        if workers <= 1:
+            for t0, t1, route, size_usd in tasks:
                 if time.time() > deadline_ts:
-                    _log.info("deadline reached, stopping probe")
                     break
                 candidates_total += 1
-                # For Curve routes: match pair tokens to pool coin symbols and
-                # pick the correct token for amount_in (index-based, not alphabetical).
-                if route.adapter_type == "curve_stable":
-                    _c0 = route.curve_coin0_sym  # symbol at coin index 0
-                    _c1 = getattr(route, "curve_coin1_sym", None)  # symbol at coin index 1
-                    _expected_in_sym = _c0 if route.token_in_index == 0 else _c1
-                    _expected_out_sym = _c1 if route.token_out_index == 1 else _c0
-                    if t0.symbol == _expected_in_sym and t1.symbol == _expected_out_sym:
-                        _token_in_for_amount = t0
-                    elif t1.symbol == _expected_in_sym and t0.symbol == _expected_out_sym:
-                        _token_in_for_amount = t1
-                    else:
-                        # Pair incompatible with this Curve pool direction → skip
-                        candidates_total -= 1
-                        continue
-                    amount_in = size_usd_to_amount_in(_token_in_for_amount, size_usd)
+                ok, reason, rpc_err = _probe_one(
+                    w3,
+                    route,
+                    t0,
+                    t1,
+                    size_usd,
+                    neg_cache=neg_cache,
+                    bucket_id=bucket_id,
+                    lane_limiter=lane_limiter,
+                    rpc_url=rpc_url,
+                )
+                key = (t0.symbol, t1.symbol, route.dex_id)
+                if ok:
+                    passes_total += 1
+                    passed[key] = True
                 else:
-                    amount_in = size_usd_to_amount_in(t0, size_usd)
-                try:
-                    result: QuoteResult = probe_quote(w3, route, t0, t1, amount_in)
-                    if result.ok:
+                    quote_fails += 1
+                    if rpc_err:
+                        rpc_errors += 1
+                    reason = reason or "UNKNOWN"
+                    reject_histogram[reason] = reject_histogram.get(reason, 0) + 1
+                    _record_near_miss(t0, t1, route, size_usd, reason)
+            return passed
+        pending = list(tasks)
+        cursor = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            active: Dict[Any, Tuple[TokenInfo, TokenInfo, DexRoute, float]] = {}
+            while (cursor < len(pending) or active) and time.time() <= deadline_ts:
+                while len(active) < workers and cursor < len(pending):
+                    if time.time() > deadline_ts:
+                        break
+                    t0, t1, route, size_usd = pending[cursor]
+                    cursor += 1
+                    fut = pool.submit(
+                        _probe_one,
+                        w3,
+                        route,
+                        t0,
+                        t1,
+                        size_usd,
+                        neg_cache=neg_cache,
+                        bucket_id=bucket_id,
+                        lane_limiter=lane_limiter,
+                        rpc_url=rpc_url,
+                    )
+                    active[fut] = (t0, t1, route, size_usd)
+                if not active:
+                    break
+                remaining = max(0.05, deadline_ts - time.time())
+                done, _ = wait(active.keys(), timeout=remaining, return_when=FIRST_COMPLETED)
+                if not done and time.time() > deadline_ts:
+                    for fut in list(active):
+                        fut.cancel()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    break
+                for fut in done:
+                    t0, t1, route, size_usd = active.pop(fut)
+                    candidates_total += 1
+                    ok, reason, rpc_err = fut.result()
+                    key = (t0.symbol, t1.symbol, route.dex_id)
+                    if ok:
                         passes_total += 1
+                        passed[key] = True
                     else:
-                        reason = result.reject_reason or "UNKNOWN"
-                        reject_histogram[reason] = reject_histogram.get(reason, 0) + 1
-                        if result.reject_reason == "QUOTE_RPC_ERROR":
+                        quote_fails += 1
+                        if rpc_err:
                             rpc_errors += 1
-                        # Record near-miss (any reject at this size)
-                        if len(near_miss) < 50:
-                            near_miss.append({
-                                "pair_id": f"{t0.symbol}_{t1.symbol}",
-                                "route_a_id": f"{route.dex_id}:f{route.fee}",
-                                "route_b_id": "N/A",
-                                "size_usd": size_usd,
-                                "verdict": "REJECT",
-                                "reject_reason": reason,
-                                "net_usd": None,
-                                "net_bps": None,
-                                "gross_bps": None,
-                            })
-                except Exception as exc:
-                    rpc_errors += 1
-                    reject_histogram["QUOTE_RPC_ERROR"] = reject_histogram.get("QUOTE_RPC_ERROR", 0) + 1
-                    _log.debug("probe_quote error pair=%s_%s route=%s size=%s: %s",
-                               t0.symbol, t1.symbol, route.dex_id, size_usd, exc)
+                        reason = reason or "UNKNOWN"
+                        reject_histogram[reason] = reject_histogram.get(reason, 0) + 1
+                        _record_near_miss(t0, t1, route, size_usd, reason)
+            if time.time() > deadline_ts and active:
+                for fut in list(active):
+                    fut.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+        return passed
 
-    total_attempts = candidates_total
-    qsr = 1.0 - (rpc_errors / total_attempts) if total_attempts > 0 else 1.0
-    rpc_error_rate = rpc_errors / total_attempts if total_attempts > 0 else 0.0
+    base_tasks = [(t0, t1, route, min_size) for t0, t1 in pairs for route in routes]
+    passed_keys = _run_batch(base_tasks)
+    if extra_sizes and time.time() <= deadline_ts:
+        extra_tasks: List[Tuple[TokenInfo, TokenInfo, DexRoute, float]] = []
+        for t0, t1 in pairs:
+            for route in routes:
+                key = (t0.symbol, t1.symbol, route.dex_id)
+                if not passed_keys.get(key):
+                    continue
+                for size_usd in extra_sizes:
+                    extra_tasks.append((t0, t1, route, size_usd))
+        _run_batch(extra_tasks)
 
+    total_attempts = max(candidates_total, 1)
+    rpc_success_rate = 1.0 - (rpc_errors / total_attempts)
+    productive_quote_rate = passes_total / total_attempts
+    rpc_error_rate = rpc_errors / total_attempts
     metrics: Dict[str, Any] = {
         "stable_anchor_candidates_total": candidates_total,
         "stable_anchor_passes_total": passes_total,
         "stable_anchor_fills_total": 0,
         "best_net_usd": None,
         "rpc_error_rate": round(rpc_error_rate, 4),
-        "quote_success_rate": round(qsr, 4),
+        "rpc_success_rate": round(rpc_success_rate, 4),
+        "productive_quote_rate": round(productive_quote_rate, 4),
+        "quote_success_rate": round(productive_quote_rate, 4),
+        "quote_fails_total": quote_fails,
         "reject_histogram": reject_histogram,
+        "quote_negative_cache": neg_cache.stats(),
+        "async_max_workers": workers,
     }
+    if lane_limiter is not None:
+        metrics["quote_lane_limiter"] = lane_limiter.stats()
+        metrics["provider_errors"] = lane_limiter.provider_errors
+        metrics["rpc_wait_s"] = lane_limiter.rpc_wait_s
+    probe_elapsed_s = max(0.001, time.time() - probe_t0)
+    metrics["routes_per_s"] = round(candidates_total / probe_elapsed_s, 3)
     return near_miss, metrics
 
 
@@ -297,6 +475,9 @@ def _write_artifact(
         "active_routes_count": 0,
         "route_discovery_scope": "quote_probe_only",
     }
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    artifact = apply_pipeline_provenance(artifact, run_timestamp=run_ts)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as fh:
         json.dump(artifact, fh, indent=2)
@@ -364,6 +545,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="When probe-mode=fresh_delta, limit to token addresses in subset JSON",
     )
+    parser.add_argument(
+        "--streaming-manifest",
+        default=None,
+        help="Streaming batch manifest for session/fingerprint validation",
+    )
     args = parser.parse_args(argv)
 
     setup_logging(json_format=args.log_json)
@@ -393,6 +579,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Build pairs and routes
     pairs = _enumerate_pairs(cfg)
     routes = _enumerate_routes(cfg)
+    if args.probe_mode == "fresh_delta":
+        from core.pipeline_streaming import streaming_enabled
+        from m8.discovery.streaming_handoff import validate_streaming_handoff
+
+        if streaming_enabled() or args.streaming_manifest:
+            if not args.token_subset_file:
+                print(
+                    "ERROR: fresh_delta streaming requires --token-subset-file",
+                    flush=True,
+                )
+                return 2
+            if args.streaming_manifest:
+                try:
+                    validate_streaming_handoff(
+                        args.streaming_manifest,
+                        expected_session_id=os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
+                        or None,
+                    )
+                except (OSError, ValueError) as exc:
+                    print(f"ERROR: streaming handoff validation failed: {exc}", flush=True)
+                    return 2
     if args.probe_mode == "fresh_delta" and args.token_subset_file:
         from m8.discovery.token_subset import load_token_subset_file
         from m8_1.stable_anchor.fresh_delta_pairs import enumerate_fresh_delta_pairs
@@ -428,7 +635,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"PASS: wrote stub artifact (no pairs in config) -> {output_path}", flush=True)
         return 0
 
-    _log.info("pairs=%d routes=%d sizes=%s", len(pairs), len(routes), _DEFAULT_SIZES_USD)
+    sizes_usd = list(cfg.sizes_usd or _DEFAULT_SIZES_USD)
+    async_workers = int(getattr(cfg.quote_gate, "async_max_workers", 4) or 4)
+    _log.info(
+        "pairs=%d routes=%d sizes=%s async_workers=%d",
+        len(pairs),
+        len(routes),
+        sizes_usd,
+        async_workers,
+    )
 
     # Load web3
     try:
@@ -440,25 +655,57 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_start = time.time()
     run_ts = _iso_now()
     deadline_ts = run_start + args.duration_minutes * 60
+    lane_limiter = QuoteLaneLimiter(max_concurrent=max(1, async_workers))
 
     # Probe quotes
-    near_miss, metrics = _probe_all(w3, pairs, routes, _DEFAULT_SIZES_USD, deadline_ts)
+    near_miss, metrics = _probe_all(
+        w3,
+        pairs,
+        routes,
+        sizes_usd,
+        deadline_ts,
+        async_max_workers=async_workers,
+        lane_limiter=lane_limiter,
+        rpc_url=rpc_url,
+    )
 
     elapsed_s = time.time() - run_start
     freshness_s = elapsed_s
 
-    # Gate acceptance: rpc_error_rate < 0.1
-    gate_acceptance = metrics.get("rpc_error_rate", 1.0) < 0.1
+    target_pqr = float(getattr(cfg.quote_gate, "target_quote_success_rate", 0.0) or 0.0)
+    productive_rate = float(metrics.get("productive_quote_rate", 0.0) or 0.0)
+    gate_acceptance = (
+        metrics.get("rpc_error_rate", 1.0) < 0.1
+        and (target_pqr <= 0.0 or productive_rate >= target_pqr)
+    )
 
     _write_artifact(output_path, near_miss, metrics, run_ts,
                     freshness_s, gate_acceptance, rpc_url, args.duration_minutes)
+    _PROBE_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _PROBE_METRICS_PATH.write_text(
+        json.dumps(
+            {
+                "schema_version": "m8_1_probe_metrics.1",
+                "rpc_wait_s": metrics.get("rpc_wait_s", 0.0),
+                "provider_errors": metrics.get("provider_errors", 0),
+                "cache_hits": (metrics.get("quote_negative_cache") or {}).get("hits", 0),
+                "cache_misses": (metrics.get("quote_negative_cache") or {}).get("misses", 0),
+                "routes_per_s": metrics.get("routes_per_s"),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     passes = metrics.get("stable_anchor_passes_total", 0)
     candidates = metrics.get("stable_anchor_candidates_total", 0)
-    qsr = metrics.get("quote_success_rate", 0.0)
+    qsr = metrics.get("productive_quote_rate", metrics.get("quote_success_rate", 0.0))
+    rpc_sr = metrics.get("rpc_success_rate", 0.0)
     _summary = (
         f"{'PASS' if gate_acceptance else 'WARN'} - M8.1 stable-anchor run\n"
-        f"  candidates={candidates}, passes={passes}, qsr={qsr:.4f}\n"
+        f"  candidates={candidates}, passes={passes}, "
+        f"productive_quote_rate={qsr:.4f}, rpc_success_rate={rpc_sr:.4f}\n"
         f"  near_miss={len(near_miss)}, elapsed={elapsed_s:.1f}s\n"
         f"  artifact -> {output_path}"
     )

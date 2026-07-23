@@ -14,10 +14,64 @@ committed.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
-__all__ = ["CheckpointStore"]
+__all__ = [
+    "CheckpointStore",
+    "fingerprint_paths",
+    "read_done_record",
+    "write_done_record",
+    "done_fingerprint_matches",
+]
+
+
+def fingerprint_paths(paths: Iterable[Union[str, Path]]) -> str:
+    """Stable short fingerprint from file content (missing paths included)."""
+    parts: List[str] = []
+    for raw in sorted(str(p) for p in paths):
+        path = Path(raw)
+        if path.is_file():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+            parts.append(f"{raw}:{digest}")
+        else:
+            parts.append(f"{raw}:missing")
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def read_done_record(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {"legacy": text, "fingerprint": None, "completed_at_utc": text}
+    if isinstance(data, dict):
+        return data
+    return {"legacy": text, "fingerprint": None}
+
+
+def write_done_record(path: Path, *, fingerprint: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "completed_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "fingerprint": fingerprint,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def done_fingerprint_matches(path: Path, expected: str) -> bool:
+    rec = read_done_record(path)
+    if not rec:
+        return False
+    return str(rec.get("fingerprint") or "") == expected
 
 
 class CheckpointStore:

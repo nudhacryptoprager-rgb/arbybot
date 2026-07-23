@@ -2,15 +2,19 @@
 # Development and testing dependencies for ARBY
 #
 # Usage:
-#   python -m venv venv
-#   source venv/bin/activate  # or venv\Scripts\activate on Windows
-#   pip install -r requirements-dev.txt
+#   python -m venv .venv
+#   source venv/bin/activate  # or .venv\Scripts\activate on Windows
+#   pip install -r requirements-dev.txt -c requirements-constraints-py311.txt
 #   pytest -q
 
-# Core dependencies
+# Core dependencies (match pyproject.toml floors)
 pyyaml>=6.0.1
 httpx>=0.25.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
+aiohttp>=3.14.1
+requests>=2.33.0
+urllib3>=2.7.0
+idna>=3.15
 
 # Build backend (required for deterministic wheel-smoke in tests/unit/test_packaging_contract.py).
 # Matches [build-system].requires in pyproject.toml.
@@ -18,8 +22,9 @@ setuptools>=61.0
 wheel>=0.40.0
 
 # Testing
-pytest>=7.4.0
+pytest>=9.0.3
 pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
 
 # Typing
 mypy>=1.7.0
@@ -27,7 +32,7 @@ types-PyYAML>=6.0.12
 
 # Code quality
 ruff>=0.1.0
-black>=23.12.0
+black>=26.3.1
 
 # Supply-chain audit (used by scripts/check_quality_ratchet.py --pip-audit)
 pip-audit>=2.7.0

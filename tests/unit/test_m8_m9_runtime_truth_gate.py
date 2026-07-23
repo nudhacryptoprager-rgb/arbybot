@@ -65,6 +65,22 @@ def _coherent_bundle(now: datetime = NOW) -> dict:
     }
 
 
+def _with_bound_session(bundle: dict, session_id: str = "session-test-bound") -> dict:
+    bound = {}
+    for key, doc in bundle.items():
+        if doc is None:
+            bound[key] = None
+            continue
+        row = dict(doc)
+        ts = (
+            (row.get("run_context") or {}).get("run_timestamp")
+            or row.get("generated_at_utc")
+        )
+        row["run_context"] = {"session_id": session_id, "run_timestamp": ts}
+        bound[key] = row
+    return bound
+
+
 def test_stub_sniper_placeholder_pool_blocks_as_code_artifact_contract():
     """0xabc stub (84-byte artifact) must be refused; never a market verdict."""
     stub = {"status": "ACTIVE", "recent_events": [{"event_id": "e1", "pool_address": "0xabc"}]}
@@ -121,19 +137,61 @@ def test_missing_timestamp_blocks():
 
 
 def test_coherent_fresh_bundle_passes():
-    verdict = evaluate_runtime_truth_gate(now=NOW, **_coherent_bundle())
+    verdict = evaluate_runtime_truth_gate(
+        now=NOW, **_with_bound_session(_coherent_bundle())
+    )
     assert verdict["truth_status"] == "PASS"
     assert verdict["blockers"] == []
     assert verdict["blocker_class"] is None
     assert verdict["sniper_assessment"]["operational"] is True
 
 
+def test_upstream_phase_passes_without_bridge():
+    bundle = _with_bound_session(_coherent_bundle())
+    verdict = evaluate_runtime_truth_gate(
+        now=NOW,
+        phase="upstream",
+        bridge=None,
+        **{k: v for k, v in bundle.items() if k != "bridge"},
+    )
+    assert verdict["phase"] == "upstream"
+    assert verdict["truth_status"] == "PASS"
+    assert "bridge" not in verdict["per_artifact"]
+
+
+def test_bundle_phase_requires_bridge():
+    bundle = _coherent_bundle()
+    bundle["bridge"] = None
+    verdict = evaluate_runtime_truth_gate(now=NOW, phase="bundle", **bundle)
+    assert verdict["truth_status"] == "BLOCKED"
+    assert "BRIDGE_ARTIFACT_MISSING" in verdict["blockers"]
+
+
+def test_post_depth_phase_requires_bridge():
+    bundle = _with_bound_session(_coherent_bundle())
+    bundle["bridge"]["depth_enrichment"] = {
+        "pre_depth_content_hash": "pre-hash",
+        "post_depth_content_hash": "post-hash",
+        "depth_enriched_at_utc": _iso(NOW - timedelta(minutes=3)),
+        "depth_enrichment_session_id": "session-test-bound",
+    }
+    verdict = evaluate_runtime_truth_gate(
+        now=NOW,
+        phase="post_depth",
+        **bundle,
+    )
+    assert verdict["phase"] == "post_depth"
+    assert verdict["truth_status"] == "PASS"
+
+
 def test_window_budget_is_configurable():
     """Long-pipeline runs may widen the window budget explicitly."""
-    bundle = _coherent_bundle()
     old_ts = _iso(NOW - timedelta(hours=2, minutes=5))
-    bundle["bridge"] = _ts_doc(old_ts)
-    bundle["expansion"] = _ts_doc(old_ts)
+    bundle = _coherent_bundle()
+    bundle["sniper"] = _valid_sniper(old_ts)
+    for key in ("anchor", "hints", "expansion", "m8_3_registry", "bridge"):
+        bundle[key] = _ts_doc(old_ts)
+    bundle = _with_bound_session(bundle)
     verdict = evaluate_runtime_truth_gate(now=NOW, window_seconds=3 * 3600, **bundle)
     assert "MIXED_RUNTIME_WINDOW" not in verdict["blockers"]
     assert verdict["truth_status"] == "PASS"
@@ -142,10 +200,13 @@ def test_window_budget_is_configurable():
 def test_run_timestamp_is_canonical_over_generated_at_utc():
     """run_context.run_timestamp must be used when present; generated_at_utc
     is a legacy fallback only."""
-    bundle = _coherent_bundle()
+    bundle = _with_bound_session(_coherent_bundle())
     bundle["bridge"] = {
-        "run_context": {"run_timestamp": _iso(NOW - timedelta(minutes=5))},
-        "generated_at_utc": _iso(NOW - timedelta(hours=5)),  # would be stale
+        "run_context": {
+            "session_id": "session-test-bound",
+            "run_timestamp": _iso(NOW - timedelta(minutes=5)),
+        },
+        "generated_at_utc": _iso(NOW - timedelta(hours=5)),
     }
     verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
     assert "BRIDGE_STALE" not in verdict["blockers"]
@@ -163,25 +224,57 @@ def test_shared_session_id_widens_window_for_serial_pipeline():
     session_window_seconds (default 90 min) so a 44-min serial bundle still
     counts as one runtime window."""
     bundle = _coherent_bundle()
-    # Sniper is fresh; bridge is 44 min older — would exceed the default
-    # 48-min ad-hoc window only just barely, but the 30-min default from
-    # the old gate would have failed it. Here we use 70 min to prove the
-    # session-widened budget (90 min) admits it while the ad-hoc budget
-    # (48 min) would not.
     fresh_ts = _iso(NOW - timedelta(minutes=2))
     older_ts = _iso(NOW - timedelta(minutes=72))
     shared_sid = "session-2026-07-19-serial-1"
     for key in ("sniper", "anchor", "hints", "expansion", "m8_3_registry", "bridge"):
         doc = dict(bundle[key])
-        doc["run_context"] = {"session_id": shared_sid, "run_timestamp": older_ts if key == "bridge" else fresh_ts}
+        doc["run_context"] = {
+            "session_id": shared_sid,
+            "run_timestamp": older_ts if key == "bridge" else fresh_ts,
+        }
         bundle[key] = doc
-    # Without session widening (window_seconds=48*60) this would BLOCK.
     verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
     assert verdict["session_id"] == shared_sid
+    assert verdict["session_binding_complete"] is True
     assert "MIXED_RUNTIME_WINDOW" not in verdict["blockers"]
+    assert "SESSION_ID_INCOMPLETE" not in verdict["blockers"]
     assert verdict["truth_status"] == "PASS"
-    # And the effective window is the session window:
     assert verdict["window_seconds"] == 90 * 60
+
+
+def test_partial_session_binding_does_not_widen_window(monkeypatch):
+    monkeypatch.delenv("ARBY_PIPELINE_SESSION_ID", raising=False)
+    bundle = _coherent_bundle()
+    ts = _iso(NOW - timedelta(minutes=5))
+    bundle["sniper"] = _valid_sniper(ts)
+    bundle["bridge"] = {
+        "run_context": {"session_id": "session-only-bridge", "run_timestamp": ts},
+    }
+    for key in ("anchor", "hints", "expansion", "m8_3_registry"):
+        bundle[key] = _ts_doc(ts)
+    verdict = evaluate_runtime_truth_gate(now=NOW, **bundle)
+    assert "SESSION_ID_INCOMPLETE" in verdict["blockers"]
+    assert verdict["session_binding_complete"] is False
+    assert verdict["window_seconds"] == 48 * 60
+
+
+def test_upstream_phase_uses_sniper_lineage_staleness(monkeypatch):
+    monkeypatch.delenv("ARBY_PIPELINE_SESSION_ID", raising=False)
+    ts = _iso(NOW - timedelta(hours=2))
+    bundle = _coherent_bundle()
+    bundle["sniper"] = _valid_sniper(ts)
+    for key in ("anchor", "hints", "expansion", "m8_3_registry"):
+        bundle[key] = _ts_doc(ts)
+    bundle = _with_bound_session(bundle)
+    verdict = evaluate_runtime_truth_gate(
+        now=NOW,
+        phase="upstream",
+        bridge=None,
+        **{k: v for k, v in bundle.items() if k != "bridge"},
+    )
+    assert verdict["truth_status"] == "PASS"
+    assert verdict["per_artifact"]["sniper"]["freshness_mode"] == "lineage"
 
 
 def test_session_id_mismatch_is_hard_blocker():

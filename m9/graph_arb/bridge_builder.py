@@ -2094,6 +2094,13 @@ def build_bridge_inventory(
 
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    ts = output_artifact.get("generated_at_utc")
+    if not ts:
+        rc = output_artifact.get("run_context") or {}
+        ts = rc.get("run_timestamp") if isinstance(rc, dict) else None
+    output_artifact = apply_pipeline_provenance(output_artifact, run_timestamp=ts)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output_artifact, f, ensure_ascii=False, indent=2)
 

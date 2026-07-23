@@ -384,6 +384,8 @@ ALLOWED_YAML_FILES = {
     "m8_2_candidate_dex_registry.yaml",
     # M9 token baseline prices/decimals registry
     "m9_token_baselines.yaml",
+    # Per-provider RPC quota budgets (chains.provider_quota)
+    "provider_quotas.yaml",
 }
 
 

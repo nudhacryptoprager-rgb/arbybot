@@ -34,7 +34,24 @@ from typing import Any, Iterable
 
 import yaml
 
-from application.checkpoint_store import CheckpointStore  # noqa: F401
+from application.checkpoint_store import (  # noqa: F401
+    CheckpointStore,
+    done_fingerprint_matches,
+    fingerprint_paths,
+    write_done_record,
+)
+from core.pipeline_provenance import (  # noqa: F401
+    ENV_PIPELINE_SESSION_ID,
+    new_pipeline_session_id,
+)
+from core.pipeline_slo import PipelineSloTracker
+from core.pipeline_streaming import (
+    m81_streaming_cli_args,
+    resolve_sniper_minutes,
+    resolve_streaming_batches,
+    streaming_enabled,
+)
+from m8.discovery.streaming_handoff import write_streaming_batch_manifest
 from application.pipeline_stage import PipelineStage, StageResult  # noqa: F401
 from application.stage_runner import run_stage_subprocess, run_with_retries  # noqa: F401
 from strategy.chain_stats import (  # noqa: F401
@@ -98,7 +115,45 @@ M9_SHADOW_ARTIFACT = "data/tmp/m9_graph_handoff_quote_validation_10m.json"
 M9_PATIENT_SHADOW_ARTIFACT = "data/tmp/m9_patient_lane_shadow_10m.json"
 M9_RCA_ARTIFACT = "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
 PIPELINE_STEP_MARKERS_DIR = Path("data/tmp/start_pipeline_steps")
+ALWAYS_RERUN_PIPELINE_STEPS = frozenset(
+    {
+        "m8_m9_runtime_truth_gate_upstream",
+        "m8_m9_runtime_truth_gate_bundle",
+        "m8_m9_runtime_truth_gate_post_depth",
+    }
+)
+UPSTREAM_ROLLING_ARTIFACTS: tuple[str, ...] = (
+    "data/runs/_rolling/new_pool_sniper_latest.json",
+    "data/runs/_rolling/m8_1_stable_anchor_latest.json",
+    "data/runs/_rolling/m8_external_pool_hints_latest.json",
+    "data/runs/_rolling/m8_cross_dex_expansion_latest.json",
+    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+)
+M83_UPSTREAM_INVALIDATING_STEPS = frozenset(
+    {
+        "m8_sniper_acceptance",
+        "m8_1_stable_anchor",
+        "m8_1_stable_anchor_fresh_delta",
+        "m8_event_stream_lane",
+        "m8_onchain_factory_mirror_scan",
+        "m8_mirror_discovery_recall",
+        "m8_2_radar_two_phase",
+        "m8_2_cross_dex_expand",
+        "m8_3_registry_refresh",
+    }
+)
+POST_BRIDGE_FINGERPRINT_PREFIXES: tuple[str, ...] = (
+    "m9_enrich_",
+    "m9_topology_",
+    "m9_capacity_",
+    "m9_shadow_",
+    "m9_patient_",
+    "gate_capacity_",
+    "m9_lane_",
+    "m8_m9_runtime_truth_gate_bundle",
+)
 PIPELINE_CURRENT_PATH = Path("data/tmp/start_pipeline_current.json")
+M81_PROBE_METRICS_PATH = Path("data/tmp/m8_1_probe_metrics_latest.json")
 _CURRENT_PIPELINE_ARGS: argparse.Namespace | None = None
 PENDING_1_TO_2_QUEUE_PATH = Path("data/tmp/m8_time_to_mirror_pending_queue_latest.json")
 WATCHLIST_PATH = Path("data/tmp/m8_token_watchlist_latest.json")
@@ -482,6 +537,53 @@ def _clear_recall_downstream_markers(pipeline_mode: str) -> int:
     return _checkpoint_store().clear_markers(pipeline_mode, RECALL_DOWNSTREAM_MARKER_STEPS)
 
 
+def _upstream_artifacts_fingerprint() -> str:
+    return fingerprint_paths(Path(p) for p in UPSTREAM_ROLLING_ARTIFACTS)
+
+
+def _bundle_artifacts_fingerprint() -> str:
+    paths = list(UPSTREAM_ROLLING_ARTIFACTS) + [PRODUCTION_BRIDGE]
+    return fingerprint_paths(Path(p) for p in paths)
+
+
+def _pipeline_step_fingerprint(step_name: str) -> str:
+    if step_name in ALWAYS_RERUN_PIPELINE_STEPS:
+        return ""
+    if step_name == "m9_bridge_production" or any(
+        step_name.startswith(prefix) for prefix in POST_BRIDGE_FINGERPRINT_PREFIXES
+    ):
+        return _bundle_artifacts_fingerprint()
+    return _upstream_artifacts_fingerprint()
+
+
+def _should_skip_done_marker(
+    step_name: str,
+    done_marker: Path,
+    *,
+    force_rerun: bool,
+) -> bool:
+    if force_rerun or step_name in ALWAYS_RERUN_PIPELINE_STEPS:
+        return False
+    if not done_marker.exists():
+        return False
+    expected = _pipeline_step_fingerprint(step_name)
+    return done_fingerprint_matches(done_marker, expected)
+
+
+def _invalidate_truth_gate_markers(
+    pipeline_mode: str,
+    *,
+    upstream: bool = True,
+    bundle: bool = True,
+) -> int:
+    steps: list[str] = []
+    if upstream:
+        steps.append("m8_m9_runtime_truth_gate_upstream")
+    if bundle:
+        steps.append("m8_m9_runtime_truth_gate_bundle")
+    return _checkpoint_store().clear_markers(pipeline_mode, steps)
+
+
 def _checkpoint_activity_since(step_name: str, since_wall_ts: float) -> bool:
     """True when a watched checkpoint file was touched after the step started."""
     return CheckpointStore.checkpoint_activity_since(
@@ -581,6 +683,7 @@ def _pipeline_step(
     timeout_seconds: int | None = None,
     internal: str | None = None,
     description: str | None = None,
+    **extra: Any,
 ) -> dict[str, Any]:
     step: dict[str, Any] = {
         "name": name,
@@ -594,6 +697,7 @@ def _pipeline_step(
         step["internal"] = internal
     if description:
         step["description"] = description
+    step.update(extra)
     return step
 
 
@@ -635,7 +739,7 @@ def _clear_pipeline_current() -> None:
         pass
 
 
-def _run_internal_pipeline_step(internal: str) -> int:
+def _run_internal_pipeline_step(internal: str, step: dict[str, Any] | None = None) -> int:
     if internal == "pending_1_to_2_queue":
         return _export_pending_1_to_2_queue()
     if internal == "patient_spread_lifetime_export":
@@ -666,6 +770,25 @@ def _run_internal_pipeline_step(internal: str) -> int:
         return _run_mirror_selection_pass()
     if internal == "gate_recall_verify_admission":
         return _gate_recall_verify_admission()
+    if internal == "streaming_batch_manifest":
+        session_id = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
+        if not session_id:
+            session_id = new_pipeline_session_id()
+            os.environ[ENV_PIPELINE_SESSION_ID] = session_id
+        batch_index = int((step or {}).get("streaming_batch_index", 1))
+        batch_minutes = int(
+            (step or {}).get(
+                "streaming_batch_minutes",
+                os.environ.get("ARBY_SNIPER_BATCH_MINUTES", "15"),
+            )
+            or 15
+        )
+        write_streaming_batch_manifest(
+            session_id=session_id,
+            batch_index=batch_index,
+            batch_minutes=batch_minutes,
+        )
+        return 0
     print(f"ERROR: unknown internal pipeline step: {internal}", flush=True)
     return 2
 
@@ -753,6 +876,8 @@ def _mirror_smoke_pipeline_cmd(checkpoint_path: str, *extra: str) -> list[str]:
         "--pipeline-mode",
         "--checkpoint-path",
         checkpoint_path,
+        "--quote-workers",
+        "4",
         *extra,
     )
 
@@ -1021,7 +1146,7 @@ def _run_pipeline_step_subprocess(
     internal = step.get("internal")
     if internal:
         _touch_current(os.getpid(), status="running_internal")
-        rc = _run_internal_pipeline_step(str(internal))
+        rc = _run_internal_pipeline_step(str(internal), step)
         heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
         _touch_current(os.getpid(), status="finished_internal" if rc == 0 else "failed_internal")
         log_fh.write(f"<<< {name}: internal={internal} exit={rc}\n")
@@ -1030,6 +1155,9 @@ def _run_pipeline_step_subprocess(
     cmd = list(step["cmd"])
     env = os.environ.copy()
     env.update(step.get("env") or {})
+    pipeline_sid = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
+    if pipeline_sid:
+        env[ENV_PIPELINE_SESSION_ID] = pipeline_sid
 
     pid_holder: dict[str, int | None] = {"pid": None}
 
@@ -1078,13 +1206,66 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
     max_radar = str(
         int((ttm_profile or {}).get("max_radar_tokens") or getattr(args, "max_radar_tokens", 753) or 753)
     )
-    sniper_minutes = str(int(getattr(args, "sniper_minutes", 45) or 45))
+    streaming = bool(getattr(args, "streaming", False)) or streaming_enabled()
+    sniper_minutes = str(
+        resolve_sniper_minutes(
+            int(getattr(args, "sniper_minutes", 45) or 45),
+            streaming=streaming,
+            batch_minutes=int(getattr(args, "sniper_batch_minutes", 15) or 15),
+        )
+    )
+    token_concurrency = str(max(1, int(getattr(args, "token_concurrency", 4) or 4)))
     skip_coingecko = bool(getattr(args, "skip_coingecko", True))
     include_shadow = not bool(getattr(args, "skip_shadow", False))
 
     steps: list[dict[str, Any]] = []
 
     def add_m8() -> None:
+        total_sniper_minutes = int(getattr(args, "sniper_minutes", 45) or 45)
+        batch_minutes = int(getattr(args, "sniper_batch_minutes", 15) or 15)
+        if streaming:
+            batches = resolve_streaming_batches(
+                total_sniper_minutes,
+                batch_minutes=batch_minutes,
+            )
+            for batch_index, batch_dur in enumerate(batches, start=1):
+                steps.append(
+                    _pipeline_step(
+                        f"m8_sniper_acceptance_batch_{batch_index}",
+                        _productive_rpc_cmd(
+                            "-u",
+                            "scripts/sniper_smoke_run.py",
+                            "--chain",
+                            "base",
+                            "--duration-minutes",
+                            str(batch_dur),
+                            "--acceptance-run",
+                            "--blocks-back",
+                            "50",
+                        ),
+                        env={"ARBY_SNIPER_ENABLE": "1"},
+                        streaming_batch_index=batch_index,
+                    )
+                )
+                steps.append(
+                    _pipeline_step(
+                        f"m8_streaming_batch_manifest_{batch_index}",
+                        [],
+                        internal="streaming_batch_manifest",
+                        streaming_batch_index=batch_index,
+                        streaming_batch_minutes=batch_dur,
+                    )
+                )
+                m81_cmd = _productive_rpc_cmd("scripts/m8_1_stable_anchor_run.py")
+                m81_cmd.extend(m81_streaming_cli_args(batch_index=batch_index))
+                steps.append(
+                    _pipeline_step(
+                        f"m8_1_stable_anchor_batch_{batch_index}",
+                        m81_cmd,
+                        streaming_batch_index=batch_index,
+                    )
+                )
+            return
         steps.append(
             _pipeline_step(
                 "m8_sniper_acceptance",
@@ -1102,10 +1283,11 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 env={"ARBY_SNIPER_ENABLE": "1"},
             )
         )
+        m81_cmd = _productive_rpc_cmd("scripts/m8_1_stable_anchor_run.py")
         steps.append(
             _pipeline_step(
                 "m8_1_stable_anchor",
-                _productive_rpc_cmd("scripts/m8_1_stable_anchor_run.py"),
+                m81_cmd,
             )
         )
 
@@ -1123,6 +1305,8 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             "--lane-mode",
             "fresh_first",
             "--skip-acceptance",
+            "--token-concurrency",
+            token_concurrency,
         )
         if skip_coingecko:
             radar_cmd.append("--skip-coingecko")
@@ -1470,16 +1654,18 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         # follow the same defaults as scripts/m8_m9_runtime_truth_gate.py.
         steps.append(
             _pipeline_step(
-                "m8_m9_runtime_truth_gate",
+                "m8_m9_runtime_truth_gate_upstream",
                 _py_cmd(
                     "scripts/m8_m9_runtime_truth_gate.py",
+                    "--phase",
+                    "upstream",
                     "--output",
-                    "data/tmp/m8_m9_runtime_truth_gate_latest.json",
+                    "data/tmp/m8_m9_runtime_truth_gate_upstream_latest.json",
                 ),
                 allow_exit_codes=(0,),
                 description=(
-                    "Refuses upstream bundle when M8 sniper is stub/stale or "
-                    "when artifacts come from mixed runtime windows."
+                    "Upstream admission: refuse M8/M8.1/M8.2/M8.3 bundle when "
+                    "sniper is stub/stale or inputs come from mixed windows."
                 ),
             )
         )
@@ -1530,6 +1716,23 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
         steps.append(
             _pipeline_step(
+                "m8_m9_runtime_truth_gate_bundle",
+                _py_cmd(
+                    "scripts/m8_m9_runtime_truth_gate.py",
+                    "--phase",
+                    "bundle",
+                    "--output",
+                    "data/tmp/m8_m9_runtime_truth_gate_latest.json",
+                ),
+                allow_exit_codes=(0,),
+                description=(
+                    "Bundle coherence after bridge build: upstream inputs plus "
+                    "production bridge must share one runtime window/session."
+                ),
+            )
+        )
+        steps.append(
+            _pipeline_step(
                 "m9_enrich_depth_false_positive",
                 _productive_rpc_cmd(
                     "scripts/m9_enrich_bridge_depth.py",
@@ -1551,6 +1754,23 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     "--force-reprobe",
                     "--sleep-ms",
                     "150",
+                ),
+            )
+        )
+        steps.append(
+            _pipeline_step(
+                "m8_m9_runtime_truth_gate_post_depth",
+                _py_cmd(
+                    "scripts/m8_m9_runtime_truth_gate.py",
+                    "--phase",
+                    "post_depth",
+                    "--output",
+                    "data/tmp/m8_m9_runtime_truth_gate_post_depth_latest.json",
+                ),
+                allow_exit_codes=(0,),
+                description=(
+                    "Post-depth bridge coherence: production bridge after enrichment "
+                    "must remain session-bound with upstream inputs."
                 ),
             )
         )
@@ -2064,6 +2284,26 @@ def _write_pipeline_done_marker(*, fail_path: Path, done_path: Path) -> None:
     done_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
 
 
+def _step_slo_probe_metrics(step_name: str) -> dict[str, Any]:
+    if "m8_1_stable_anchor" not in step_name:
+        return {}
+    if not M81_PROBE_METRICS_PATH.is_file():
+        return {}
+    try:
+        doc = json.loads(M81_PROBE_METRICS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    return {
+        "rpc_wait_s": doc.get("rpc_wait_s"),
+        "provider_errors": int(doc.get("provider_errors") or 0),
+        "cache_hits": int(doc.get("cache_hits") or 0),
+        "cache_misses": int(doc.get("cache_misses") or 0),
+        "routes_per_s": doc.get("routes_per_s"),
+    }
+
+
 def _run_project_pipeline(args: argparse.Namespace) -> int:
     global _CURRENT_PIPELINE_ARGS
     _CURRENT_PIPELINE_ARGS = args
@@ -2077,6 +2317,17 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
     steps = build_project_pipeline_steps(args)
     step_names = [str(step["name"]) for step in steps]
     pipeline_mode = str(args.pipeline)
+    pipeline_session_id = (
+        os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip() or new_pipeline_session_id()
+    )
+    os.environ[ENV_PIPELINE_SESSION_ID] = pipeline_session_id
+    streaming = bool(getattr(args, "streaming", False)) or streaming_enabled()
+    if streaming:
+        os.environ["ARBY_PIPELINE_STREAMING"] = "1"
+        os.environ["ARBY_SNIPER_BATCH_MINUTES"] = str(
+            int(getattr(args, "sniper_batch_minutes", 15) or 15)
+        )
+    slo_tracker = PipelineSloTracker()
     log_path = Path(getattr(args, "pipeline_log", "") or "data/tmp/start_pipeline_latest.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fail_path = Path("data/tmp/start_pipeline_latest.fail")
@@ -2104,6 +2355,7 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
     force_rerun = bool(getattr(args, "force_rerun_steps", False))
     with log_path.open("a", encoding="utf-8") as log_fh:
         log_fh.write(f"=== start_pipeline mode={args.pipeline} ===\n")
+        log_fh.write(f"pipeline_session_id={pipeline_session_id}\n")
         if getattr(args, "resume_from", None):
             log_fh.write(f"resume_from={args.resume_from}\n")
         if getattr(args, "allow_roadmap_edit", False):
@@ -2125,10 +2377,11 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         for step_index, step in enumerate(steps, start=1):
             name = step["name"]
             step_t0 = time.monotonic()
+            queue_delay_s = slo_tracker.begin_step()
             done_marker, fail_marker = _step_marker_paths(name, pipeline_mode=pipeline_mode)
             if (
                 not force_rerun
-                and done_marker.exists()
+                and _should_skip_done_marker(name, done_marker, force_rerun=force_rerun)
                 and not getattr(args, "dry_run", False)
             ):
                 if name in {
@@ -2149,6 +2402,7 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 msg = f"skip {name}: prior step marker {done_marker}\n"
                 print(msg.strip())
                 log_fh.write(msg)
+                slo_tracker.record_skipped(name, reason="prior_marker")
                 if record_ttm_timings:
                     step_timings[name] = 0.0
                 continue
@@ -2256,8 +2510,61 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                         ),
                     }
                 )
+                slo_tracker.mark_failed(name, reason)
+                probe_metrics = _step_slo_probe_metrics(name)
+                slo_tracker.end_step(
+                    name,
+                    step_t0,
+                    queue_delay_s,
+                    status="failed",
+                    failure_reason=reason,
+                    rpc_wait_s=probe_metrics.get("rpc_wait_s"),
+                    provider_errors=int(probe_metrics.get("provider_errors") or 0),
+                    cache_hits=int(probe_metrics.get("cache_hits") or 0),
+                    cache_misses=int(probe_metrics.get("cache_misses") or 0),
+                    routes_per_s=probe_metrics.get("routes_per_s"),
+                )
+                if not getattr(args, "dry_run", False):
+                    slo_tracker.write(
+                        session_id=pipeline_session_id,
+                        pipeline_mode=pipeline_mode,
+                    )
                 return rc or 1
-            done_marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+            write_done_record(
+                done_marker,
+                fingerprint=_pipeline_step_fingerprint(name),
+            )
+            if name in M83_UPSTREAM_INVALIDATING_STEPS:
+                cleared_truth = _invalidate_truth_gate_markers(
+                    pipeline_mode,
+                    upstream=True,
+                    bundle=True,
+                )
+                if cleared_truth:
+                    log_fh.write(
+                        f"invalidated {cleared_truth} truth-gate marker(s) after {name}\n"
+                    )
+            if name == "m9_bridge_production":
+                cleared_bundle = _invalidate_truth_gate_markers(
+                    pipeline_mode,
+                    upstream=False,
+                    bundle=True,
+                )
+                if cleared_bundle:
+                    log_fh.write(
+                        f"invalidated {cleared_bundle} bundle truth-gate marker(s) after bridge build\n"
+                    )
+            probe_metrics = _step_slo_probe_metrics(name)
+            slo_tracker.end_step(
+                name,
+                step_t0,
+                queue_delay_s,
+                rpc_wait_s=probe_metrics.get("rpc_wait_s"),
+                provider_errors=int(probe_metrics.get("provider_errors") or 0),
+                cache_hits=int(probe_metrics.get("cache_hits") or 0),
+                cache_misses=int(probe_metrics.get("cache_misses") or 0),
+                routes_per_s=probe_metrics.get("routes_per_s"),
+            )
             if record_ttm_timings:
                 step_timings[name] = round(time.monotonic() - step_t0, 2)
                 _write_time_to_mirror_step_timings(
@@ -2275,6 +2582,8 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 profile=ttm_profile,
                 run_kind=run_kind,
             )
+        if not getattr(args, "dry_run", False):
+            slo_tracker.write(session_id=pipeline_session_id, pipeline_mode=pipeline_mode)
         if not getattr(args, "dry_run", False):
             _write_pipeline_done_marker(fail_path=fail_path, done_path=done_path)
             _clear_pipeline_current()
@@ -2400,6 +2709,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Diagnostic override for scored on-chain verify cap (-time_to_mirror --hot only)",
     )
     ap.add_argument("--sniper-minutes", type=int, default=45)
+    ap.add_argument(
+        "--streaming",
+        action="store_true",
+        default=False,
+        help="Streaming M8 handoff: shorter sniper batches + fresh_delta M8.1 probing",
+    )
+    ap.add_argument(
+        "--sniper-batch-minutes",
+        type=int,
+        default=15,
+        help="Per-batch sniper duration when --streaming (default 15)",
+    )
+    ap.add_argument(
+        "--token-concurrency",
+        type=int,
+        default=4,
+        help="Concurrent token workers for M8.2 radar refresh phases",
+    )
     ap.add_argument("--skip-shadow", action="store_true", default=False)
     ap.add_argument("--skip-coingecko", action="store_true", default=True)
     ap.add_argument("--with-coingecko", dest="skip_coingecko", action="store_false")

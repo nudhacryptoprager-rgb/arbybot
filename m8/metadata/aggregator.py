@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import Counter
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -70,12 +71,14 @@ def build_aggregated_registry(
     ext_hints = _external_hint_map(external_hints)
 
     from m8.metadata.negative_cache import (
+        DEFAULT_NEGATIVE_CACHE_TTL_S,
         TokenNegativeCache,
         collect_cycle_scope_token_addresses,
         is_negative_cache_eligible,
     )
 
-    neg_cache = TokenNegativeCache.load_from_registry(prior_registry)
+    ttl_s = float(os.environ.get("ARBY_M83_NEGATIVE_CACHE_TTL_S", DEFAULT_NEGATIVE_CACHE_TTL_S))
+    neg_cache = TokenNegativeCache.load_from_registry(prior_registry, ttl_s=ttl_s)
     cycle_scope_addrs = collect_cycle_scope_token_addresses(bridge, capacity=capacity)
 
     erc20 = Erc20TokenWorker()

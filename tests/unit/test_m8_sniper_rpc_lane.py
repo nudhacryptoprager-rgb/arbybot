@@ -138,24 +138,26 @@ class TestSniperGetLogsFailover(unittest.TestCase):
 
 
 class TestSniperArtifactPreserve(unittest.TestCase):
-    def test_preserve_recent_events_on_rpc_error(self, tmp_path=None):
+    def test_preserve_recent_events_on_rpc_error(self):
         import json
+        import tempfile
         from pathlib import Path
+        from unittest.mock import patch
 
         from m8.runtime.smoke_run import _load_preserved_recent_events_dicts
 
-        rolling = Path("data/runs/_rolling")
-        rolling.mkdir(parents=True, exist_ok=True)
-        art = rolling / "new_pool_sniper_latest.json"
-        prior = {
-            "status": "ACTIVE",
-            "recent_events": [{"event_id": "e1", "pool_address": "0xabc"}],
-        }
-        art.write_text(json.dumps(prior), encoding="utf-8")
-        preserved = _load_preserved_recent_events_dicts("RPC_ERROR", [])
-        self.assertIsNotNone(preserved)
-        self.assertEqual(len(preserved), 1)
-        self.assertIsNone(_load_preserved_recent_events_dicts("ACTIVE", []))
+        with tempfile.TemporaryDirectory() as td:
+            art = Path(td) / "new_pool_sniper_latest.json"
+            prior = {
+                "status": "ACTIVE",
+                "recent_events": [{"event_id": "e1", "pool_address": "0xabc"}],
+            }
+            art.write_text(json.dumps(prior), encoding="utf-8")
+            with patch("m8.runtime.smoke_run._ROLLING_SNIPER_ARTIFACT", art):
+                preserved = _load_preserved_recent_events_dicts("RPC_ERROR", [])
+                self.assertIsNotNone(preserved)
+                self.assertEqual(len(preserved), 1)
+                self.assertIsNone(_load_preserved_recent_events_dicts("ACTIVE", []))
 
 
 if __name__ == "__main__":

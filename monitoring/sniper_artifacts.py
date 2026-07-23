@@ -207,7 +207,9 @@ def make_sniper_artifact(
     if provenance:
         artifact["provenance"] = dict(provenance)
 
-    return artifact
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    return apply_pipeline_provenance(artifact, run_timestamp=ts)
 
 
 # ---------------------------------------------------------------------------

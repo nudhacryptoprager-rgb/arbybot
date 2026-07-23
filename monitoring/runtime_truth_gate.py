@@ -48,8 +48,15 @@ __all__ = [
     "STALE_SECONDS",
     "WINDOW_MISMATCH_SECONDS",
     "SESSION_WINDOW_SECONDS",
+    "TRUTH_GATE_PHASES",
     "evaluate_runtime_truth_gate",
 ]
+
+# upstream: M8/M8.1/M8.2/M8.3 admission before bridge build (no bridge required)
+# bundle: full cross-artifact coherence after bridge exists (pre-depth)
+# post_depth: bridge coherence after depth enrichment rewrites production bridge
+# full: upstream + bundle in one evaluation (CLI default / legacy)
+TRUTH_GATE_PHASES = frozenset({"upstream", "bundle", "post_depth", "full"})
 
 # Blocker classification for every blocker emitted by this gate.
 BLOCKER_CLASS_CODE_ARTIFACT_CONTRACT = "CODE_ARTIFACT_CONTRACT"
@@ -59,13 +66,16 @@ BLOCKER_CLASS_CODE_ARTIFACT_CONTRACT = "CODE_ARTIFACT_CONTRACT"
 # the sniper is the hottest upstream input; the rest refresh on the order
 # of tens of minutes to hours.
 STALE_SECONDS: Dict[str, int] = {
-    "sniper": 30 * 60,        # 30 min
-    "anchor": 6 * 3600,       # M8.1 stable-anchor diagnostics
-    "hints": 6 * 3600,        # M8.2 external pool hints
-    "expansion": 6 * 3600,    # M8.2 cross-DEX expansion
-    "m8_3": 6 * 3600,         # M8.3 token metadata registry
-    "bridge": 6 * 3600,       # M9 bridge inventory
+    "sniper": 30 * 60,        # market freshness (bundle/full phases)
+    "anchor": 6 * 3600,
+    "hints": 6 * 3600,
+    "expansion": 6 * 3600,
+    "m8_3": 6 * 3600,
+    "bridge": 6 * 3600,
 }
+
+# Serial M8→M9 pipeline lineage: sniper may finish long before bridge build.
+SNIPER_LINEAGE_STALE_SECONDS: int = 6 * 3600
 
 # Artifacts further apart than this do not count as one runtime window.
 # Used when no common session_id binds the artifacts. Allow a 48-minute
@@ -149,6 +159,7 @@ def evaluate_runtime_truth_gate(
     expansion: Optional[Dict[str, Any]] = None,
     m8_3_registry: Optional[Dict[str, Any]] = None,
     bridge: Optional[Dict[str, Any]] = None,
+    phase: str = "full",
     window_seconds: int = WINDOW_MISMATCH_SECONDS,
     session_window_seconds: int = SESSION_WINDOW_SECONDS,
     stale_seconds: Optional[Dict[str, int]] = None,
@@ -166,6 +177,12 @@ def evaluate_runtime_truth_gate(
     * ``session_id``: shared session_id if all session-bearing inputs agree,
       ``None`` otherwise
     """
+    gate_phase = str(phase or "full").strip().lower()
+    if gate_phase not in TRUTH_GATE_PHASES:
+        raise ValueError(
+            f"invalid truth gate phase {phase!r}; expected one of {sorted(TRUTH_GATE_PHASES)}"
+        )
+
     thresholds = dict(STALE_SECONDS)
     if stale_seconds:
         thresholds.update(stale_seconds)
@@ -177,8 +194,9 @@ def evaluate_runtime_truth_gate(
         "hints": hints,
         "expansion": expansion,
         "m8_3": m8_3_registry,
-        "bridge": bridge,
     }
+    if gate_phase in {"bundle", "full", "post_depth"}:
+        docs["bridge"] = bridge
 
     blockers: List[str] = []
 
@@ -191,12 +209,21 @@ def evaluate_runtime_truth_gate(
     per_artifact: Dict[str, Dict[str, Any]] = {}
     parsed: Dict[str, datetime] = {}
     sessions: Dict[str, str] = {}
+    present_keys = [key for key, doc in docs.items() if doc is not None]
     for key, doc in docs.items():
-        entry: Dict[str, Any] = {"present": doc is not None}
+        if doc is None:
+            continue
         sid = _artifact_session_id(doc)
         if sid:
-            entry["session_id"] = sid
             sessions[key] = sid
+    session_binding_complete = bool(
+        present_keys and len(sessions) == len(present_keys)
+    )
+    for key, doc in docs.items():
+        entry: Dict[str, Any] = {"present": doc is not None}
+        sid = sessions.get(key)
+        if sid:
+            entry["session_id"] = sid
         if doc is None:
             entry["status"] = "MISSING"
             blockers.append(f"{key.upper()}_ARTIFACT_MISSING")
@@ -214,38 +241,56 @@ def evaluate_runtime_truth_gate(
         age_s = (now_dt - ts_dt).total_seconds()
         entry["age_seconds"] = round(age_s, 1)
         threshold = thresholds.get(key)
+        if key == "sniper":
+            if gate_phase == "upstream":
+                threshold = SNIPER_LINEAGE_STALE_SECONDS
+                entry["freshness_mode"] = "lineage"
+            elif session_binding_complete:
+                threshold = SNIPER_LINEAGE_STALE_SECONDS
+                entry["freshness_mode"] = "lineage_bound_bundle"
+            else:
+                entry["freshness_mode"] = "market"
         entry["stale_threshold_seconds"] = threshold
         if threshold is not None and age_s > threshold:
             entry["status"] = "STALE"
-            blockers.append(f"{key.upper()}_STALE")
+            blocker_code = (
+                f"{key.upper()}_LINEAGE_STALE"
+                if key == "sniper"
+                and (
+                    gate_phase == "upstream"
+                    or session_binding_complete
+                )
+                else f"{key.upper()}_STALE"
+            )
+            blockers.append(blocker_code)
         else:
             entry["status"] = "FRESH"
         parsed[key] = ts_dt
         per_artifact[key] = entry
 
     # --- 3. Session_id binding --------------------------------------------
-    # If two or more artifacts carry a session_id, they must all agree.
-    # Mismatch is a hard blocker regardless of temporal proximity.
     shared_session_id: Optional[str] = None
     distinct_sessions = set(sessions.values())
     if len(sessions) >= 2:
         if len(distinct_sessions) > 1:
             blockers.append("SESSION_ID_MISMATCH")
             shared_session_id = None
-        else:
-            # All session-bearing artifacts agree: use the shared id.
+        elif session_binding_complete:
             shared_session_id = next(iter(distinct_sessions))
-    elif len(sessions) == 1:
+        else:
+            blockers.append("SESSION_ID_INCOMPLETE")
+            shared_session_id = None
+    elif len(sessions) == 1 and session_binding_complete:
         shared_session_id = next(iter(distinct_sessions))
+    elif sessions and not session_binding_complete:
+        blockers.append("SESSION_ID_INCOMPLETE")
+        shared_session_id = None
 
     # --- 4. Single run_timestamp window -----------------------------------
-    # When a shared session_id binds the bundle, widen the temporal budget
-    # to session_window_seconds — a serial M8 -> M8.1 -> M8.2 -> M8.3 ->
-    # bridge pipeline legitimately spans more than the ad-hoc proximity
-    # threshold. Without a shared session_id, fall back to the strict
-    # window_seconds budget.
     effective_window = (
-        session_window_seconds if shared_session_id else window_seconds
+        session_window_seconds
+        if shared_session_id and session_binding_complete
+        else window_seconds
     )
     keys_present = sorted(parsed.keys())
     max_delta = 0.0
@@ -259,10 +304,39 @@ def evaluate_runtime_truth_gate(
     if len(keys_present) >= 2 and max_delta > effective_window:
         blockers.append("MIXED_RUNTIME_WINDOW")
 
+    if gate_phase == "post_depth" and bridge is not None:
+        depth_meta = bridge.get("depth_enrichment") or {}
+        required_fields = (
+            "pre_depth_content_hash",
+            "post_depth_content_hash",
+            "depth_enriched_at_utc",
+            "depth_enrichment_session_id",
+        )
+        for field in required_fields:
+            if not str(depth_meta.get(field) or "").strip():
+                blockers.append(f"DEPTH_ENRICHMENT_{field.upper()}_MISSING")
+        pre_hash = str(depth_meta.get("pre_depth_content_hash") or "")
+        post_hash = str(depth_meta.get("post_depth_content_hash") or "")
+        if pre_hash and post_hash and pre_hash == post_hash:
+            blockers.append("DEPTH_ENRICHMENT_HASH_UNCHANGED")
+        depth_sid = str(depth_meta.get("depth_enrichment_session_id") or "").strip()
+        if shared_session_id and depth_sid and depth_sid != shared_session_id:
+            blockers.append("DEPTH_ENRICHMENT_SESSION_MISMATCH")
+        per_artifact.setdefault("bridge", {}).setdefault(
+            "depth_enrichment",
+            {
+                "pre_depth_content_hash": pre_hash or None,
+                "post_depth_content_hash": post_hash or None,
+                "depth_enriched_at_utc": depth_meta.get("depth_enriched_at_utc"),
+                "depth_enrichment_session_id": depth_sid or None,
+            },
+        )
+
     blockers = sorted(set(blockers))
     truth_status = "PASS" if not blockers else "BLOCKED"
     return {
         "schema_version": "m8_m9_runtime_truth_gate.2",
+        "phase": gate_phase,
         "truth_status": truth_status,
         "blocker_class": (
             None if truth_status == "PASS" else BLOCKER_CLASS_CODE_ARTIFACT_CONTRACT
@@ -271,6 +345,7 @@ def evaluate_runtime_truth_gate(
         "sniper_assessment": sniper_assessment,
         "per_artifact": per_artifact,
         "session_id": shared_session_id,
+        "session_binding_complete": session_binding_complete,
         "session_ids_by_artifact": sessions,
         "window_seconds": effective_window,
         "window_max_delta_seconds": round(max_delta, 1),

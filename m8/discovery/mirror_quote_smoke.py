@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -415,6 +416,7 @@ def smoke_mirror_same_pair_routes(
     checkpoint_path: Optional[str] = None,
     progress_every: int = 5,
     token_subset: Optional[set[str]] = None,
+    quote_workers: int = 4,
 ) -> Dict[str, Any]:
     """Run lightweight quoter smoke on same-pair mirror routes; mutates routes in place."""
     routes = filter_routes_for_token_subset(routes, token_subset=token_subset)
@@ -478,81 +480,176 @@ def smoke_mirror_same_pair_routes(
         },
     )
 
-    for route in eligible:
-        attempted += 1
+    from m8.discovery.mirror_quote_cache import (
+        PersistentMirrorQuoteCache,
+        mirror_quote_cache_key,
+    )
+    from m8_1.stable_anchor.quote_negative_cache import block_bucket
+    from core.quote_lane_limiter import QuoteLaneLimiter
+
+    quote_cache = PersistentMirrorQuoteCache()
+    workers = max(1, int(quote_workers or 1))
+    lane_limiter = QuoteLaneLimiter(max_concurrent=max(1, min(workers, 2)))
+    head_block = None
+    try:
+        from web3 import Web3
+
+        w3_head = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 12}))
+        head_block = int(w3_head.eth.block_number)
+    except Exception:
+        head_block = None
+    head_bucket = block_bucket(head_block)
+    default_amount_wei = 10**15
+
+    def _smoke_route(route: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
         adapter = str(route.get("adapter_type") or "")
         dex_id = str(route.get("dex_id") or "")
-        last_route_id = str(route.get("route_id") or route.get("pool_address") or "")
-        try:
+        route_id = str(route.get("route_id") or route.get("pool_address") or "")
+        t0a, t1a = resolve_route_token_addrs(route, config)
+        focus_addr = str(
+            route.get("focus_token_address") or route.get("exotic_address") or ""
+        ).lower()
+        if focus_addr and focus_addr == t0a:
+            direction = f"{t0a}->{t1a}"
+        elif focus_addr and focus_addr == t1a:
+            direction = f"{t1a}->{t0a}"
+        else:
+            direction = f"{t0a}->{t1a}"
+        cache_key = mirror_quote_cache_key(
+            route_id=route_id,
+            direction=direction,
+            amount_wei=default_amount_wei,
+            block_bucket=head_bucket,
+        )
+        cached = quote_cache.get(cache_key)
+        if cached and not force_retry:
+            route["quote_smoke_status"] = cached
+            route["quote_smoke"] = cached
+            return route, cached
+
+        def _execute_smoke() -> str:
             if adapter in _V3_ADAPTERS:
                 quoter = _dex_quoter(config or {}, dex_id)
-                status = (
+                return (
                     _smoke_v3_route(
                         route, rpc_url=rpc_url, quoter=quoter, config=config
                     )
                     if quoter
                     else "QUOTE_FAIL_NO_QUOTER"
                 )
-            elif adapter == "uniswap_v4":
+            if adapter == "uniswap_v4":
                 quoter = _dex_quoter(config or {}, dex_id)
-                status = (
+                return (
                     _smoke_v4_route(
                         route, rpc_url=rpc_url, quoter=quoter, config=config
                     )
                     if quoter
                     else "QUOTE_FAIL_NO_QUOTER"
                 )
-            elif adapter in ("uniswap_v2", "ve33", "aerodrome_v2_stable"):
-                status = _smoke_v2_route(route, rpc_url=rpc_url)
-            else:
-                status = "QUOTE_SKIP_UNSUPPORTED_ADAPTER"
+            if adapter in ("uniswap_v2", "ve33", "aerodrome_v2_stable"):
+                return _smoke_v2_route(route, rpc_url=rpc_url)
+            return "QUOTE_SKIP_UNSUPPORTED_ADAPTER"
+
+        try:
+            status = lane_limiter.call(rpc_url, _execute_smoke)
         except Exception as exc:
             status = f"QUOTE_FAIL_{type(exc).__name__}"
-            last_rpc_error = str(exc)
         route["quote_smoke_status"] = status
         route["quote_smoke"] = status
-        t0a, t1a = resolve_route_token_addrs(route, config)
+        quote_cache.put(cache_key, status)
         if t0a:
             route["token0_addr"] = t0a
         if t1a:
             route["token1_addr"] = t1a
-        by_status[status] = by_status.get(status, 0) + 1
-        if _status_quoteable(status):
-            quote_ok += 1
-        else:
-            quote_fail += 1
-            if "429" in status.upper() or "RATE" in status.upper():
-                last_rpc_error = status
+        return route, status
 
-        if progress_every > 0 and (
-            attempted % progress_every == 0 or attempted == total_eligible
-        ):
-            ckpt = {
-                "status": "running",
-                "reason": "OK",
-                "processed_routes": attempted,
-                "routes_total": total_eligible,
-                "quote_ok": quote_ok,
-                "quote_fail": quote_fail,
-                "last_route_id": last_route_id,
-                "last_rpc_error": last_rpc_error,
-            }
-            write_mirror_checkpoint(ckpt_path, ckpt)
-            print(
-                "MIRROR_SMOKE_PROGRESS: "
-                + json.dumps(
-                    {
-                        "processed": attempted,
-                        "total": total_eligible,
+    if workers <= 1:
+        route_iter = eligible
+    else:
+        route_iter = None
+
+    if route_iter is not None:
+        for route in route_iter:
+            attempted += 1
+            route, status = _smoke_route(route)
+            last_route_id = str(route.get("route_id") or route.get("pool_address") or "")
+            by_status[status] = by_status.get(status, 0) + 1
+            if _status_quoteable(status):
+                quote_ok += 1
+            else:
+                quote_fail += 1
+                if "429" in status.upper() or "RATE" in status.upper():
+                    last_rpc_error = status
+            if progress_every > 0 and (
+                attempted % progress_every == 0 or attempted == total_eligible
+            ):
+                ckpt = {
+                    "status": "running",
+                    "reason": "OK",
+                    "processed_routes": attempted,
+                    "routes_total": total_eligible,
+                    "quote_ok": quote_ok,
+                    "quote_fail": quote_fail,
+                    "last_route_id": last_route_id,
+                    "last_rpc_error": last_rpc_error,
+                }
+                write_mirror_checkpoint(ckpt_path, ckpt)
+                print(
+                    "MIRROR_SMOKE_PROGRESS: "
+                    + json.dumps(
+                        {
+                            "processed": attempted,
+                            "total": total_eligible,
+                            "quote_ok": quote_ok,
+                            "quote_fail": quote_fail,
+                            "last_route_id": last_route_id,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_smoke_route, route): route for route in eligible}
+            for fut in as_completed(futures):
+                attempted += 1
+                route, status = fut.result()
+                last_route_id = str(route.get("route_id") or route.get("pool_address") or "")
+                by_status[status] = by_status.get(status, 0) + 1
+                if _status_quoteable(status):
+                    quote_ok += 1
+                else:
+                    quote_fail += 1
+                    if "429" in status.upper() or "RATE" in status.upper():
+                        last_rpc_error = status
+                if progress_every > 0 and (
+                    attempted % progress_every == 0 or attempted == total_eligible
+                ):
+                    ckpt = {
+                        "status": "running",
+                        "reason": "OK",
+                        "processed_routes": attempted,
+                        "routes_total": total_eligible,
                         "quote_ok": quote_ok,
                         "quote_fail": quote_fail,
                         "last_route_id": last_route_id,
-                    },
-                    sort_keys=True,
-                ),
-                flush=True,
-            )
-
+                        "last_rpc_error": last_rpc_error,
+                    }
+                    write_mirror_checkpoint(ckpt_path, ckpt)
+                    print(
+                        "MIRROR_SMOKE_PROGRESS: "
+                        + json.dumps(
+                            {
+                                "processed": attempted,
+                                "total": total_eligible,
+                                "quote_ok": quote_ok,
+                                "quote_fail": quote_fail,
+                                "last_route_id": last_route_id,
+                            },
+                            sort_keys=True,
+                        ),
+                        flush=True,
+                    )
     exit_code, exit_class = classify_mirror_smoke_exit(
         quote_ok=quote_ok, reason="OK"
     )
@@ -580,7 +677,11 @@ def smoke_mirror_same_pair_routes(
         "force_retry": force_retry,
         "exit_code": exit_code,
         "exit_class": exit_class,
+        "mirror_quote_cache": quote_cache.stats(),
+        "quote_lane_limiter": lane_limiter.stats(),
         "checkpoint_path": str(ckpt_path),
+        "quote_cache": quote_cache.stats(),
+        "quote_workers": workers,
     }
 
 

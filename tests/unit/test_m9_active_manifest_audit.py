@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import yaml
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "config" / "m9_active_manifest.yaml"
@@ -21,6 +22,15 @@ def test_manifest_loads_and_lists_primary():
 
 
 def test_audit_strict_passes_when_runtime_present():
+    manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    missing_runtime = [
+        rel
+        for rel in (manifest.get("runtime_rolling_current") or [])
+        if not (ROOT / rel).is_file()
+    ]
+    if missing_runtime:
+        pytest.skip(f"runtime rolling artifacts absent: {missing_runtime}")
+
     proc = subprocess.run(
         [
             sys.executable,

@@ -57,6 +57,14 @@ def main() -> int:
     ap.add_argument("--m8-3-registry", default=str(_DEFAULT_PATHS["m8_3"]))
     ap.add_argument("--bridge", default=str(_DEFAULT_PATHS["bridge"]))
     ap.add_argument(
+        "--phase",
+        choices=("upstream", "bundle", "post_depth", "full"),
+        default="full",
+        help="upstream: M8 inputs only (before bridge build); "
+             "bundle: include bridge coherence (after bridge build); "
+             "full: both in one pass.",
+    )
+    ap.add_argument(
         "--window-seconds",
         type=int,
         default=WINDOW_MISMATCH_SECONDS,
@@ -84,6 +92,7 @@ def main() -> int:
         expansion=_load(Path(args.expansion)),
         m8_3_registry=_load(Path(args.m8_3_registry)),
         bridge=_load(Path(args.bridge)),
+        phase=str(args.phase),
         window_seconds=int(args.window_seconds),
         session_window_seconds=int(args.session_window_seconds),
     )
@@ -92,6 +101,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(verdict, indent=2), encoding="utf-8")
 
+    print("phase:", verdict.get("phase"))
     print("truth_status:", verdict["truth_status"])
     print("blocker_class:", verdict["blocker_class"])
     print("blockers:", verdict["blockers"])

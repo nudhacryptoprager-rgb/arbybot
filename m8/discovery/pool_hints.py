@@ -559,6 +559,9 @@ def write_hints_artifact(
     p.parent.mkdir(parents=True, exist_ok=True)
     artifact["schema_version"] = SCHEMA_VERSION
     artifact["generated_at_utc"] = _iso_now()
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    artifact = apply_pipeline_provenance(artifact, run_timestamp=artifact["generated_at_utc"])
     p.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

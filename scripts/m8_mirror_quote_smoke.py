@@ -51,6 +51,12 @@ def main() -> int:
         default=None,
         help="Limit smoke to focus tokens listed in subset JSON or pending queue",
     )
+    ap.add_argument(
+        "--quote-workers",
+        type=int,
+        default=4,
+        help="Parallel quote-smoke workers (default 4)",
+    )
     args = ap.parse_args()
 
     path = Path(args.expansion)
@@ -87,6 +93,7 @@ def main() -> int:
         pipeline_mode=bool(args.pipeline_mode),
         checkpoint_path=args.checkpoint_path,
         token_subset=subset,
+        quote_workers=int(args.quote_workers),
     )
     topology, quote, same_pair, debug = aggregate_mirror_readiness_from_routes(routes)
     mirror_tokens = build_mirror_token_details(routes)

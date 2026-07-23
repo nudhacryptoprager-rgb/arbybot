@@ -20,10 +20,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -32,6 +34,11 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 log = logging.getLogger("m9_enrich_bridge_depth")
+
+
+def _inventory_content_hash(inventory: Dict) -> str:
+    blob = json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:32]
 
 
 def _load_dex_quoters(dexes_path: str, chain: str) -> Dict[str, str]:
@@ -170,6 +177,7 @@ def main() -> int:
         return 1
     with inv_path.open("r", encoding="utf-8") as fh:
         inventory = json.load(fh)
+    pre_depth_content_hash = _inventory_content_hash(inventory)
 
     routes = inventory.get("active_routes", [])
     target_ids: set[str] | None = None
@@ -310,6 +318,16 @@ def main() -> int:
     if args.dry_run:
         log.info("Dry-run: not writing inventory")
         return 0
+
+    post_depth_content_hash = _inventory_content_hash(inventory)
+    from core.pipeline_provenance import ENV_PIPELINE_SESSION_ID
+
+    inventory["depth_enrichment"] = {
+        "pre_depth_content_hash": pre_depth_content_hash,
+        "post_depth_content_hash": post_depth_content_hash,
+        "depth_enriched_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "depth_enrichment_session_id": os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip(),
+    }
 
     out_path = Path(args.output or args.inventory)
     with out_path.open("w", encoding="utf-8") as fh:

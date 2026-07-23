@@ -35,6 +35,14 @@ def test_enrich_bridge_depth_writes_v4_metrics(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr("m9.graph_arb.pool_depth_probe.enrich_routes_missing_depth", _fake_enrich)
+    monkeypatch.setenv("ARBY_OFFLINE", "1")
+    from core import rpc_urls as _rpc_urls
+    import core.env as _env
+
+    monkeypatch.setattr(_rpc_urls, "resolve_productive_http_rpc", lambda chain: "https://example.invalid/rpc")
+    monkeypatch.setattr(_rpc_urls, "is_public_rpc_url", lambda url: False)
+    monkeypatch.setattr(_rpc_urls, "apply_productive_rpc_env", lambda chain: {})
+    monkeypatch.setattr(_env, "load_root_dotenv", lambda *a, **k: None)
     monkeypatch.setattr(
         sys,
         "argv",

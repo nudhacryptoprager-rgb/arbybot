@@ -67,5 +67,12 @@ def merge_hint_artifact_files(
     merged = merge_hint_artifacts(base, incoming, chain=chain)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    ts = merged.get("generated_at_utc")
+    if not ts:
+        rc = merged.get("run_context") or {}
+        ts = rc.get("run_timestamp") if isinstance(rc, dict) else None
+    merged = apply_pipeline_provenance(merged, run_timestamp=ts)
     out.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
     return merged
