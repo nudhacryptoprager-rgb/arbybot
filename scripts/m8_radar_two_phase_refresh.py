@@ -90,7 +90,19 @@ def main() -> int:
         action="store_true",
         help="Merge DexScreener phase into existing on-chain hints artifact",
     )
+    p.add_argument(
+        "--hints-output",
+        default=None,
+        help="Override rolling M8.2 external pool hints output path",
+    )
+    p.add_argument(
+        "--radar-output",
+        default=None,
+        help="Override rolling M8.2 radar candidates output path",
+    )
     args = p.parse_args()
+    hints_out = str(args.hints_output or HINTS_OUT)
+    radar_out = str(args.radar_output or RADAR_OUT)
 
     py = sys.executable
     boot = [py, "scripts/bootstrap_productive_rpc_env.py", "--", py, "-u"]
@@ -135,7 +147,7 @@ def main() -> int:
         "--max-tokens",
         str(args.max_tokens),
         "--radar-output",
-        RADAR_OUT,
+        radar_out,
         "--checkpoint-path",
         "data/tmp/m8_hint_refresh_checkpoint_ds_radar.json",
         "--provider-timeout-s",
@@ -183,7 +195,7 @@ def main() -> int:
             "--pipeline-mode",
             "verify_subset",
             "--load-radar-input",
-            RADAR_OUT,
+            radar_out,
             "--watchlist",
             args.watchlist,
             "--max-tokens",
@@ -192,7 +204,7 @@ def main() -> int:
             "--verify-mode",
             "specialized",
             "--output",
-            HINTS_OUT,
+            hints_out,
             "--checkpoint-path",
             "data/tmp/m8_hint_refresh_checkpoint_ds_verify.json",
             "--fetch-async",
@@ -211,7 +223,7 @@ def main() -> int:
         return rc
 
     if not args.skip_secondary:
-        radar = json.loads((_REPO / RADAR_OUT).read_text(encoding="utf-8"))
+        radar = json.loads((_REPO / radar_out).read_text(encoding="utf-8"))
         from m8.discovery.pool_hints import PoolHint
         from m8.discovery.radar_fast_pipeline import (
             tokens_for_secondary_sources,
@@ -271,9 +283,9 @@ def main() -> int:
                 from m8.discovery.hint_artifact_merge import merge_hint_artifact_files
 
                 merge_hint_artifact_files(
-                    _REPO / HINTS_OUT,
+                    _REPO / hints_out,
                     secondary_staging,
-                    _REPO / HINTS_OUT,
+                    _REPO / hints_out,
                     chain="base",
                 )
                 try:
@@ -324,9 +336,9 @@ def main() -> int:
             from m8.discovery.hint_artifact_merge import merge_hint_artifact_files
 
             merge_hint_artifact_files(
-                _REPO / HINTS_OUT,
+                _REPO / hints_out,
                 coingecko_staging,
-                _REPO / HINTS_OUT,
+                _REPO / hints_out,
                 chain="base",
             )
             try:
@@ -342,7 +354,7 @@ def main() -> int:
         if rc != 0:
             return rc
 
-    hpath = _REPO / HINTS_OUT
+    hpath = _REPO / hints_out
     if hpath.is_file():
         m = json.loads(hpath.read_text(encoding="utf-8")).get("metrics") or {}
         print("\n=== pipeline summary ===", flush=True)

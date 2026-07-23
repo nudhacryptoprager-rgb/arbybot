@@ -28,7 +28,10 @@ class QuoteLaneLimiter:
         self._semaphores: Dict[str, threading.Semaphore] = {}
         self._lock = threading.Lock()
         self.provider_errors = 0
-        self.rpc_wait_s = 0.0
+        self.queue_wait_s = 0.0
+        self.rpc_service_s = 0.0
+        self.backoff_s = 0.0
+        self._stats_lock = threading.Lock()
 
     def _sem_for(self, rpc_url: str) -> threading.Semaphore:
         key = str(rpc_url or "default").strip().lower()
@@ -36,6 +39,10 @@ class QuoteLaneLimiter:
             if key not in self._semaphores:
                 self._semaphores[key] = threading.Semaphore(self.max_concurrent)
             return self._semaphores[key]
+
+    def _is_rate_limit(self, exc: BaseException) -> bool:
+        msg = str(exc).upper()
+        return "429" in msg or "RATE" in msg or "TOO MANY" in msg
 
     def call(
         self,
@@ -47,32 +54,51 @@ class QuoteLaneLimiter:
         sem = self._sem_for(rpc_url)
         last_exc: Optional[BaseException] = None
         for attempt in range(self.max_retries):
+            queue_t0 = time.monotonic()
             acquired = sem.acquire(timeout=self.timeout_s)
+            with self._stats_lock:
+                self.queue_wait_s += max(0.0, time.monotonic() - queue_t0)
             if not acquired:
-                self.provider_errors += 1
+                with self._stats_lock:
+                    self.provider_errors += 1
                 raise TimeoutError(f"quote lane timeout waiting for {rpc_url}")
-            wait_t0 = time.monotonic()
+
+            released = False
+            service_t0 = time.monotonic()
             try:
                 return fn(*args, **kwargs)
             except Exception as exc:
                 last_exc = exc
-                msg = str(exc).upper()
-                if "429" in msg or "RATE" in msg or "TOO MANY" in msg:
-                    self.provider_errors += 1
-                    if attempt + 1 < self.max_retries:
-                        time.sleep(min(8.0, 0.25 * (2**attempt)))
-                        continue
+                if self._is_rate_limit(exc) and attempt + 1 < self.max_retries:
+                    with self._stats_lock:
+                        self.provider_errors += 1
+                    sem.release()
+                    released = True
+                    sleep_s = min(8.0, 0.25 * (2**attempt))
+                    with self._stats_lock:
+                        self.backoff_s += sleep_s
+                    time.sleep(sleep_s)
+                    continue
                 raise
             finally:
-                self.rpc_wait_s += max(0.0, time.monotonic() - wait_t0)
-                sem.release()
+                if not released:
+                    with self._stats_lock:
+                        self.rpc_service_s += max(0.0, time.monotonic() - service_t0)
+                    sem.release()
         if last_exc is not None:
             raise last_exc
         raise RuntimeError("quote lane call failed without exception")
 
     def stats(self) -> Dict[str, Any]:
-        return {
-            "provider_errors": int(self.provider_errors),
-            "rpc_wait_s": round(self.rpc_wait_s, 3),
-            "endpoints": len(self._semaphores),
-        }
+        with self._stats_lock:
+            return {
+                "provider_errors": int(self.provider_errors),
+                "queue_wait_s": round(self.queue_wait_s, 3),
+                "rpc_service_s": round(self.rpc_service_s, 3),
+                "backoff_s": round(self.backoff_s, 3),
+                "rpc_wait_s": round(
+                    self.queue_wait_s + self.rpc_service_s + self.backoff_s,
+                    3,
+                ),
+                "endpoints": len(self._semaphores),
+            }

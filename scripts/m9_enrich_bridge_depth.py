@@ -20,7 +20,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -28,6 +27,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
+
+from monitoring.bridge_content_hash import bridge_inventory_content_hash
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -37,8 +38,7 @@ log = logging.getLogger("m9_enrich_bridge_depth")
 
 
 def _inventory_content_hash(inventory: Dict) -> str:
-    blob = json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(blob).hexdigest()[:32]
+    return bridge_inventory_content_hash(inventory)
 
 
 def _load_dex_quoters(dexes_path: str, chain: str) -> Dict[str, str]:

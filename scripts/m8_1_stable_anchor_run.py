@@ -77,7 +77,10 @@ def _load_web3(rpc_url: str) -> Any:
     """Return a Web3 instance for the given HTTP RPC URL."""
     try:
         from web3 import Web3  # type: ignore[import]
-        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+        from m8_1.stable_anchor.quote_probe import rpc_call_timeout_s
+
+        timeout_s = rpc_call_timeout_s()
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": timeout_s}))
         return w3
     except ImportError as e:
         raise RuntimeError(f"web3 not installed: {e}") from e
@@ -338,8 +341,9 @@ def _probe_all(
             return passed
         pending = list(tasks)
         cursor = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            active: Dict[Any, Tuple[TokenInfo, TokenInfo, DexRoute, float]] = {}
+        pool = ThreadPoolExecutor(max_workers=workers)
+        active: Dict[Any, Tuple[TokenInfo, TokenInfo, DexRoute, float]] = {}
+        try:
             while (cursor < len(pending) or active) and time.time() <= deadline_ts:
                 while len(active) < workers and cursor < len(pending):
                     if time.time() > deadline_ts:
@@ -366,7 +370,6 @@ def _probe_all(
                 if not done and time.time() > deadline_ts:
                     for fut in list(active):
                         fut.cancel()
-                    pool.shutdown(wait=False, cancel_futures=True)
                     break
                 for fut in done:
                     t0, t1, route, size_usd = active.pop(fut)
@@ -386,7 +389,8 @@ def _probe_all(
             if time.time() > deadline_ts and active:
                 for fut in list(active):
                     fut.cancel()
-                pool.shutdown(wait=False, cancel_futures=True)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         return passed
 
     base_tasks = [(t0, t1, route, min_size) for t0, t1 in pairs for route in routes]
@@ -426,6 +430,8 @@ def _probe_all(
         metrics["rpc_wait_s"] = lane_limiter.rpc_wait_s
     probe_elapsed_s = max(0.001, time.time() - probe_t0)
     metrics["routes_per_s"] = round(candidates_total / probe_elapsed_s, 3)
+    if hasattr(neg_cache, "flush"):
+        neg_cache.flush()
     return near_miss, metrics
 
 
@@ -550,11 +556,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="Streaming batch manifest for session/fingerprint validation",
     )
+    parser.add_argument(
+        "--streaming-batch-index",
+        type=int,
+        default=None,
+        help="Resolve streaming batch paths from pipeline session + batch index",
+    )
+    parser.add_argument(
+        "--publish-rolling",
+        action="store_true",
+        help="Also publish batch output to rolling m8_1_stable_anchor_latest.json",
+    )
     args = parser.parse_args(argv)
 
     setup_logging(json_format=args.log_json)
 
+    if args.streaming_batch_index is not None:
+        from core.pipeline_streaming import resolve_streaming_batch_paths
+
+        batch_paths = resolve_streaming_batch_paths(int(args.streaming_batch_index))
+        args.probe_mode = "fresh_delta"
+        args.token_subset_file = str(batch_paths.token_subset)
+        args.streaming_manifest = str(batch_paths.manifest)
+
     output_path = Path(args.output)
+    if args.streaming_batch_index is not None and args.output == _DEFAULT_OUTPUT:
+        output_path = batch_paths.m81_output
 
     if args.offline:
         return _offline_refresh(output_path)
@@ -681,6 +708,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _write_artifact(output_path, near_miss, metrics, run_ts,
                     freshness_s, gate_acceptance, rpc_url, args.duration_minutes)
+    if args.publish_rolling:
+        import shutil
+        from core.pipeline_streaming import DEFAULT_M81_ROLLING
+
+        rolling_path = Path(DEFAULT_M81_ROLLING)
+        rolling_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(output_path, rolling_path)
     _PROBE_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     _PROBE_METRICS_PATH.write_text(
         json.dumps(

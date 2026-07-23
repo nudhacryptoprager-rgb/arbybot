@@ -5,6 +5,7 @@ and returns a :class:`QuoteResult`.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -25,6 +26,17 @@ _V4_ZERO_HOOKS = "0x" + "0" * 40  # zero address = vanilla pool
 #   returns (uint256 amountOut, uint16 fee)   ← fee is dynamic OUTPUT, never an input
 # keccak256("quoteExactInputSingle(address,address,uint256,uint160)")[:4] = 2d9ebd1d
 _ALGEBRA_SELECTOR = bytes.fromhex("2d9ebd1d")
+
+_DEFAULT_RPC_CALL_TIMEOUT_S = float(os.environ.get("ARBY_M81_RPC_CALL_TIMEOUT_S", "12"))
+
+
+def rpc_call_timeout_s() -> float:
+    return _DEFAULT_RPC_CALL_TIMEOUT_S
+
+
+def _eth_call(w3: Any, call_dict: dict) -> Any:
+    """eth_call via Web3 HTTP provider request timeout (no thread-per-call)."""
+    return w3.eth.call(call_dict)
 
 
 @dataclass(frozen=True)
@@ -190,12 +202,12 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
         rpc_throttle.acquire(n=2)  # rate-limit: 2 tokens for eth_chainId + eth_call (web3 v6 pattern)
         if route.adapter_type in ("uniswap_v3",):
             calldata = _encode_v3_call(token_in.address, token_out.address, amount_in, route.fee)
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             amount_out, gas_est = _decode_quote_response(result.hex() if isinstance(result, bytes) else result)
         elif route.adapter_type == "algebra":
             # Algebra dynamic-fee quoter (Camelot V3 / QuickSwap V3): no fee-tier input.
             calldata = _encode_algebra_call(token_in.address, token_out.address, amount_in)
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             amount_out = _decode_algebra_response(result.hex() if isinstance(result, bytes) else result)
             gas_est = None
         elif route.adapter_type == "aerodrome_slipstream":
@@ -204,14 +216,14 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
             calldata = _encode_slipstream_call(
                 token_in.address, token_out.address, amount_in, route.tick_spacing
             )
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             amount_out, gas_est = _decode_quote_response(result.hex() if isinstance(result, bytes) else result)
         elif route.adapter_type == "aerodrome_v2_stable":
             # getAmountOut(uint amountIn, address tokenIn) selector: f140a35a
             addr_in_padded = int(token_in.address, 16).to_bytes(32, "big")
             amount_bytes = amount_in.to_bytes(32, "big")
             calldata = "0x" + "f140a35a" + amount_bytes.hex() + addr_in_padded.hex()
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result[2:]
             amount_out = int(raw[:64], 16)
             gas_est = None
@@ -226,7 +238,7 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
             # phantom). Select by declared pool_kind; unknown defaults to stable.
             _curve_selector = "556d6e9f" if route.pool_kind == "crypto" else "5e0d443f"
             calldata = "0x" + _curve_selector + idx_in.to_bytes(32, "big").hex() + idx_out.to_bytes(32, "big").hex() + amount_in.to_bytes(32, "big").hex()
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result[2:]
             amount_out = int(raw[:64], 16)
             gas_est = None
@@ -256,13 +268,13 @@ def probe_quote(w3: Any, route: "DexRoute", token_in: "TokenInfo", token_out: "T
                 token_in.address, token_out.address, route.fee, route.tick_spacing,
                 hooks, amount_in
             )
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             hex_res = result.hex() if isinstance(result, bytes) else result
             amount_out, gas_est = _decode_v4_response(hex_res, zero_for_one)
         elif route.adapter_type == "uniswap_v2":
             # getReserves() selector: 0902f1ac
             calldata = "0x0902f1ac"
-            result = w3.eth.call({"to": quoter_addr, "data": calldata})
+            result = _eth_call(w3, {"to": quoter_addr, "data": calldata})
             raw = result.hex() if isinstance(result, bytes) else result
             if raw.startswith("0x"):
                 raw = raw[2:]

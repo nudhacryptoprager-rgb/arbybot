@@ -46,8 +46,10 @@ from core.pipeline_provenance import (  # noqa: F401
 )
 from core.pipeline_slo import PipelineSloTracker
 from core.pipeline_streaming import (
+    batched_m8_refresh_mode,
     m81_streaming_cli_args,
     resolve_sniper_minutes,
+    resolve_streaming_batch_paths,
     resolve_streaming_batches,
     streaming_enabled,
 )
@@ -154,6 +156,14 @@ POST_BRIDGE_FINGERPRINT_PREFIXES: tuple[str, ...] = (
 )
 PIPELINE_CURRENT_PATH = Path("data/tmp/start_pipeline_current.json")
 M81_PROBE_METRICS_PATH = Path("data/tmp/m8_1_probe_metrics_latest.json")
+STREAMING_TOKEN_SUBSET_SENTINEL = "__ARBY_STREAMING_TOKEN_SUBSET__"
+STREAMING_M81_OUTPUT_SENTINEL = "__ARBY_STREAMING_M81_OUTPUT__"
+STREAMING_M82_HINTS_SENTINEL = "__ARBY_STREAMING_M82_HINTS__"
+STREAMING_M82_RADAR_SENTINEL = "__ARBY_STREAMING_M82_RADAR__"
+STREAMING_M82_EXPANSION_SENTINEL = "__ARBY_STREAMING_M82_EXPANSION__"
+STREAMING_M83_REGISTRY_SENTINEL = "__ARBY_STREAMING_M83_REGISTRY__"
+STREAMING_UPSTREAM_GATE_SENTINEL = "__ARBY_STREAMING_UPSTREAM_GATE__"
+ENV_STREAMING_FINAL_BATCH_INDEX = "ARBY_STREAMING_FINAL_BATCH_INDEX"
 _CURRENT_PIPELINE_ARGS: argparse.Namespace | None = None
 PENDING_1_TO_2_QUEUE_PATH = Path("data/tmp/m8_time_to_mirror_pending_queue_latest.json")
 WATCHLIST_PATH = Path("data/tmp/m8_token_watchlist_latest.json")
@@ -770,6 +780,8 @@ def _run_internal_pipeline_step(internal: str, step: dict[str, Any] | None = Non
         return _run_mirror_selection_pass()
     if internal == "gate_recall_verify_admission":
         return _gate_recall_verify_admission()
+    if internal == "streaming_batch_upstream_gate":
+        return _run_streaming_batch_upstream_gate(step or {})
     if internal == "streaming_batch_manifest":
         session_id = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
         if not session_id:
@@ -854,19 +866,101 @@ def _m81_stable_anchor_cmd(
     return cmd
 
 
-def _m82_cross_dex_expand_cmd(*, hot: bool = False) -> list[str]:
+def _streaming_paths_for_step(step: dict[str, Any]):
+    batch_index = step.get("streaming_batch_index")
+    if batch_index is not None:
+        return resolve_streaming_batch_paths(int(batch_index))
+    if step.get("streaming_final_batch"):
+        final_idx = int(os.environ.get(ENV_STREAMING_FINAL_BATCH_INDEX, "0") or "0")
+        if final_idx > 0:
+            return resolve_streaming_batch_paths(final_idx)
+    return None
+
+
+def _resolve_streaming_step_cmd(step: dict[str, Any], cmd: list[str]) -> list[str]:
+    paths = _streaming_paths_for_step(step)
+    if paths is None:
+        return cmd
+    resolved: list[str] = []
+    for token in cmd:
+        if token == STREAMING_TOKEN_SUBSET_SENTINEL:
+            resolved.append(str(paths.token_subset))
+        elif token == STREAMING_M81_OUTPUT_SENTINEL:
+            resolved.append(str(paths.m81_output))
+        elif token == STREAMING_M82_HINTS_SENTINEL:
+            resolved.append(str(paths.m82_hints))
+        elif token == STREAMING_M82_RADAR_SENTINEL:
+            resolved.append(str(paths.m82_radar))
+        elif token == STREAMING_M82_EXPANSION_SENTINEL:
+            resolved.append(str(paths.m82_expansion))
+        elif token == STREAMING_M83_REGISTRY_SENTINEL:
+            resolved.append(str(paths.m83_registry))
+        elif token == STREAMING_UPSTREAM_GATE_SENTINEL:
+            resolved.append(str(paths.upstream_gate_output))
+        else:
+            resolved.append(token)
+    return resolved
+
+
+def _run_streaming_batch_upstream_gate(step: dict[str, Any]) -> int:
+    batch_index = int(step.get("streaming_batch_index", 1))
+    session_id = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
+    paths = resolve_streaming_batch_paths(batch_index, session_id=session_id)
+    from monitoring.runtime_truth_gate import evaluate_runtime_truth_gate
+
+    def _load(path: Path) -> dict[str, Any] | None:
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    verdict = evaluate_runtime_truth_gate(
+        sniper=_load(Path("data/runs/_rolling/new_pool_sniper_latest.json")),
+        anchor=_load(paths.m81_output),
+        hints=_load(paths.m82_hints),
+        expansion=_load(paths.m82_expansion),
+        m8_3_registry=_load(paths.m83_registry),
+        phase="upstream",
+    )
+    paths.upstream_gate_output.parent.mkdir(parents=True, exist_ok=True)
+    paths.upstream_gate_output.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+    print("phase:", verdict.get("phase"))
+    print("truth_status:", verdict.get("truth_status"))
+    print("written:", paths.upstream_gate_output)
+    return 0 if verdict.get("truth_status") == "PASS" else 1
+
+
+def _m82_cross_dex_expand_cmd(
+    *,
+    hot: bool = False,
+    token_subset: str | None = None,
+    external_hints: str | None = None,
+    anchor: str | None = None,
+    output: str | None = None,
+) -> list[str]:
     scan_mode = "hot_path_incremental" if hot else "candidate_summary"
     cmd = [
         "scripts/m8_cross_dex_expand.py",
         "--chain",
         "base",
         "--external-hints",
-        EXTERNAL_HINTS_ROLLING,
+        external_hints or EXTERNAL_HINTS_ROLLING,
         "--scan-mode",
         scan_mode,
     ]
-    if hot:
-        cmd.extend(["--token-subset-file", TIME_TO_MIRROR_EXPAND_SUBSET])
+    if anchor:
+        cmd.extend(["--anchor", anchor])
+    if output:
+        cmd.extend(["--output", output])
+    if hot or token_subset:
+        cmd.extend(
+            [
+                "--token-subset-file",
+                token_subset or TIME_TO_MIRROR_EXPAND_SUBSET,
+            ]
+        )
     return _productive_rpc_cmd(*cmd)
 
 
@@ -1152,7 +1246,7 @@ def _run_pipeline_step_subprocess(
         log_fh.write(f"<<< {name}: internal={internal} exit={rc}\n")
         return rc, None if rc in step["allow_exit_codes"] else f"exit={rc}"
 
-    cmd = list(step["cmd"])
+    cmd = _resolve_streaming_step_cmd(step, list(step["cmd"]))
     env = os.environ.copy()
     env.update(step.get("env") or {})
     pipeline_sid = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
@@ -1207,6 +1301,14 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         int((ttm_profile or {}).get("max_radar_tokens") or getattr(args, "max_radar_tokens", 753) or 753)
     )
     streaming = bool(getattr(args, "streaming", False)) or streaming_enabled()
+    streaming_final_batch_index: int | None = None
+    if streaming:
+        streaming_final_batch_index = len(
+            resolve_streaming_batches(
+                int(getattr(args, "sniper_minutes", 45) or 45),
+                batch_minutes=int(getattr(args, "sniper_batch_minutes", 15) or 15),
+            )
+        )
     sniper_minutes = str(
         resolve_sniper_minutes(
             int(getattr(args, "sniper_minutes", 45) or 45),
@@ -1263,6 +1365,74 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                         f"m8_1_stable_anchor_batch_{batch_index}",
                         m81_cmd,
                         streaming_batch_index=batch_index,
+                    )
+                )
+                radar_cmd = _productive_rpc_cmd(
+                    "scripts/m8_radar_two_phase_refresh.py",
+                    "--max-tokens",
+                    max_radar,
+                    "--lane-mode",
+                    "fresh_first",
+                    "--skip-acceptance",
+                    "--token-concurrency",
+                    token_concurrency,
+                    "--token-subset-file",
+                    STREAMING_TOKEN_SUBSET_SENTINEL,
+                    "--hints-output",
+                    STREAMING_M82_HINTS_SENTINEL,
+                    "--radar-output",
+                    STREAMING_M82_RADAR_SENTINEL,
+                )
+                if skip_coingecko:
+                    radar_cmd.append("--skip-coingecko")
+                steps.append(
+                    _pipeline_step(
+                        f"m8_2_radar_two_phase_batch_{batch_index}",
+                        radar_cmd,
+                        streaming_batch_index=batch_index,
+                    )
+                )
+                steps.append(
+                    _pipeline_step(
+                        f"m8_2_cross_dex_expand_batch_{batch_index}",
+                        _m82_cross_dex_expand_cmd(
+                            hot=True,
+                            token_subset=STREAMING_TOKEN_SUBSET_SENTINEL,
+                            external_hints=STREAMING_M82_HINTS_SENTINEL,
+                            anchor=STREAMING_M81_OUTPUT_SENTINEL,
+                            output=STREAMING_M82_EXPANSION_SENTINEL,
+                        ),
+                        streaming_batch_index=batch_index,
+                    )
+                )
+                m83_cmd = _productive_rpc_cmd(
+                    "scripts/m8_3_token_metadata_registry_refresh.py",
+                    "--chain",
+                    "base",
+                    "--task-mode",
+                    "aggregated",
+                    "--with-dex-workers",
+                    "--dex-worker-concurrency",
+                    "4",
+                    "--max-onchain-probes",
+                    "120",
+                    "--output",
+                    STREAMING_M83_REGISTRY_SENTINEL,
+                )
+                steps.append(
+                    _pipeline_step(
+                        f"m8_3_registry_refresh_batch_{batch_index}",
+                        m83_cmd,
+                        streaming_batch_index=batch_index,
+                    )
+                )
+                steps.append(
+                    _pipeline_step(
+                        f"m8_m9_runtime_truth_gate_upstream_batch_{batch_index}",
+                        [],
+                        internal="streaming_batch_upstream_gate",
+                        streaming_batch_index=batch_index,
+                        allow_exit_codes=(0,),
                     )
                 )
             return
@@ -1647,22 +1817,38 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
 
     def add_m9() -> None:
-        # Runtime truth admission gate (Step 2 fix): mandatory step that
-        # refuses the M8 -> M9 bundle before any bridge/shadow step runs
-        # when the upstream evidence is a stub, stale, or stitched from
-        # mixed runtime windows / mismatched session_ids. Cited artifacts
-        # follow the same defaults as scripts/m8_m9_runtime_truth_gate.py.
+        use_batched_final = streaming_final_batch_index is not None
+        m83_registry = (
+            STREAMING_M83_REGISTRY_SENTINEL
+            if use_batched_final
+            else "data/runs/_rolling/m8_3_token_metadata_registry_latest.json"
+        )
+        upstream_gate_cmd = [
+            "scripts/m8_m9_runtime_truth_gate.py",
+            "--phase",
+            "upstream",
+            "--output",
+            "data/tmp/m8_m9_runtime_truth_gate_upstream_latest.json",
+        ]
+        if use_batched_final:
+            upstream_gate_cmd.extend(
+                [
+                    "--anchor",
+                    STREAMING_M81_OUTPUT_SENTINEL,
+                    "--hints",
+                    STREAMING_M82_HINTS_SENTINEL,
+                    "--expansion",
+                    STREAMING_M82_EXPANSION_SENTINEL,
+                    "--m8-3-registry",
+                    STREAMING_M83_REGISTRY_SENTINEL,
+                ]
+            )
         steps.append(
             _pipeline_step(
                 "m8_m9_runtime_truth_gate_upstream",
-                _py_cmd(
-                    "scripts/m8_m9_runtime_truth_gate.py",
-                    "--phase",
-                    "upstream",
-                    "--output",
-                    "data/tmp/m8_m9_runtime_truth_gate_upstream_latest.json",
-                ),
+                _py_cmd(*upstream_gate_cmd),
                 allow_exit_codes=(0,),
+                streaming_final_batch=use_batched_final,
                 description=(
                     "Upstream admission: refuse M8/M8.1/M8.2/M8.3 bundle when "
                     "sniper is stub/stale or inputs come from mixed windows."
@@ -1679,12 +1865,13 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     "--no-registry",
                     "--include-expansion-duplicates-for-shadow",
                     "--metadata-registry",
-                    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+                    m83_registry,
                     "--output",
                     "data/tmp/m9_bridge_curve_probe.json",
                     "--no-enforce-m8-provenance",
                 ),
                 env={"ARBY_M9_CURVE_ADMIT_ALL": "1"},
+                streaming_final_batch=use_batched_final,
             )
         )
         steps.append(
@@ -1707,11 +1894,12 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 _py_cmd(
                     "scripts/m9_bridge_build.py",
                     "--metadata-registry",
-                    "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
+                    m83_registry,
                     "--output",
                     PRODUCTION_BRIDGE,
                 ),
                 env={"ARBY_CURVE_POOL_INDICES": "data/runs/_rolling/m9_curve_pool_indices_latest.json"},
+                streaming_final_batch=use_batched_final,
             )
         )
         steps.append(
@@ -2215,8 +2403,9 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         add_cross_chain_research()
     elif mode in {"m8_m9", "full"}:
         add_m8()
-        add_m82()
-        add_m83()
+        if not streaming:
+            add_m82()
+            add_m83()
         add_m9()
     else:
         raise ValueError(f"unknown pipeline mode: {mode}")
@@ -2327,6 +2516,12 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         os.environ["ARBY_SNIPER_BATCH_MINUTES"] = str(
             int(getattr(args, "sniper_batch_minutes", 15) or 15)
         )
+        final_batches = resolve_streaming_batches(
+            int(getattr(args, "sniper_minutes", 45) or 45),
+            batch_minutes=int(getattr(args, "sniper_batch_minutes", 15) or 15),
+        )
+        os.environ[ENV_STREAMING_FINAL_BATCH_INDEX] = str(len(final_batches))
+        os.environ["ARBY_PIPELINE_MODE"] = batched_m8_refresh_mode(streaming=True)
     slo_tracker = PipelineSloTracker()
     log_path = Path(getattr(args, "pipeline_log", "") or "data/tmp/start_pipeline_latest.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2713,7 +2908,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--streaming",
         action="store_true",
         default=False,
-        help="Streaming M8 handoff: shorter sniper batches + fresh_delta M8.1 probing",
+        help=(
+            "Batched M8 refresh (batched_m8_refresh): per-batch sniper→M8.1→M8.2→M8.3 "
+            "with session-namespaced artifacts, then one M9 pass on the final batch bundle"
+        ),
     )
     ap.add_argument(
         "--sniper-batch-minutes",

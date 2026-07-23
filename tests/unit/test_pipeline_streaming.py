@@ -65,5 +65,5 @@ def test_write_manifest_emits_subset_file(tmp_path: Path):
     assert manifest["batch_index"] == 2
     assert Path(manifest["token_subset_file"]).is_file()
     args = m81_streaming_cli_args(batch_index=2)
-    assert "--token-subset-file" in args
-    assert "--streaming-manifest" in args
+    assert "--streaming-batch-index" in args
+    assert "--publish-rolling" in args

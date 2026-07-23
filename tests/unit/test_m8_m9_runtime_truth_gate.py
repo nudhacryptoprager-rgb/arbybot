@@ -169,9 +169,13 @@ def test_bundle_phase_requires_bridge():
 
 def test_post_depth_phase_requires_bridge():
     bundle = _with_bound_session(_coherent_bundle())
+    bridge_body = dict(bundle["bridge"])
+    from monitoring.bridge_content_hash import bridge_inventory_content_hash
+
+    post_hash = bridge_inventory_content_hash(bridge_body)
     bundle["bridge"]["depth_enrichment"] = {
         "pre_depth_content_hash": "pre-hash",
-        "post_depth_content_hash": "post-hash",
+        "post_depth_content_hash": post_hash,
         "depth_enriched_at_utc": _iso(NOW - timedelta(minutes=3)),
         "depth_enrichment_session_id": "session-test-bound",
     }

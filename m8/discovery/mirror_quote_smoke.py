@@ -668,6 +668,7 @@ def smoke_mirror_same_pair_routes(
             "exit_class": exit_class,
         },
     )
+    quote_cache.flush()
     return {
         "attempted": attempted,
         "quote_ok": quote_ok,

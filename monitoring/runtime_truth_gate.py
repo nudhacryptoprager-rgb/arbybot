@@ -38,6 +38,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from monitoring.bridge_content_hash import bridge_inventory_content_hash
 from monitoring.sniper_artifacts import (
     M9_SNIPER_BLOCKER,
     assess_sniper_artifact_for_m9,
@@ -319,6 +320,9 @@ def evaluate_runtime_truth_gate(
         post_hash = str(depth_meta.get("post_depth_content_hash") or "")
         if pre_hash and post_hash and pre_hash == post_hash:
             blockers.append("DEPTH_ENRICHMENT_HASH_UNCHANGED")
+        recomputed = bridge_inventory_content_hash(bridge)
+        if post_hash and recomputed != post_hash:
+            blockers.append("DEPTH_ENRICHMENT_HASH_MISMATCH")
         depth_sid = str(depth_meta.get("depth_enrichment_session_id") or "").strip()
         if shared_session_id and depth_sid and depth_sid != shared_session_id:
             blockers.append("DEPTH_ENRICHMENT_SESSION_MISMATCH")
