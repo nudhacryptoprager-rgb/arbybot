@@ -1,7 +1,7 @@
 # AGENTS.md - ARBY3 / arbybot (Codex Agent Rules)
 
 > Scope: this file is the Codex / GPT team-lead reviewer contract.
-> OpenCode developer-agent work is governed by `OPENCODE.md`.
+> Cursor developer-agent work is governed by `CURSOR.md` and `.cursor/rules/*.mdc`.
 > Independent auditor work is governed by `docs/agent_context/AUDITOR_CONTRACT.md`.
 > If any executor or auditor loads this file automatically, it must use only the source-of-truth,
 > artifact, safety, and documentation constraints here; it must not adopt the

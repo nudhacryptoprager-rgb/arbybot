@@ -1,19 +1,16 @@
 ---
-description: Legacy Cursor compatibility; active executor contract is OPENCODE.md.
+description: ARBY3 source-of-truth order for Cursor executor work.
 globs: ["**/*"]
 alwaysApply: true
 ---
 
-# Legacy Cursor Compatibility
+# Source Of Truth
 
-- Cursor is no longer the active ARBY3 executor.
-- If Cursor opens this repo accidentally, follow `OPENCODE.md` for executor
-  boundaries and keep work read-only unless the user explicitly asks for Cursor.
 - Follow this source-of-truth order when context conflicts:
   1. `Roadmap.md`
   2. Active milestone files under `docs/status/`
   3. Runtime artifact paths supplied by the user or Codex reviewer
-- `OPENCODE.md` defines active executor behavior.
+- `CURSOR.md` and `.cursor/rules/*.mdc` define Cursor executor behavior.
 - `AGENTS.md` defines the Codex reviewer role. If Cursor loads it, use its
   safety and artifact constraints only; do not adopt its reviewer persona or
   final-response format.

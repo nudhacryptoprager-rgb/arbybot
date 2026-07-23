@@ -1,5 +1,5 @@
 ---
-description: Documentation discipline for legacy Cursor edits.
+description: Documentation discipline for Cursor edits.
 globs: ["docs/**/*.md", "*.md", ".cursor/rules/*.mdc"]
 alwaysApply: true
 ---

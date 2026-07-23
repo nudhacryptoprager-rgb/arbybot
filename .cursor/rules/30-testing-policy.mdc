@@ -1,5 +1,5 @@
 ---
-description: Test order and loop limits for legacy Cursor patch tasks.
+description: Test order and loop limits for Cursor patch tasks.
 globs: ["**/*"]
 alwaysApply: true
 ---
@@ -7,7 +7,7 @@ alwaysApply: true
 # Testing Policy
 
 - Start with the narrowest relevant targeted test.
-- Then run the broader gate requested by Codex or the user.
+- Then run the broader gate requested by GPT/Codex or the user.
 - Use Windows Python as `py -3.11`; do not use another Python version.
 - Standard deterministic gates are:
   - `py -3.11 scripts/check_repo_safety.py`

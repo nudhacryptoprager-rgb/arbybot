@@ -6,12 +6,12 @@ files, or rolling artifacts.
 
 ## Operating Model
 
-- Codex/team lead owns planning, review, priority, and acceptance decisions.
-- OpenCode is the active executor for small, explicit patch tasks.
-- Each OpenCode task should name 3 to 7 files and one measurable goal.
+- GPT/Codex team lead owns planning, review, priority, and acceptance decisions.
+- Cursor is the active executor for small, explicit patch tasks.
+- Each Cursor task should name 3 to 7 files and one measurable goal.
 - After a long exchange on one task, compact the handoff to the latest brief,
   current context, target files, and failing command.
-- Use the configured OpenCode default model for simple patches. Reserve premium
+- Use the configured Cursor default model for simple patches. Reserve premium
   models for hard debugging only after user approval.
 - Opus/Fable auditors are read-only reviewers; they do not execute patches or
   close milestones.
@@ -34,7 +34,7 @@ commit are only for reproducibility.
 - Execution remains disabled unless the user gives an explicit separate unlock
   instruction after evidence review.
 
-## OpenCode Boundaries
+## Cursor Boundaries
 
 - Do not read or edit secrets, `.env`, runtime artifacts, logs, or virtual envs.
 - Do not manually edit rolling artifacts.
@@ -48,7 +48,7 @@ commit are only for reproducibility.
 - Then run the broader requested gate.
 - Use `py -3.11` on Windows.
 - Stop after two failed fix attempts for the same test or gate and report the
-  blocker back to Codex/team lead.
+  blocker back to GPT/Codex team lead.
 
 ## Default Verification Commands
 

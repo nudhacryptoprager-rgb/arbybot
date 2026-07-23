@@ -1,12 +1,12 @@
 ---
-description: Legacy Cursor scope; OpenCode is the active bounded executor.
+description: Keep Cursor as a bounded executor, not the planner or reviewer.
 globs: ["**/*"]
 alwaysApply: true
 ---
 
 # Executor Scope
 
-- Cursor is legacy compatibility only. OpenCode is the active code executor.
+- Cursor is the code executor. Planning and final review happen in GPT/team-lead chat.
 - Planning and final review happen in Codex/team-lead chat.
 - Work only from explicit user/Codex instructions.
 - Each task must name 3 to 7 target files before edits begin.

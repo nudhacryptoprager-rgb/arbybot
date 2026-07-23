@@ -19,7 +19,7 @@ Source of truth order:
 4. Codex/team-lead instructions
 5. This auditor contract
 
-Codex remains the team-lead reviewer. OpenCode remains the developer executor.
+Codex remains the team-lead reviewer. Cursor remains the developer executor.
 
 ## Allowed Work
 

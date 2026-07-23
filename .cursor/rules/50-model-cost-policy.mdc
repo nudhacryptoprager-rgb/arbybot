@@ -1,10 +1,10 @@
 ---
-description: Legacy Cursor model policy; OpenCode model is configured in opencode.json.
+description: Keep model usage economical in Cursor.
 globs: ["**/*"]
 alwaysApply: true
 ---
 
-# Legacy Model Cost Policy
+# Model Cost Policy
 
 - Use cheap/default models for simple patches, doc edits, imports, aliases, and test updates.
 - Do not use MAX, Opus-class, GPT-heavy, or the most expensive model for routine patch tasks.
