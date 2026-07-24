@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from m8.discovery.cross_dex_mirror import (
+    evaluate_mirror_readiness,
+)
+from m8.discovery.cross_dex_mirror import (
+    same_pair_route_quoteable as _same_pair_route_quoteable,
+)
 from m8.discovery.token_subset import load_token_subset_file
 
 SCHEMA_VERSION = "m8_cross_dex_expansion.1"
@@ -537,74 +543,6 @@ def _record_resolve_reject(
     all_reject_rows.append({"dex_id": dex_id, "reason": norm})
     reject_hist[norm] += 1
     return norm
-
-
-def _same_pair_route_quoteable(route: Dict[str, Any]) -> bool:
-    status = str(route.get("quote_smoke_status") or route.get("quote_smoke") or "")
-    upper = status.upper()
-    if not upper or upper in ("NOT_RUN", "SKIPPED_REGISTRY"):
-        return False
-    if "SKIPPED_REGISTRY" in upper:
-        return False
-    if any(upper.startswith(p) for p in ("QUOTE_OK", "OK", "PASS", "SUCCESS", "INDEXED")):
-        return True
-    return route.get("effective_depth_usd") is not None
-
-
-def mirror_missing_reason(
-    *,
-    token_seen_on_dexes: int,
-    same_pair_routes: int,
-    same_pair_dexes: int,
-    quoteable_same_pair_routes: int = 0,
-    topology_ready: bool = False,
-) -> str:
-    if token_seen_on_dexes < 2:
-        return "TOKEN_SEEN_ON_ONE_DEX"
-    if same_pair_routes < 2:
-        return "SAME_PAIR_ROUTES_LT_2"
-    if same_pair_dexes < 2:
-        return "SAME_PAIR_DEXES_LT_2"
-    if topology_ready and quoteable_same_pair_routes < 2:
-        return "SAME_PAIR_QUOTES_LT_2"
-    return "READY"
-
-
-def evaluate_mirror_readiness(
-    *,
-    token_seen_on_dexes: int,
-    same_pair_routes: int,
-    same_pair_dexes: int,
-    quoteable_same_pair_routes: int = 0,
-) -> Dict[str, Any]:
-    """M8.2 2-leg same-pair mirror gate (parallel to 3+ token subgraph_ready)."""
-    mirror_topology_ready = (
-        token_seen_on_dexes >= 2
-        and same_pair_routes >= 2
-        and same_pair_dexes >= 2
-    )
-    mirror_quote_ready = mirror_topology_ready and quoteable_same_pair_routes >= 2
-    same_pair_mirror_token = same_pair_routes >= 2 and same_pair_dexes >= 2
-    return {
-        "token_seen_on_dexes": token_seen_on_dexes,
-        "same_pair_routes": same_pair_routes,
-        "same_pair_dexes": same_pair_dexes,
-        "quoteable_same_pair_routes": quoteable_same_pair_routes,
-        "same_pair_mirror_token": same_pair_mirror_token,
-        "mirror_topology_ready": mirror_topology_ready,
-        "mirror_quote_ready": mirror_quote_ready,
-        "missing_reason": (
-            "READY"
-            if mirror_quote_ready
-            else mirror_missing_reason(
-                token_seen_on_dexes=token_seen_on_dexes,
-                same_pair_routes=same_pair_routes,
-                same_pair_dexes=same_pair_dexes,
-                quoteable_same_pair_routes=quoteable_same_pair_routes,
-                topology_ready=mirror_topology_ready,
-            )
-        ),
-    }
 
 
 def compute_v4_event_index_coverage(
@@ -2391,6 +2329,16 @@ def _expand_batch_token_neighborhood(
         **_candidate_summary,
         **distinct_lane,
     }
+    summary["adapter_backlog"] = {
+        "configured": int(_candidate_summary.get("candidate_dexes_configured") or 0),
+        "seen": int(_candidate_summary.get("candidate_dexes_seen") or 0),
+        "by_status": dict(_candidate_summary.get("candidate_dexes_by_status") or {}),
+        "unsupported": list(_candidate_summary.get("unsupported_candidate_dexes") or []),
+        "active_scan_unsupported_by_dex": dict(
+            batch_scan_telemetry.get("active_scan_unsupported_dex_by_dex") or {}
+        ),
+        "pending_reason": "adapter_not_supported",
+    }
     handoff_ready = (
         mirror_quote_ready_count > 0 or graph_topology_ready_count > 0
     )
@@ -2753,16 +2701,3 @@ def expand_cross_dex(
         "tokens": token_results,
         "routes_admitted": routes_admitted,
     }
-
-
-def write_artifact(artifact: Dict[str, Any], output_path: Path) -> None:
-    from core.pipeline_provenance import apply_pipeline_provenance
-
-    ts = artifact.get("generated_at_utc")
-    if not ts:
-        rc = artifact.get("run_context") or {}
-        ts = rc.get("run_timestamp") if isinstance(rc, dict) else None
-    artifact = apply_pipeline_provenance(artifact, run_timestamp=ts)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as fh:
-        json.dump(artifact, fh, ensure_ascii=False, indent=2)

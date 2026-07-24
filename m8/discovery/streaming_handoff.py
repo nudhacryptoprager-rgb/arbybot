@@ -141,6 +141,17 @@ def write_streaming_batch_manifest(
 ) -> Dict[str, Any]:
     """Record one immutable batched-M8 manifest bundle (subset + manifest)."""
     paths = resolve_streaming_batch_paths(batch_index, session_id=session_id)
+    immutable = immutable_path or paths.manifest
+    if immutable.is_file():
+        existing = load_streaming_manifest(immutable)
+        existing_sid = str(existing.get("session_id") or "").strip()
+        if existing_sid == session_id.strip():
+            subset_file = str(existing.get("token_subset_file") or "").strip()
+            if subset_file and Path(subset_file).is_file():
+                latest = output_path or STREAMING_MANIFEST_PATH
+                latest.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(latest, existing)
+                return existing
     sniper_fp = sniper_content_fingerprint(sniper_artifact)
     addrs = sorted(extract_sniper_token_addresses(sniper_artifact))
     subset_path = token_subset_path or paths.token_subset
@@ -169,7 +180,6 @@ def write_streaming_batch_manifest(
         "upstream_gate_output": str(paths.upstream_gate_output),
         "downstream_probe_mode": "fresh_delta",
     }
-    immutable = immutable_path or paths.manifest
     with path_lock(_session_lock_path(session_id)):
         _write_exclusive_subset(subset_path, subset_payload)
         immutable.parent.mkdir(parents=True, exist_ok=True)

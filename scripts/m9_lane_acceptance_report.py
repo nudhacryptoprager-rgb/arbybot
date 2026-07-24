@@ -118,6 +118,7 @@ def _freshness_gate(
     m8_3_registry: Optional[Dict[str, Any]],
     capacity_metrics: Optional[Dict[str, Any]],
     now: Optional[Any] = None,
+    skip_shadow: bool = False,
 ) -> Dict[str, Any]:
     """Cross-artifact freshness/provenance gate (Patch 3).
 
@@ -140,6 +141,9 @@ def _freshness_gate(
         m8_3_registry=m8_3_registry,
         capacity_metrics=capacity_metrics,
     )
+    if skip_shadow:
+        for key in ("shadow", "capacity"):
+            ts_raw.pop(key, None)
     parsed = {k: _parse_iso_ts(v) for k, v in ts_raw.items()}
     now_dt = now or _now_utc()
 
@@ -787,6 +791,7 @@ def build_acceptance_report(
     m8_2_report: Optional[Dict[str, Any]] = None,
     capacity_metrics: Optional[Dict[str, Any]] = None,
     m8_3_registry_path: Optional[str] = None,
+    skip_shadow: bool = False,
 ) -> Dict[str, Any]:
     sniper_metrics = (sniper or {}).get("metrics") or {}
     anchor_metrics = (anchor or {}).get("metrics") or {}
@@ -1013,6 +1018,7 @@ def build_acceptance_report(
         m8_2_report=m8_2_report,
         m8_3_registry=m8_3_registry,
         capacity_metrics=capacity_metrics,
+        skip_shadow=skip_shadow,
     )
     if freshness_gate["freshness_status"] == "BLOCKED":
         upstream_blockers.extend(freshness_gate["blockers"])
@@ -1047,6 +1053,21 @@ def build_acceptance_report(
 
     blockers = sorted(set(upstream_blockers + m9_blockers))
 
+    upstream_only_blockers = sorted(set(upstream_blockers))
+    upstream_bundle_status = (
+        "UPSTREAM_BUNDLE_VALIDATED"
+        if not upstream_only_blockers
+        else "BLOCKED"
+    )
+    if skip_shadow:
+        m9_shadow_acceptance_status = "SKIPPED"
+    elif shadow is None:
+        m9_shadow_acceptance_status = "NOT_RUN"
+    elif m9_blockers or m9_quote_validation_blockers:
+        m9_shadow_acceptance_status = "BLOCKED"
+    else:
+        m9_shadow_acceptance_status = "M9_SHADOW_ACCEPTED"
+
     exploration_sample: List[Dict[str, Any]] = []
     for r in ((bridge or {}).get("exploration_routes") or [])[:20]:
         exploration_sample.append(
@@ -1060,8 +1081,19 @@ def build_acceptance_report(
         )
 
     m9_goal = "BLOCKED" if m9_blockers else "PARTIAL"
-    if shadow is None and not m9_blockers:
+    if skip_shadow:
         m9_goal = "NOT_EVALUATED"
+    elif shadow is None and not m9_blockers:
+        m9_goal = "NOT_EVALUATED"
+
+    if skip_shadow:
+        goal_status = (
+            "BLOCKED"
+            if upstream_only_blockers
+            else "UPSTREAM_BUNDLE_VALIDATED"
+        )
+    else:
+        goal_status = "BLOCKED" if blockers else m9_goal
 
     operator_verdict = _build_operator_verdict(
         shadow=shadow,
@@ -1116,8 +1148,11 @@ def build_acceptance_report(
         "upstream_blockers": upstream_blockers,
         "bridge_upstream_warnings": bridge_upstream_warnings,
         "blockers": blockers,
-        "goal_status": "BLOCKED" if blockers else m9_goal,
+        "goal_status": goal_status,
         "m9_goal_status": m9_goal,
+        "upstream_bundle_status": upstream_bundle_status,
+        "m9_shadow_acceptance_status": m9_shadow_acceptance_status,
+        "skip_shadow": bool(skip_shadow),
     }
 
 
@@ -1148,6 +1183,12 @@ def main() -> int:
         "--output",
         default=str(REPO_ROOT / "data/tmp/m9_lane_acceptance_report_latest.json"),
     )
+    ap.add_argument(
+        "--skip-shadow",
+        action="store_true",
+        default=False,
+        help="Shadow lane was not run; evaluate upstream bundle only.",
+    )
     args = ap.parse_args()
 
     m8_2_path = Path(args.m8_2_report)
@@ -1160,11 +1201,12 @@ def main() -> int:
         anchor=_load(Path(args.anchor)),
         expansion=_load(Path(args.expansion)),
         bridge=_load(Path(args.bridge)),
-        shadow=_load(Path(args.shadow)),
+        shadow=None if args.skip_shadow else _load(Path(args.shadow)),
         rca=_load(Path(args.rca)),
         m8_2_report=m8_2_report,
         capacity_metrics=capacity_metrics,
         m8_3_registry_path=args.m8_3_registry,
+        skip_shadow=bool(args.skip_shadow),
     )
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

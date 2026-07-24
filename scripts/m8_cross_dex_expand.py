@@ -82,7 +82,8 @@ def main() -> int:
 
     from pathlib import Path
 
-    from m8.discovery.cross_dex_expand import expand_cross_dex, load_yaml_config, write_artifact
+    from m8.discovery.cross_dex_artifact import write_artifact
+    from m8.discovery.cross_dex_expand import expand_cross_dex, load_yaml_config
 
     config_path = Path(args.config)
     config = load_yaml_config(config_path)

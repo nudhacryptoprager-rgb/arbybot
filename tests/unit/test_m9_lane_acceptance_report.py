@@ -497,3 +497,64 @@ def test_lane_report_shadow_bridge_stale_or_mismatch():
         m8_2_report={"goal_status": "REACHED", "handoff_ready": True},
     )
     assert "SHADOW_BRIDGE_STALE_OR_MISMATCH" in report["m9_blockers"]
+
+
+def test_lane_report_skip_shadow_upstream_bundle_validated(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    aligned = "2026-07-23T20:10:00Z"
+    now_fixed = datetime(2026, 7, 23, 20, 11, 0, tzinfo=timezone.utc)
+    import scripts.m9_lane_acceptance_report as mod
+
+    monkeypatch.setattr(mod, "_now_utc", lambda: now_fixed)
+
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.98}},"generated_at_utc":"'
+        + aligned
+        + '"}',
+        encoding="utf-8",
+    )
+    report = build_acceptance_report(
+        sniper={
+            "status": "ACTIVE",
+            "generated_at_utc": aligned,
+            "metrics": {},
+            "recent_events": [{}],
+        },
+        anchor={
+            "generated_at_utc": aligned,
+            "metrics": {"stable_anchor_passes_total": 100},
+        },
+        expansion={
+            "generated_at_utc": aligned,
+            "summary": {"routes_admitted_count": 50, "handoff_ready": True},
+            "metrics": {"routes_admitted": 50},
+        },
+        bridge={
+            "generated_at_utc": aligned,
+            "active_routes": [{"dex_id": "uniswap_v3"}],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 5,
+                "graph_ready_from_expansion": 10,
+                "graph_ready_total": 15,
+                "sniper_generated_at_utc": aligned,
+            },
+        },
+        shadow=None,
+        rca=None,
+        m8_2_report={
+            "generated_at_utc": aligned,
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+        },
+        m8_3_registry_path=str(registry_path),
+        skip_shadow=True,
+    )
+    assert report["skip_shadow"] is True
+    assert report["m9_shadow_acceptance_status"] == "SKIPPED"
+    assert report["upstream_bundle_status"] == "UPSTREAM_BUNDLE_VALIDATED"
+    assert report["goal_status"] == "UPSTREAM_BUNDLE_VALIDATED"
+    assert "SHADOW_STALE" not in report["blockers"]

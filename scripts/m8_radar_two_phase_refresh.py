@@ -27,6 +27,36 @@ def _run(cmd: list[str], *, label: str) -> int:
     return int(rc)
 
 
+def _scratch_file(scratch_dir: str | None, name: str) -> str:
+    if scratch_dir:
+        path = Path(scratch_dir) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
+    return f"data/tmp/{name}"
+
+
+def _load_token_addresses(
+    token_subset_file: str | None,
+    watchlist_path: Path,
+    *,
+    max_tokens: int,
+) -> list[str]:
+    if token_subset_file:
+        doc = json.loads(Path(token_subset_file).read_text(encoding="utf-8"))
+        raw = doc.get("tokens") or []
+        out: list[str] = []
+        for item in raw:
+            if isinstance(item, str) and item.lower().startswith("0x"):
+                out.append(item.lower())
+            elif isinstance(item, dict):
+                addr = item.get("token") or item.get("address")
+                if addr and str(addr).lower().startswith("0x"):
+                    out.append(str(addr).lower())
+        return out[:max_tokens]
+    wl = json.loads(watchlist_path.read_text(encoding="utf-8"))
+    return list((wl.get("tokens") or {}).keys())[:max_tokens]
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="M8.2 DexScreener-first two-phase refresh")
     p.add_argument("--max-tokens", type=int, default=300)
@@ -100,9 +130,15 @@ def main() -> int:
         default=None,
         help="Override rolling M8.2 radar candidates output path",
     )
+    p.add_argument(
+        "--batch-scratch-dir",
+        default=None,
+        help="Session/batch scratch directory for checkpoints and staging files",
+    )
     args = p.parse_args()
     hints_out = str(args.hints_output or HINTS_OUT)
     radar_out = str(args.radar_output or RADAR_OUT)
+    scratch_dir = str(args.batch_scratch_dir) if args.batch_scratch_dir else None
 
     py = sys.executable
     boot = [py, "scripts/bootstrap_productive_rpc_env.py", "--", py, "-u"]
@@ -124,7 +160,7 @@ def main() -> int:
             fresh_first=args.lane_mode == "fresh_first",
         )
         save_watchlist(watchlist, str(wl_path))
-        subset_path = _REPO / "data/tmp/m8_fresh_delta_token_subset.json"
+        subset_path = Path(_scratch_file(scratch_dir, "m8_fresh_delta_token_subset.json"))
         subset_path.parent.mkdir(parents=True, exist_ok=True)
         subset_path.write_text(
             json.dumps({"tokens": selected, "lane_meta": lane_meta}, indent=2),
@@ -149,7 +185,7 @@ def main() -> int:
         "--radar-output",
         radar_out,
         "--checkpoint-path",
-        "data/tmp/m8_hint_refresh_checkpoint_ds_radar.json",
+        _scratch_file(scratch_dir, "m8_hint_refresh_checkpoint_ds_radar.json"),
         "--provider-timeout-s",
         "8",
         "--sleep-ms",
@@ -206,7 +242,7 @@ def main() -> int:
             "--output",
             hints_out,
             "--checkpoint-path",
-            "data/tmp/m8_hint_refresh_checkpoint_ds_verify.json",
+            _scratch_file(scratch_dir, "m8_hint_refresh_checkpoint_ds_verify.json"),
             "--fetch-async",
             "--use-multicall",
             "--ws-head",
@@ -230,14 +266,17 @@ def main() -> int:
         )
 
         hints = [PoolHint.from_dict(h) for h in (radar.get("candidates") or [])]
-        wl = json.loads((_REPO / args.watchlist).read_text(encoding="utf-8"))
-        all_tokens = list((wl.get("tokens") or {}).keys())[: args.max_tokens]
+        all_tokens = _load_token_addresses(
+            token_subset_file,
+            _REPO / args.watchlist,
+            max_tokens=args.max_tokens,
+        )
         secondary = tokens_for_secondary_sources(all_tokens, hints)[:50]
-        subset_file = _REPO / "data/tmp/m8_secondary_token_subset.json"
+        subset_file = Path(_scratch_file(scratch_dir, "m8_secondary_token_subset.json"))
         subset_file.parent.mkdir(parents=True, exist_ok=True)
         subset_file.write_text(json.dumps({"tokens": secondary}), encoding="utf-8")
         if secondary:
-            secondary_out = str(_REPO / "data/tmp/m8_secondary_hints_merge_staging.json")
+            secondary_out = _scratch_file(scratch_dir, "m8_secondary_hints_merge_staging.json")
             secondary_staging = Path(secondary_out)
             rc_secondary = _run(
                 boot
@@ -258,7 +297,7 @@ def main() -> int:
                     "--output",
                     secondary_out,
                     "--checkpoint-path",
-                    "data/tmp/m8_hint_refresh_checkpoint_secondary.json",
+                    _scratch_file(scratch_dir, "m8_hint_refresh_checkpoint_secondary.json"),
                     "--provider-timeout-s",
                     str(int(args.secondary_provider_timeout_s)),
                     "--sleep-ms",
@@ -294,12 +333,12 @@ def main() -> int:
                     pass
 
     if not args.skip_coingecko:
-        subset_file = _REPO / "data/tmp/m8_coingecko_fallback_subset.json"
+        subset_file = Path(_scratch_file(scratch_dir, "m8_coingecko_fallback_subset.json"))
         subset_file.write_text(
             json.dumps({"tokens": []}),
             encoding="utf-8",
         )
-        coingecko_staging = _REPO / "data/tmp/m8_coingecko_hints_merge_staging.json"
+        coingecko_staging = Path(_scratch_file(scratch_dir, "m8_coingecko_hints_merge_staging.json"))
         rc_cg = _run(
             boot
             + [
@@ -319,7 +358,7 @@ def main() -> int:
                 "--output",
                 str(coingecko_staging),
                 "--checkpoint-path",
-                "data/tmp/m8_hint_refresh_checkpoint_cg.json",
+                _scratch_file(scratch_dir, "m8_hint_refresh_checkpoint_cg.json"),
                 "--provider-timeout-s",
                 str(int(args.coingecko_provider_timeout_s)),
                 "--sleep-ms",
@@ -370,6 +409,7 @@ def main() -> int:
                         "radar_to_verify_rate",
                         "verified_yield",
                         "provider_timing",
+                        "dexscreener_telemetry",
                         "fetch_async",
                         "bytecode_parallel_prepass",
                     )

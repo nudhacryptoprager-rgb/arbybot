@@ -11,7 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from m8.discovery.cross_dex_expand import load_yaml_config, write_artifact
+from m8.discovery.cross_dex_artifact import write_artifact
+from m8.discovery.cross_dex_expand import load_yaml_config
 from m8.discovery.mirror_quote_smoke import (
     DEFAULT_MIRROR_CHECKPOINT_PATH,
     aggregate_mirror_readiness_from_routes,

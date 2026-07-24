@@ -823,7 +823,7 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         write_radar_candidates_artifact,
     )
     from m8.discovery.radar_fast_pipeline import build_verify_subset_tokens, pipeline_metrics
-    from m8.discovery.radar_providers import radar_provider_metrics
+    from m8.discovery.radar_providers import build_dexscreener_telemetry, radar_provider_metrics
 
     subset_size = len(build_verify_subset_tokens(deduped))
     pipe_m = pipeline_metrics(
@@ -893,6 +893,13 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         per_source_verified_yield,
         sources_requested=sources,
     )
+    from m8.discovery.radar_providers import build_dexscreener_telemetry
+
+    dexscreener_telemetry = build_dexscreener_telemetry(
+        provider_timing,
+        source_pool_counts=source_pool_counts,
+        per_source_verified_yield=per_source_verified_yield,
+    )
     metrics = {
         "hint_tokens_checked": len(tokens),
         "second_pool_hints_found": second_pool_hints,
@@ -919,6 +926,7 @@ def _run_hint_refresh(args: argparse.Namespace) -> int:
         "defillama_dex_scan_weights": defillama_weights.get("dex_scan_weights") or {},
         "external_route_liveness": route_liveness,
         **radar_metrics,
+        "dexscreener_telemetry": dexscreener_telemetry,
         **verification_metrics,
     }
     artifact = build_artifact(

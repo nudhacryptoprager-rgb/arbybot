@@ -2,6 +2,9 @@
 
 ``--streaming`` enables ``batched_m8_refresh``: repeated sniper→M8.1→M8.2→M8.3
 per batch, then a single M9 admission pass on the final batch bundle.
+
+M8 sniper coverage is limited to configured + adapter-supported DEXes in config;
+expansion backlog may still track unsupported venues for later adapter work.
 """
 from __future__ import annotations
 
@@ -87,7 +90,16 @@ class StreamingBatchPaths:
     m82_hints: Path
     m82_expansion: Path
     m83_registry: Path
+    m82_acceptance: Path
     upstream_gate_output: Path
+    m82_checkpoint_radar: Path
+    m82_checkpoint_verify: Path
+    m82_secondary_subset: Path
+    m82_secondary_staging: Path
+    m82_checkpoint_secondary: Path
+    m82_coingecko_subset: Path
+    m82_coingecko_staging: Path
+    m82_checkpoint_coingecko: Path
 
 
 def resolve_streaming_batch_paths(
@@ -109,7 +121,16 @@ def resolve_streaming_batch_paths(
         m82_hints=batch_dir / "m8_external_pool_hints.json",
         m82_expansion=batch_dir / "m8_cross_dex_expansion.json",
         m83_registry=batch_dir / "m8_3_token_metadata_registry.json",
+        m82_acceptance=batch_dir / "m8_2_acceptance_report.json",
         upstream_gate_output=batch_dir / "m8_m9_runtime_truth_gate_upstream.json",
+        m82_checkpoint_radar=batch_dir / "m8_hint_refresh_checkpoint_ds_radar.json",
+        m82_checkpoint_verify=batch_dir / "m8_hint_refresh_checkpoint_ds_verify.json",
+        m82_secondary_subset=batch_dir / "m8_secondary_token_subset.json",
+        m82_secondary_staging=batch_dir / "m8_secondary_hints_merge_staging.json",
+        m82_checkpoint_secondary=batch_dir / "m8_hint_refresh_checkpoint_secondary.json",
+        m82_coingecko_subset=batch_dir / "m8_coingecko_fallback_subset.json",
+        m82_coingecko_staging=batch_dir / "m8_coingecko_hints_merge_staging.json",
+        m82_checkpoint_coingecko=batch_dir / "m8_hint_refresh_checkpoint_cg.json",
     )
 
 

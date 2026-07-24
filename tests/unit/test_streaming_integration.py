@@ -18,6 +18,7 @@ from core.pipeline_streaming import (
 from core.quote_lane_limiter import QuoteLaneLimiter
 from m8.discovery.mirror_quote_cache import mirror_quote_cache_key
 from m8.discovery.streaming_handoff import (
+    sniper_content_fingerprint,
     validate_streaming_handoff,
     write_streaming_batch_manifest,
 )
@@ -66,6 +67,22 @@ def test_streaming_plan_three_batches_with_full_handoff():
     assert "2" in joined
 
 
+def test_streaming_lane_acceptance_uses_final_batch_artifacts(monkeypatch):
+    from core.batch_path_resolver import resolve_streaming_step_cmd
+
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "session-final-batch")
+    monkeypatch.setenv("ARBY_STREAMING_FINAL_BATCH_INDEX", "3")
+    steps = build_project_pipeline_steps(_fake_args())
+    names = [s["name"] for s in steps]
+    assert "m8_2_acceptance_final_batch" in names
+    lane = next(s for s in steps if s["name"] == "m9_lane_acceptance")
+    joined = " ".join(resolve_streaming_step_cmd(lane, list(lane["cmd"])))
+    assert "m8_2_acceptance_report.json" in joined
+    assert "batch_3" in joined
+    assert "--skip-shadow" in joined
+    assert "m8_2_acceptance_report_latest.json" not in joined
+
+
 def test_streaming_paths_are_session_namespaced(monkeypatch):
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "2026-07-23T12:00:00Z")
     paths = resolve_streaming_batch_paths(2)
@@ -74,6 +91,29 @@ def test_streaming_paths_are_session_namespaced(monkeypatch):
     assert paths.m81_output.name == "m8_1_stable_anchor.json"
     assert paths.m82_hints.name == "m8_external_pool_hints.json"
     assert paths.m83_registry.name == "m8_3_token_metadata_registry.json"
+    assert paths.m82_checkpoint_secondary.name == "m8_hint_refresh_checkpoint_secondary.json"
+
+
+def test_final_m9_commands_use_batch_expansion_not_rolling(monkeypatch):
+    from core.batch_path_resolver import (
+        ROLLING_EXPANSION_PATH,
+        resolve_streaming_step_cmd,
+    )
+
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "session-final-batch")
+    monkeypatch.setenv("ARBY_STREAMING_FINAL_BATCH_INDEX", "3")
+    steps = build_project_pipeline_steps(_fake_args())
+    for step_name in ("m9_bridge_production", "m9_bridge_curve_probe_for_indices"):
+        step = next(s for s in steps if s["name"] == step_name)
+        cmd = resolve_streaming_step_cmd(step, list(step["cmd"]))
+        joined = " ".join(cmd)
+        assert ROLLING_EXPANSION_PATH not in joined
+        assert "m8_cross_dex_expansion.json" in joined
+        assert "batch_3" in joined
+    bundle = next(s for s in steps if s["name"] == "m8_m9_runtime_truth_gate_bundle")
+    bundle_cmd = resolve_streaming_step_cmd(bundle, list(bundle["cmd"]))
+    assert ROLLING_EXPANSION_PATH not in " ".join(bundle_cmd)
+    assert "m8_cross_dex_expansion.json" in " ".join(bundle_cmd)
 
 
 def test_m81_streaming_cli_uses_batch_index():
@@ -122,6 +162,65 @@ def test_immutable_manifest_collision(tmp_path: Path):
             immutable_path=manifest_path,
             token_subset_path=tmp_path / "subset2.json",
         )
+
+
+def test_streaming_manifest_resume_is_idempotent(tmp_path: Path, monkeypatch):
+    sniper = tmp_path / "sniper.json"
+    sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
+    session_id = "session-resume"
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", session_id)
+    monkeypatch.setattr(
+        "core.pipeline_streaming.STREAMING_ROOT_DIR",
+        tmp_path / "streaming_batches",
+    )
+    manifest_path = (
+        tmp_path / "streaming_batches" / session_id / "batch_1" / "manifest.json"
+    )
+    write_streaming_batch_manifest(
+        session_id=session_id,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper),
+        immutable_path=manifest_path,
+    )
+    sniper.write_text(json.dumps({"recent_events": [{"token0": "0x" + "9" * 40}]}), encoding="utf-8")
+    second = write_streaming_batch_manifest(
+        session_id=session_id,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper),
+        immutable_path=manifest_path,
+    )
+    assert second == json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert second["sniper_input_fingerprint"] != sniper_content_fingerprint(str(sniper))
+
+
+def test_streaming_batch_fingerprint_uses_manifest_not_rolling(monkeypatch, tmp_path: Path):
+    from application.checkpoint_store import fingerprint_paths
+    from start import _pipeline_step_fingerprint
+
+    session_id = "session-fp"
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", session_id)
+    monkeypatch.setattr(
+        "core.pipeline_streaming.STREAMING_ROOT_DIR",
+        tmp_path / "streaming_batches",
+    )
+    sniper = tmp_path / "sniper.json"
+    sniper.write_text(json.dumps({"recent_events": []}), encoding="utf-8")
+    manifest_path = (
+        tmp_path / "streaming_batches" / session_id / "batch_1" / "manifest.json"
+    )
+    write_streaming_batch_manifest(
+        session_id=session_id,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper),
+        immutable_path=manifest_path,
+    )
+    fp_before = _pipeline_step_fingerprint("m8_sniper_acceptance_batch_1")
+    sniper.write_text(json.dumps({"recent_events": [{"token0": "0x" + "2" * 40}]}), encoding="utf-8")
+    fp_after = _pipeline_step_fingerprint("m8_sniper_acceptance_batch_1")
+    assert fp_before == fp_after == fingerprint_paths([manifest_path])
 
 
 def test_quote_cache_key_isolates_quoter():

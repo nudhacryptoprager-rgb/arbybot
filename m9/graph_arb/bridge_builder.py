@@ -186,11 +186,9 @@ def _iso_now() -> str:
 
 
 def _load_json(path: str) -> Optional[Dict]:
-    p = Path(path)
-    if not p.exists():
-        return None
-    with open(p, encoding="utf-8") as f:
-        return json.load(f)
+    from m9.graph_arb.bridge_input_loader import load_json
+
+    return load_json(path)
 
 
 def _artifact_age_seconds(artifact: Dict, now_ts: float) -> Optional[float]:
@@ -2093,36 +2091,13 @@ def build_bridge_inventory(
     }
 
     out_path = Path(output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    from core.pipeline_provenance import apply_pipeline_provenance
+    from m9.graph_arb.bridge_artifact_writer import write_bridge_inventory_artifact
 
-    ts = output_artifact.get("generated_at_utc")
-    if not ts:
-        rc = output_artifact.get("run_context") or {}
-        ts = rc.get("run_timestamp") if isinstance(rc, dict) else None
-    output_artifact = apply_pipeline_provenance(output_artifact, run_timestamp=ts)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(output_artifact, f, ensure_ascii=False, indent=2)
-
-    if graph_handoff_only:
-        try:
-            from m9.graph_arb.topology_diagnostic import quick_cycle_count
-
-            _after_builder = quick_cycle_count(
-                str(out_path),
-                cycle_lengths=(2, 3, 4),
-                lane="discovery",
-            )
-            bridge_source_metrics["graph_handoff_cycle_potential_after_builder"] = (
-                _after_builder
-            )
-            output_artifact["graph_handoff_cycle_potential_after_builder"] = (
-                _after_builder
-            )
-            output_artifact["bridge_source_metrics"] = bridge_source_metrics
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(output_artifact, f, ensure_ascii=False, indent=2)
-        except Exception as _topo_exc:
-            bridge_source_metrics["graph_handoff_topology_error"] = str(_topo_exc)[:200]
+    bridge_source_metrics = write_bridge_inventory_artifact(
+        output_artifact,
+        out_path,
+        graph_handoff_only=graph_handoff_only,
+        bridge_source_metrics=bridge_source_metrics,
+    )
 
     return bridge_source_metrics

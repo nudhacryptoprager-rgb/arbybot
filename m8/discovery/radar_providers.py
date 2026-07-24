@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from m8.discovery.pool_hints import PoolHint
 
@@ -80,4 +80,29 @@ def radar_provider_metrics(
     return {
         "mirror_source_yield_by_provider": mirror_yield,
         "radar_provider_status": provider_status,
+    }
+
+
+def build_dexscreener_telemetry(
+    provider_timing: Dict[str, Any],
+    *,
+    source_pool_counts: Dict[str, int],
+    per_source_verified_yield: Dict[str, int],
+) -> Dict[str, Any]:
+    """Explicit DexScreener recall telemetry for radar/verify phases."""
+    raw = provider_timing.get("dexscreener")
+    timing = raw.to_dict() if hasattr(raw, "to_dict") else dict(raw or {})
+    candidates = int(source_pool_counts.get("dexscreener", 0))
+    verified = int(per_source_verified_yield.get("dexscreener", 0))
+    calls = int(timing.get("calls") or 0)
+    return {
+        "live_http_calls": calls,
+        "http_timeouts": int(timing.get("timeouts") or 0),
+        "http_errors": int(timing.get("errors") or 0),
+        "candidates_fetched": candidates,
+        "verified_yield": verified,
+        "candidate_to_verified_rate": (
+            round(verified / candidates, 4) if candidates else None
+        ),
+        "zero_verify_warning": bool(calls == 0 or verified == 0),
     }

@@ -40,10 +40,28 @@ from application.checkpoint_store import (  # noqa: F401
     fingerprint_paths,
     write_done_record,
 )
+from application.pipeline_stage import PipelineStage, StageResult  # noqa: F401
+from application.stage_runner import run_stage_subprocess, run_with_retries  # noqa: F401
+from core.batch_path_resolver import (
+    ENV_STREAMING_FINAL_BATCH_INDEX,
+    STREAMING_BATCH_DIR_SENTINEL,
+    STREAMING_M81_OUTPUT_SENTINEL,
+    STREAMING_M82_ACCEPTANCE_SENTINEL,
+    STREAMING_M82_EXPANSION_SENTINEL,
+    STREAMING_M82_HINTS_SENTINEL,
+    STREAMING_M82_RADAR_SENTINEL,
+    STREAMING_M83_REGISTRY_SENTINEL,
+    STREAMING_TOKEN_SUBSET_SENTINEL,
+    batched_final_bridge_args,
+    batched_final_lane_acceptance_args,
+    batched_final_truth_gate_args,
+    resolve_streaming_step_cmd,
+)
 from core.pipeline_provenance import (  # noqa: F401
     ENV_PIPELINE_SESSION_ID,
     new_pipeline_session_id,
 )
+from core.pipeline_runtime import run_streaming_batch_upstream_gate
 from core.pipeline_slo import PipelineSloTracker
 from core.pipeline_streaming import (
     batched_m8_refresh_mode,
@@ -54,8 +72,6 @@ from core.pipeline_streaming import (
     streaming_enabled,
 )
 from m8.discovery.streaming_handoff import write_streaming_batch_manifest
-from application.pipeline_stage import PipelineStage, StageResult  # noqa: F401
-from application.stage_runner import run_stage_subprocess, run_with_retries  # noqa: F401
 from strategy.chain_stats import (  # noqa: F401
     SANE_ROUNDTRIP_PNL_BPS_MAX,
     SANE_ROUNDTRIP_PNL_BPS_MIN,
@@ -156,14 +172,6 @@ POST_BRIDGE_FINGERPRINT_PREFIXES: tuple[str, ...] = (
 )
 PIPELINE_CURRENT_PATH = Path("data/tmp/start_pipeline_current.json")
 M81_PROBE_METRICS_PATH = Path("data/tmp/m8_1_probe_metrics_latest.json")
-STREAMING_TOKEN_SUBSET_SENTINEL = "__ARBY_STREAMING_TOKEN_SUBSET__"
-STREAMING_M81_OUTPUT_SENTINEL = "__ARBY_STREAMING_M81_OUTPUT__"
-STREAMING_M82_HINTS_SENTINEL = "__ARBY_STREAMING_M82_HINTS__"
-STREAMING_M82_RADAR_SENTINEL = "__ARBY_STREAMING_M82_RADAR__"
-STREAMING_M82_EXPANSION_SENTINEL = "__ARBY_STREAMING_M82_EXPANSION__"
-STREAMING_M83_REGISTRY_SENTINEL = "__ARBY_STREAMING_M83_REGISTRY__"
-STREAMING_UPSTREAM_GATE_SENTINEL = "__ARBY_STREAMING_UPSTREAM_GATE__"
-ENV_STREAMING_FINAL_BATCH_INDEX = "ARBY_STREAMING_FINAL_BATCH_INDEX"
 _CURRENT_PIPELINE_ARGS: argparse.Namespace | None = None
 PENDING_1_TO_2_QUEUE_PATH = Path("data/tmp/m8_time_to_mirror_pending_queue_latest.json")
 WATCHLIST_PATH = Path("data/tmp/m8_token_watchlist_latest.json")
@@ -381,9 +389,16 @@ STEP_QUIET_CHECKPOINTS: dict[str, tuple[str, ...]] = {
         "data/tmp/m8_3_token_metadata_registry_refresh_progress.json",
     ),
 }
+_STREAMING_BATCH_STEP_RE = re.compile(
+    r"^m8_(?:sniper_acceptance|streaming_batch_manifest|1_stable_anchor|"
+    r"2_radar_two_phase|2_cross_dex_expand|3_registry_refresh|"
+    r"m9_runtime_truth_gate_upstream)_batch_(\d+)$"
+)
+
 RESUME_FROM_FIRST_STEP: dict[str, str] = {
     "m8_2": "m8_2_radar_two_phase",
     "m8_2_radar": "m8_2_radar_two_phase",
+    "m8_2_batch_1": "m8_2_radar_two_phase_batch_1",
     "m8_onchain_factory_mirror_scan": "m8_onchain_factory_mirror_scan",
     "m8_2_expand": "m8_2_cross_dex_expand",
     "m8_mirror_quote_reprobe": "m8_mirror_quote_reprobe",
@@ -556,9 +571,34 @@ def _bundle_artifacts_fingerprint() -> str:
     return fingerprint_paths(Path(p) for p in paths)
 
 
+def _streaming_batch_index_from_step(step_name: str) -> int | None:
+    match = _STREAMING_BATCH_STEP_RE.match(step_name)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _streaming_batch_manifest_fingerprint(batch_index: int) -> str | None:
+    session_id = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
+    if not session_id:
+        return None
+    manifest_path = resolve_streaming_batch_paths(
+        batch_index,
+        session_id=session_id,
+    ).manifest
+    if manifest_path.is_file():
+        return fingerprint_paths([manifest_path])
+    return None
+
+
 def _pipeline_step_fingerprint(step_name: str) -> str:
     if step_name in ALWAYS_RERUN_PIPELINE_STEPS:
         return ""
+    batch_index = _streaming_batch_index_from_step(step_name)
+    if batch_index is not None:
+        batch_fp = _streaming_batch_manifest_fingerprint(batch_index)
+        if batch_fp is not None:
+            return batch_fp
     if step_name == "m9_bridge_production" or any(
         step_name.startswith(prefix) for prefix in POST_BRIDGE_FINGERPRINT_PREFIXES
     ):
@@ -866,70 +906,11 @@ def _m81_stable_anchor_cmd(
     return cmd
 
 
-def _streaming_paths_for_step(step: dict[str, Any]):
-    batch_index = step.get("streaming_batch_index")
-    if batch_index is not None:
-        return resolve_streaming_batch_paths(int(batch_index))
-    if step.get("streaming_final_batch"):
-        final_idx = int(os.environ.get(ENV_STREAMING_FINAL_BATCH_INDEX, "0") or "0")
-        if final_idx > 0:
-            return resolve_streaming_batch_paths(final_idx)
-    return None
-
-
-def _resolve_streaming_step_cmd(step: dict[str, Any], cmd: list[str]) -> list[str]:
-    paths = _streaming_paths_for_step(step)
-    if paths is None:
-        return cmd
-    resolved: list[str] = []
-    for token in cmd:
-        if token == STREAMING_TOKEN_SUBSET_SENTINEL:
-            resolved.append(str(paths.token_subset))
-        elif token == STREAMING_M81_OUTPUT_SENTINEL:
-            resolved.append(str(paths.m81_output))
-        elif token == STREAMING_M82_HINTS_SENTINEL:
-            resolved.append(str(paths.m82_hints))
-        elif token == STREAMING_M82_RADAR_SENTINEL:
-            resolved.append(str(paths.m82_radar))
-        elif token == STREAMING_M82_EXPANSION_SENTINEL:
-            resolved.append(str(paths.m82_expansion))
-        elif token == STREAMING_M83_REGISTRY_SENTINEL:
-            resolved.append(str(paths.m83_registry))
-        elif token == STREAMING_UPSTREAM_GATE_SENTINEL:
-            resolved.append(str(paths.upstream_gate_output))
-        else:
-            resolved.append(token)
-    return resolved
+_resolve_streaming_step_cmd = resolve_streaming_step_cmd
 
 
 def _run_streaming_batch_upstream_gate(step: dict[str, Any]) -> int:
-    batch_index = int(step.get("streaming_batch_index", 1))
-    session_id = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
-    paths = resolve_streaming_batch_paths(batch_index, session_id=session_id)
-    from monitoring.runtime_truth_gate import evaluate_runtime_truth_gate
-
-    def _load(path: Path) -> dict[str, Any] | None:
-        if not path.is_file():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-
-    verdict = evaluate_runtime_truth_gate(
-        sniper=_load(Path("data/runs/_rolling/new_pool_sniper_latest.json")),
-        anchor=_load(paths.m81_output),
-        hints=_load(paths.m82_hints),
-        expansion=_load(paths.m82_expansion),
-        m8_3_registry=_load(paths.m83_registry),
-        phase="upstream",
-    )
-    paths.upstream_gate_output.parent.mkdir(parents=True, exist_ok=True)
-    paths.upstream_gate_output.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
-    print("phase:", verdict.get("phase"))
-    print("truth_status:", verdict.get("truth_status"))
-    print("written:", paths.upstream_gate_output)
-    return 0 if verdict.get("truth_status") == "PASS" else 1
+    return run_streaming_batch_upstream_gate(step)
 
 
 def _m82_cross_dex_expand_cmd(
@@ -1365,6 +1346,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                         f"m8_1_stable_anchor_batch_{batch_index}",
                         m81_cmd,
                         streaming_batch_index=batch_index,
+                        allow_exit_codes=(0, 1),
                     )
                 )
                 radar_cmd = _productive_rpc_cmd(
@@ -1382,6 +1364,8 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     STREAMING_M82_HINTS_SENTINEL,
                     "--radar-output",
                     STREAMING_M82_RADAR_SENTINEL,
+                    "--batch-scratch-dir",
+                    STREAMING_BATCH_DIR_SENTINEL,
                 )
                 if skip_coingecko:
                     radar_cmd.append("--skip-coingecko")
@@ -1831,18 +1815,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             "data/tmp/m8_m9_runtime_truth_gate_upstream_latest.json",
         ]
         if use_batched_final:
-            upstream_gate_cmd.extend(
-                [
-                    "--anchor",
-                    STREAMING_M81_OUTPUT_SENTINEL,
-                    "--hints",
-                    STREAMING_M82_HINTS_SENTINEL,
-                    "--expansion",
-                    STREAMING_M82_EXPANSION_SENTINEL,
-                    "--m8-3-registry",
-                    STREAMING_M83_REGISTRY_SENTINEL,
-                ]
-            )
+            upstream_gate_cmd.extend(batched_final_truth_gate_args())
         steps.append(
             _pipeline_step(
                 "m8_m9_runtime_truth_gate_upstream",
@@ -1856,20 +1829,23 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
             )
         )
         steps.append(_pipeline_step("m9_curve_discovery", _productive_rpc_cmd("scripts/m9_curve_discovery.py")))
+        bridge_probe_cmd = [
+            "scripts/m9_bridge_build.py",
+            "--graph-handoff-only",
+            "--no-registry",
+            "--include-expansion-duplicates-for-shadow",
+            "--metadata-registry",
+            m83_registry,
+            "--output",
+            "data/tmp/m9_bridge_curve_probe.json",
+            "--no-enforce-m8-provenance",
+        ]
+        if use_batched_final:
+            bridge_probe_cmd.extend(batched_final_bridge_args())
         steps.append(
             _pipeline_step(
                 "m9_bridge_curve_probe_for_indices",
-                _py_cmd(
-                    "scripts/m9_bridge_build.py",
-                    "--graph-handoff-only",
-                    "--no-registry",
-                    "--include-expansion-duplicates-for-shadow",
-                    "--metadata-registry",
-                    m83_registry,
-                    "--output",
-                    "data/tmp/m9_bridge_curve_probe.json",
-                    "--no-enforce-m8-provenance",
-                ),
+                _py_cmd(*bridge_probe_cmd),
                 env={"ARBY_M9_CURVE_ADMIT_ALL": "1"},
                 streaming_final_batch=use_batched_final,
             )
@@ -1888,31 +1864,40 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 ),
             )
         )
+        bridge_prod_cmd = [
+            "scripts/m9_bridge_build.py",
+            "--metadata-registry",
+            m83_registry,
+            "--output",
+            PRODUCTION_BRIDGE,
+        ]
+        if use_batched_final:
+            bridge_prod_cmd.extend(batched_final_bridge_args())
         steps.append(
             _pipeline_step(
                 "m9_bridge_production",
-                _py_cmd(
-                    "scripts/m9_bridge_build.py",
-                    "--metadata-registry",
-                    m83_registry,
-                    "--output",
-                    PRODUCTION_BRIDGE,
-                ),
+                _py_cmd(*bridge_prod_cmd),
                 env={"ARBY_CURVE_POOL_INDICES": "data/runs/_rolling/m9_curve_pool_indices_latest.json"},
                 streaming_final_batch=use_batched_final,
             )
         )
+        bundle_gate_cmd = [
+            "scripts/m8_m9_runtime_truth_gate.py",
+            "--phase",
+            "bundle",
+            "--output",
+            "data/tmp/m8_m9_runtime_truth_gate_latest.json",
+            "--bridge",
+            PRODUCTION_BRIDGE,
+        ]
+        if use_batched_final:
+            bundle_gate_cmd.extend(batched_final_truth_gate_args())
         steps.append(
             _pipeline_step(
                 "m8_m9_runtime_truth_gate_bundle",
-                _py_cmd(
-                    "scripts/m8_m9_runtime_truth_gate.py",
-                    "--phase",
-                    "bundle",
-                    "--output",
-                    "data/tmp/m8_m9_runtime_truth_gate_latest.json",
-                ),
+                _py_cmd(*bundle_gate_cmd),
                 allow_exit_codes=(0,),
+                streaming_final_batch=use_batched_final,
                 description=(
                     "Bundle coherence after bridge build: upstream inputs plus "
                     "production bridge must share one runtime window/session."
@@ -1945,17 +1930,23 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 ),
             )
         )
+        post_depth_cmd = [
+            "scripts/m8_m9_runtime_truth_gate.py",
+            "--phase",
+            "post_depth",
+            "--output",
+            "data/tmp/m8_m9_runtime_truth_gate_post_depth_latest.json",
+            "--bridge",
+            PRODUCTION_BRIDGE,
+        ]
+        if use_batched_final:
+            post_depth_cmd.extend(batched_final_truth_gate_args())
         steps.append(
             _pipeline_step(
                 "m8_m9_runtime_truth_gate_post_depth",
-                _py_cmd(
-                    "scripts/m8_m9_runtime_truth_gate.py",
-                    "--phase",
-                    "post_depth",
-                    "--output",
-                    "data/tmp/m8_m9_runtime_truth_gate_post_depth_latest.json",
-                ),
+                _py_cmd(*post_depth_cmd),
                 allow_exit_codes=(0,),
+                streaming_final_batch=use_batched_final,
                 description=(
                     "Post-depth bridge coherence: production bridge after enrichment "
                     "must remain session-bound with upstream inputs."
@@ -2025,22 +2016,52 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     env={"ARBY_M9_CYCLE_LENGTHS": "2,3,4"},
                 )
             )
-        steps.append(
-            _pipeline_step(
-                "m9_lane_acceptance",
-                _py_cmd(
-                    "scripts/m9_lane_acceptance_report.py",
+        if use_batched_final:
+            steps.append(
+                _pipeline_step(
+                    "m8_2_acceptance_final_batch",
+                    _py_cmd(
+                        "scripts/m8_2_acceptance_report.py",
+                        "--hints",
+                        STREAMING_M82_HINTS_SENTINEL,
+                        "--radar",
+                        STREAMING_M82_RADAR_SENTINEL,
+                        "--expansion",
+                        STREAMING_M82_EXPANSION_SENTINEL,
+                        "--output",
+                        STREAMING_M82_ACCEPTANCE_SENTINEL,
+                    ),
+                    streaming_final_batch=True,
+                    allow_exit_codes=(0, 1),
+                )
+            )
+        lane_acceptance_cmd = [
+            "scripts/m9_lane_acceptance_report.py",
+            "--bridge",
+            PRODUCTION_BRIDGE,
+            "--shadow",
+            M9_SHADOW_ARTIFACT,
+            "--rca",
+            M9_RCA_ARTIFACT,
+        ]
+        if use_batched_final:
+            lane_acceptance_cmd.extend(
+                batched_final_lane_acceptance_args(skip_shadow=not include_shadow)
+            )
+        else:
+            lane_acceptance_cmd.extend(
+                [
                     "--m8-2-report",
                     "data/tmp/m8_2_acceptance_report_latest.json",
                     "--m8-3-registry",
                     "data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
-                    "--bridge",
-                    PRODUCTION_BRIDGE,
-                    "--shadow",
-                    M9_SHADOW_ARTIFACT,
-                    "--rca",
-                    M9_RCA_ARTIFACT,
-                ),
+                ]
+            )
+        steps.append(
+            _pipeline_step(
+                "m9_lane_acceptance",
+                _py_cmd(*lane_acceptance_cmd),
+                streaming_final_batch=use_batched_final,
             )
         )
 
@@ -2523,6 +2544,8 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         os.environ[ENV_STREAMING_FINAL_BATCH_INDEX] = str(len(final_batches))
         os.environ["ARBY_PIPELINE_MODE"] = batched_m8_refresh_mode(streaming=True)
     slo_tracker = PipelineSloTracker()
+    if getattr(args, "resume_from", None):
+        slo_tracker.set_resume_context(str(args.resume_from))
     log_path = Path(getattr(args, "pipeline_log", "") or "data/tmp/start_pipeline_latest.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fail_path = Path("data/tmp/start_pipeline_latest.fail")

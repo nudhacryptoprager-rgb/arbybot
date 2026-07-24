@@ -60,3 +60,27 @@ py -3.11 scripts/ci_full_pipeline.py --mode ci
 
 Run online commands only when Codex/user explicitly requests them and any required
 RPC preflight is satisfied.
+
+## M8 Coverage Contract
+
+- M8 sniper discovery scans all **configured** DEXes with adapter/event support in
+  `config/` and `adapter_metadata.yaml`, not every DEX that exists on-chain.
+- Expansion backlog may include tokens seen on DEXes without adapter support; those
+  remain backlog until adapter coverage or event sources exist.
+
+## Batched M8 Refresh (`--streaming`)
+
+- Pipeline mode `batched_m8_refresh`: per-batch sniper→M8.1→M8.2→M8.3 under
+  `data/tmp/streaming_batches/<session>/batch_N/`, then one M9 pass on the final batch
+  bundle (anchor, hints, expansion, M8.3 registry must align).
+- M8.1 remains quote/inventory diagnostics only; mirror economics and metadata authority
+  stay in M8.2/M8.3 respectively.
+- **M8.1 admission contract (streaming):** `gate_acceptance=false` means productive quote
+  rate is below the strict perf gate; `strategy_gate_acceptance=true` with
+  `perf_gate_fail=false` allows the batched pipeline to continue as a discovery lane.
+  `rpc_error_rate < 0.1` is required for soft-exit (exit 0) in streaming batch mode.
+  M8.1 does not gate M9 bridge admission — upstream truth gates and M8.2 handoff do.
+- **M9 lane acceptance (streaming):** `m9_lane_acceptance` must consume final-batch
+  M8.2 acceptance report, expansion, and M8.3 registry from `batch_N/` (not rolling).
+  With `--skip-shadow`, `upstream_bundle_status=UPSTREAM_BUNDLE_VALIDATED` is the
+  success criterion; `m9_shadow_acceptance_status=SKIPPED` — not production-ready M9.
