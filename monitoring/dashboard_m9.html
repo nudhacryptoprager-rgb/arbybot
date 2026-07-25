@@ -78,6 +78,16 @@
 <h2>Quarantine Impact</h2>
 <div class="row" id="quarantine-row"></div>
 
+
+<h2>M_control Funnel (session-coherent)</h2>
+<div id="m-control-banner" class="verdict-row"></div>
+<div class="row" id="m-control-conversion-row"></div>
+<table id="m-control-stages-table">
+  <thead><tr><th>Stage</th><th>Status</th><th>Session</th><th>Blockers</th></tr></thead>
+  <tbody id="m-control-stages-body"></tbody>
+</table>
+<h3>Top attrition reasons</h3>
+<ul id="m-control-attrition"></ul>
 <h2>Top Blockers</h2>
 <table id="blockers-table">
   <thead><tr><th>Reason</th><th>Count</th><th>Owner</th></tr></thead>
@@ -201,6 +211,40 @@ async function load() {
 
 
   const ocp = d.operator_control_plane || {};
+  const mcf = d.m_control_funnel || {};
+  const econBanner = document.getElementById('m-control-banner');
+  if (econBanner) {
+    if (mcf.economics_not_yet_tested) {
+      econBanner.innerHTML = badge('ECONOMICS NOT YET TESTED', 'yellow');
+    } else {
+      econBanner.innerHTML = '<span class="neu">economics path attempted</span>';
+    }
+  }
+  const conv = mcf.capacity_conversion || {};
+  const mcr = document.getElementById('m-control-conversion-row');
+  if (mcr) {
+    mcr.innerHTML = [
+      card('cap valid', conv.capacity_valid_count ?? '-', ''),
+      card('selected', conv.shadow_selected_count ?? '-', ''),
+      card('quoted', conv.shadow_quoted_count ?? '-', ''),
+      card('cap sel rate', conv.capacity_selected_rate != null ? conv.capacity_selected_rate : '-', ''),
+      card('cap quote rate', conv.capacity_quoted_rate != null ? conv.capacity_quoted_rate : '-', ''),
+      card('econ RPC', conv.econ_rpc_quote_attempts ?? '-', ''),
+    ].join('');
+  }
+  const mst = document.getElementById('m-control-stages-body');
+  if (mst) {
+    const stages = mcf.stages || [];
+    mst.innerHTML = stages.length ? stages.map(s =>
+      `<tr><td>${s.stage}</td><td>${gateBadge(s.status)}</td><td>${s.session_id || '-'}</td><td>${(s.blockers||[]).join(', ') || '-'}</td></tr>`
+    ).join('') : '<tr><td colspan="4" class="neu">-</td></tr>';
+  }
+  const mat = document.getElementById('m-control-attrition');
+  if (mat) {
+    const attr = mcf.top_attrition_reasons || [];
+    mat.innerHTML = attr.length ? attr.map(([r,c]) => `<li>${r}: ${c}</li>`).join('') : '<li class="neu">none</li>';
+  }
+
 
   const warns = ocp.operator_warnings || [];
   const ow = document.getElementById('operator-warnings');

@@ -26,6 +26,7 @@ def test_control_funnel_economics_not_yet_tested(tmp_path):
         encoding="utf-8",
     )
     funnel = build_control_funnel(tmp_path)
+    assert funnel["schema_version"] == "m_control_funnel_v2"
     assert funnel["economics_not_yet_tested"] is True
     assert funnel["session_id"] == "sess_a"
     assert "DEPTH_BELOW_ECONOMICS_FLOOR" in funnel["reason_histogram"]

@@ -148,11 +148,23 @@ def is_session_fresh_long_tail_quote_ready(
     provenance: Optional[Dict[str, Any]] = None,
     now_ts: Optional[float] = None,
     mirror_quote_ready: bool = False,
+    expected_session_id: Optional[str] = None,
 ) -> bool:
     """Fresh long-tail quote-ready only with session-bound sniper provenance."""
     if not mirror_quote_ready:
         return False
     prov = provenance or {}
+    from core.pipeline_provenance import pipeline_session_id
+
+    sid = (expected_session_id or pipeline_session_id() or "").strip()
+    if sid:
+        prov_sid = str(
+            prov.get("session_id")
+            or prov.get("pipeline_session_id")
+            or ""
+        ).strip()
+        if not prov_sid or prov_sid != sid:
+            return False
     if not _has_session_sniper_provenance(prov):
         return False
     prior_pools = int(prov.get("prior_pool_count") or 0)

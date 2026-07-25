@@ -844,23 +844,30 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _serve_control_funnel(self):
-        from api.control_projection import build_control_funnel
+        from api.control_cache import get_control_projection_cache
 
-        payload = json.dumps(build_control_funnel("."), default=str).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-cache, max-age=0")
-        self.end_headers()
-        self.wfile.write(payload)
+        body, etag = get_control_projection_cache(".").funnel()
+        self._serve_control_json(body, etag)
 
     def _serve_control_traces(self):
-        from api.control_projection import build_control_traces
+        from api.control_cache import get_control_projection_cache
 
-        payload = json.dumps(build_control_traces("."), default=str).encode("utf-8")
+        body, etag = get_control_projection_cache(".").traces()
+        self._serve_control_json(body, etag)
+
+    def _serve_control_json(self, body: dict, etag: str) -> None:
+        inm = self.headers.get("If-None-Match") or self.headers.get("if-none-match")
+        if inm and inm == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache, max-age=0")
+            self.end_headers()
+            return
+        payload = json.dumps(body, default=str).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        self.send_header("ETag", etag)
         self.send_header("Cache-Control", "no-cache, max-age=0")
         self.end_headers()
         self.wfile.write(payload)
@@ -1722,11 +1729,11 @@ def build_m9_current_payload(
     )
     start_pipeline = build_pipeline_control_plane(now_utc=now_utc)
     try:
-        from api.control_projection import build_control_funnel
+        from api.control_cache import get_control_projection_cache
 
-        m_control_funnel = build_control_funnel(".")
+        m_control_funnel = get_control_projection_cache(".").funnel()[0]
     except Exception:
-        m_control_funnel = {"schema_version": "m_control_funnel_v1", "stages": []}
+        m_control_funnel = {"schema_version": "m_control_funnel_v2", "stages": []}
 
     return {
         "schema_family": "m9_dashboard",

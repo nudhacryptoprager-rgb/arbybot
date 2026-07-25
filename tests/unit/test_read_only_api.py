@@ -304,7 +304,7 @@ def test_control_funnel_api_route(repo):
     status, _, body = app.handle("GET", "/v1/control/funnel")
     assert status == 200
     data = _json((status, _, body))
-    assert data["schema_version"] == "m_control_funnel_v1"
+    assert data["schema_version"] == "m_control_funnel_v2"
     assert "stages" in data
 
 
@@ -313,7 +313,7 @@ def test_control_traces_api_route(repo):
     status, _, body = app.handle("GET", "/v1/control/traces")
     assert status == 200
     data = _json((status, _, body))
-    assert data["schema_version"] == "m_control_traces_v1"
+    assert data["schema_version"] == "m_control_traces_v2"
 
     app = ApiApp(repo)
     status, _, _ = app.handle("POST", "/health/live")

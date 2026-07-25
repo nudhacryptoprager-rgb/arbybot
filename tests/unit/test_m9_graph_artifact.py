@@ -24,7 +24,12 @@ _ROLLING = Path("data/runs/_rolling/m9_graph_latest.json")
 def _load_rolling() -> Dict[str, Any]:
     if not _ROLLING.exists():
         pytest.skip(f"Rolling artifact not found: {_ROLLING}")
-    return json.loads(_ROLLING.read_text(encoding="utf-8"))
+    doc = json.loads(_ROLLING.read_text(encoding="utf-8"))
+    from api.artifact_provenance import is_test_or_fixture_artifact
+
+    if is_test_or_fixture_artifact(doc):
+        pytest.skip("Rolling artifact is test fixture — live contract tests skipped")
+    return doc
 
 
 def _make_topology():

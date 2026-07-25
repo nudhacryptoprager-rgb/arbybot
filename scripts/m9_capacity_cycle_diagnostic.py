@@ -27,19 +27,31 @@ def stamp_capacity_provenance(
     report: Dict[str, Any],
     *,
     now_utc: Optional[str] = None,
+    run_timestamp: Optional[str] = None,
+    universe_contract: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Stamp the capacity diagnostic artifact with provenance (Patch 4).
+    """Stamp capacity diagnostic with provenance, session binding, and universe contract."""
+    from core.pipeline_provenance import (
+        apply_pipeline_provenance,
+        pipeline_session_id,
+        stamp_run_context,
+    )
+    from m9.graph_arb.universe_contract import stamp_universe_contract
 
-    Schema-additive: only sets ``generated_at_utc`` (and keeps any existing
-    value untouched when the caller does not pass ``now_utc``). The empty /
-    no-graph path (``blocker_hint == "NO_GRAPH_OR_NO_CYCLES"``) and the normal
-    success path both receive the same provenance stamp so the M9 lane
-    freshness gate (Patch 3) never sees a missing capacity timestamp.
-
-    ``now_utc`` is accepted as an injection seam for deterministic unit tests
-    so they do not depend on wall-clock time.
-    """
-    report["generated_at_utc"] = now_utc or _iso_now()
+    ts = now_utc or _iso_now()
+    report["generated_at_utc"] = ts
+    report["run_timestamp"] = run_timestamp or ts
+    sid = pipeline_session_id()
+    if sid:
+        report["session_id"] = sid
+    report["run_context"] = stamp_run_context(
+        report.get("run_context"),
+        run_timestamp=report["run_timestamp"],
+    )
+    if universe_contract is not None:
+        stamp_universe_contract(report, universe_contract)
+    provenance_out = apply_pipeline_provenance(report, run_timestamp=report["run_timestamp"])
+    report.update(provenance_out)
     return report
 
 
@@ -60,7 +72,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="M9 usable-capacity cycle diagnostic")
     ap.add_argument("--bridge", "--inventory", dest="bridge", default=_DEFAULT_BRIDGE)
     ap.add_argument("--config", default=_DEFAULT_CONFIG)
-    ap.add_argument("--cycle-lengths", default="2,3,4")
+    ap.add_argument("--cycle-lengths", default=None, help="Comma-separated (default: from config scan_params)")
     ap.add_argument(
         "--floors",
         default=None,
@@ -97,14 +109,31 @@ def main() -> int:
         choices=("discovery", "productive"),
         default="productive",
     )
+    ap.add_argument(
+        "--require-factory-verified",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Match runner productive graph admission (default: true when --lane productive)",
+    )
     args = ap.parse_args()
 
     from m9.graph_arb.cycle_capacity import (
         narrow_routes_by_econ_capacity_closure,
         run_capacity_cycle_diagnostic,
     )
+    from m9.graph_arb.universe_contract import (
+        build_universe_contract,
+        resolve_cycle_lengths_from_config,
+    )
 
-    lengths = _parse_cycle_lengths(args.cycle_lengths)
+    require_fv = args.require_factory_verified
+    if require_fv is None:
+        require_fv = args.lane == "productive"
+
+    if args.cycle_lengths:
+        lengths = _parse_cycle_lengths(args.cycle_lengths)
+    else:
+        lengths = resolve_cycle_lengths_from_config(args.config)
     floors = _parse_floors(args.floors)
     report = run_capacity_cycle_diagnostic(
         inventory_path=args.bridge,
@@ -112,6 +141,7 @@ def main() -> int:
         cycle_lengths=lengths,
         floors_usd=floors,
         lane=args.lane,
+        require_factory_verified=require_fv,
         include_four_leg_rca=args.four_leg_rca,
     )
 
@@ -163,7 +193,15 @@ def main() -> int:
         qpath.write_text(json.dumps(qrca, indent=2), encoding="utf-8")
         report["quarantine_depth_rca_path"] = str(qpath)
     out.parent.mkdir(parents=True, exist_ok=True)
-    stamp_capacity_provenance(report)
+    universe_contract = build_universe_contract(
+        inventory_path=args.bridge,
+        config_path=args.config,
+        lane=args.lane,
+        require_factory_verified=require_fv,
+        cycle_lengths=lengths,
+        active_economics_profile=str(report.get("active_economics_profile") or ""),
+    )
+    stamp_capacity_provenance(report, universe_contract=universe_contract)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     summary = {

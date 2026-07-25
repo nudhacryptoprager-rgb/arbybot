@@ -37,9 +37,10 @@ class TestTokenClassify:
         tc = classify_token_class(_FRESH, config=_cfg(), prior_pool_count=0)
         assert tc == TOKEN_CLASS_FRESH
 
-    def test_session_fresh_requires_sniper_provenance(self):
+    def test_session_fresh_requires_sniper_provenance(self, monkeypatch):
         from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
 
+        monkeypatch.delenv("ARBY_PIPELINE_SESSION_ID", raising=False)
         now = 1_700_000_000.0
         registry = {
             "tokens": {
@@ -66,22 +67,41 @@ class TestTokenClassify:
             mirror_quote_ready=True,
         )
 
-    def test_symbol_spoof_does_not_exclude_fresh_long_tail(self):
+    def test_session_mismatch_blocks_when_session_differs(self):
         from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
 
-        spoof = "0xdead000000000000000000000000000000000002"
         now = 1_700_000_000.0
-        registry = {"tokens": {spoof: {"first_seen_ts": now - 30, "venues": {}}}}
-        assert is_session_fresh_long_tail_quote_ready(
-            spoof,
+        registry = {"tokens": {_FRESH: {"first_seen_ts": now - 60, "venues": {}}}}
+        assert not is_session_fresh_long_tail_quote_ready(
+            _FRESH,
             config=_cfg(),
             registry=registry,
             provenance={
                 "refresh_lane": "fresh_delta_lane",
-                "first_seen_ts": now - 30,
+                "first_seen_ts": now - 60,
+                "session_id": "other-session",
             },
             now_ts=now,
             mirror_quote_ready=True,
+            expected_session_id="canonical-session",
+        )
+
+    def test_missing_provenance_session_id_blocks_when_expected(self):
+        from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
+
+        now = 1_700_000_000.0
+        registry = {"tokens": {_FRESH: {"first_seen_ts": now - 60, "venues": {}}}}
+        assert not is_session_fresh_long_tail_quote_ready(
+            _FRESH,
+            config=_cfg(),
+            registry=registry,
+            provenance={
+                "refresh_lane": "fresh_delta_lane",
+                "first_seen_ts": now - 60,
+            },
+            now_ts=now,
+            mirror_quote_ready=True,
+            expected_session_id="canonical-session",
         )
 
     def test_mechanic_pair_cross(self):

@@ -126,6 +126,9 @@ class ApiApp:
         self._sniper_assessor: Optional[
             Callable[[Optional[Mapping[str, Any]]], Dict[str, Any]]
         ] = sniper_assessor
+        from api.control_cache import get_control_projection_cache
+
+        self._control_cache = get_control_projection_cache(self.repo_root, cache=self.cache)
 
     # -- transport-neutral entry point ---------------------------------------
 
@@ -283,16 +286,12 @@ class ApiApp:
         return self._json_with_etag(body, proj.etag if proj else None, headers)
 
     def _control_funnel(self, headers: Mapping[str, str]) -> Response:
-        from api.control_projection import build_control_funnel
-
-        body = build_control_funnel(self.repo_root)
-        return self._json_response(body)
+        body, etag = self._control_cache.funnel()
+        return self._json_with_etag(body, etag, headers)
 
     def _control_traces(self, headers: Mapping[str, str]) -> Response:
-        from api.control_projection import build_control_traces
-
-        body = build_control_traces(self.repo_root)
-        return self._json_response(body)
+        body, etag = self._control_cache.traces()
+        return self._json_with_etag(body, etag, headers)
 
     def _run(self, run_id: str, headers: Mapping[str, str]) -> Response:
         run_id = run_id.strip()

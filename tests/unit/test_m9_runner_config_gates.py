@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import tempfile
+from pathlib import Path
+
+_GATE_ARTIFACT = str(Path(tempfile.gettempdir()) / "m9_runner_gate_test_artifact.json")
 
 
 def _minimal_args(**overrides) -> argparse.Namespace:
@@ -27,6 +31,7 @@ def _minimal_args(**overrides) -> argparse.Namespace:
         require_premium_rpc=False,
         require_factory_verified=False,
         verbose=False,
+        artifact_path=_GATE_ARTIFACT,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)

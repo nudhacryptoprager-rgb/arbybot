@@ -32,12 +32,12 @@ def cycle_long_tail_target_eligible(
     cycle: GraphCycle,
     *,
     direct_pool_addrs: FrozenSet[str],
-    derived_pool_addrs: FrozenSet[str],
+    verified_mirror_pool_addrs: FrozenSet[str],
 ) -> bool:
-    """Direct sniper pool or verified M8-derived mirror pool on the cycle."""
+    """Direct sniper pool or verified mirror pool on the cycle."""
     for edge in cycle.edges:
         pool = str(getattr(edge, "pool_address", "") or "").lower()
-        if pool in direct_pool_addrs or pool in derived_pool_addrs:
+        if pool in direct_pool_addrs or pool in verified_mirror_pool_addrs:
             return True
     return False
 
@@ -48,7 +48,7 @@ def filter_cycles_for_shadow_lane(
     mode: str,
     capacity_ids: Set[str],
     direct_pool_addrs: FrozenSet[str],
-    derived_pool_addrs: FrozenSet[str],
+    verified_mirror_pool_addrs: FrozenSet[str],
 ) -> Tuple[List[GraphCycle], Optional[str]]:
     """Physical universe filter — not a soft queue boost."""
     lane = normalize_shadow_lane_mode(mode)
@@ -64,7 +64,7 @@ def filter_cycles_for_shadow_lane(
             if cycle_long_tail_target_eligible(
                 c,
                 direct_pool_addrs=direct_pool_addrs,
-                derived_pool_addrs=derived_pool_addrs,
+                verified_mirror_pool_addrs=verified_mirror_pool_addrs,
             )
         ]
         if not filtered:
@@ -80,7 +80,7 @@ def rank_shadow_cycles(
     route_meta: Dict[str, Dict[str, Any]],
     mode: str,
     direct_pool_addrs: FrozenSet[str],
-    derived_pool_addrs: FrozenSet[str],
+    verified_mirror_pool_addrs: FrozenSet[str],
     capacity_prioritized: bool = False,
 ) -> List[GraphCycle]:
     """Single stable rank: capacity-valid → target-eligible → productive score."""
@@ -98,7 +98,7 @@ def rank_shadow_cycles(
                 if cycle_long_tail_target_eligible(
                     c,
                     direct_pool_addrs=direct_pool_addrs,
-                    derived_pool_addrs=derived_pool_addrs,
+                    verified_mirror_pool_addrs=verified_mirror_pool_addrs,
                 )
                 else 1
             )

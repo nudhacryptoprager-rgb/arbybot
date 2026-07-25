@@ -25,7 +25,7 @@ def _cycle(cycle_id: str, pools: list[str]) -> MagicMock:
 
 
 _DIRECT = frozenset({"0xdirect"})
-_DERIVED = frozenset({"0xderived"})
+_VERIFIED_MIRROR = frozenset({"0xderived"})
 
 
 class TestShadowLaneFilter:
@@ -39,7 +39,7 @@ class TestShadowLaneFilter:
             mode=SHADOW_LANE_LONG_TAIL_TARGET,
             capacity_ids=set(),
             direct_pool_addrs=_DIRECT,
-            derived_pool_addrs=_DERIVED,
+            verified_mirror_pool_addrs=_VERIFIED_MIRROR,
         )
         assert blocker is None
         assert [c.cycle_id for c in filtered] == ["target"]
@@ -51,7 +51,7 @@ class TestShadowLaneFilter:
             mode=SHADOW_LANE_LONG_TAIL_TARGET,
             capacity_ids=set(),
             direct_pool_addrs=_DIRECT,
-            derived_pool_addrs=_DERIVED,
+            verified_mirror_pool_addrs=_VERIFIED_MIRROR,
         )
         assert filtered == []
         assert blocker == BLOCKER_NO_LONG_TAIL_TARGET_CYCLES
@@ -63,7 +63,7 @@ class TestShadowLaneFilter:
             mode=SHADOW_LANE_CAPACITY_ONLY,
             capacity_ids={"cap"},
             direct_pool_addrs=_DIRECT,
-            derived_pool_addrs=_DERIVED,
+            verified_mirror_pool_addrs=_VERIFIED_MIRROR,
         )
         assert blocker is None
         assert [c.cycle_id for c in filtered] == ["cap"]
@@ -81,7 +81,7 @@ class TestShadowLaneRanking:
             route_meta={},
             mode=SHADOW_LANE_LONG_TAIL_TARGET,
             direct_pool_addrs=_DIRECT,
-            derived_pool_addrs=_DERIVED,
+            verified_mirror_pool_addrs=_VERIFIED_MIRROR,
             capacity_prioritized=True,
         )
         assert ranked[0].cycle_id == "broad_cap"
@@ -95,7 +95,7 @@ class TestShadowLaneRanking:
             mode=SHADOW_LANE_CAPACITY_ONLY,
             capacity_ids=cap_ids,
             direct_pool_addrs=_DIRECT,
-            derived_pool_addrs=_DERIVED,
+            verified_mirror_pool_addrs=_VERIFIED_MIRROR,
         )
         assert blocker is None
         assert len(filtered) == 20

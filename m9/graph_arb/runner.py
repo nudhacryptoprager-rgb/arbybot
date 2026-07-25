@@ -51,6 +51,7 @@ EXIT_ALL_QUOTES_FAILED = 3
 EXIT_BRIDGE_UNIVERSE_TOO_SMALL = 4
 EXIT_BRIDGE_SHADOW_CYCLE_GATE = 5
 EXIT_NO_SHADOW_TARGET_UNIVERSE = 6
+EXIT_CAPACITY_UNIVERSE_MISMATCH = 7
 
 
 def _load_capacity_valid_cycle_ids(cap_doc: Dict[str, Any]) -> list[str]:
@@ -67,6 +68,118 @@ def _load_capacity_valid_cycle_ids(cap_doc: Dict[str, Any]) -> list[str]:
         for row in (cap_doc.get("sample_cycles_at_econ_floor") or [])
         if row.get("cycle_id")
     ]
+
+
+def _write_shadow_lane_blocked_artifact(
+    *,
+    args: argparse.Namespace,
+    log: Any,
+    blocker: str,
+    shadow_lane_mode: str,
+    topology: Any,
+    cycles_found_topology: int,
+    run_timestamp: str,
+    started_at: float,
+    inventory_path: str,
+    funnel_a: Any,
+    inventory_reject_histogram: Any,
+    bridge_source_metrics: Optional[Dict[str, Any]],
+    capacity_scope: Dict[str, Any],
+    rpc_provider: Optional[str],
+    rpc_source: Optional[str],
+    rpc_public_fallback_used: bool,
+    unverified_active_routes: Optional[int],
+    pool_quality_lane: str,
+    discovery_cycles_found: int,
+    cycle_lengths_used: tuple,
+    discovery_cycles_by_length: Dict[str, int],
+    depth_quarantine_skipped: int,
+    revert_quarantine_skipped: int,
+    phantom_quarantine_skipped: int,
+    diagnostic_quarantine_skipped: int,
+    quarantine_exclusion_breakdown: Any,
+    diagnostic_quarantine_mode: Optional[str],
+    diagnostic_admission_mode: Optional[str],
+    cycles_before_quarantine: Optional[int],
+    cycles_after_quarantine: Optional[int],
+    graph_build_admission_histogram: Any,
+    graph_build_metrics: Any,
+    route_meta_by_pool: Dict[str, Dict[str, Any]],
+    cost_model: Any,
+    process_id: int,
+    duration_minutes: float,
+    universe_contract: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Emit canonical shadow artifact when strict lane filter excludes all cycles."""
+    from core.pipeline_provenance import apply_pipeline_provenance
+    from m9.graph_arb.artifacts import build_artifact, write_artifact
+
+    bsm = dict(bridge_source_metrics or {})
+    bsm["shadow_lane_blocker"] = blocker
+    artifact_path = getattr(
+        args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
+    )
+    cap_ids = list(capacity_scope.get("capacity_valid_cycle_ids") or [])
+    artifact = build_artifact(
+        chain=args.chain,
+        duration_minutes=duration_minutes,
+        cycle_results=[],
+        topology=topology,
+        sizes_usd=tuple(args.sizes_usd),
+        run_timestamp=run_timestamp,
+        started_at_mono=started_at,
+        elapsed_s=time.monotonic() - started_at,
+        inventory_path=inventory_path,
+        config_path=args.config,
+        sweeps_completed=0,
+        process_id=process_id,
+        python_executable=sys.executable,
+        venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+        cycles_found_topology=cycles_found_topology,
+        funnel_a=funnel_a,
+        inventory_reject_histogram=inventory_reject_histogram,
+        rpc_provider=rpc_provider,
+        rpc_source=rpc_source,
+        rpc_public_fallback_used=rpc_public_fallback_used,
+        unverified_active_routes=unverified_active_routes,
+        pool_quality_lane=pool_quality_lane,
+        discovery_cycles_found=discovery_cycles_found,
+        cycle_lengths_used=cycle_lengths_used,
+        discovery_cycles_by_length=discovery_cycles_by_length,
+        depth_quarantine_skipped=depth_quarantine_skipped,
+        revert_quarantine_skipped=revert_quarantine_skipped,
+        phantom_quarantine_skipped=phantom_quarantine_skipped,
+        diagnostic_quarantine_skipped=diagnostic_quarantine_skipped,
+        quarantine_exclusion_breakdown=quarantine_exclusion_breakdown,
+        diagnostic_quarantine_mode=diagnostic_quarantine_mode,
+        diagnostic_admission_mode=diagnostic_admission_mode,
+        cycles_before_quarantine=cycles_before_quarantine,
+        cycles_after_quarantine=cycles_after_quarantine,
+        graph_build_admission_histogram=graph_build_admission_histogram,
+        graph_build_metrics=graph_build_metrics,
+        bridge_source_metrics=bsm,
+        route_meta_by_pool=route_meta_by_pool or None,
+        cost_model=cost_model,
+        capacity_scope=capacity_scope,
+        scan_scope={
+            "shadow_lane_mode": shadow_lane_mode,
+            "shadow_lane_blocker": blocker,
+            "capacity_valid_cycle_ids": cap_ids,
+        },
+    )
+    artifact["runner_outcome"] = "NO_SHADOW_TARGET_UNIVERSE"
+    artifact["shadow_lane_blocker"] = blocker
+    provenance_out = apply_pipeline_provenance(artifact, run_timestamp=run_timestamp)
+    artifact.update(provenance_out)
+    if universe_contract:
+        artifact["universe_contract"] = dict(universe_contract)
+    write_artifact(artifact, artifact_path)
+    log.info(
+        "Wrote shadow lane blocked artifact: blocker=%s path=%s cycles_topology=%d",
+        blocker,
+        artifact_path,
+        cycles_found_topology,
+    )
 
 
 def _iso_now() -> str:
@@ -626,6 +739,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     cycles_limit = int(getattr(args, "cycles_limit", 5000) or 5000)
 
     _capacity_scope: Dict[str, Any] = {}
+    _cap_doc: Optional[Dict[str, Any]] = None
     cap_path_str = str(getattr(args, "capacity_diagnostic", "") or "").strip()
     if cap_path_str:
         import json
@@ -633,11 +747,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
         cap_path = Path(cap_path_str)
         if cap_path.is_file():
-            cap_doc = json.loads(cap_path.read_text(encoding="utf-8"))
+            _cap_doc = json.loads(cap_path.read_text(encoding="utf-8"))
             _capacity_scope = {
-                "capacity_valid_cycle_ids": _load_capacity_valid_cycle_ids(cap_doc),
+                "capacity_valid_cycle_ids": _load_capacity_valid_cycle_ids(_cap_doc),
                 "cycles_at_production_floor": int(
-                    cap_doc.get("cycles_at_production_floor") or 0
+                    _cap_doc.get("cycles_at_production_floor") or 0
                 ),
             }
         elif getattr(args, "require_cycles_at_floor", False):
@@ -653,7 +767,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 cap_path_str,
             )
             return 1
-        blocked, reason = shadow_gate_blocked(cap_doc)
+        blocked, reason = shadow_gate_blocked(_cap_doc or {})
         if blocked:
             log.error("SHADOW_CAPACITY_GATE: %s (path=%s)", reason, cap_path_str)
             return 1
@@ -779,6 +893,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Opt-in widening via scan_params.cycle_lengths so existing soaks keep
     # the (3, 4) behavior until a config explicitly requests 2-leg/wider.
     _cycle_lengths: "tuple[int, ...]" = (3, 4)
+    _active_profile: str = ""
     try:
         import yaml  # noqa: PLC0415
         with open(args.config, encoding="utf-8") as _f:
@@ -931,6 +1046,33 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         args.chain, args.config, inventory_path,
     )
 
+    _runner_universe_contract: Optional[Dict[str, Any]] = None
+    if cap_path_str and _cap_doc is not None:
+        from m9.graph_arb.universe_contract import (
+            build_universe_contract,
+            validate_capacity_for_runner,
+        )
+
+        _pool_lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
+        _runner_universe_contract = build_universe_contract(
+            inventory_path=inventory_path,
+            config_path=args.config,
+            lane=_pool_lane,
+            require_factory_verified=bool(getattr(args, "require_factory_verified", False)),
+            cycle_lengths=_cycle_lengths,
+            active_economics_profile=_active_profile,
+        )
+        _capacity_scope["universe_contract"] = _runner_universe_contract
+        ok, mismatches = validate_capacity_for_runner(_cap_doc, _runner_universe_contract)
+        if not ok:
+            log.error(
+                "CAPACITY_UNIVERSE_MISMATCH: capacity diagnostic built for a different "
+                "universe than runner (mismatches=%s path=%s)",
+                mismatches,
+                cap_path_str,
+            )
+            return EXIT_CAPACITY_UNIVERSE_MISMATCH
+
     # Extract inventory stats (Funnel A + reject taxonomy) before building graph
     inv_stats = extract_inventory_stats(inventory_path)
     funnel_a = inv_stats.get("funnel_a")
@@ -944,12 +1086,18 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _m8_pool_addrs: "frozenset[str]" = frozenset()
     _m8_direct_pool_addrs: "frozenset[str]" = frozenset()
     _m8_derived_pool_addrs: "frozenset[str]" = frozenset()
+    _verified_mirror_pool_addrs: "frozenset[str]" = frozenset()
     _cross_mechanic_pool_addrs: "frozenset[str]" = frozenset()
     try:
         import json as _json_bridge
         with open(inventory_path, encoding="utf-8") as _inv_fh:
             _inv_raw = _json_bridge.load(_inv_fh)
         from m9.graph_arb.cycle_lane_prefilter import build_route_metadata_from_routes
+
+        from m9.graph_arb.verified_mirror import (
+            direct_sniper_pool_addrs,
+            verified_mirror_pool_addrs,
+        )
 
         _route_meta_by_pool = build_route_metadata_from_routes(
             _inv_raw.get("active_routes") or []
@@ -970,20 +1118,11 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                     "(run m9_enrich_bridge_decimals/depth before trusting economics shadow)",
                     _pre_shadow,
                 )
-        # Extract M8 pool addresses for cycle participation tracking
-        _m8_direct_pool_addrs = frozenset(
-            r.get("pool_address", "").lower()
-            for r in _inv_raw.get("active_routes", [])
-            if r.get("source") == "m8_sniper" and r.get("pool_address")
-        )
-        _m8_derived_pool_addrs = frozenset(
-            r.get("pool_address", "").lower()
-            for r in _inv_raw.get("active_routes", [])
-            if r.get("pool_address")
-            and r.get("matched_m8_token")
-            and r.get("source") != "m8_sniper"
-        )
-        _m8_pool_addrs = _m8_direct_pool_addrs | _m8_derived_pool_addrs
+        _active_routes = _inv_raw.get("active_routes") or []
+        _m8_direct_pool_addrs = direct_sniper_pool_addrs(_active_routes)
+        _verified_mirror_pool_addrs = verified_mirror_pool_addrs(_active_routes)
+        _m8_derived_pool_addrs = _verified_mirror_pool_addrs
+        _m8_pool_addrs = _m8_direct_pool_addrs | _verified_mirror_pool_addrs
         _cross_mechanic_pool_addrs = frozenset(
             r.get("pool_address", "").lower()
             for r in _inv_raw.get("active_routes", [])
@@ -996,6 +1135,9 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             )
             _bridge_source_metrics["m8_derived_pool_addrs_tracked"] = len(
                 _m8_derived_pool_addrs
+            )
+            _bridge_source_metrics["verified_mirror_pool_addrs_tracked"] = len(
+                _verified_mirror_pool_addrs
             )
             _bridge_source_metrics["cross_mechanic_pool_addrs_tracked"] = len(
                 _cross_mechanic_pool_addrs
@@ -1463,18 +1605,57 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         mode=_shadow_lane_mode,
         capacity_ids=_cap_ids,
         direct_pool_addrs=_m8_direct_pool_addrs,
-        derived_pool_addrs=_m8_derived_pool_addrs,
+        verified_mirror_pool_addrs=_verified_mirror_pool_addrs,
     )
     if _lane_filter_blocker == BLOCKER_NO_LONG_TAIL_TARGET_CYCLES:
         log.error(
-            "SHADOW_LANE_FILTER: %s (mode=%s direct_pools=%d derived_pools=%d)",
+            "SHADOW_LANE_FILTER: %s (mode=%s direct_pools=%d verified_mirror_pools=%d)",
             _lane_filter_blocker,
             _shadow_lane_mode,
             len(_m8_direct_pool_addrs),
-            len(_m8_derived_pool_addrs),
+            len(_verified_mirror_pool_addrs),
         )
         if _bridge_source_metrics is not None:
             _bridge_source_metrics["shadow_lane_blocker"] = _lane_filter_blocker
+        _write_shadow_lane_blocked_artifact(
+            args=args,
+            log=log,
+            blocker=_lane_filter_blocker,
+            shadow_lane_mode=_shadow_lane_mode,
+            topology=topology,
+            cycles_found_topology=len(cycles),
+            run_timestamp=run_timestamp,
+            started_at=started_at,
+            inventory_path=inventory_path,
+            funnel_a=funnel_a,
+            inventory_reject_histogram=inventory_reject_histogram,
+            bridge_source_metrics=_bridge_source_metrics,
+            capacity_scope=_capacity_scope,
+            rpc_provider=rpc_provider,
+            rpc_source=rpc_source,
+            rpc_public_fallback_used=rpc_public_fallback_used,
+            unverified_active_routes=unverified_active_routes,
+            pool_quality_lane=_lane,
+            discovery_cycles_found=_discovery_cycles_found,
+            cycle_lengths_used=_cycle_lengths,
+            discovery_cycles_by_length=_discovery_cycles_by_length,
+            depth_quarantine_skipped=_depth_quarantine_skipped,
+            revert_quarantine_skipped=_revert_quarantine_skipped,
+            phantom_quarantine_skipped=_phantom_quarantine_skipped,
+            diagnostic_quarantine_skipped=_diagnostic_quarantine_skipped,
+            quarantine_exclusion_breakdown=_quarantine_exclusion_breakdown,
+            diagnostic_quarantine_mode=_diag_q_mode,
+            diagnostic_admission_mode=_diag_admission_mode,
+            cycles_before_quarantine=_cycles_before_quarantine,
+            cycles_after_quarantine=_cycles_after_quarantine,
+            graph_build_admission_histogram=_graph_admission_hist,
+            graph_build_metrics=_graph_build_metrics,
+            route_meta_by_pool=_route_meta_by_pool,
+            cost_model=_cost_model,
+            process_id=process_id,
+            duration_minutes=duration_minutes,
+            universe_contract=_runner_universe_contract,
+        )
         return EXIT_NO_SHADOW_TARGET_UNIVERSE
     if _lane_filter_blocker == BLOCKER_NO_CAPACITY_VALID_CYCLES:
         log.error(
@@ -1485,6 +1666,45 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         if _bridge_source_metrics is not None:
             _bridge_source_metrics["shadow_lane_blocker"] = _lane_filter_blocker
+        _write_shadow_lane_blocked_artifact(
+            args=args,
+            log=log,
+            blocker=_lane_filter_blocker,
+            shadow_lane_mode=_shadow_lane_mode,
+            topology=topology,
+            cycles_found_topology=len(cycles),
+            run_timestamp=run_timestamp,
+            started_at=started_at,
+            inventory_path=inventory_path,
+            funnel_a=funnel_a,
+            inventory_reject_histogram=inventory_reject_histogram,
+            bridge_source_metrics=_bridge_source_metrics,
+            capacity_scope=_capacity_scope,
+            rpc_provider=rpc_provider,
+            rpc_source=rpc_source,
+            rpc_public_fallback_used=rpc_public_fallback_used,
+            unverified_active_routes=unverified_active_routes,
+            pool_quality_lane=_lane,
+            discovery_cycles_found=_discovery_cycles_found,
+            cycle_lengths_used=_cycle_lengths,
+            discovery_cycles_by_length=_discovery_cycles_by_length,
+            depth_quarantine_skipped=_depth_quarantine_skipped,
+            revert_quarantine_skipped=_revert_quarantine_skipped,
+            phantom_quarantine_skipped=_phantom_quarantine_skipped,
+            diagnostic_quarantine_skipped=_diagnostic_quarantine_skipped,
+            quarantine_exclusion_breakdown=_quarantine_exclusion_breakdown,
+            diagnostic_quarantine_mode=_diag_q_mode,
+            diagnostic_admission_mode=_diag_admission_mode,
+            cycles_before_quarantine=_cycles_before_quarantine,
+            cycles_after_quarantine=_cycles_after_quarantine,
+            graph_build_admission_histogram=_graph_admission_hist,
+            graph_build_metrics=_graph_build_metrics,
+            route_meta_by_pool=_route_meta_by_pool,
+            cost_model=_cost_model,
+            process_id=process_id,
+            duration_minutes=duration_minutes,
+            universe_contract=_runner_universe_contract,
+        )
         return EXIT_NO_SHADOW_TARGET_UNIVERSE
 
     ranked = rank_shadow_cycles(
@@ -1493,7 +1713,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         route_meta=_route_meta_by_pool or {},
         mode=_shadow_lane_mode,
         direct_pool_addrs=_m8_direct_pool_addrs,
-        derived_pool_addrs=_m8_derived_pool_addrs,
+        verified_mirror_pool_addrs=_verified_mirror_pool_addrs,
         capacity_prioritized=_capacity_prioritized,
     )
     if _cap_ids and _capacity_prioritized:

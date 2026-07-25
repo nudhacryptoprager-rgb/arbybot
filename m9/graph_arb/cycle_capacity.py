@@ -612,6 +612,7 @@ def run_capacity_cycle_diagnostic(
     cycle_lengths: Tuple[int, ...] = (2, 3, 4),
     floors_usd: Sequence[float] = DEFAULT_CAPACITY_FLOORS_USD,
     lane: str = "productive",
+    require_factory_verified: bool = False,
     max_cycles: int = 8000,
     sample_limit: int = 8,
     include_four_leg_rca: bool = False,
@@ -641,7 +642,7 @@ def run_capacity_cycle_diagnostic(
         inventory_path=inventory_path,
         config_path=config_path,
         lane=lane,
-        require_factory_verified=False,
+        require_factory_verified=require_factory_verified,
         diagnostic_admission_mode=(
             "topology_probe" if lane == "productive" else None
         ),
@@ -651,6 +652,7 @@ def run_capacity_cycle_diagnostic(
         "inventory_path": inventory_path,
         "config_path": config_path,
         "lane": lane,
+        "require_factory_verified": require_factory_verified,
         "cycle_lengths": list(cycle_lengths),
         "capacity_floors_usd": list(floors_usd),
         "active_economics_profile": active_profile,
