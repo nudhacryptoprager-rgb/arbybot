@@ -196,6 +196,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._serve_m8_current()
         elif path == "/api/m9/current":
             self._serve_m9_current()
+        elif path == "/api/control/funnel":
+            self._serve_control_funnel()
+        elif path == "/api/control/traces":
+            self._serve_control_traces()
         elif path == "/api/pipeline/current":
             self._serve_pipeline_current()
         elif path == "/m7" or path == "/m7/":
@@ -832,6 +836,28 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             artifact_source_path=artifact_source,
         )
         payload = json.dumps(result, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_control_funnel(self):
+        from api.control_projection import build_control_funnel
+
+        payload = json.dumps(build_control_funnel("."), default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache, max-age=0")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_control_traces(self):
+        from api.control_projection import build_control_traces
+
+        payload = json.dumps(build_control_traces("."), default=str).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
@@ -1695,6 +1721,12 @@ def build_m9_current_payload(
         file_age_s=file_age_s,
     )
     start_pipeline = build_pipeline_control_plane(now_utc=now_utc)
+    try:
+        from api.control_projection import build_control_funnel
+
+        m_control_funnel = build_control_funnel(".")
+    except Exception:
+        m_control_funnel = {"schema_version": "m_control_funnel_v1", "stages": []}
 
     return {
         "schema_family": "m9_dashboard",
@@ -1706,6 +1738,10 @@ def build_m9_current_payload(
         "freshness_s": freshness_s,
         "generated_at_utc": generated_at,
         "operator_control_plane": operator_control_plane,
+        "m_control_funnel": m_control_funnel,
+        "economics_not_yet_tested": bool(
+            m_control_funnel.get("economics_not_yet_tested")
+        ),
         "start_pipeline": start_pipeline,
         "m9_summary": {
             "chain": a.get("chain", "base"),

@@ -183,3 +183,5 @@ Per `docs/DOCS_POLICY.md`:
 - **Never add version strings** (`vX.Y.Z`) to docs outside `docs/DEV_REPORT_LATEST.md` (exception: `docs/m4/*.md` API contracts may use schema identifiers; prefer placeholders in examples)
 - **Never add timestamps** to docs except `docs/status/Status_*.md` and `docs/DEV_REPORT_LATEST.md` (exception: `docs/m4/*.md` may use placeholder timestamps in JSON examples)
 - See `docs/DEV_REPORT_CANONICAL_UA.md` for the canonical report format
+- After a completed deterministic verification set, overwrite `docs/DEV_REPORT_LATEST.md` with an evidence-bound handoff even when runtime proof is pending. It MUST use `goal_status: IN_PROGRESS`, enumerate commands actually run, state `NOT RUN` checks explicitly, and must not claim runtime readiness.
+- Update a milestone `docs/status/Status_*.md` only after fresh, same-session evidence for that milestone. CI and unit tests alone may be recorded in `DEV_REPORT_LATEST.md`, but never promote a Status milestone or replace its runtime evidence.

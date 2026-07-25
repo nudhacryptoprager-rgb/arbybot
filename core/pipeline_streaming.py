@@ -8,6 +8,7 @@ expansion backlog may still track unsupported venues for later adapter work.
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,3 +144,20 @@ def m81_streaming_cli_args(*, batch_index: int) -> List[str]:
         str(int(batch_index)),
         "--publish-rolling",
     ]
+
+
+def final_m82_acceptance_allows_shadow(*, session_id: Optional[str] = None) -> bool:
+    """True when the final-batch M8.2 acceptance artifact authorizes M9 shadow."""
+    final_idx = int(os.environ.get("ARBY_STREAMING_FINAL_BATCH_INDEX", "0") or "0")
+    if final_idx <= 0:
+        return True
+    paths = resolve_streaming_batch_paths(final_idx, session_id=session_id)
+    if not paths.m82_acceptance.is_file():
+        return False
+    try:
+        doc = json.loads(paths.m82_acceptance.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if str(doc.get("goal_status") or "").upper() == "BLOCKED":
+        return False
+    return bool(doc.get("handoff_ready"))

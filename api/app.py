@@ -7,7 +7,8 @@ Endpoints (all GET, all read-only):
                         sniper schema/stub/freshness valid, no critical
                         rolling quality blockers (Step 8 fix; previously a
                         stub sniper + stale artifacts counted as "ready").
-* ``/v1/pipeline``   — pipeline control-plane state (current + checkpoints)
+* ``/v1/control/funnel`` — M_control session-coherent M8→M9 funnel projection
+* ``/v1/control/traces`` — entity trace summary (token/pool/route/cycle)
 * ``/v1/runs/{id}``  — run summary for one runDir (path-traversal safe)
 * ``/v1/opportunities`` — latest opportunities/signals with pagination
 * ``/v1/artifacts/{family}/latest`` — canonical artifact by family allowlist
@@ -150,6 +151,10 @@ class ApiApp:
             return self._ready()
         if route == "/v1/pipeline":
             return self._pipeline(headers)
+        if route == "/v1/control/funnel":
+            return self._control_funnel(headers)
+        if route == "/v1/control/traces":
+            return self._control_traces(headers)
         if route.startswith("/v1/runs/"):
             return self._run(route[len("/v1/runs/"):], headers)
         if route == "/v1/opportunities":
@@ -276,6 +281,18 @@ class ApiApp:
         proj = self.cache.get(self.repo_root / _ARTIFACT_FAMILIES["pipeline_current"])
         body = proj.data if proj is not None else {"status": "idle"}
         return self._json_with_etag(body, proj.etag if proj else None, headers)
+
+    def _control_funnel(self, headers: Mapping[str, str]) -> Response:
+        from api.control_projection import build_control_funnel
+
+        body = build_control_funnel(self.repo_root)
+        return self._json_response(body)
+
+    def _control_traces(self, headers: Mapping[str, str]) -> Response:
+        from api.control_projection import build_control_traces
+
+        body = build_control_traces(self.repo_root)
+        return self._json_response(body)
 
     def _run(self, run_id: str, headers: Mapping[str, str]) -> Response:
         run_id = run_id.strip()

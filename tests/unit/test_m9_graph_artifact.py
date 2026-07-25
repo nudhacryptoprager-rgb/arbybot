@@ -320,6 +320,8 @@ class TestM9GraphArtifactSchema:
             valid = {
                 "NOT_RUN", "NOT_BLOCKED", "PROVIDER_QUALITY_BLOCKED",
                 "INVENTORY_TOO_ANCHOR_HEAVY", "MARKET_NO_POSITIVE_GROSS",
+                "ECON_RPC_QUOTE_NOT_ATTEMPTED",
+                "DEPTH_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE",
             }
             assert v in valid, f"economics_blocker_class invalid: {v!r}"
 
@@ -507,7 +509,7 @@ class TestM9GraphArtifactBuilder:
             cycles_found_topology=1234,
         )
         assert a["cycles_found"] == 1234
-        assert a["economics_gate_status"] == "BLOCKED_NO_POSITIVE_GROSS"
+        assert a["economics_gate_status"] == "BLOCKED_BEFORE_ECONOMIC_QUOTE"
         assert a["topology_gate"] == "CYCLES_FOUND"
 
     def test_cycles_quoteable_present(self):
@@ -1175,4 +1177,89 @@ class TestCycleLengthTelemetry:
         assert a["cycles_found_by_length"] == {"2": 1, "3": 1}
         assert a["cycles_quoteable_by_length"] == {"3": 1}
         assert a["discovery_cycles_by_length"] == {"2": 12, "3": 60, "4": 48}
+
+
+class TestAdmissionBeforeQuoteEconomics:
+    """Depth/policy gate without RPC quote must not yield MARKET_NO_POSITIVE_GROSS."""
+
+    def test_depth_gate_only_blocked_before_economic_quote(self):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.depth_telemetry import REJECT_DEPTH_BELOW_ECONOMICS_FLOOR
+        from m9.graph_arb.models import CycleQuoteResult
+
+        results = []
+        for i in range(3):
+            cyc = _make_mock_cycle()
+            cyc.cycle_id = f"depth_gate_{i}"
+            results.append(
+                CycleQuoteResult(
+                    cycle=cyc,
+                    size_usd=180.0,
+                    amount_in=180,
+                    amount_out=0,
+                    gross_bps=0.0,
+                    status="DEPTH_BELOW_ECONOMICS_FLOOR",
+                    reject_reason=REJECT_DEPTH_BELOW_ECONOMICS_FLOOR,
+                    leg_results=[],
+                    elapsed_s=0.05,
+                )
+            )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=results,
+            topology=_make_topology(),
+            sizes_usd=(180.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+            cycles_found_topology=3,
+        )
+        assert a["economics_blocker_class"] == (
+            "DEPTH_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE"
+        )
+        assert a["economics_gate_status"] == "BLOCKED_BEFORE_ECONOMIC_QUOTE"
+        assert a["cycles_quoteable"] == 0
+        assert a["quote_size_truth"]["econ_rpc_quote_attempts"] == 0
+        assert a["qsr_econ"] is None
+        assert a["rpc_quote_success_rate"] is None
+        assert a["econ_quote_success_rate"] is None
+        assert a["econ_quote_attempt_rate"] == a["rpc_quote_attempt_rate"]
+        assert a["discovery_qsr"] == 1.0
+
+    def test_capacity_scope_overlap_fields(self, monkeypatch):
+        from m9.graph_arb.artifacts import build_artifact
+        from m9.graph_arb.models import CycleQuoteResult
+
+        monkeypatch.setenv("ARBY_M9_CAPACITY_PRIORITIZED", "1")
+        cyc = _make_mock_cycle()
+        qr = CycleQuoteResult(
+            cycle=cyc,
+            size_usd=180.0,
+            amount_in=180,
+            amount_out=179,
+            gross_bps=-5.0,
+            status="NEGATIVE_GROSS",
+            reject_reason=None,
+            leg_results=[],
+            elapsed_s=0.1,
+        )
+        a = build_artifact(
+            chain="base",
+            duration_minutes=1.0,
+            cycle_results=[qr],
+            topology=_make_topology(),
+            sizes_usd=(180.0,),
+            run_timestamp="2026-01-01T00:00:00Z",
+            started_at_mono=0.0,
+            elapsed_s=60.0,
+            capacity_scope={
+                "capacity_valid_cycle_ids": [cyc.cycle_id, "other_cycle"],
+                "shadow_selected_cycle_ids": [cyc.cycle_id],
+            },
+        )
+        scope = a["scan_scope"]
+        assert scope["capacity_prioritized"] is True
+        assert cyc.cycle_id in scope["shadow_quoted_cycle_ids"]
+        assert scope["capacity_shadow_selected_overlap_count"] == 1
 

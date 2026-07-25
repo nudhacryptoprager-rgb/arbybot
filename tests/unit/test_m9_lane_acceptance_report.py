@@ -26,6 +26,7 @@ def test_build_acceptance_report_blockers_when_m8_not_ready():
             "cross_mechanic_cycles": 0,
             "qsr": 0.1,
             "active_economics_profile": "production_conservative",
+            "quote_size_truth": {"econ_rpc_quote_attempts": 10, "econ_gate_attempts": 10},
         },
         rca=None,
     )
@@ -119,6 +120,10 @@ def test_build_acceptance_report_quote_blockers():
             "cycles_with_m8_pool": 0,
             "phantom_quote_diagnostics": {"phantom_count": 10},
             "cycle_reject_histogram": {"OVERSIZED_VS_DEPTH": 261},
+            "quote_size_truth": {
+                "econ_rpc_quote_attempts": 5,
+                "econ_gate_attempts": 362,
+            },
         },
         rca={"by_reject_reason": {"QUOTE_REVERT": 50}},
     )
@@ -558,3 +563,170 @@ def test_lane_report_skip_shadow_upstream_bundle_validated(monkeypatch, tmp_path
     assert report["upstream_bundle_status"] == "UPSTREAM_BUNDLE_VALIDATED"
     assert report["goal_status"] == "UPSTREAM_BUNDLE_VALIDATED"
     assert "SHADOW_STALE" not in report["blockers"]
+
+
+def test_lane_report_shadow_accepted_goal_reached(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    from monitoring.sniper_artifacts import make_sniper_artifact
+
+    aligned = "2026-07-23T20:10:00Z"
+    now_fixed = datetime(2026, 7, 23, 20, 11, 0, tzinfo=timezone.utc)
+    import scripts.m9_lane_acceptance_report as mod
+
+    monkeypatch.setattr(mod, "_now_utc", lambda: now_fixed)
+
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.98}},"generated_at_utc":"'
+        + aligned
+        + '"}',
+        encoding="utf-8",
+    )
+    sniper = make_sniper_artifact(
+        status="ACTIVE",
+        recent_events=[{"pool": "0x" + "1" * 40}, {"pool": "0x" + "2" * 40}],
+        metrics={"pool_creation_events_seen": 5},
+    )
+    sniper["generated_at_utc"] = aligned
+    sniper["m8_health"] = {"goal_status": "REACHED"}
+    report = build_acceptance_report(
+        sniper=sniper,
+        anchor={"generated_at_utc": aligned, "metrics": {"stable_anchor_passes_total": 100}},
+        expansion={
+            "generated_at_utc": aligned,
+            "summary": {"routes_admitted_count": 50, "handoff_ready": True},
+            "metrics": {"routes_admitted": 50},
+        },
+        bridge={
+            "generated_at_utc": aligned,
+            "active_routes": [{"dex_id": "uniswap_v3", "cross_mechanic": True}],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 5,
+                "graph_ready_from_expansion": 10,
+                "graph_ready_total": 15,
+                "sniper_generated_at_utc": aligned,
+                "productive_curve_quoteable_routes": 2,
+                "missing_distinct_pricing_lanes": [],
+                "depth_known_rate": 0.9,
+                "m8_3_authority_applied": True,
+            },
+        },
+        shadow={
+            "generated_at_utc": aligned,
+            "cycles_found": 10,
+            "cycles_quoteable": 10,
+            "cycles_positive_gross": 3,
+            "cycles_with_m8_pool": 5,
+            "cross_mechanic_cycles_found": 4,
+            "cross_mechanic_cycles_quoteable": 2,
+            "qsr": 0.5,
+        },
+        rca=None,
+        m8_2_report={
+            "generated_at_utc": aligned,
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+        },
+        m8_3_registry_path=str(registry_path),
+        capacity_metrics={"generated_at_utc": aligned},
+        skip_shadow=False,
+    )
+    assert report["m9_shadow_acceptance_status"] == "M9_SHADOW_ACCEPTED"
+    assert report["m9_goal_status"] == "REACHED"
+    assert report["goal_status"] == "REACHED"
+    assert report["blockers"] == []
+
+
+def test_lane_report_quote_validation_failure_blocks_release(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    aligned = "2026-07-23T20:10:00Z"
+    now_fixed = datetime(2026, 7, 23, 20, 11, 0, tzinfo=timezone.utc)
+    import scripts.m9_lane_acceptance_report as mod
+
+    monkeypatch.setattr(mod, "_now_utc", lambda: now_fixed)
+
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.98}},"generated_at_utc":"'
+        + aligned
+        + '"}',
+        encoding="utf-8",
+    )
+    report = build_acceptance_report(
+        sniper={
+            "status": "ACTIVE",
+            "generated_at_utc": aligned,
+            "metrics": {},
+            "recent_events": [{}],
+        },
+        anchor={"generated_at_utc": aligned, "metrics": {"stable_anchor_passes_total": 100}},
+        expansion={
+            "generated_at_utc": aligned,
+            "summary": {"routes_admitted_count": 50, "handoff_ready": True},
+            "metrics": {"routes_admitted": 50},
+        },
+        bridge={
+            "generated_at_utc": aligned,
+            "active_routes": [{"dex_id": "uniswap_v3"}],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 5,
+                "graph_ready_from_expansion": 10,
+                "graph_ready_total": 15,
+                "sniper_generated_at_utc": aligned,
+            },
+        },
+        shadow={
+            "generated_at_utc": aligned,
+            "cycles_found": 0,
+            "cycles_quoteable": 0,
+            "cycles_positive_gross": 0,
+        },
+        rca=None,
+        m8_2_report={
+            "generated_at_utc": aligned,
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+        },
+        m8_3_registry_path=str(registry_path),
+        skip_shadow=False,
+    )
+    assert "UPSTREAM_OK_BUT_NO_CYCLES" in report["m9_quote_validation_blockers"]
+    assert "UPSTREAM_OK_BUT_NO_CYCLES" in report["blockers"]
+    assert report["m9_shadow_acceptance_status"] == "BLOCKED"
+    assert report["goal_status"] == "BLOCKED"
+
+
+def test_m9_blockers_admission_before_quote_not_market_negative():
+    from scripts.m9_lane_acceptance_report import _m9_economics_blockers
+
+    blockers = _m9_economics_blockers(
+        shadow={
+            "qsr": 1.0,
+            "qsr_econ": None,
+            "economics_blocker_class": "DEPTH_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE",
+            "quote_size_truth": {
+                "econ_gate_attempts": 2441,
+                "econ_rpc_quote_attempts": 0,
+            },
+            "scan_scope": {
+                "shadow_lane_mode": "broad_graph_diagnostic",
+                "capacity_valid_cycle_ids": ["cap_a", "cap_b"],
+            },
+        },
+        rca=None,
+        shadow_cycles_found=2441,
+        shadow_cycles_quoteable=0,
+        shadow_cycles_with_m8=0,
+        bridge={"fresh_long_tail_quote_ready_tokens": 0},
+        capacity_metrics={"cycles_at_production_floor": 2, "cycles_total": 10},
+    )
+    assert "CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE" in blockers
+    assert "NO_POSITIVE_GROSS" not in blockers
+    assert "BROAD_GRAPH_DIAGNOSTIC_NOT_LONG_TAIL_ECONOMICS" in blockers
+    assert "CAPACITY_VALID_CYCLES_NOT_QUOTED_IN_SHADOW" in blockers

@@ -50,6 +50,23 @@ EXIT_NO_CYCLES = 2
 EXIT_ALL_QUOTES_FAILED = 3
 EXIT_BRIDGE_UNIVERSE_TOO_SMALL = 4
 EXIT_BRIDGE_SHADOW_CYCLE_GATE = 5
+EXIT_NO_SHADOW_TARGET_UNIVERSE = 6
+
+
+def _load_capacity_valid_cycle_ids(cap_doc: Dict[str, Any]) -> list[str]:
+    """Prefer full capacity_valid_cycle_ids; fall back to sample rows."""
+    full = [
+        str(cid)
+        for cid in (cap_doc.get("capacity_valid_cycle_ids") or [])
+        if cid
+    ]
+    if full:
+        return full
+    return [
+        str(row.get("cycle_id"))
+        for row in (cap_doc.get("sample_cycles_at_econ_floor") or [])
+        if row.get("cycle_id")
+    ]
 
 
 def _iso_now() -> str:
@@ -608,20 +625,37 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     )
     cycles_limit = int(getattr(args, "cycles_limit", 5000) or 5000)
 
-    if getattr(args, "require_cycles_at_floor", False):
+    _capacity_scope: Dict[str, Any] = {}
+    cap_path_str = str(getattr(args, "capacity_diagnostic", "") or "").strip()
+    if cap_path_str:
         import json
         from pathlib import Path
 
-        from m9.graph_arb.cycle_capacity import shadow_gate_blocked
-
-        cap_path = Path(getattr(args, "capacity_diagnostic", "") or "")
-        if not cap_path.is_file():
+        cap_path = Path(cap_path_str)
+        if cap_path.is_file():
+            cap_doc = json.loads(cap_path.read_text(encoding="utf-8"))
+            _capacity_scope = {
+                "capacity_valid_cycle_ids": _load_capacity_valid_cycle_ids(cap_doc),
+                "cycles_at_production_floor": int(
+                    cap_doc.get("cycles_at_production_floor") or 0
+                ),
+            }
+        elif getattr(args, "require_cycles_at_floor", False):
             log.error("SHADOW_CAPACITY_GATE: capacity diagnostic missing: %s", cap_path)
             return 1
-        cap_doc = json.loads(cap_path.read_text(encoding="utf-8"))
+
+    if getattr(args, "require_cycles_at_floor", False):
+        from m9.graph_arb.cycle_capacity import shadow_gate_blocked
+
+        if not _capacity_scope:
+            log.error(
+                "SHADOW_CAPACITY_GATE: capacity diagnostic missing or empty: %s",
+                cap_path_str,
+            )
+            return 1
         blocked, reason = shadow_gate_blocked(cap_doc)
         if blocked:
-            log.error("SHADOW_CAPACITY_GATE: %s (path=%s)", reason, cap_path)
+            log.error("SHADOW_CAPACITY_GATE: %s (path=%s)", reason, cap_path_str)
             return 1
         log.info("SHADOW_CAPACITY_GATE: allowed (%s)", reason)
 
@@ -1334,6 +1368,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             bridge_source_metrics=_bridge_source_metrics,
             route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
+            capacity_scope=_capacity_scope,
         )
         write_artifact(artifact, artifact_path)
         return EXIT_CONFIG_ERROR
@@ -1390,6 +1425,19 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # -----------------------------------------------------------------------------
     topology = analyze_topology(adjacency, cycles)
     ranked = rank_cycles(cycles)
+    _shadow_lane_mode = os.environ.get("ARBY_M9_SHADOW_LANE_MODE", "").strip()
+    from m9.graph_arb.shadow_lane import (
+        BLOCKER_NO_CAPACITY_VALID_CYCLES,
+        BLOCKER_NO_LONG_TAIL_TARGET_CYCLES,
+        filter_cycles_for_shadow_lane,
+        normalize_shadow_lane_mode,
+        rank_shadow_cycles,
+    )
+
+    _shadow_lane_mode = normalize_shadow_lane_mode(_shadow_lane_mode)
+    _cap_ids = set(_capacity_scope.get("capacity_valid_cycle_ids") or [])
+    _capacity_prioritized = os.environ.get("ARBY_M9_CAPACITY_PRIORITIZED") == "1"
+
     if _lane == "productive" and _route_meta_by_pool:
         from m9.graph_arb.cycle_lane_prefilter import (
             cycle_productive_readiness_score,
@@ -1409,6 +1457,57 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _all_ready,
             len(ranked),
         )
+
+    ranked, _lane_filter_blocker = filter_cycles_for_shadow_lane(
+        ranked,
+        mode=_shadow_lane_mode,
+        capacity_ids=_cap_ids,
+        direct_pool_addrs=_m8_direct_pool_addrs,
+        derived_pool_addrs=_m8_derived_pool_addrs,
+    )
+    if _lane_filter_blocker == BLOCKER_NO_LONG_TAIL_TARGET_CYCLES:
+        log.error(
+            "SHADOW_LANE_FILTER: %s (mode=%s direct_pools=%d derived_pools=%d)",
+            _lane_filter_blocker,
+            _shadow_lane_mode,
+            len(_m8_direct_pool_addrs),
+            len(_m8_derived_pool_addrs),
+        )
+        if _bridge_source_metrics is not None:
+            _bridge_source_metrics["shadow_lane_blocker"] = _lane_filter_blocker
+        return EXIT_NO_SHADOW_TARGET_UNIVERSE
+    if _lane_filter_blocker == BLOCKER_NO_CAPACITY_VALID_CYCLES:
+        log.error(
+            "SHADOW_LANE_FILTER: %s (mode=%s capacity_ids=%d)",
+            _lane_filter_blocker,
+            _shadow_lane_mode,
+            len(_cap_ids),
+        )
+        if _bridge_source_metrics is not None:
+            _bridge_source_metrics["shadow_lane_blocker"] = _lane_filter_blocker
+        return EXIT_NO_SHADOW_TARGET_UNIVERSE
+
+    ranked = rank_shadow_cycles(
+        ranked,
+        capacity_ids=_cap_ids,
+        route_meta=_route_meta_by_pool or {},
+        mode=_shadow_lane_mode,
+        direct_pool_addrs=_m8_direct_pool_addrs,
+        derived_pool_addrs=_m8_derived_pool_addrs,
+        capacity_prioritized=_capacity_prioritized,
+    )
+    if _cap_ids and _capacity_prioritized:
+        log.info(
+            "Capacity-prioritized shadow: %d / %d cycles capacity-valid (mode=%s)",
+            sum(1 for c in ranked if c.cycle_id in _cap_ids),
+            len(ranked),
+            _shadow_lane_mode,
+        )
+    log.info(
+        "Shadow lane mode=%s topology_cycles_after_filter=%d",
+        _shadow_lane_mode,
+        len(ranked),
+    )
 
     log.info("Found %d cycles across %d tokens", len(cycles), topology.token_count)
 
@@ -1529,6 +1628,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
             spread_lifetime_block=_spread_early,
+            capacity_scope=_capacity_scope,
         )
         write_artifact(artifact, artifact_path)
         return EXIT_NO_CYCLES
@@ -1581,6 +1681,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             bridge_source_metrics=_bridge_source_metrics,
             route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
+            capacity_scope=_capacity_scope,
         )
         write_artifact(artifact, artifact_path)
         return EXIT_OK
@@ -1629,6 +1730,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     cycle_count = len(ranked)
     all_results: list = []
     sweep_num = 0
+    _selected_shadow_cycle_ids: Set[str] = set()
 
     # Build scheduler — priority mode (default) uses adaptive 2-tier hot/cold queue;
     # round_robin keeps the legacy sliding-window behaviour.
@@ -1754,7 +1856,12 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 if sweep_num > 0:
                     break
 
-        # Step 8: get active RPC (primary or secondary after failover)
+        for _c in batch:
+            _selected_shadow_cycle_ids.add(_c.cycle_id)
+        _capacity_scope_runtime = {
+            **_capacity_scope,
+            "shadow_selected_cycle_ids": sorted(_selected_shadow_cycle_ids),
+        }
         _active_rpc = _router.get_url() if rpc_url else rpc_url
 
         # Steps 1+2: Recreate w3 when router selects a different endpoint.
@@ -1980,6 +2087,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
             cost_model=_cost_model,
             active_rpc_by_sweep=dict(_active_rpc_by_sweep),
+            capacity_scope=_capacity_scope_runtime,
         )
         write_artifact(partial, artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -2210,6 +2318,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         m8_pool_addrs_for_annotation=_m8_pool_addrs if _m8_pool_addrs else None,
         cost_model=_cost_model,
         active_rpc_by_sweep=dict(_active_rpc_by_sweep),
+        capacity_scope={
+            **_capacity_scope,
+            "shadow_selected_cycle_ids": sorted(_selected_shadow_cycle_ids),
+        },
     )
     artifact["run_status"] = "COMPLETED"
     artifact["runner_outcome"] = "COMPLETED"

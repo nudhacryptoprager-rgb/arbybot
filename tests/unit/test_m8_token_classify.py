@@ -37,6 +37,53 @@ class TestTokenClassify:
         tc = classify_token_class(_FRESH, config=_cfg(), prior_pool_count=0)
         assert tc == TOKEN_CLASS_FRESH
 
+    def test_session_fresh_requires_sniper_provenance(self):
+        from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
+
+        now = 1_700_000_000.0
+        registry = {
+            "tokens": {
+                _FRESH: {
+                    "first_seen_ts": now - 60,
+                    "venues": {},
+                }
+            }
+        }
+        assert is_session_fresh_long_tail_quote_ready(
+            _FRESH,
+            config=_cfg(),
+            registry=registry,
+            provenance={"refresh_lane": "fresh_delta_lane", "first_seen_ts": now - 60},
+            now_ts=now,
+            mirror_quote_ready=True,
+        )
+        assert not is_session_fresh_long_tail_quote_ready(
+            _FRESH,
+            config=_cfg(),
+            registry=registry,
+            provenance={},
+            now_ts=now,
+            mirror_quote_ready=True,
+        )
+
+    def test_symbol_spoof_does_not_exclude_fresh_long_tail(self):
+        from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
+
+        spoof = "0xdead000000000000000000000000000000000002"
+        now = 1_700_000_000.0
+        registry = {"tokens": {spoof: {"first_seen_ts": now - 30, "venues": {}}}}
+        assert is_session_fresh_long_tail_quote_ready(
+            spoof,
+            config=_cfg(),
+            registry=registry,
+            provenance={
+                "refresh_lane": "fresh_delta_lane",
+                "first_seen_ts": now - 30,
+            },
+            now_ts=now,
+            mirror_quote_ready=True,
+        )
+
     def test_mechanic_pair_cross(self):
         assert classify_mechanic_pair(cross_mechanic=True) == MECHANIC_CROSS
         assert classify_mechanic_pair(cross_mechanic=False) == MECHANIC_SAME

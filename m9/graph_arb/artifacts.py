@@ -65,6 +65,11 @@ _BLOCKER_NOT_BLOCKED = "NOT_BLOCKED"
 _BLOCKER_PROVIDER_QUALITY = "PROVIDER_QUALITY_BLOCKED"
 _BLOCKER_INVENTORY_ANCHOR = "INVENTORY_TOO_ANCHOR_HEAVY"
 _BLOCKER_MARKET = "MARKET_NO_POSITIVE_GROSS"
+_BLOCKER_ECON_NOT_ATTEMPTED = "ECON_RPC_QUOTE_NOT_ATTEMPTED"
+_BLOCKER_DEPTH_ADMISSION = "DEPTH_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE"
+
+_DIAG_ADMISSION_BLOCKED = "CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE"
+_ECON_BLOCKED_BEFORE_QUOTE = "BLOCKED_BEFORE_ECONOMIC_QUOTE"
 
 _LOSS_QUOTE_FAILED = "QUOTE_FAILED"
 _LOSS_TOXIC = "TOXIC_ROUTE_PRICE_IMPACT"
@@ -637,10 +642,14 @@ def _resolve_positive_gross_lane_status(
     *,
     cycles_found: int,
     cycles_positive_gross: int,
+    econ_rpc_attempts: int = 0,
+    cycles_quoteable: int = 0,
 ) -> Optional[str]:
     """Distinguish diagnostic lane zero-gross from production market absence."""
     if cycles_found <= 0 or cycles_positive_gross > 0:
         return None
+    if econ_rpc_attempts == 0 or cycles_quoteable == 0:
+        return _DIAG_ADMISSION_BLOCKED
     if _is_diagnostic_shadow_lane():
         return "DIAGNOSTIC_NO_POSITIVE_GROSS"
     return "MARKET_NO_POSITIVE_GROSS"
@@ -998,6 +1007,7 @@ def build_artifact(
     # Cycle topology config + discovery reference (graph-handoff RCA)
     cycle_lengths_used: "Optional[Tuple[int, ...]]" = None,
     discovery_cycles_by_length: Optional[Dict[str, int]] = None,
+    capacity_scope: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -1210,9 +1220,11 @@ def build_artifact(
     # Economics gate (applies only when we have actual quote results)
     if cycles_found == 0:
         econ_status = _ECON_BLOCKED_NO_CYCLES
+    elif cycles_found > 0 and _econ_rpc_attempts == 0:
+        econ_status = _ECON_BLOCKED_BEFORE_QUOTE
     elif cycle_results and qsr < _QSR_ACCEPTANCE_THRESHOLD:
         econ_status = _ECON_BLOCKED_QSR
-    elif cycles_positive_gross == 0:
+    elif cycles_positive_gross == 0 and _econ_rpc_attempts > 0:
         econ_status = _ECON_BLOCKED_NO_POSITIVE_GROSS
     elif best_cycle_net_bps is not None and 0 < best_cycle_net_bps < 5:
         econ_status = _ECON_NEAR_MISS
@@ -1260,10 +1272,6 @@ def build_artifact(
     )
     quote_failure_diagnostics = _compute_quote_failure_diagnostics(cycle_results)
     no_active_liquidity_rca = _compute_no_active_liquidity_rca(cycle_results)
-    diagnostic_lane_status = _resolve_positive_gross_lane_status(
-        cycles_found=cycles_found,
-        cycles_positive_gross=cycles_positive_gross,
-    )
     phantom_quote_diagnostics = _compute_phantom_quote_diagnostics(cycle_results)
     computed_route_hist, _route_hist_trim = _trim_route_error_histogram(computed_route_hist_full)
     _edge_hist_total = len(computed_edge_hist_full) if isinstance(computed_edge_hist_full, list) else 0
@@ -1303,6 +1311,48 @@ def build_artifact(
         scan_scope["diagnostic_quarantine_mode"] = diagnostic_quarantine_mode
     if diagnostic_admission_mode:
         scan_scope["diagnostic_admission_mode"] = diagnostic_admission_mode
+    shadow_lane_mode = os.environ.get("ARBY_M9_SHADOW_LANE_MODE", "").strip()
+    if shadow_lane_mode:
+        scan_scope["shadow_lane_mode"] = shadow_lane_mode
+    if bridge_source_metrics is not None:
+        scan_scope["exploration_routes_excluded_count"] = int(
+            bridge_source_metrics.get("routes_rejected_not_m8_derived") or 0
+        )
+        scan_scope["canonical_routes_only"] = True
+    if capacity_scope:
+        cap_ids = [
+            str(cid)
+            for cid in (capacity_scope.get("capacity_valid_cycle_ids") or [])
+            if cid
+        ]
+        quoted_ids = sorted(
+            {
+                qr.cycle.cycle_id
+                for qr in cycle_results
+                if is_econ_rpc_quote_attempt(qr, _econ_floor_usd)
+            }
+        )
+        selected_ids = [
+            str(cid)
+            for cid in (capacity_scope.get("shadow_selected_cycle_ids") or [])
+            if cid
+        ]
+        overlap = len(set(cap_ids) & set(quoted_ids))
+        scan_scope["capacity_valid_cycle_ids"] = cap_ids
+        scan_scope["shadow_quoted_cycle_ids"] = quoted_ids
+        if selected_ids:
+            scan_scope["shadow_selected_cycle_ids"] = selected_ids
+            cap_selected_overlap = len(set(cap_ids) & set(selected_ids))
+            scan_scope["capacity_shadow_selected_overlap_count"] = cap_selected_overlap
+            scan_scope["capacity_shadow_selected_overlap_rate"] = (
+                round(cap_selected_overlap / len(cap_ids), 4) if cap_ids else None
+            )
+        scan_scope["capacity_shadow_overlap_count"] = overlap
+        scan_scope["capacity_shadow_overlap_rate"] = (
+            round(overlap / len(cap_ids), 4) if cap_ids else None
+        )
+        if os.environ.get("ARBY_M9_CAPACITY_PRIORITIZED") == "1":
+            scan_scope["capacity_prioritized"] = True
     if _economics_claim_suppressed:
         scan_scope["economics_claim_suppressed"] = True
     if pool_quality_lane == "productive":
@@ -1360,12 +1410,25 @@ def build_artifact(
     # Economics discovery metrics (Funnel economics signal quality)
     quoted_gross = [qr.gross_bps for qr in cycle_results if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS")]
     cycles_quoteable = len(quoted_gross)
-    econ_quote_attempt_rate = (
+    diagnostic_lane_status = _resolve_positive_gross_lane_status(
+        cycles_found=cycles_found,
+        cycles_positive_gross=cycles_positive_gross,
+        econ_rpc_attempts=_econ_rpc_attempts,
+        cycles_quoteable=cycles_quoteable,
+    )
+    discovery_qsr = round(qsr, 4) if cycles_found else 0.0
+    depth_admission_rate = (
         round(_econ_gate_attempts / cycles_found, 4) if cycles_found else 0.0
     )
-    econ_quote_success_rate = (
-        round(qsr_econ, 4) if cycles_quoteable > 0 and _econ_rpc_attempts > 0 else 0.0
+    rpc_quote_attempt_rate = (
+        round(_econ_rpc_attempts / cycles_found, 4) if cycles_found else 0.0
     )
+    rpc_quote_success_rate = (
+        round(qsr_econ, 4) if _econ_rpc_attempts > 0 else None
+    )
+    econ_quote_attempt_rate = rpc_quote_attempt_rate
+    econ_quote_success_rate = rpc_quote_success_rate
+    econ_quote_attempt_rate_legacy_depth_admission = depth_admission_rate
     near_breakeven_count = sum(1 for bps in quoted_gross if bps >= _ROUTER_SIM_BPS_FLOOR)
     positive_gross_rate = (
         cycles_positive_gross / cycles_quoteable if cycles_quoteable else 0.0
@@ -1418,6 +1481,10 @@ def build_artifact(
         "p50_gross_bps": p50_gross_bps,
         "p90_gross_bps": p90_gross_bps,
         "quoted_cycles_count": cycles_quoteable,
+        "discovery_qsr": discovery_qsr,
+        "depth_admission_rate": depth_admission_rate,
+        "rpc_quote_attempt_rate": rpc_quote_attempt_rate,
+        "rpc_quote_success_rate": rpc_quote_success_rate,
         "quote_rpc_error_rate": quote_rpc_error_rate,
         "quote_revert_rate": quote_revert_rate,
         "router_sim_bps_floor": _ROUTER_SIM_BPS_FLOOR,
@@ -1461,6 +1528,12 @@ def build_artifact(
     elif qsr < _QSR_ACCEPTANCE_THRESHOLD:
         # QSR below acceptance means quote/infra data is unreliable; not a market verdict.
         economics_blocker_class = _BLOCKER_PROVIDER_QUALITY
+    elif _econ_rpc_attempts == 0:
+        economics_blocker_class = (
+            _BLOCKER_DEPTH_ADMISSION
+            if _econ_gate_attempts > 0
+            else _BLOCKER_ECON_NOT_ATTEMPTED
+        )
     elif cycles_positive_gross > 0:
         economics_blocker_class = _BLOCKER_NOT_BLOCKED
     elif 0 < pair_count <= _ANCHOR_HEAVY_PAIR_THRESHOLD:
@@ -1614,9 +1687,14 @@ def build_artifact(
         "positive_cycle_max_repeat": positive_cycle_max_repeat,  # max repeat for single cycle_id
         "qsr": round(qsr, 4),
         "qsr_liveness": round(qsr_liveness, 4),
-        "qsr_econ": round(qsr_econ, 4),
+        "qsr_econ": round(qsr_econ, 4) if _econ_rpc_attempts > 0 else None,
+        "discovery_qsr": discovery_qsr,
+        "depth_admission_rate": depth_admission_rate,
+        "rpc_quote_attempt_rate": rpc_quote_attempt_rate,
+        "rpc_quote_success_rate": rpc_quote_success_rate,
         "econ_quote_attempt_rate": econ_quote_attempt_rate,
         "econ_quote_success_rate": econ_quote_success_rate,
+        "econ_quote_attempt_rate_legacy_depth_admission": econ_quote_attempt_rate_legacy_depth_admission,
         "economic_size_floor_usd": _econ_floor_usd,
         "active_economics_profile": (
             economics_profile_context(cost_model=cost_model).get(

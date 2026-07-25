@@ -48,7 +48,8 @@ def record_step_slo(
     records.append(row)
 
 
-def _aggregate_batch_wall_clock(records: List[Dict[str, Any]]) -> Dict[str, float]:
+def _aggregate_batch_work_duration(records: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Sum per-step ``duration_s`` for each batch index (work time, not wall-clock)."""
     batch_totals: Dict[str, float] = {}
     for row in records:
         match = _BATCH_STEP_RE.match(str(row.get("step") or ""))
@@ -139,7 +140,7 @@ class PipelineSloTracker:
         resumed_from_step: Optional[str] = None,
     ) -> None:
         payload: Dict[str, Any] = {
-            "schema_version": "pipeline_slo.3",
+            "schema_version": "pipeline_slo.4",
             "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "session_id": session_id,
             "pipeline_mode": pipeline_mode,
@@ -148,7 +149,7 @@ class PipelineSloTracker:
             "failure_reason": self.failure_reason,
             "resumed_from_step": resumed_from_step or self.resumed_from_step,
             "session_wall_clock_s": round(time.monotonic() - self.pipeline_t0, 2),
-            "batch_wall_clock_s": _aggregate_batch_wall_clock(self.records),
+            "batch_work_duration_s": _aggregate_batch_work_duration(self.records),
             "steps": list(self.records),
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)

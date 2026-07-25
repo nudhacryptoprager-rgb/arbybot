@@ -118,6 +118,67 @@ def classify_token_class(
     return TOKEN_CLASS_UNKNOWN
 
 
+_SNIPER_PROVENANCE_LANES = frozenset(
+    {
+        "fresh_delta_lane",
+        "time_to_mirror_hot",
+        "direct_sniper",
+        "sniper_event",
+    }
+)
+
+
+def _has_session_sniper_provenance(provenance: Dict[str, Any]) -> bool:
+    lane = str(provenance.get("refresh_lane") or "")
+    source = str(provenance.get("source") or provenance.get("provenance_source") or "")
+    if lane in _SNIPER_PROVENANCE_LANES or "sniper" in lane.lower():
+        return True
+    if source in {"m8_sniper", "sniper_event", "new_pool_sniper"}:
+        return True
+    if provenance.get("sniper_event_id") or provenance.get("first_seen_block"):
+        return True
+    return False
+
+
+def is_session_fresh_long_tail_quote_ready(
+    token_addr: str,
+    *,
+    config: Dict[str, Any],
+    registry: Optional[Dict[str, Any]] = None,
+    provenance: Optional[Dict[str, Any]] = None,
+    now_ts: Optional[float] = None,
+    mirror_quote_ready: bool = False,
+) -> bool:
+    """Fresh long-tail quote-ready only with session-bound sniper provenance."""
+    if not mirror_quote_ready:
+        return False
+    prov = provenance or {}
+    if not _has_session_sniper_provenance(prov):
+        return False
+    prior_pools = int(prov.get("prior_pool_count") or 0)
+    if prior_pools <= 0 and registry is not None:
+        prior_pools, _ = prior_venue_stats(registry, token_addr)
+    # Address-only classification — ignore symbol spoofing.
+    token_class = classify_token_class(
+        token_addr,
+        symbol="",
+        config=config,
+        registry=registry,
+        now_ts=now_ts,
+        prior_pool_count=prior_pools,
+    )
+    if token_class != TOKEN_CLASS_FRESH:
+        return False
+    first_ts = prov.get("first_seen_ts")
+    if first_ts is None and registry is not None:
+        reg_tok = ((registry or {}).get("tokens") or {}).get(token_addr.lower()) or {}
+        first_ts = reg_tok.get("first_seen_ts")
+    if now_ts is None or first_ts is None:
+        return False
+    age = float(now_ts) - float(first_ts)
+    return age <= _fresh_window_s(config)
+
+
 def classify_mechanic_pair(
     *,
     cross_mechanic: Optional[bool] = None,

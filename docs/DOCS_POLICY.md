@@ -91,17 +91,19 @@ Active `docs/status/Status_*.md` files contain:
 
 **Steps**:
 1. **Code Phase**: Make all code, config, and test changes
-2. **Verification Phase**: Run ALL verification commands:
+2. **Verification Phase**: Run the deterministic verification commands:
    - `py -3.11 scripts/check_repo_safety.py`
    - `py -3.11 -m pytest tests/unit -q`
    - `py -3.11 scripts/ci_full_pipeline.py --mode ci`
-   - Online coverage runs for affected chains
-3. **Docs Phase**: Update docs using ONLY runDirs/evidence from step 2
+3. **Handoff Phase**: After step 2, overwrite `docs/DEV_REPORT_LATEST.md` when a session needs to hand off unfinished work. It must use `goal_status: IN_PROGRESS`, list only commands actually run, identify runtime checks as `NOT RUN`, and distinguish implementation verification from runtime proof.
+4. **Runtime Verification Phase**: Run online coverage for each affected chain and milestone.
+5. **Milestone Docs Phase**: Update `Status_*.md` and any runtime-readiness claim in `DEV_REPORT_LATEST.md` using only fresh, same-session runDirs/evidence from steps 2 and 4.
 
 **Forbidden**:
-- Updating `Status_*.md` or `DEV_REPORT_LATEST.md` before verification runs complete
+- Updating `Status_*.md` before the affected milestone's online verification completes
 - Using runDirs from previous sessions as "fresh evidence"
 - Mixing evidence from different verification sessions
+- Recording `PASS`, `REACHED`, production readiness, or economics conclusions in an `IN_PROGRESS` handoff without the matching fresh runtime artifacts
 
 ## 9. Session Completion Gate (MANDATORY)
 
@@ -135,11 +137,12 @@ Active `docs/status/Status_*.md` files contain:
 
 ## 10. How to Update
 
-1. Run online scan: generates rolling artifacts
-2. Update `docs/status/Status_*.md` with evidence from `run_summary_latest.json`
-3. Update `docs/DEV_REPORT_LATEST.md` per `docs/DEV_REPORT_CANONICAL_UA.md`
-4. Run `py -3.11 scripts/check_repo_safety.py` before commit
-5. Run `py -3.11 scripts/ci_full_pipeline.py --mode ci` to verify gates
+1. After deterministic verification, overwrite `docs/DEV_REPORT_LATEST.md` with an `IN_PROGRESS` handoff if runtime work remains.
+2. Run the affected online scan: generates fresh rolling artifacts/runDir evidence.
+3. Update `docs/status/Status_*.md` with that milestone's fresh evidence.
+4. Replace the handoff in `docs/DEV_REPORT_LATEST.md` with the final canonical report.
+5. Run `py -3.11 scripts/check_repo_safety.py` before commit.
+6. Run `py -3.11 scripts/ci_full_pipeline.py --mode ci` to verify gates.
 
 ## See Also
 

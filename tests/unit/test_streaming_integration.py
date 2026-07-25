@@ -83,6 +83,33 @@ def test_streaming_lane_acceptance_uses_final_batch_artifacts(monkeypatch):
     assert "m8_2_acceptance_report_latest.json" not in joined
 
 
+def test_streaming_final_m82_acceptance_before_shadow(monkeypatch):
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "session-final-batch")
+    monkeypatch.setenv("ARBY_STREAMING_FINAL_BATCH_INDEX", "3")
+    steps = build_project_pipeline_steps(_fake_args(skip_shadow=False))
+    names = [s["name"] for s in steps]
+    assert names.index("m8_2_acceptance_final_batch") < names.index("m9_shadow_10m")
+
+
+def test_final_m82_acceptance_allows_shadow(tmp_path, monkeypatch):
+    from core.pipeline_streaming import final_m82_acceptance_allows_shadow
+
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "session-m82-gate")
+    monkeypatch.setenv("ARBY_STREAMING_FINAL_BATCH_INDEX", "1")
+    paths = resolve_streaming_batch_paths(1)
+    paths.batch_dir.mkdir(parents=True, exist_ok=True)
+    paths.m82_acceptance.write_text(
+        '{"goal_status":"REACHED","handoff_ready":true}',
+        encoding="utf-8",
+    )
+    assert final_m82_acceptance_allows_shadow() is True
+    paths.m82_acceptance.write_text(
+        '{"goal_status":"BLOCKED","handoff_ready":false}',
+        encoding="utf-8",
+    )
+    assert final_m82_acceptance_allows_shadow() is False
+
+
 def test_streaming_paths_are_session_namespaced(monkeypatch):
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "2026-07-23T12:00:00Z")
     paths = resolve_streaming_batch_paths(2)
@@ -330,6 +357,18 @@ def test_slo_writes_on_failure(tmp_path: Path):
     tracker.write(session_id="sess", pipeline_mode="m8_m9")
     doc = json.loads((tmp_path / "slo.json").read_text(encoding="utf-8"))
     assert doc["pipeline_status"] == "failed"
+
+
+def test_slo_batch_work_duration_field(tmp_path: Path):
+    tracker = PipelineSloTracker(path=tmp_path / "slo.json")
+    t0 = time.monotonic()
+    tracker.end_step("m8_sniper_acceptance_batch_1", t0, 0.0)
+    tracker.write(session_id="sess", pipeline_mode="m8_m9")
+    doc = json.loads((tmp_path / "slo.json").read_text(encoding="utf-8"))
+    assert doc["schema_version"] == "pipeline_slo.4"
+    assert "batch_work_duration_s" in doc
+    assert "batch_wall_clock_s" not in doc
+    assert "1" in doc["batch_work_duration_s"]
 
 
 def test_m81_deadline_respects_wall_clock():

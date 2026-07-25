@@ -669,6 +669,7 @@ def run_capacity_cycle_diagnostic(
         "cycles_at_production_floor": 0,
         "cycles_at_econ_floor_by_length": {str(n): 0 for n in cycle_lengths},
         "sample_cycles_at_econ_floor": [],
+        "capacity_valid_cycle_ids": [],
         "blocker_hint": "NO_GRAPH_OR_NO_CYCLES",
     }
     if not adjacency:
@@ -773,6 +774,7 @@ def run_capacity_cycle_diagnostic(
         "cycles_at_econ_floor": cycles_at_active,
         "cycles_at_production_floor": cycles_at_prod,
         "cycles_at_econ_floor_by_length": by_length,
+        "capacity_valid_cycle_ids": [c.cycle_id for c in qualified],
         "sample_cycles_at_econ_floor": samples,
         "blocker_hint": blocker_hint,
         "top_bottleneck_legs": top_legs,

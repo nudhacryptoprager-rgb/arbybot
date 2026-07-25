@@ -65,6 +65,7 @@ from core.pipeline_runtime import run_streaming_batch_upstream_gate
 from core.pipeline_slo import PipelineSloTracker
 from core.pipeline_streaming import (
     batched_m8_refresh_mode,
+    final_m82_acceptance_allows_shadow,
     m81_streaming_cli_args,
     resolve_sniper_minutes,
     resolve_streaming_batch_paths,
@@ -248,6 +249,20 @@ def _fresh_quote_ready_count() -> int:
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             continue
     return 0
+
+
+def _resolve_m9_shadow_step_env() -> dict[str, str]:
+    """Capacity-prioritized shadow with explicit lane mode for economics verdict."""
+    fresh = _fresh_quote_ready_count()
+    env = {
+        "ARBY_M9_CAPACITY_PRIORITIZED": "1",
+        "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
+    }
+    if fresh > 0:
+        env["ARBY_M9_SHADOW_LANE_MODE"] = "long_tail_target"
+    else:
+        env["ARBY_M9_SHADOW_LANE_MODE"] = "broad_graph_diagnostic"
+    return env
 
 
 def _target_m9_allowed_from_bridge() -> bool:
@@ -1225,11 +1240,15 @@ def _run_pipeline_step_subprocess(
         heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
         _touch_current(os.getpid(), status="finished_internal" if rc == 0 else "failed_internal")
         log_fh.write(f"<<< {name}: internal={internal} exit={rc}\n")
+        log_fh.flush()
         return rc, None if rc in step["allow_exit_codes"] else f"exit={rc}"
 
     cmd = _resolve_streaming_step_cmd(step, list(step["cmd"]))
     env = os.environ.copy()
-    env.update(step.get("env") or {})
+    base_env = dict(step.get("env") or {})
+    if name in {"m9_shadow_10m", "m9_patient_shadow_10m"}:
+        base_env.update(_resolve_m9_shadow_step_env())
+    env.update(base_env)
     pipeline_sid = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
     if pipeline_sid:
         env[ENV_PIPELINE_SESSION_ID] = pipeline_sid
@@ -1243,6 +1262,7 @@ def _run_pipeline_step_subprocess(
     def _on_output(line: str) -> None:
         sys.stdout.write(line)
         log_fh.write(line)
+        log_fh.flush()
 
     def _on_heartbeat() -> None:
         heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
@@ -1261,6 +1281,7 @@ def _run_pipeline_step_subprocess(
     heartbeat_state["last"] = datetime.now(timezone.utc).isoformat()
     _touch_current(pid_holder["pid"], status="failed" if fail_reason else "finished")
     log_fh.write(f"<<< {name}: exit={rc}" + (f" reason={fail_reason}" if fail_reason else "") + "\n")
+    log_fh.flush()
     if fail_reason:
         return rc or 1, fail_reason
     return rc, None
@@ -1983,6 +2004,25 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 allow_exit_codes=(0, 2),
             )
         )
+        if use_batched_final:
+            steps.append(
+                _pipeline_step(
+                    "m8_2_acceptance_final_batch",
+                    _py_cmd(
+                        "scripts/m8_2_acceptance_report.py",
+                        "--hints",
+                        STREAMING_M82_HINTS_SENTINEL,
+                        "--radar",
+                        STREAMING_M82_RADAR_SENTINEL,
+                        "--expansion",
+                        STREAMING_M82_EXPANSION_SENTINEL,
+                        "--output",
+                        STREAMING_M82_ACCEPTANCE_SENTINEL,
+                    ),
+                    streaming_final_batch=True,
+                    allow_exit_codes=(0, 1),
+                )
+            )
         if include_shadow:
             steps.append(
                 _pipeline_step(
@@ -2013,26 +2053,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                         "--artifact-path",
                         M9_SHADOW_ARTIFACT,
                     ),
-                    env={"ARBY_M9_CYCLE_LENGTHS": "2,3,4"},
-                )
-            )
-        if use_batched_final:
-            steps.append(
-                _pipeline_step(
-                    "m8_2_acceptance_final_batch",
-                    _py_cmd(
-                        "scripts/m8_2_acceptance_report.py",
-                        "--hints",
-                        STREAMING_M82_HINTS_SENTINEL,
-                        "--radar",
-                        STREAMING_M82_RADAR_SENTINEL,
-                        "--expansion",
-                        STREAMING_M82_EXPANSION_SENTINEL,
-                        "--output",
-                        STREAMING_M82_ACCEPTANCE_SENTINEL,
-                    ),
-                    streaming_final_batch=True,
-                    allow_exit_codes=(0, 1),
+                    env=_resolve_m9_shadow_step_env(),
                 )
             )
         lane_acceptance_cmd = [
@@ -2571,14 +2592,19 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
     if getattr(args, "dry_run", False):
         _print_rpc_policy_table(steps)
     force_rerun = bool(getattr(args, "force_rerun_steps", False))
-    with log_path.open("a", encoding="utf-8") as log_fh:
+    with log_path.open("a", encoding="utf-8", buffering=1) as log_fh:
         log_fh.write(f"=== start_pipeline mode={args.pipeline} ===\n")
         log_fh.write(f"pipeline_session_id={pipeline_session_id}\n")
+        log_fh.flush()
         if getattr(args, "resume_from", None):
             log_fh.write(f"resume_from={args.resume_from}\n")
         if getattr(args, "allow_roadmap_edit", False):
             log_fh.write("allow_roadmap_edit=true\n")
         shadow_gate_allowed = True
+        final_m82_shadow_allowed = True
+        streaming_final_batch_active = int(
+            os.environ.get(ENV_STREAMING_FINAL_BATCH_INDEX, "0") or "0"
+        ) > 0
         narrow_shadow_allowed = True
         target_m9_allowed = (
             _target_m9_allowed_from_bridge()
@@ -2638,6 +2664,17 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 msg = f"skip {name}: capacity gate blocked\n"
                 print(msg.strip())
                 log_fh.write(msg)
+                log_fh.flush()
+                continue
+            if (
+                name in {"m9_shadow_10m", "m9_patient_shadow_10m"}
+                and streaming_final_batch_active
+                and not final_m82_shadow_allowed
+            ):
+                msg = f"skip {name}: final M8.2 acceptance blocked upstream handoff\n"
+                print(msg.strip())
+                log_fh.write(msg)
+                log_fh.flush()
                 continue
             if name == "m9_time_to_mirror_narrow_shadow_10m" and not narrow_shadow_allowed:
                 msg = (
@@ -2674,6 +2711,7 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             log_fh.write(
                 f"    timeout_s={timeout_s} heartbeat_stale_s={int(heartbeat_stale_s)}\n"
             )
+            log_fh.flush()
             if getattr(args, "dry_run", False):
                 continue
             try:
@@ -2692,6 +2730,10 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             )
             if name == "gate_capacity_shadow":
                 shadow_gate_allowed = rc == 0
+            if name == "m8_2_acceptance_final_batch" and rc in step["allow_exit_codes"]:
+                final_m82_shadow_allowed = final_m82_acceptance_allows_shadow(
+                    session_id=pipeline_session_id,
+                )
             if name == "gate_time_to_mirror_narrow_shadow":
                 narrow_shadow_allowed = rc == 0
             if name == "gate_time_to_mirror_target_universe":

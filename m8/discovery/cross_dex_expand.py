@@ -1942,6 +1942,10 @@ def _expand_batch_token_neighborhood(
     watchlist_map = _load_watchlist_provenance_map()
     _merge_registry_provenance_map(watchlist_map, registry)
     _merge_expand_subset_provenance_map(watchlist_map, token_subset_file)
+    from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
+    import time as _time
+
+    _expand_now_ts = _time.time()
 
     for idx, addr in enumerate(token_addrs):
         if idx and idx % 25 == 0:
@@ -2046,8 +2050,17 @@ def _expand_batch_token_neighborhood(
             mirror_topology_ready_count += 1
         if _mr.get("mirror_quote_ready"):
             mirror_quote_ready_count += 1
-            _wl_tc = str((watchlist_map.get(addr.lower()) or {}).get("token_class") or "")
-            if _wl_tc == "fresh_long_tail":
+            from m8.discovery.token_classify import is_session_fresh_long_tail_quote_ready
+
+            _prov = watchlist_map.get(addr.lower()) or {}
+            if is_session_fresh_long_tail_quote_ready(
+                addr,
+                config=config,
+                registry=registry,
+                provenance=_prov,
+                now_ts=_expand_now_ts,
+                mirror_quote_ready=True,
+            ):
                 fresh_long_tail_quote_ready_count += 1
         if _mr.get("same_pair_mirror_token") and len(mirror_ready_debug) < 64:
             mirror_ready_debug.append(

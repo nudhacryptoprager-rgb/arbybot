@@ -402,29 +402,52 @@ def _m9_economics_blockers(
         blockers.append("NO_QUOTEABLE_CYCLES")
     if _shadow_bridge_stale_or_mismatch(bridge, shadow):
         blockers.append("SHADOW_BRIDGE_STALE_OR_MISMATCH")
+    econ_gate_int = int(econ_gate or 0)
+    admission_before_quote = (
+        shadow_cycles_found > 0
+        and shadow_cycles_quoteable == 0
+        and int(econ_rpc or 0) == 0
+        and econ_gate_int > 0
+    )
+    if admission_before_quote:
+        blockers.append("CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE")
     if (
         shadow_cycles_found > 0
         and cycles_positive == 0
         and profile_role != "diagnostic"
+        and int(econ_rpc or 0) > 0
     ):
         if (
             active_profile == "base_realistic"
             and str(eprof.get("profit_claim_mode") or "") == "runtime_conditional"
-            and int(econ_rpc or 0) == 0
         ):
             blockers.append("BASE_REALISTIC_RUNTIME_PROOF_PENDING")
         else:
             blockers.append("NO_POSITIVE_GROSS")
-    if shadow_cycles_found > 0 and shadow_qsr == 0.0:
+    if shadow_cycles_found > 0 and shadow_cycles_quoteable == 0 and float(shadow_qsr or 0) > 0:
+        blockers.append("DISCOVERY_QSR_NOT_QUOTE_HEALTH")
+    if shadow_cycles_found > 0 and float(shadow_qsr or 0) == 0.0:
         blockers.append("QSR_ZERO")
-    if shadow_cycles_found > 0 and qsr_econ is not None and float(qsr_econ) == 0.0:
-        blockers.append("QSR_ECON_ZERO")
     if shadow_cycles_found > 0 and econ_rpc == 0 and qst:
         blockers.append("ECON_RPC_QUOTES_ZERO")
+    if shadow_cycles_found > 0 and qsr_econ is not None and float(qsr_econ) == 0.0 and int(econ_rpc or 0) > 0:
+        blockers.append("QSR_ECON_ZERO")
     if shadow_cycles_found > 0 and int(econ_gate or 0) > 0 and int(econ_rpc or 0) == 0:
         blockers.append("ECON_RPC_QUOTE_NOT_ATTEMPTED")
         if active_profile == "base_realistic":
             blockers.append("BASE_REALISTIC_ADMISSION_OR_CAPACITY_GATE")
+    econ_blocker = str((shadow or {}).get("economics_blocker_class") or "")
+    if econ_blocker in {
+        "MARKET_NO_POSITIVE_GROSS",
+        "DEPTH_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE",
+    } and int(econ_rpc or 0) == 0:
+        blockers = [
+            b
+            for b in blockers
+            if b not in {"NO_POSITIVE_GROSS", "QSR_ECON_ZERO"}
+        ]
+        if "CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE" not in blockers:
+            blockers.append("CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE")
     if shadow_cycles_found > 0 and depth_known is not None and float(depth_known) == 0.0:
         blockers.append("DEPTH_UNKNOWN")
 
@@ -531,6 +554,23 @@ def _m9_economics_blockers(
     if near_econ > 0 and cycles_at_prod == 0:
         blockers.append("NEAR_ECON_CAPACITY_ONLY")
 
+    scan_scope = (shadow or {}).get("scan_scope") or {}
+    cap_ids = list(scan_scope.get("capacity_valid_cycle_ids") or [])
+    quoted_ids = list(scan_scope.get("shadow_quoted_cycle_ids") or [])
+    if cycles_at_prod > 0 and cap_ids and not quoted_ids:
+        blockers.append("CAPACITY_VALID_CYCLES_NOT_QUOTED_IN_SHADOW")
+    shadow_lane_mode = str(scan_scope.get("shadow_lane_mode") or "")
+    if shadow_lane_mode == "broad_graph_diagnostic":
+        blockers.append("BROAD_GRAPH_DIAGNOSTIC_NOT_LONG_TAIL_ECONOMICS")
+    bsm = (bridge or {}).get("bridge_source_metrics") or {}
+    fresh_ready = int(
+        bsm.get("fresh_long_tail_quote_ready_tokens")
+        or (bridge or {}).get("fresh_long_tail_quote_ready_tokens")
+        or 0
+    )
+    if shadow_lane_mode == "long_tail_target" and fresh_ready <= 0:
+        blockers.append("FRESH_LONG_TAIL_QUOTE_READY_ZERO")
+
     return sorted(set(blockers))
 
 
@@ -544,9 +584,14 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     qsr = shadow.get("qsr")
     qsr_liveness = shadow.get("qsr_liveness")
     qsr_econ = shadow.get("qsr_econ")
+    qst = shadow.get("quote_size_truth") or {}
     econ_quote_attempt_rate = shadow.get("econ_quote_attempt_rate")
     econ_quote_success_rate = shadow.get("econ_quote_success_rate")
-    qst = shadow.get("quote_size_truth") or {}
+    econ_metrics = (shadow or {}).get("economics_metrics") or {}
+    discovery_qsr = shadow.get("discovery_qsr", qsr)
+    depth_admission_rate = shadow.get("depth_admission_rate")
+    rpc_quote_attempt_rate = shadow.get("rpc_quote_attempt_rate")
+    rpc_quote_success_rate = shadow.get("rpc_quote_success_rate")
 
     if cycles_quoteable == 0:
         quote_liveness_status = "NOT_PROVEN"
@@ -598,8 +643,14 @@ def _quote_liveness_metrics(shadow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "qsr_econ": qsr_econ,
         "econ_quote_attempt_rate": econ_quote_attempt_rate,
         "econ_quote_success_rate": econ_quote_success_rate,
+        "discovery_qsr": discovery_qsr,
+        "depth_admission_rate": depth_admission_rate,
+        "rpc_quote_attempt_rate": rpc_quote_attempt_rate,
+        "rpc_quote_success_rate": rpc_quote_success_rate,
         "economics_status": (
-            "NOT_PROVEN" if cycles_positive_gross == 0 else "PARTIAL"
+            "NOT_PROVEN"
+            if cycles_positive_gross == 0
+            else "PARTIAL"
         ),
         "qsr_liveness_consistency": {"consistent": consistent, "notes": notes},
         "cycles_found_by_length": shadow.get("cycles_found_by_length") or {},
@@ -668,7 +719,15 @@ def _build_operator_verdict(
     else:
         m9_econ_label = f"M9_ECONOMICS_{econ_status}"
 
-    economics_claim_allowed = cycles_positive > 0 and not qsr_econ_zero
+    economics_claim_allowed = (
+        cycles_positive > 0
+        and not qsr_econ_zero
+        and int(
+            ((shadow or {}).get("quote_size_truth") or {}).get("econ_rpc_quote_attempts")
+            or 0
+        )
+        > 0
+    )
     forbidden_claims: List[str] = []
     if cycles_positive == 0:
         forbidden_claims.append("profit_ready")
@@ -1031,9 +1090,17 @@ def build_acceptance_report(
             m9_quote_validation_blockers.append("NO_QUOTEABLE_CYCLES")
         if int((shadow or {}).get("cycles_positive_gross") or 0) == 0 and shadow_cycles_found > 0:
             diag_status = (shadow or {}).get("diagnostic_lane_status")
+            econ_rpc_attempts = int(
+                ((shadow or {}).get("quote_size_truth") or {}).get("econ_rpc_quote_attempts")
+                or 0
+            )
             if diag_status == "DIAGNOSTIC_NO_POSITIVE_GROSS":
                 m9_quote_validation_blockers.append("DIAGNOSTIC_NO_POSITIVE_GROSS")
-            else:
+            elif diag_status == "CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE":
+                m9_quote_validation_blockers.append(
+                    "CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE"
+                )
+            elif econ_rpc_attempts > 0:
                 m9_quote_validation_blockers.append("NO_POSITIVE_GROSS")
     if rca:
         top = (rca.get("top_reject_reasons") or rca.get("reject_histogram") or {})
@@ -1051,7 +1118,12 @@ def build_acceptance_report(
     if bsm.get("m8_stale") and int(bsm.get("graph_ready_from_m8") or 0) > 0:
         bridge_upstream_warnings.append("M8_ARTIFACT_STALE")
 
-    blockers = sorted(set(upstream_blockers + m9_blockers))
+    m9_quote_validation_blockers = sorted(set(m9_quote_validation_blockers))
+    all_release_blockers = sorted(
+        set(upstream_blockers + m9_blockers + m9_quote_validation_blockers)
+    )
+    blockers = all_release_blockers
+    all_m9_blockers = sorted(set(m9_blockers + m9_quote_validation_blockers))
 
     upstream_only_blockers = sorted(set(upstream_blockers))
     upstream_bundle_status = (
@@ -1080,11 +1152,14 @@ def build_acceptance_report(
             }
         )
 
-    m9_goal = "BLOCKED" if m9_blockers else "PARTIAL"
     if skip_shadow:
         m9_goal = "NOT_EVALUATED"
-    elif shadow is None and not m9_blockers:
+    elif shadow is None and not all_m9_blockers:
         m9_goal = "NOT_EVALUATED"
+    elif all_m9_blockers:
+        m9_goal = "BLOCKED"
+    else:
+        m9_goal = "REACHED"
 
     if skip_shadow:
         goal_status = (
@@ -1093,7 +1168,7 @@ def build_acceptance_report(
             else "UPSTREAM_BUNDLE_VALIDATED"
         )
     else:
-        goal_status = "BLOCKED" if blockers else m9_goal
+        goal_status = "BLOCKED" if blockers else "REACHED"
 
     operator_verdict = _build_operator_verdict(
         shadow=shadow,
@@ -1135,7 +1210,7 @@ def build_acceptance_report(
         "m8_3_upstream": m8_3_upstream,
         "freshness_gate": freshness_gate,
         "m9_blockers": m9_blockers,
-        "m9_quote_validation_blockers": sorted(set(m9_quote_validation_blockers)),
+        "m9_quote_validation_blockers": m9_quote_validation_blockers,
         "m9_economics_status": (
             quote_liveness.get("economics_status")
             if quote_liveness

@@ -299,7 +299,22 @@ def test_metrics_prometheus_format(repo):
     assert 'route="/health/live"' in text
 
 
-def test_method_not_allowed(repo):
+def test_control_funnel_api_route(repo):
+    app = ApiApp(repo)
+    status, _, body = app.handle("GET", "/v1/control/funnel")
+    assert status == 200
+    data = _json((status, _, body))
+    assert data["schema_version"] == "m_control_funnel_v1"
+    assert "stages" in data
+
+
+def test_control_traces_api_route(repo):
+    app = ApiApp(repo)
+    status, _, body = app.handle("GET", "/v1/control/traces")
+    assert status == 200
+    data = _json((status, _, body))
+    assert data["schema_version"] == "m_control_traces_v1"
+
     app = ApiApp(repo)
     status, _, _ = app.handle("POST", "/health/live")
     assert status == 405
