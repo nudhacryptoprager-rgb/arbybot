@@ -115,6 +115,11 @@ def main() -> int:
         default=None,
         help="Match runner productive graph admission (default: true when --lane productive)",
     )
+    ap.add_argument(
+        "--session-id",
+        default=None,
+        help="Pipeline session id (fallback: ARBY_PIPELINE_SESSION_ID env)",
+    )
     args = ap.parse_args()
 
     from m9.graph_arb.cycle_capacity import (
@@ -122,9 +127,12 @@ def main() -> int:
         run_capacity_cycle_diagnostic,
     )
     from m9.graph_arb.universe_contract import (
+        apply_explicit_session_id,
         build_universe_contract,
         resolve_cycle_lengths_from_config,
     )
+
+    apply_explicit_session_id(args.session_id)
 
     require_fv = args.require_factory_verified
     if require_fv is None:
@@ -200,6 +208,8 @@ def main() -> int:
         require_factory_verified=require_fv,
         cycle_lengths=lengths,
         active_economics_profile=str(report.get("active_economics_profile") or ""),
+        session_id=apply_explicit_session_id(args.session_id),
+        graph_fingerprint=report.get("graph_fingerprint"),
     )
     stamp_capacity_provenance(report, universe_contract=universe_contract)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")

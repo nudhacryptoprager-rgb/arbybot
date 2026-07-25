@@ -1,6 +1,7 @@
 """M_control read-only projection — session-coherent M8→M9 funnel view."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -23,6 +24,42 @@ _ARTIFACT_PATHS: Dict[str, str] = {
     "pipeline": "data/tmp/start_pipeline_current.json",
     "truth_gate": "data/tmp/m8_m9_runtime_truth_gate_latest.json",
 }
+
+_SHADOW_FALLBACK_CANDIDATES = (
+    "data/tmp/m9_shadow_capacity_smoke.json",
+    "data/tmp/m9_graph_handoff_quote_validation_10m.json",
+    "data/runs/_rolling/m9_graph_latest.json",
+)
+
+
+def resolve_mcontrol_shadow_rel_path(
+    repo_root: Path | str,
+    pipeline_doc: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Prefer pipeline-declared shadow artifact, then smoke handoff, then rolling."""
+    root = Path(repo_root)
+    candidates: List[str] = []
+    if pipeline_doc:
+        for key in (
+            "shadow_artifact_path",
+            "m9_shadow_artifact_path",
+            "current_shadow_artifact",
+            "artifact_path",
+        ):
+            raw = str(pipeline_doc.get(key) or "").strip()
+            if raw:
+                candidates.append(raw)
+    env_path = os.environ.get("ARBY_MCONTROL_SHADOW_PATH", "").strip()
+    if env_path:
+        candidates.append(env_path)
+    env_dashboard = os.environ.get("ARBY_DASHBOARD_M9_SHADOW_PATH", "").strip()
+    if env_dashboard:
+        candidates.append(env_dashboard)
+    candidates.extend(list(_SHADOW_FALLBACK_CANDIDATES))
+    for rel in candidates:
+        if (root / rel).is_file():
+            return rel
+    return _ARTIFACT_PATHS["shadow"]
 
 
 def _session_id_from_doc(doc: Optional[Mapping[str, Any]]) -> Optional[str]:
@@ -276,7 +313,11 @@ class ControlProjectionBuilder:
         self.cache = cache or ProjectionCache()
 
     def _load(self, key: str) -> Optional[Dict[str, Any]]:
-        rel = _ARTIFACT_PATHS.get(key)
+        if key == "shadow":
+            pipeline = self._load_raw("pipeline")
+            rel = resolve_mcontrol_shadow_rel_path(self.repo_root, pipeline)
+        else:
+            rel = _ARTIFACT_PATHS.get(key)
         if not rel:
             return None
         proj = self.cache.get(self.repo_root / rel)
@@ -286,6 +327,15 @@ class ControlProjectionBuilder:
         if key == "shadow" and is_test_or_fixture_artifact(data):
             return None
         return data
+
+    def _load_raw(self, key: str) -> Optional[Dict[str, Any]]:
+        rel = _ARTIFACT_PATHS.get(key)
+        if not rel:
+            return None
+        proj = self.cache.get(self.repo_root / rel)
+        if proj is None or not isinstance(proj.data, dict):
+            return None
+        return proj.data
 
     def load_all(self) -> Dict[str, Optional[Dict[str, Any]]]:
         return {key: self._load(key) for key in _ARTIFACT_PATHS}
@@ -301,6 +351,7 @@ class ControlProjectionBuilder:
         m8_2 = loaded.get("m8_2")
         m8_3 = loaded.get("m8_3")
         m8_1 = loaded.get("m8_1")
+        shadow_source_path = resolve_mcontrol_shadow_rel_path(self.repo_root, pipeline)
 
         session_id = _session_id_from_doc(pipeline) or _session_id_from_doc(bridge)
         scan_scope = (shadow or {}).get("scan_scope") or {}
@@ -383,6 +434,7 @@ class ControlProjectionBuilder:
                 "%Y-%m-%dT%H:%M:%SZ"
             ),
             "session_id": session_id,
+            "shadow_source_path": shadow_source_path,
             "coherence": _coherence_status(session_id, loaded),
             "shadow_fixture_rejected": shadow_fixture_rejected,
             "pipeline_step": (pipeline or {}).get("step"),

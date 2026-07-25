@@ -41,3 +41,34 @@ def test_control_traces_capacity_ids(tmp_path):
     )
     traces = build_control_traces(tmp_path)
     assert traces["cycles"]["capacity_valid_total"] == 12
+
+
+def test_control_funnel_uses_pipeline_shadow_path(tmp_path):
+    (tmp_path / "data/tmp").mkdir(parents=True)
+    (tmp_path / "data/runs/_rolling").mkdir(parents=True)
+    (tmp_path / "data/tmp/m9_bridge_inventory_production_latest.json").write_text(
+        json.dumps({"session_id": "sess_x"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "data/tmp/m9_shadow_capacity_smoke.json").write_text(
+        json.dumps(
+            {
+                "cycles_found": 5,
+                "cycles_quoteable": 0,
+                "quote_size_truth": {"econ_rpc_quote_attempts": 0},
+                "run_context": {"session_id": "sess_x"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "data/runs/_rolling/m9_graph_latest.json").write_text(
+        json.dumps({"cycles_found": 0, "quote_size_truth": {"econ_rpc_quote_attempts": 0}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "data/tmp/start_pipeline_current.json").write_text(
+        json.dumps({"shadow_artifact_path": "data/tmp/m9_shadow_capacity_smoke.json"}),
+        encoding="utf-8",
+    )
+    funnel = build_control_funnel(tmp_path)
+    assert funnel["shadow_source_path"] == "data/tmp/m9_shadow_capacity_smoke.json"
+    assert funnel["economics_not_yet_tested"] is True

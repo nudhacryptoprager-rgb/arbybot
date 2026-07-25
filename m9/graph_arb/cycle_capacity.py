@@ -647,6 +647,16 @@ def run_capacity_cycle_diagnostic(
             "topology_probe" if lane == "productive" else None
         ),
     )
+    from m9.graph_arb.universe_contract import build_graph_fingerprint
+
+    active_route_count = len(route_map)
+    graph_fingerprint = build_graph_fingerprint(
+        inventory_path=inventory_path,
+        adjacency=adjacency,
+        active_route_count=active_route_count,
+        lane=lane,
+        require_factory_verified=require_factory_verified,
+    )
     empty_base = {
         "schema_version": "m9_capacity_cycle_diagnostic.2",
         "inventory_path": inventory_path,
@@ -673,6 +683,7 @@ def run_capacity_cycle_diagnostic(
         "sample_cycles_at_econ_floor": [],
         "capacity_valid_cycle_ids": [],
         "blocker_hint": "NO_GRAPH_OR_NO_CYCLES",
+        "graph_fingerprint": graph_fingerprint,
     }
     if not adjacency:
         return empty_base
@@ -785,6 +796,7 @@ def run_capacity_cycle_diagnostic(
             "reason": shadow_block_reason,
             "cycles_at_floor_required": True,
         },
+        "graph_fingerprint": graph_fingerprint,
     }
     if include_four_leg_rca:
         report["productive_four_leg_rca"] = run_productive_four_leg_rca(

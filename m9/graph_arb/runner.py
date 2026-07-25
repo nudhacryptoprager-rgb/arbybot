@@ -9,7 +9,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 # Process lock file
 _LOCK_FILE = "data/tmp/m9_runner.lock"
@@ -179,6 +179,80 @@ def _write_shadow_lane_blocked_artifact(
         blocker,
         artifact_path,
         cycles_found_topology,
+    )
+
+
+def _write_capacity_universe_mismatch_artifact(
+    *,
+    args: argparse.Namespace,
+    log: Any,
+    run_timestamp: str,
+    started_at: float,
+    inventory_path: str,
+    capacity_scope: Dict[str, Any],
+    capacity_doc: Dict[str, Any],
+    runner_contract: Dict[str, Any],
+    mismatches: List[str],
+    process_id: int,
+    duration_minutes: float,
+) -> None:
+    """Emit canonical shadow artifact when capacity universe contract mismatches runner."""
+    from core.pipeline_provenance import apply_pipeline_provenance
+    from m9.graph_arb.artifacts import build_artifact, write_artifact
+    from m9.graph_arb.models import GraphTopology
+    from m9.graph_arb.universe_contract import BLOCKER_CAPACITY_UNIVERSE_MISMATCH
+
+    artifact_path = getattr(
+        args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
+    )
+    empty_topology = GraphTopology(
+        token_count=0,
+        edge_count=0,
+        route_count=0,
+        hub_tokens=[],
+        dead_end_tokens=[],
+        missing_edges_for_3cycle=[],
+        adjacency_summary={},
+    )
+    cap_contract = (capacity_doc or {}).get("universe_contract") or {}
+    artifact = build_artifact(
+        chain=args.chain,
+        duration_minutes=duration_minutes,
+        cycle_results=[],
+        topology=empty_topology,
+        sizes_usd=tuple(getattr(args, "sizes_usd", None) or (100.0,)),
+        run_timestamp=run_timestamp,
+        started_at_mono=started_at,
+        elapsed_s=time.monotonic() - started_at,
+        sweeps_completed=0,
+        process_id=process_id,
+        python_executable=sys.executable,
+        venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+        cycles_found_topology=0,
+        inventory_path=inventory_path,
+        config_path=args.config,
+        capacity_scope={
+            **capacity_scope,
+            "universe_mismatch_keys": list(mismatches),
+            "capacity_universe_contract": cap_contract,
+        },
+        scan_scope={
+            "shadow_lane_blocker": BLOCKER_CAPACITY_UNIVERSE_MISMATCH,
+            "universe_mismatch_keys": list(mismatches),
+        },
+    )
+    artifact["runner_outcome"] = BLOCKER_CAPACITY_UNIVERSE_MISMATCH
+    artifact["shadow_lane_blocker"] = BLOCKER_CAPACITY_UNIVERSE_MISMATCH
+    artifact["universe_mismatch_keys"] = list(mismatches)
+    artifact["capacity_universe_contract"] = cap_contract
+    provenance_out = apply_pipeline_provenance(artifact, run_timestamp=run_timestamp)
+    artifact.update(provenance_out)
+    artifact["universe_contract"] = dict(runner_contract)
+    write_artifact(artifact, artifact_path)
+    log.info(
+        "Wrote capacity universe mismatch artifact: mismatches=%s path=%s",
+        mismatches,
+        artifact_path,
     )
 
 
@@ -695,8 +769,17 @@ def main(argv: "list[str] | None" = None) -> int:
         action="store_true",
         help="DEBUG override for 30m+ spread-lifetime without cycles_positive_gross>0",
     )
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help="Pipeline session id (fallback: ARBY_PIPELINE_SESSION_ID env)",
+    )
 
     args = parser.parse_args(argv)
+    if getattr(args, "session_id", None):
+        from m9.graph_arb.universe_contract import apply_explicit_session_id
+
+        apply_explicit_session_id(args.session_id)
     _setup_logging(args.verbose)
 
     import logging
@@ -1049,6 +1132,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _runner_universe_contract: Optional[Dict[str, Any]] = None
     if cap_path_str and _cap_doc is not None:
         from m9.graph_arb.universe_contract import (
+            apply_explicit_session_id,
             build_universe_contract,
             validate_capacity_for_runner,
         )
@@ -1061,15 +1145,33 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             require_factory_verified=bool(getattr(args, "require_factory_verified", False)),
             cycle_lengths=_cycle_lengths,
             active_economics_profile=_active_profile,
+            session_id=apply_explicit_session_id(getattr(args, "session_id", None)),
         )
         _capacity_scope["universe_contract"] = _runner_universe_contract
-        ok, mismatches = validate_capacity_for_runner(_cap_doc, _runner_universe_contract)
+        ok, mismatches = validate_capacity_for_runner(
+            _cap_doc,
+            _runner_universe_contract,
+            require_session_binding=True,
+        )
         if not ok:
             log.error(
                 "CAPACITY_UNIVERSE_MISMATCH: capacity diagnostic built for a different "
                 "universe than runner (mismatches=%s path=%s)",
                 mismatches,
                 cap_path_str,
+            )
+            _write_capacity_universe_mismatch_artifact(
+                args=args,
+                log=log,
+                run_timestamp=run_timestamp,
+                started_at=started_at,
+                inventory_path=inventory_path,
+                capacity_scope=_capacity_scope,
+                capacity_doc=_cap_doc or {},
+                runner_contract=_runner_universe_contract,
+                mismatches=mismatches,
+                process_id=process_id,
+                duration_minutes=duration_minutes,
             )
             return EXIT_CAPACITY_UNIVERSE_MISMATCH
 
