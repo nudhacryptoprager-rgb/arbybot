@@ -47,7 +47,8 @@ def test_assert_post_depth_inventory_requires_metadata():
     assert "PRE_DEPTH_INVENTORY" in blockers
 
 
-def test_prepare_effective_inventory_requires_post_depth(tmp_path):
+def test_prepare_effective_inventory_requires_post_depth(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARBY_M9_ALLOW_LIVE_EFFECTIVE_INVENTORY_MATERIALIZE", "1")
     bridge = tmp_path / "bridge.json"
     bridge.write_text(json.dumps(_bridge_doc(post_depth=False)), encoding="utf-8")
     with pytest.raises(ValueError, match="PRE_DEPTH_INVENTORY"):

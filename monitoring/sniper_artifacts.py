@@ -122,6 +122,7 @@ def make_sniper_artifact(
     recent_events: Optional[List[Dict[str, Any]]] = None,
     recent_events_by_dex: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     self_test_by_dex: Optional[Dict[str, Any]] = None,
+    self_test_source: Optional[str] = None,
     run_scope: str = "all",
     dex_filter: Optional[str] = None,
     phase2_decision: Optional[Dict[str, Any]] = None,
@@ -202,6 +203,8 @@ def make_sniper_artifact(
     artifact["run_scope"] = run_scope
     artifact["dex_filter"] = dex_filter
     artifact["self_test_by_dex"] = dict(self_test_by_dex) if self_test_by_dex else {}
+    if self_test_source in ("live", "checkpoint", "skipped_unverified"):
+        artifact["self_test_source"] = self_test_source
     # Step 7: enricher config snapshot — records anchor prices, probe size, etc.
     artifact["enricher_config"] = dict(enricher_config) if enricher_config else None
     if provenance:

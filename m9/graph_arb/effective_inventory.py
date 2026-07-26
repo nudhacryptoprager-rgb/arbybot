@@ -306,6 +306,14 @@ def _validate_loaded_inventory(
         )
 
 
+def _live_materialize_allowed() -> bool:
+    return os.environ.get(ENV_ALLOW_LIVE_MATERIALIZE, "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def materialize_effective_inventory(
     inventory_path: str,
     config_path: str,
@@ -318,6 +326,11 @@ def materialize_effective_inventory(
     w3: Any = None,
     token_prices: Optional[Dict[str, float]] = None,
 ) -> str:
+    if not _live_materialize_allowed():
+        raise ValueError(
+            f"live effective inventory materialization disabled; "
+            f"set {ENV_ALLOW_LIVE_MATERIALIZE}=1 on the writer stage"
+        )
     inv_p = Path(inventory_path)
     if not inv_p.is_file():
         raise FileNotFoundError(f"inventory not found: {inventory_path}")

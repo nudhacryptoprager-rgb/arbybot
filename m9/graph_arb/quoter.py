@@ -328,83 +328,89 @@ def quote_cycle_sync(
     current_amount = initial_amount
     leg_results: List[QuoteResult] = []
 
-    for leg_index, edge in enumerate(cycle.edges):
-        if time.monotonic() - started > timeout_s:
-            return CycleQuoteResult(
-                cycle=cycle,
-                size_usd=size_usd,
-                amount_in=initial_amount,
-                amount_out=0,
-                gross_bps=0.0,
-                status=STATUS_CYCLE_QUOTE_TIMEOUT,
-                reject_reason="TIMEOUT",
-                leg_results=leg_results,
-                elapsed_s=time.monotonic() - started,
-            )
+    from core.rpc_dispatch_hooks import clear_on_rpc_dispatch, set_on_rpc_dispatch
 
-        route = _make_dex_route(edge)
-        token_in = _make_token_info(edge.token_in_sym, edge.token_in_addr, edge.token_in_decimals)
-        token_out = _make_token_info(edge.token_out_sym, edge.token_out_addr, edge.token_out_decimals)
-
-        # Runtime continuity invariant (leg N in == leg N-1 out) before RPC.
-        if leg_index > 0 and leg_results:
-            _prev_out = getattr(leg_results[-1], "amount_out", None)
-            if _prev_out is not None and int(_prev_out) != int(current_amount):
-                return CycleQuoteResult(
-                    cycle=cycle,
-                    size_usd=size_usd,
-                    amount_in=initial_amount,
-                    amount_out=0,
-                    gross_bps=0.0,
-                    status=STATUS_LEG_CAPACITY_REJECT,
-                    reject_reason=_REJECT_AMOUNT_CONTINUITY_VIOLATION,
-                    leg_results=leg_results,
-                    elapsed_s=time.monotonic() - started,
-                )
-
-        if leg_index == 0 and quote_timeline is not None and econ_floor_usd is not None:
-            quote_timeline.try_mark_econ_dispatch(
-                size_usd=size_usd,
+    if quote_timeline is not None and econ_floor_usd is not None:
+        set_on_rpc_dispatch(
+            lambda: quote_timeline.try_mark_econ_dispatch(
+                size_usd=float(size_usd),
                 econ_floor_usd=float(econ_floor_usd),
                 queue_delay_s=float(queue_delay_s),
             )
-
-        leg_result = _probe_leg(
-            w3, route, token_in, token_out, current_amount,
-            quote_backend, rpc_url, edge=edge, leg_index=leg_index, size_usd=size_usd,
         )
-        leg_results.append(leg_result)
-
-        if not leg_result.ok:
-            _cap_reject = getattr(leg_result, "reject_reason", None) or ""
-            if _cap_reject in (
-                _REJECT_LEG_AMOUNT_EXCEEDS_POOL_CAPACITY,
-                _REJECT_ONE_DIRECTION_ONLY,
-                "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN",
-            ):
+    try:
+        for leg_index, edge in enumerate(cycle.edges):
+            if time.monotonic() - started > timeout_s:
                 return CycleQuoteResult(
                     cycle=cycle,
                     size_usd=size_usd,
                     amount_in=initial_amount,
                     amount_out=0,
                     gross_bps=0.0,
-                    status=STATUS_LEG_CAPACITY_REJECT,
-                    reject_reason=_cap_reject,
+                    status=STATUS_CYCLE_QUOTE_TIMEOUT,
+                    reject_reason="TIMEOUT",
                     leg_results=leg_results,
                     elapsed_s=time.monotonic() - started,
                 )
-            return CycleQuoteResult(
-                cycle=cycle,
-                size_usd=size_usd,
-                amount_in=initial_amount,
-                amount_out=0,
-                gross_bps=0.0,
-                status=STATUS_QUOTE_FAILED,
-                reject_reason=_REJECT_CYCLE_QUOTE_FAILED,
-                leg_results=leg_results,
-                elapsed_s=time.monotonic() - started,
+
+            route = _make_dex_route(edge)
+            token_in = _make_token_info(edge.token_in_sym, edge.token_in_addr, edge.token_in_decimals)
+            token_out = _make_token_info(edge.token_out_sym, edge.token_out_addr, edge.token_out_decimals)
+
+            # Runtime continuity invariant (leg N in == leg N-1 out) before RPC.
+            if leg_index > 0 and leg_results:
+                _prev_out = getattr(leg_results[-1], "amount_out", None)
+                if _prev_out is not None and int(_prev_out) != int(current_amount):
+                    return CycleQuoteResult(
+                        cycle=cycle,
+                        size_usd=size_usd,
+                        amount_in=initial_amount,
+                        amount_out=0,
+                        gross_bps=0.0,
+                        status=STATUS_LEG_CAPACITY_REJECT,
+                        reject_reason=_REJECT_AMOUNT_CONTINUITY_VIOLATION,
+                        leg_results=leg_results,
+                        elapsed_s=time.monotonic() - started,
+                    )
+
+            leg_result = _probe_leg(
+                w3, route, token_in, token_out, current_amount,
+                quote_backend, rpc_url, edge=edge, leg_index=leg_index, size_usd=size_usd,
             )
-        current_amount = leg_result.amount_out
+            leg_results.append(leg_result)
+
+            if not leg_result.ok:
+                _cap_reject = getattr(leg_result, "reject_reason", None) or ""
+                if _cap_reject in (
+                    _REJECT_LEG_AMOUNT_EXCEEDS_POOL_CAPACITY,
+                    _REJECT_ONE_DIRECTION_ONLY,
+                    "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN",
+                ):
+                    return CycleQuoteResult(
+                        cycle=cycle,
+                        size_usd=size_usd,
+                        amount_in=initial_amount,
+                        amount_out=0,
+                        gross_bps=0.0,
+                        status=STATUS_LEG_CAPACITY_REJECT,
+                        reject_reason=_cap_reject,
+                        leg_results=leg_results,
+                        elapsed_s=time.monotonic() - started,
+                    )
+                return CycleQuoteResult(
+                    cycle=cycle,
+                    size_usd=size_usd,
+                    amount_in=initial_amount,
+                    amount_out=0,
+                    gross_bps=0.0,
+                    status=STATUS_QUOTE_FAILED,
+                    reject_reason=_REJECT_CYCLE_QUOTE_FAILED,
+                    leg_results=leg_results,
+                    elapsed_s=time.monotonic() - started,
+                )
+            current_amount = leg_result.amount_out
+    finally:
+        clear_on_rpc_dispatch()
 
     from m9.graph_arb.cycle_sanity import check_cycle_leg_sanity
 

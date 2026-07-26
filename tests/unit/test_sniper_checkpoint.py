@@ -8,6 +8,7 @@ import pytest
 from m8.runtime.sniper_checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     load_checkpoint,
+    resolve_streaming_checkpoint_path,
     validate_checkpoint_for_batch,
     write_checkpoint_artifact,
 )
@@ -37,6 +38,12 @@ def test_checkpoint_write_and_validate(tmp_path):
         now_utc=datetime(2026, 7, 26, 12, 0, 0, tzinfo=timezone.utc),
     )
     assert blockers == []
+
+
+def test_streaming_checkpoint_path_is_session_scoped():
+    path = resolve_streaming_checkpoint_path("2026-07-26T12:00:00Z")
+    assert "2026-07-26T12_00_00Z" in path
+    assert path.endswith(".json")
 
 
 def test_checkpoint_rejects_session_mismatch(tmp_path):

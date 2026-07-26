@@ -18,6 +18,7 @@ from typing import Any, Optional
 import httpx
 
 from core.provider_throttle import provider_throttle
+from core.rpc_dispatch_hooks import notify_rpc_dispatch
 from core.rpc_rate_limiter import rpc_throttle
 from m8_1.stable_anchor.pairs import TokenInfo
 from m8_1.stable_anchor.pool_discovery import DexRoute
@@ -76,6 +77,7 @@ def _eth_call_raw(
     }
     last_exc: httpx.HTTPStatusError | None = None
     for attempt in range(max_retries):
+        notify_rpc_dispatch()
         resp = client.post(url, content=json.dumps(payload))
         if resp.status_code == 429:
             if attempt + 1 < max_retries:

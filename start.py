@@ -130,7 +130,13 @@ HOT_PAIRS_CACHE_DIR = Path("data") / "cache"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 PRODUCTION_BRIDGE = "data/tmp/m9_bridge_inventory_production_latest.json"
 CAPACITY_DIAGNOSTIC = "data/tmp/m9_capacity_cycle_diagnostic_latest.json"
-M8_SNIPER_STREAMING_CHECKPOINT = "data/tmp/m8_sniper_streaming_checkpoint.json"
+M8_SNIPER_STREAMING_CHECKPOINT_LEGACY = "data/tmp/m8_sniper_streaming_checkpoint.json"
+
+
+def _resolve_sniper_streaming_checkpoint_path() -> str:
+    from m8.runtime.sniper_checkpoint import resolve_streaming_checkpoint_path
+
+    return resolve_streaming_checkpoint_path()
 M9_SHADOW_ARTIFACT = "data/tmp/m9_graph_handoff_quote_validation_10m.json"
 M9_PATIENT_SHADOW_ARTIFACT = "data/tmp/m9_patient_lane_shadow_10m.json"
 M9_RCA_ARTIFACT = "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
@@ -1370,7 +1376,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 sniper_env = {"ARBY_SNIPER_ENABLE": "1"}
                 if batch_index == 1:
                     sniper_cmd.extend(
-                        ["--write-checkpoint", M8_SNIPER_STREAMING_CHECKPOINT]
+                        ["--write-checkpoint", _resolve_sniper_streaming_checkpoint_path()]
                     )
                 else:
                     sniper_cmd.extend(
@@ -1378,7 +1384,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                             "--skip-self-test",
                             "--skip-preflight",
                             "--checkpoint-artifact",
-                            M8_SNIPER_STREAMING_CHECKPOINT,
+                            _resolve_sniper_streaming_checkpoint_path(),
                         ]
                     )
                 steps.append(
@@ -2605,13 +2611,14 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         )
         return CROSS_CHAIN_RESEARCH_BLOCKED_EXIT
 
-    steps = build_project_pipeline_steps(args)
-    step_names = [str(step["name"]) for step in steps]
-    pipeline_mode = str(args.pipeline)
     pipeline_session_id = (
         os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip() or new_pipeline_session_id()
     )
     os.environ[ENV_PIPELINE_SESSION_ID] = pipeline_session_id
+
+    steps = build_project_pipeline_steps(args)
+    step_names = [str(step["name"]) for step in steps]
+    pipeline_mode = str(args.pipeline)
     streaming = bool(getattr(args, "streaming", False)) or streaming_enabled()
     if streaming:
         os.environ["ARBY_PIPELINE_STREAMING"] = "1"

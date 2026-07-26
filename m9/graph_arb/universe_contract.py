@@ -203,6 +203,9 @@ def enrich_contract_with_graph_fingerprint(
     return out
 
 
+_MISSING = object()
+
+
 def build_universe_contract(
     *,
     inventory_path: str,
@@ -211,10 +214,15 @@ def build_universe_contract(
     require_factory_verified: bool,
     cycle_lengths: Sequence[int],
     active_economics_profile: str,
-    session_id: Optional[str] = None,
+    session_id: Any = _MISSING,
     graph_fingerprint: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    sid = (session_id or resolve_session_id() or "").strip() or None
+    if session_id is _MISSING:
+        sid = (resolve_session_id() or "").strip() or None
+    elif session_id is None:
+        sid = None
+    else:
+        sid = str(session_id).strip() or None
     contract: Dict[str, Any] = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "inventory_path": normalize_artifact_path(inventory_path),

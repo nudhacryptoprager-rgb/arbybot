@@ -36,6 +36,9 @@ def rpc_call_timeout_s() -> float:
 
 def _eth_call(w3: Any, call_dict: dict) -> Any:
     """eth_call via Web3 HTTP provider request timeout (no thread-per-call)."""
+    from core.rpc_dispatch_hooks import notify_rpc_dispatch
+
+    notify_rpc_dispatch()
     return w3.eth.call(call_dict)
 
 

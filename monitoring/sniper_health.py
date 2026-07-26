@@ -30,10 +30,25 @@ def _ws_lane_healthy(metrics: Dict[str, Any]) -> bool:
     return listener_mode.startswith("ws") and ws_connected and ws_events > 0
 
 
+def _resolve_self_test_source(artifact: Dict[str, Any]) -> str | None:
+    """Return self_test_source from artifact, with legacy reason fallback."""
+    explicit = artifact.get("self_test_source")
+    if explicit in ("live", "checkpoint", "skipped_unverified"):
+        return str(explicit)
+    reasons = list(artifact.get("reasons") or [])
+    if "SELF_TEST_SKIPPED" in reasons:
+        return "skipped_unverified"
+    self_test = artifact.get("self_test_by_dex") or (artifact.get("metrics") or {}).get(
+        "self_test_by_dex"
+    ) or {}
+    if self_test:
+        return "live"
+    return None
+
+
 def evaluate_m8_sniper_health(artifact: Dict[str, Any]) -> Dict[str, Any]:
     """Return health blockers for M8 sniper rolling artifact."""
     metrics = artifact.get("metrics") or {}
-    reasons = list(artifact.get("reasons") or [])
     blockers: List[str] = []
 
     rpc_calls = int(metrics.get("rpc_calls_made") or 0)
@@ -47,7 +62,8 @@ def evaluate_m8_sniper_health(artifact: Dict[str, Any]) -> Dict[str, Any]:
     if int(metrics.get("parse_failed") or 0) > 0:
         blockers.append("M8_PARSE_FAILED")
 
-    if "SELF_TEST_SKIPPED" in reasons:
+    self_test_source = _resolve_self_test_source(artifact)
+    if self_test_source == "skipped_unverified":
         blockers.append("M8_SELF_TEST_SKIPPED")
 
     self_test = artifact.get("self_test_by_dex") or metrics.get("self_test_by_dex") or {}

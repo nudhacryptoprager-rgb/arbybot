@@ -940,6 +940,7 @@ def _build_and_write_artifact(
     phase2_event_decisions: Optional[Dict[str, Any]] = None,
     enricher_config: Optional[Dict[str, Any]] = None,
     arb_trace: Optional[List[Dict[str, Any]]] = None,
+    self_test_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build, validate, and atomically write the rolling artifact."""
     metrics = funnel.snapshot()
@@ -1142,6 +1143,7 @@ def _build_and_write_artifact(
         recent_events=recent_list,
         recent_events_by_dex=recent_events_by_dex,
         self_test_by_dex=metrics.get("self_test_by_dex"),
+        self_test_source=self_test_source,
         run_scope=metrics.get("run_scope", "all"),
         dex_filter=metrics.get("dex_filter"),
         phase2_decision=phase2_summary,
@@ -1751,6 +1753,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ------------------------------------------------------------------
     rpc_lane: Optional[SniperRpcLane] = None
     w3: Any = None
+    self_test_source: Optional[str] = None
     if not offline:
         try:
             rpc_lane = _build_sniper_rpc_lane(args.chain, args.rpc_url, funnel)
@@ -1818,6 +1821,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not self_test_ok:
                 logger.error("self_test_FAILED -- aborting run (use --skip-self-test to bypass)")
                 return 3
+            self_test_source = "live"
             if args.write_checkpoint:
                 from core.pipeline_provenance import pipeline_session_id
                 from m8.runtime.sniper_checkpoint import (
@@ -1858,6 +1862,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return 4
             self_test_results = dict((checkpoint or {}).get("self_test_results") or {})
+            self_test_source = "checkpoint"
             logger.warning(
                 "self_test_skipped_via_checkpoint",
                 extra={"context": {"checkpoint": args.checkpoint_artifact}},
@@ -1865,6 +1870,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         # Store self-test results in the funnel for artifact inclusion.
         funnel.set_self_test_results(self_test_results)
+    elif args.skip_self_test:
+        self_test_source = "skipped_unverified"
 
     # ------------------------------------------------------------------
     # Phase 2 enricher setup (online-only: requires w3)
@@ -2062,7 +2069,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         reasons.append(f"TOPIC_UNVERIFIED:{dex_name}")
     for dex_name in null_topic_factories:
         reasons.append(f"TOPIC_NULL:{dex_name}")
-    if args.skip_self_test:
+    if self_test_source == "skipped_unverified":
         reasons.append("SELF_TEST_SKIPPED")
 
     # Step 3: snapshot decisions under lock before final artifact write.
@@ -2081,6 +2088,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         phase2_event_decisions=final_decisions,
         enricher_config=enricher_config,
         arb_trace=list(arb_trace),
+        self_test_source=self_test_source,
     )
 
     health_blockers = (artifact.get("m8_health") or {}).get("blockers") or []
