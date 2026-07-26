@@ -7,7 +7,10 @@ import pytest
 
 from m9.graph_arb.effective_inventory import (
     assert_post_depth_inventory,
+    build_route_universe_identity,
     prepare_effective_execution_inventory,
+    resolve_effective_inventory_path,
+    sanitize_session_token,
 )
 from m9.graph_arb.universe_contract import (
     build_runner_admission_graph_fingerprint,
@@ -109,3 +112,31 @@ def test_pre_depth_capacity_contract_fails_against_post_depth_effective_inventor
     ok, validate_mismatches = validate_capacity_for_runner(cap_doc, runner_contract)
     assert not ok
     assert validate_mismatches
+
+
+def test_resolve_effective_inventory_path_is_session_namespaced(monkeypatch, tmp_path):
+    monkeypatch.delenv("ARBY_M9_EFFECTIVE_INVENTORY_PATH", raising=False)
+    path = resolve_effective_inventory_path("sess/alpha")
+    assert "m9_effective_execution_inventory_" in path
+    assert sanitize_session_token("sess/alpha") in path
+    assert path != "data/tmp/m9_inventory_truth_enriched.json"
+
+
+def test_build_route_universe_identity_detects_route_change(tmp_path):
+    bridge = tmp_path / "bridge.json"
+    bridge.write_text(json.dumps(_bridge_doc(post_depth=True)), encoding="utf-8")
+    identity_a = build_route_universe_identity(str(bridge))
+    doc_b = _bridge_doc(post_depth=True)
+    doc_b["active_routes"].append(
+        {
+            "route_id": "r2",
+            "pool_address": "0xdef",
+            "factory_verified": True,
+            "token0_decimals": 18,
+            "token1_decimals": 6,
+        }
+    )
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps(doc_b), encoding="utf-8")
+    identity_b = build_route_universe_identity(str(other))
+    assert identity_a["route_universe_hash"] != identity_b["route_universe_hash"]

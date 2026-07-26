@@ -52,6 +52,8 @@ EXIT_BRIDGE_UNIVERSE_TOO_SMALL = 4
 EXIT_BRIDGE_SHADOW_CYCLE_GATE = 5
 EXIT_NO_SHADOW_TARGET_UNIVERSE = 6
 EXIT_CAPACITY_UNIVERSE_MISMATCH = 7
+EXIT_EFFECTIVE_INVENTORY_PREP_FAILED = 8
+BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED = "EFFECTIVE_INVENTORY_PREP_FAILED"
 
 
 def _load_capacity_valid_cycle_ids(cap_doc: Dict[str, Any]) -> list[str]:
@@ -346,6 +348,73 @@ def _validate_capacity_universe_or_exit(
         duration_minutes=duration_minutes,
     )
     return runner_contract, EXIT_CAPACITY_UNIVERSE_MISMATCH
+
+
+def _write_effective_inventory_prep_failed_artifact(
+    *,
+    args: argparse.Namespace,
+    log: Any,
+    run_timestamp: str,
+    started_at: float,
+    inventory_path: str,
+    failure_reason: str,
+    process_id: int,
+    duration_minutes: float,
+) -> None:
+    """Emit canonical shadow artifact when effective inventory preparation fails."""
+    from m9.graph_arb.artifacts import build_artifact, write_artifact
+    from m9.graph_arb.models import GraphTopology
+
+    artifact_path = getattr(
+        args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
+    )
+    empty_topology = GraphTopology(
+        token_count=0,
+        edge_count=0,
+        route_count=0,
+        hub_tokens=[],
+        dead_end_tokens=[],
+        missing_edges_for_3cycle=[],
+        adjacency_summary={},
+    )
+    artifact = build_artifact(
+        chain=args.chain,
+        duration_minutes=duration_minutes,
+        cycle_results=[],
+        topology=empty_topology,
+        sizes_usd=tuple(getattr(args, "sizes_usd", None) or (100.0,)),
+        run_timestamp=run_timestamp,
+        started_at_mono=started_at,
+        elapsed_s=time.monotonic() - started_at,
+        sweeps_completed=0,
+        process_id=process_id,
+        python_executable=sys.executable,
+        venv_active=bool(os.environ.get("VIRTUAL_ENV")),
+        inventory_path=inventory_path,
+        config_path=args.config,
+        scan_scope={
+            "shadow_lane_blocker": BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED,
+            "effective_inventory_prep_failure": failure_reason,
+        },
+    )
+    artifact["runner_outcome"] = BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED
+    artifact["shadow_lane_blocker"] = BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED
+    artifact["effective_inventory_prep_failure"] = failure_reason
+    from m9.graph_arb.universe_contract import resolve_session_id
+
+    _stamp_runner_completion_provenance(
+        artifact,
+        run_timestamp=run_timestamp,
+        universe_contract=None,
+        inventory_path=inventory_path,
+        session_id=resolve_session_id(getattr(args, "session_id", None)),
+    )
+    write_artifact(artifact, artifact_path)
+    log.error(
+        "Effective inventory preparation failed: %s (path=%s)",
+        failure_reason,
+        inventory_path,
+    )
 
 
 def _iso_now() -> str:
@@ -869,10 +938,23 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument(
         "--allow-pre-depth-inventory",
         action="store_true",
-        help="Skip post-depth inventory requirement for effective execution prep (debug/tests)",
+        help="Discovery/offline only: skip post-depth requirement (forbidden with --productive-lane)",
+    )
+    parser.add_argument(
+        "--effective-inventory-path",
+        default=None,
+        help="Session-bound effective inventory output (fallback: ARBY_M9_EFFECTIVE_INVENTORY_PATH env)",
     )
 
     args = parser.parse_args(argv)
+    if getattr(args, "productive_lane", False) and getattr(
+        args, "allow_pre_depth_inventory", False
+    ):
+        print(
+            "ERROR: --allow-pre-depth-inventory is forbidden with --productive-lane",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_ERROR
     if getattr(args, "session_id", None):
         from m9.graph_arb.universe_contract import bind_cli_session_to_env
 
@@ -1503,9 +1585,14 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _truth_prices: Optional[Dict[str, float]] = None
     _truth_w3: Optional[Any] = None
     _runner_universe_contract: Optional[Dict[str, Any]] = None
-    try:
-        from m9.graph_arb.effective_inventory import prepare_effective_execution_inventory
+    _productive_lane = bool(getattr(args, "productive_lane", False))
+    if _productive_lane:
+        from m9.graph_arb.effective_inventory import (
+            prepare_effective_execution_inventory,
+            resolve_effective_inventory_path,
+        )
         from m9.graph_arb.route_quarantine import merge_paused_pools_from_lane_rca
+        from m9.graph_arb.universe_contract import resolve_session_id
 
         try:
             _rq_merge = merge_paused_pools_from_lane_rca()
@@ -1517,20 +1604,33 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         except Exception as _rq_exc:
             log.debug("Paused-pool quarantine merge skipped: %s", _rq_exc)
 
-        _require_post_depth = getattr(args, "require_post_depth_inventory", None)
-        if _require_post_depth is None:
-            _require_post_depth = bool(getattr(args, "productive_lane", False)) and not bool(
-                getattr(args, "allow_pre_depth_inventory", False)
-            )
-        inventory_path = prepare_effective_execution_inventory(
-            inventory_path,
-            args.config,
-            chain=args.chain,
-            require_post_depth=bool(_require_post_depth),
+        _runner_sid = resolve_session_id(getattr(args, "session_id", None))
+        _effective_out = (
+            str(getattr(args, "effective_inventory_path", "") or "").strip()
+            or resolve_effective_inventory_path(_runner_sid)
         )
-        log.info("Effective execution inventory: path=%s", inventory_path)
-    except Exception as _truth_exc:
-        log.warning("Effective execution inventory preparation skipped: %s", _truth_exc)
+        try:
+            inventory_path = prepare_effective_execution_inventory(
+                inventory_path,
+                args.config,
+                chain=args.chain,
+                output_path=_effective_out,
+                session_id=_runner_sid,
+                require_post_depth=True,
+            )
+            log.info("Effective execution inventory: path=%s", inventory_path)
+        except Exception as _prep_exc:
+            _write_effective_inventory_prep_failed_artifact(
+                args=args,
+                log=log,
+                run_timestamp=run_timestamp,
+                started_at=started_at,
+                inventory_path=inventory_path,
+                failure_reason=str(_prep_exc),
+                process_id=process_id,
+                duration_minutes=duration_minutes,
+            )
+            return EXIT_EFFECTIVE_INVENTORY_PREP_FAILED
 
     if cap_path_str and _cap_doc is not None:
         _runner_universe_contract, _universe_exit = _validate_capacity_universe_or_exit(

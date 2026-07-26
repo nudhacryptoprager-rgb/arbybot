@@ -826,3 +826,45 @@ def test_capacity_selected_but_not_quoted_blocker():
         },
     )
     assert "CAPACITY_SELECTED_BUT_NOT_QUOTED" in report["m9_quote_validation_blockers"]
+
+
+def test_sniper_to_shadow_quote_slo_exceeded_blocker():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "generated_at_utc": "2026-07-25T10:00:00Z"},
+        anchor={"metrics": {}},
+        expansion={"metrics": {"handoff_ready": True}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
+        shadow={
+            "cycles_found": 5,
+            "scan_scope": {
+                "shadow_quoted_cycle_ids": ["c1"],
+                "first_shadow_quote_at_utc": "2026-07-25T11:00:00Z",
+            },
+        },
+        rca=None,
+        m8_2_report={"handoff_ready": True, "goal_status": "REACHED"},
+        capacity_metrics={"capacity_valid_cycle_ids": ["c1"]},
+    )
+    assert report["pipeline_slo_gate"]["slo_status"] == "BLOCKED"
+    assert "SNIPER_TO_SHADOW_QUOTE_SLO_EXCEEDED" in report["upstream_blockers"]
+
+
+def test_capacity_valid_no_shadow_quote_overlap_blocker():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {"handoff_ready": True}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
+        shadow={
+            "cycles_found": 5,
+            "scan_scope": {
+                "capacity_valid_cycle_ids": ["c1"],
+                "shadow_selected_cycle_ids": ["c1"],
+                "shadow_quoted_cycle_ids": ["c9"],
+            },
+        },
+        rca=None,
+        m8_2_report={"handoff_ready": True, "goal_status": "REACHED"},
+        capacity_metrics={"capacity_valid_cycle_ids": ["c1"]},
+    )
+    assert "CAPACITY_VALID_NO_SHADOW_QUOTE_OVERLAP" in report["m9_quote_validation_blockers"]

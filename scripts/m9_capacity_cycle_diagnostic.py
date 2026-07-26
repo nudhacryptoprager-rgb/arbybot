@@ -118,7 +118,12 @@ def main() -> int:
     ap.add_argument(
         "--allow-pre-depth-inventory",
         action="store_true",
-        help="Allow capacity on bridge without post-depth enrichment metadata (debug/tests)",
+        help="Discovery/offline only: skip post-depth requirement (forbidden with --lane productive)",
+    )
+    ap.add_argument(
+        "--effective-inventory-path",
+        default=None,
+        help="Session-bound effective inventory output (fallback: ARBY_M9_EFFECTIVE_INVENTORY_PATH env)",
     )
     ap.add_argument("--chain", default="base", help="Chain for optional RPC truth enrich")
     ap.add_argument(
@@ -127,6 +132,13 @@ def main() -> int:
         help="Pipeline session id (fallback: ARBY_PIPELINE_SESSION_ID env)",
     )
     args = ap.parse_args()
+
+    if args.lane == "productive" and args.allow_pre_depth_inventory:
+        print(
+            "ERROR: --allow-pre-depth-inventory is forbidden with --lane productive",
+            file=sys.stderr,
+        )
+        return 2
 
     from m9.graph_arb.cycle_capacity import (
         narrow_routes_by_econ_capacity_closure,
@@ -151,13 +163,23 @@ def main() -> int:
         lengths = resolve_cycle_lengths_from_config(args.config)
     floors = _parse_floors(args.floors)
 
-    from m9.graph_arb.effective_inventory import prepare_effective_execution_inventory
+    from m9.graph_arb.effective_inventory import (
+        prepare_effective_execution_inventory,
+        resolve_effective_inventory_path,
+    )
 
+    session_id = resolve_session_id(args.session_id)
+    effective_out = (
+        str(args.effective_inventory_path or "").strip()
+        or resolve_effective_inventory_path(session_id)
+    )
     require_post_depth = args.lane == "productive" and not args.allow_pre_depth_inventory
     effective_inventory_path = prepare_effective_execution_inventory(
         args.bridge,
         args.config,
         chain=args.chain,
+        output_path=effective_out,
+        session_id=session_id,
         require_post_depth=require_post_depth,
     )
     report = run_capacity_cycle_diagnostic(

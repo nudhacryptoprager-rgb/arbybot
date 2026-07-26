@@ -26,6 +26,8 @@ _GRAPH_COMPARE_KEYS = (
     "active_route_count",
     "graph_edge_count",
     "graph_route_count",
+    "route_universe_hash",
+    "post_depth_content_hash",
 )
 
 
@@ -148,12 +150,16 @@ def build_graph_fingerprint(
     require_factory_verified: bool,
 ) -> Dict[str, Any]:
     from m9.graph_arb.builder import graph_edge_count, graph_route_count
+    from m9.graph_arb.effective_inventory import build_route_universe_identity
 
+    identity = build_route_universe_identity(inventory_path)
     return {
         "resolved_inventory_path": normalize_artifact_path(inventory_path),
         "active_route_count": int(active_route_count),
         "graph_edge_count": int(graph_edge_count(adjacency)) if adjacency else 0,
         "graph_route_count": int(graph_route_count(adjacency)) if adjacency else 0,
+        "route_universe_hash": identity.get("route_universe_hash"),
+        "post_depth_content_hash": identity.get("post_depth_content_hash"),
         "admission_policy": admission_policy_label(
             lane=lane,
             require_factory_verified=require_factory_verified,

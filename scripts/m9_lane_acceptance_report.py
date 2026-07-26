@@ -49,6 +49,10 @@ FRESHNESS_MISMATCH_SECONDS = 30 * 60  # 30 min
 # wall-clock spread before declaring MIXED_RUNTIME_WINDOW.
 SESSION_ALIGNED_MISMATCH_SECONDS = 90 * 60  # 90 min
 
+# Pipeline latency SLO: final sniper artifact -> first shadow econ quote.
+# Separate from SESSION_ALIGNED_MISMATCH_SECONDS (session TTL compensation).
+SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS = 45 * 60  # 45 min
+
 FRESHNESS_BLOCKER_BY_KEY = {
     "m8_2": "M8_2_STALE",
     "m8_3": "M8_3_STALE",
@@ -177,6 +181,86 @@ def _session_binding_gate(
         "missing_session_on": [
             k for k in core_with_docs if k not in per_artifact
         ],
+    }
+
+
+def _fresh_direct_cohort_counters(
+    bridge: Optional[Dict[str, Any]],
+    shadow: Optional[Dict[str, Any]],
+    bsm: Dict[str, Any],
+) -> Dict[str, Any]:
+    """First-class M8 fresh-direct cohort counters (admission + mirror recall)."""
+    routes = [
+        r
+        for r in ((bridge or {}).get("active_routes") or [])
+        if str(r.get("source") or "") == "m8_sniper"
+    ]
+    tokens: set[str] = set()
+    pools: set[str] = set()
+    mirrors = 0
+    for route in routes:
+        pool = str(route.get("pool_address") or "").lower()
+        if pool:
+            pools.add(pool)
+        for key in ("token0", "token1"):
+            tok = str(route.get(key) or "").lower()
+            if tok:
+                tokens.add(tok)
+        if route.get("mirror_of") or route.get("verified_mirror"):
+            mirrors += 1
+    return {
+        "tokens": len(tokens),
+        "pools": len(pools),
+        "routes": len(routes),
+        "mirrors": mirrors,
+        "cycles_found": int(
+            (shadow or {}).get("m8_direct_cycles_found")
+            or (shadow or {}).get("cycles_with_direct_sniper_pool")
+            or 0
+        ),
+        "cycles_quoteable": int((shadow or {}).get("m8_direct_cycles_quoteable") or 0),
+        "m8_direct_routes_in_bridge": bsm.get("m8_direct_routes_in_bridge"),
+        "derived_m8_routes": max(
+            0,
+            int(bsm.get("graph_ready_from_m8") or 0)
+            - int(bsm.get("m8_direct_routes_in_bridge") or 0),
+        ),
+        "configured_seed_routes": bsm.get("graph_ready_from_expansion"),
+    }
+
+
+def _sniper_to_shadow_quote_slo_gate(
+    *,
+    sniper: Optional[Dict[str, Any]],
+    shadow: Optional[Dict[str, Any]],
+    skip_shadow: bool = False,
+) -> Dict[str, Any]:
+    """Pipeline latency SLO: final sniper artifact -> first shadow econ quote."""
+    blockers: List[str] = []
+    if skip_shadow or shadow is None or sniper is None:
+        return {
+            "slo_status": "SKIPPED",
+            "blockers": blockers,
+            "slo_budget_seconds": SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS,
+        }
+    scan_scope = (shadow or {}).get("scan_scope") or {}
+    quoted_ids = list(scan_scope.get("shadow_quoted_cycle_ids") or [])
+    sniper_ts = _parse_iso_ts(sniper.get("generated_at_utc"))
+    first_quote_ts = _parse_iso_ts(scan_scope.get("first_shadow_quote_at_utc"))
+    latency_s: Optional[float] = None
+    if sniper_ts is not None and first_quote_ts is not None:
+        latency_s = (first_quote_ts - sniper_ts).total_seconds()
+        if latency_s > SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS:
+            blockers.append("SNIPER_TO_SHADOW_QUOTE_SLO_EXCEEDED")
+    elif quoted_ids and sniper_ts is not None:
+        blockers.append("SNIPER_TO_SHADOW_QUOTE_SLO_UNMEASURED")
+    return {
+        "slo_status": "PASS" if not blockers else "BLOCKED",
+        "blockers": sorted(set(blockers)),
+        "slo_budget_seconds": SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS,
+        "latency_seconds": round(latency_s, 1) if latency_s is not None else None,
+        "sniper_generated_at_utc": sniper.get("generated_at_utc"),
+        "first_shadow_quote_at_utc": scan_scope.get("first_shadow_quote_at_utc"),
     }
 
 
@@ -1007,6 +1091,10 @@ def build_acceptance_report(
             "m8_tokens_in": exp_summary.get("m8_tokens_in"),
         },
         {
+            "layer": "M8_fresh_direct_cohort",
+            **_fresh_direct_cohort_counters(bridge, shadow, bsm),
+        },
+        {
             "layer": "M8_cohorts",
             "fresh_direct_sniper_routes": bsm.get("m8_direct_routes_in_bridge"),
             "derived_m8_routes": max(
@@ -1186,6 +1274,14 @@ def build_acceptance_report(
     if freshness_gate["freshness_status"] == "BLOCKED":
         upstream_blockers.extend(freshness_gate["blockers"])
 
+    pipeline_slo_gate = _sniper_to_shadow_quote_slo_gate(
+        sniper=sniper,
+        shadow=shadow,
+        skip_shadow=skip_shadow,
+    )
+    if pipeline_slo_gate["slo_status"] == "BLOCKED":
+        upstream_blockers.extend(pipeline_slo_gate["blockers"])
+
     m9_quote_validation_blockers: List[str] = []
     if capacity_metrics and shadow is not None and not skip_shadow:
         cap_ids = set(capacity_metrics.get("capacity_valid_cycle_ids") or [])
@@ -1194,6 +1290,8 @@ def build_acceptance_report(
         quoted_ids = set(scan_scope.get("shadow_quoted_cycle_ids") or [])
         if cap_ids and selected_ids and not quoted_ids:
             m9_quote_validation_blockers.append("CAPACITY_SELECTED_BUT_NOT_QUOTED")
+        if cap_ids and quoted_ids and not (cap_ids & quoted_ids):
+            m9_quote_validation_blockers.append("CAPACITY_VALID_NO_SHADOW_QUOTE_OVERLAP")
         cap_inv = str(
             ((capacity_metrics or {}).get("universe_contract") or {}).get("inventory_path")
             or (capacity_metrics or {}).get("effective_inventory_path")
@@ -1332,6 +1430,7 @@ def build_acceptance_report(
         "m8_2_upstream": m8_2_upstream,
         "m8_3_upstream": m8_3_upstream,
         "freshness_gate": freshness_gate,
+        "pipeline_slo_gate": pipeline_slo_gate,
         "m9_blockers": m9_blockers,
         "m9_quote_validation_blockers": m9_quote_validation_blockers,
         "m9_economics_status": (

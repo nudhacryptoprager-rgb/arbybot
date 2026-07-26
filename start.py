@@ -253,10 +253,13 @@ def _fresh_quote_ready_count() -> int:
 
 def _resolve_m9_shadow_step_env() -> dict[str, str]:
     """Capacity-prioritized shadow with explicit lane mode for economics verdict."""
+    from m9.graph_arb.effective_inventory import resolve_effective_inventory_path
+
     fresh = _fresh_quote_ready_count()
     env = {
         "ARBY_M9_CAPACITY_PRIORITIZED": "1",
         "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
+        "ARBY_M9_EFFECTIVE_INVENTORY_PATH": resolve_effective_inventory_path(),
     }
     if fresh > 0:
         env["ARBY_M9_SHADOW_LANE_MODE"] = "long_tail_target"

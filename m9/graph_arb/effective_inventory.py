@@ -1,20 +1,61 @@
 """Post-depth effective execution inventory — shared by capacity, runner, shadow."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from m9.graph_arb.inventory_truth import _DEFAULT_OUT as EFFECTIVE_EXECUTION_INVENTORY_PATH
+from core.pipeline_provenance import pipeline_session_id
 
 log = logging.getLogger(__name__)
 
+ENV_EFFECTIVE_INVENTORY_PATH = "ARBY_M9_EFFECTIVE_INVENTORY_PATH"
+LEGACY_EFFECTIVE_INVENTORY_PATH = "data/tmp/m9_inventory_truth_enriched.json"
+
 __all__ = (
-    "EFFECTIVE_EXECUTION_INVENTORY_PATH",
+    "ENV_EFFECTIVE_INVENTORY_PATH",
+    "LEGACY_EFFECTIVE_INVENTORY_PATH",
     "assert_post_depth_inventory",
+    "build_route_universe_identity",
     "prepare_effective_execution_inventory",
+    "resolve_effective_inventory_path",
+    "sanitize_session_token",
 )
+
+
+def sanitize_session_token(session_id: Optional[str]) -> str:
+    sid = str(session_id or pipeline_session_id() or "unknown").strip()
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", sid)
+    return (safe[:96] or "unknown").strip("_") or "unknown"
+
+
+def resolve_effective_inventory_path(session_id: Optional[str] = None) -> str:
+    """Session-namespaced effective inventory path (env override for pipeline binding)."""
+    env = os.environ.get(ENV_EFFECTIVE_INVENTORY_PATH, "").strip()
+    if env:
+        return env.replace("\\", "/")
+    token = sanitize_session_token(session_id)
+    return f"data/tmp/m9_effective_execution_inventory_{token}.json"
+
+
+def build_route_universe_identity(inventory_path: str) -> Dict[str, str]:
+    """Deterministic identity of the post-depth active route universe."""
+    inv = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
+    route_ids = sorted(
+        str(r.get("route_id") or "").strip()
+        for r in (inv.get("active_routes") or [])
+        if str(r.get("route_id") or "").strip()
+    )
+    depth = inv.get("depth_enrichment") or {}
+    route_hash = hashlib.sha256("|".join(route_ids).encode("utf-8")).hexdigest()[:16]
+    return {
+        "route_universe_hash": route_hash,
+        "post_depth_content_hash": str(depth.get("post_depth_content_hash") or ""),
+    }
 
 
 def assert_post_depth_inventory(doc: Optional[Dict[str, Any]]) -> Tuple[bool, List[str]]:
@@ -35,7 +76,8 @@ def prepare_effective_execution_inventory(
     config_path: str,
     *,
     chain: Optional[str] = None,
-    output_path: str = EFFECTIVE_EXECUTION_INVENTORY_PATH,
+    output_path: Optional[str] = None,
+    session_id: Optional[str] = None,
     require_post_depth: bool = True,
     w3: Any = None,
     token_prices: Optional[Dict[str, float]] = None,
@@ -56,6 +98,8 @@ def prepare_effective_execution_inventory(
             )
 
     from m9.graph_arb.inventory_truth import enrich_inventory_for_quote_truth
+
+    resolved_out = output_path or resolve_effective_inventory_path(session_id)
 
     resolved_w3 = w3
     resolved_prices = token_prices
@@ -94,7 +138,7 @@ def prepare_effective_execution_inventory(
         config_path,
         w3=resolved_w3,
         token_prices=resolved_prices,
-        output_path=output_path,
+        output_path=resolved_out,
     )
     log.info("Prepared effective execution inventory: %s -> %s", inventory_path, out)
     return out

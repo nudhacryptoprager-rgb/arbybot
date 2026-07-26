@@ -16,6 +16,8 @@ def _graph_fp(**overrides):
         "active_route_count": 1,
         "graph_edge_count": 2,
         "graph_route_count": 1,
+        "route_universe_hash": "abc123",
+        "post_depth_content_hash": "posthash",
     }
     base.update(overrides)
     return base
@@ -86,6 +88,8 @@ def test_validate_passes_when_contracts_match():
         "active_route_count",
         "graph_edge_count",
         "graph_route_count",
+        "route_universe_hash",
+        "post_depth_content_hash",
     )
     cap = {
         "universe_contract": dict(runner),
@@ -115,6 +119,8 @@ def test_compare_fail_close_missing_runner_graph_keys():
         "active_route_count",
         "graph_edge_count",
         "graph_route_count",
+        "route_universe_hash",
+        "post_depth_content_hash",
     ):
         broken = dict(runner)
         broken.pop(key, None)
@@ -125,12 +131,11 @@ def test_compare_fail_close_missing_runner_graph_keys():
 
 
 def test_graph_route_count_is_required_compare_key():
-    assert "graph_route_count" in (
-        "resolved_inventory_path",
-        "active_route_count",
-        "graph_edge_count",
-        "graph_route_count",
-    )
+    from m9.graph_arb.universe_contract import _GRAPH_COMPARE_KEYS
+
+    assert "graph_route_count" in _GRAPH_COMPARE_KEYS
+    assert "route_universe_hash" in _GRAPH_COMPARE_KEYS
+    assert "post_depth_content_hash" in _GRAPH_COMPARE_KEYS
 
 
 def test_contract_schema_version_v2():
