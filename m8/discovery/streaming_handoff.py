@@ -5,7 +5,8 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from application.checkpoint_store import fingerprint_paths
 from core.json_io import atomic_write_json
@@ -23,6 +24,96 @@ from m8.discovery.token_subset import write_token_subset_file
 
 def sniper_content_fingerprint(sniper_path: str | Path = DEFAULT_SNIPER_ARTIFACT) -> str:
     return fingerprint_paths([sniper_path])
+
+
+STREAMING_FORCE_RERUN_REMEDIATION = (
+    "use --new-session or omit --force-rerun-steps; "
+    "to resume an existing session use --resume-session without --force-rerun-steps"
+)
+
+
+@dataclass(frozen=True)
+class StreamingForceRerunConflict:
+    """Forced sniper rerun cannot reuse a session with immutable batch manifests."""
+
+    session_id: str
+    immutable_batch_indices: tuple[int, ...]
+    batch_index: int
+    manifest_fingerprint: str
+    current_sniper_fingerprint: str
+    remediation: str = STREAMING_FORCE_RERUN_REMEDIATION
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "reason": "STREAMING_SESSION_REUSE_REQUIRES_NEW_SESSION",
+            "session_id": self.session_id,
+            "immutable_batch_indices": list(self.immutable_batch_indices),
+            "batch_index": self.batch_index,
+            "manifest_fingerprint": self.manifest_fingerprint,
+            "current_sniper_fingerprint": self.current_sniper_fingerprint,
+            "remediation": self.remediation,
+        }
+
+    def failure_reason(self) -> str:
+        return (
+            "STREAMING_SESSION_REUSE_REQUIRES_NEW_SESSION: "
+            f"session_id={self.session_id!r} "
+            f"immutable_batches={list(self.immutable_batch_indices)} "
+            f"batch_index={self.batch_index} "
+            f"manifest_fingerprint={self.manifest_fingerprint} "
+            f"current_sniper_fingerprint={self.current_sniper_fingerprint} "
+            f"remediation={self.remediation}"
+        )
+
+
+def find_immutable_streaming_batches(
+    session_id: str,
+    batch_indices: Iterable[int],
+) -> List[int]:
+    immutable: List[int] = []
+    for raw_idx in batch_indices:
+        idx = int(raw_idx)
+        paths = resolve_streaming_batch_paths(idx, session_id=session_id)
+        if paths.manifest.is_file():
+            immutable.append(idx)
+    return sorted(immutable)
+
+
+def detect_streaming_force_rerun_conflict(
+    session_id: str,
+    batch_indices: Iterable[int],
+    *,
+    sniper_artifact: str | Path = DEFAULT_SNIPER_ARTIFACT,
+) -> Optional[StreamingForceRerunConflict]:
+    """Return conflict details when force-rerun would rewrite sniper input for a frozen session."""
+    immutable = find_immutable_streaming_batches(session_id, batch_indices)
+    if not immutable:
+        return None
+    first_batch = immutable[0]
+    paths = resolve_streaming_batch_paths(first_batch, session_id=session_id)
+    manifest = load_streaming_manifest(paths.manifest)
+    return StreamingForceRerunConflict(
+        session_id=str(session_id),
+        immutable_batch_indices=tuple(immutable),
+        batch_index=first_batch,
+        manifest_fingerprint=str(manifest.get("sniper_input_fingerprint") or ""),
+        current_sniper_fingerprint=sniper_content_fingerprint(sniper_artifact),
+    )
+
+
+def validate_force_rerun_streaming_session(
+    session_id: str,
+    batch_indices: Iterable[int],
+    *,
+    sniper_artifact: str | Path = DEFAULT_SNIPER_ARTIFACT,
+) -> None:
+    conflict = detect_streaming_force_rerun_conflict(
+        session_id,
+        batch_indices,
+        sniper_artifact=sniper_artifact,
+    )
+    if conflict is not None:
+        raise ValueError(conflict.failure_reason())
 
 
 def _load_sniper_doc(path: str | Path) -> Dict[str, Any]:

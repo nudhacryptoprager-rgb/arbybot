@@ -18,7 +18,9 @@ from core.pipeline_streaming import (
 from core.quote_lane_limiter import QuoteLaneLimiter
 from m8.discovery.mirror_quote_cache import mirror_quote_cache_key
 from m8.discovery.streaming_handoff import (
+    detect_streaming_force_rerun_conflict,
     sniper_content_fingerprint,
+    validate_force_rerun_streaming_session,
     validate_streaming_handoff,
     write_streaming_batch_manifest,
 )
@@ -28,7 +30,11 @@ from m8_1.stable_anchor.quote_negative_cache import (
 )
 from monitoring.bridge_content_hash import bridge_inventory_content_hash
 from monitoring.runtime_truth_gate import evaluate_runtime_truth_gate
-from start import build_project_pipeline_steps
+from start import (
+    build_project_pipeline_steps,
+    resolve_pipeline_session_id,
+    validate_pipeline_session_cli_args,
+)
 
 
 def _fake_args(**overrides):
@@ -42,6 +48,14 @@ def _fake_args(**overrides):
         skip_shadow = True
         skip_preflight = True
         max_radar_tokens = 100
+        new_session = False
+        resume_session = None
+        force_rerun_steps = False
+        dry_run = False
+        pipeline_log = "data/tmp/start_pipeline_latest.log"
+        resume_from = None
+        allow_roadmap_edit = False
+        heartbeat_stale_minutes = 15
 
     ns = NS()
     for key, value in overrides.items():
@@ -432,3 +446,85 @@ def test_persistent_negative_cache_roundtrip(tmp_path: Path):
     cache.flush()
     cache2 = PersistentQuoteNegativeCache(path=path, ttl_s=60.0)
     assert cache2.get(key) == "QUOTE_REVERT"
+
+
+def test_force_rerun_reused_session_conflict_detected_before_sniper(tmp_path, monkeypatch):
+    session_id = "2026-07-26T13:04:06Z"
+    sniper_path = tmp_path / "sniper.json"
+    sniper_path.write_text('{"candidates": [{"token0": "0x1"}]}', encoding="utf-8")
+    monkeypatch.setattr(
+        "m8.discovery.streaming_handoff.DEFAULT_SNIPER_ARTIFACT",
+        str(sniper_path),
+    )
+    write_streaming_batch_manifest(
+        session_id=session_id,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper_path),
+    )
+    sniper_path.write_text('{"candidates": [{"token0": "0x2"}]}', encoding="utf-8")
+    conflict = detect_streaming_force_rerun_conflict(session_id, [1], sniper_artifact=sniper_path)
+    assert conflict is not None
+    assert conflict.batch_index == 1
+    with pytest.raises(ValueError, match="STREAMING_SESSION_REUSE_REQUIRES_NEW_SESSION"):
+        validate_force_rerun_streaming_session(session_id, [1], sniper_artifact=sniper_path)
+
+
+def test_new_session_ignores_env_and_produces_valid_handoff(tmp_path, monkeypatch):
+    session_a = "session-a"
+    sniper_path = tmp_path / "sniper.json"
+    sniper_path.write_text('{"candidates": [{"token0": "0xabc"}]}', encoding="utf-8")
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", session_a)
+    write_streaming_batch_manifest(
+        session_id=session_a,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper_path),
+    )
+    resolved = resolve_pipeline_session_id(_fake_args(new_session=True))
+    assert resolved != session_a
+    manifest = write_streaming_batch_manifest(
+        session_id=resolved,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper_path),
+    )
+    validate_streaming_handoff(
+        resolve_streaming_batch_paths(1, session_id=resolved).manifest,
+        expected_session_id=resolved,
+    )
+    assert manifest["session_id"] == resolved
+
+
+def test_resume_session_rejects_force_rerun():
+    class NS:
+        new_session = False
+        resume_session = "2026-07-26T13:04:06Z"
+        force_rerun_steps = True
+
+    assert validate_pipeline_session_cli_args(NS()) is not None
+
+
+def test_pipeline_preflight_blocks_force_rerun_before_steps(tmp_path, monkeypatch):
+    session_id = "2026-07-26T13:04:06Z"
+    sniper_path = tmp_path / "sniper.json"
+    sniper_path.write_text('{"candidates": [{"token0": "0x1"}]}', encoding="utf-8")
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", session_id)
+    monkeypatch.setattr(
+        "m8.discovery.streaming_handoff.DEFAULT_SNIPER_ARTIFACT",
+        str(sniper_path),
+    )
+    write_streaming_batch_manifest(
+        session_id=session_id,
+        batch_index=1,
+        batch_minutes=15,
+        sniper_artifact=str(sniper_path),
+    )
+    from start import _run_project_pipeline
+
+    args = _fake_args(force_rerun_steps=True, skip_preflight=True, dry_run=False)
+    rc = _run_project_pipeline(args)
+    assert rc == 2
+    fail_text = Path("data/tmp/start_pipeline_latest.fail").read_text(encoding="utf-8")
+    assert "STREAMING_SESSION_REUSE_REQUIRES_NEW_SESSION" in fail_text
+    assert f"session_id={session_id}" in fail_text

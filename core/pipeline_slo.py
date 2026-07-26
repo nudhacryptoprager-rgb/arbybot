@@ -138,6 +138,7 @@ class PipelineSloTracker:
         session_id: Optional[str] = None,
         pipeline_mode: Optional[str] = None,
         resumed_from_step: Optional[str] = None,
+        streaming_failure: Optional[Dict[str, Any]] = None,
     ) -> None:
         payload: Dict[str, Any] = {
             "schema_version": "pipeline_slo.4",
@@ -152,5 +153,7 @@ class PipelineSloTracker:
             "batch_work_duration_s": _aggregate_batch_work_duration(self.records),
             "steps": list(self.records),
         }
+        if streaming_failure:
+            payload["streaming_failure"] = dict(streaming_failure)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

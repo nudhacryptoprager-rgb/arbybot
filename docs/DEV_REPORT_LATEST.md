@@ -4,68 +4,81 @@
 timestamp_utc: 2026-07-08T08:18:55
 canonical_rolling_timestamp: 2026-07-08T08:18:55
 rolling_run_dir: data/runs/ci_m5_gate_arbitrum_one_20260708_101645_712808
-session_patch_timestamp_utc: 2026-07-26T17:30:00Z
+session_patch_timestamp_utc: 2026-07-26T19:55:09Z
 goal_status: IN_PROGRESS
-primary_blocker_of_session: P0_CAPACITY_CONTRACT_AND_QUARANTINE_TRACE_EDGE_CASES
-runtime_validation: NOT RUN
+primary_blocker_of_session: SNIPER_FINGERPRINT_MISMATCH
+blocker_type: CODE_OR_ORCHESTRATION
+runtime_validation: FAILED_BEFORE_M9
 docs_reread_confirmed: true
-run_id: m9-p0-capacity-contract-quarantine-trace-fix-2026-07-26
-mode: P0 fail-close + quarantine trace/TTL patch-set (iteration 3)
+run_id: m9-streaming-session-preflight-guard-2026-07-26
+mode: streaming session lifecycle guard + P0 patch-set follow-up
 config: config/exotic_base_anchor.yaml
-prior_bundle_session_id: 2026-07-26T13:04:06Z
+failed_bundle_session_id: 2026-07-26T13:04:06Z
+code_revision: dd649eb6288ce0d5b78a6b8d632703b32cde1aea
 
 ## Session Completion
-session_goal: перевірити другу P0 integration-ітерацію
+session_goal: fresh M8→M9 bundle after P0 integration patch-set
 goal_status: IN_PROGRESS
-primary_blocker_of_session: P0_CAPACITY_CONTRACT_AND_QUARANTINE_TRACE_EDGE_CASES
+primary_blocker_of_session: SNIPER_FINGERPRINT_MISMATCH
 close_allowed: false
-remaining_blockers: fresh runtime evidence after P0 trace/TTL patch-set
+remaining_blockers: streaming session preflight guard; retry bundle in new session namespace
 docs_reread_confirmed: true
 
-## P0 patch-set (iteration 3)
+## Online runtime (failed bundle)
 
-### Fixes applied
-1. `require_contract_binding` when capacity diagnostic doc is loaded (not gated on non-empty `cycle_contract_by_id`)
-2. `session_quarantine_filtered_cycle_ids` tracked in runner and passed to `capacity_scope`
-3. `SESSION_POOL_QUARANTINE` explicit `block_reason` in `capacity_contract_trace` (not contract mismatch)
-4. Session quarantine filter runs before `shadow_selected_cycle_ids` admission
-5. `load_session_pool_quarantine_addresses()` skips expired `retry_after_utc` entries
-6. `cycle_contract_hash()` uses `<none>` marker for `None` (distinct from `0`)
-7. Incremental quarantine via `merge_pool_observations` + refresh on `new_results` only
-8. Lane acceptance + control dashboard counts for quarantine/contract-missing blockers
-9. `CAPACITY_CONTRACT_MISSING` added to deterministic reject statuses
+### Command
+```powershell
+py -3.11 start.py -m8_m9 --streaming --sniper-batch-minutes 15 --no-dashboard --force-rerun-steps --pipeline-log data/tmp/m8_m9_p0_fixed.log
+```
+
+### Result
+- exit_code: 2
+- elapsed: ~27.5 min
+- failed_step: `m8_1_stable_anchor_batch_1`
+- session_id reused: `2026-07-26T13:04:06Z`
+- root_cause: `SNIPER_FINGERPRINT_MISMATCH` (manifest `fa7f1e44e3c79254` vs rolling sniper `a0421773b10403a7`)
+- M9 shadow: NOT RUN
+- post_depth truth gate: NOT RUN
+
+### M8 sniper batch 1 (completed before fail)
+- exit: 0
+- candidates: 47
+- RPC errors: 0
+- elapsed: ~1642s
+
+## Patch-set in progress (streaming session guard)
 
 ### Target files
-- `m9/graph_arb/runner.py`
-- `m9/graph_arb/artifacts.py`
-- `m9/graph_arb/pool_scorecard.py`
-- `m9/graph_arb/depth_contract.py`
-- `scripts/m9_lane_acceptance_report.py`
-- `api/control_projection.py`
-- `tests/unit/test_m9_p0_integration_wiring.py`
-- `tests/unit/test_depth_contract_cycle_verdict.py`
+- `m8/discovery/streaming_handoff.py`
+- `start.py`
+- `core/pipeline_slo.py`
+- `tests/unit/test_streaming_integration.py`
 
-## Verification (same session)
+### Planned fixes
+1. `--new-session` creates fresh `pipeline_session_id` (ignores inherited env)
+2. Early preflight blocks `--force-rerun-steps` when immutable batch manifest exists in session
+3. Immutable manifest behavior unchanged (no self-heal on fingerprint mismatch)
+4. `--resume-session` explicit reuse without `--force-rerun-steps`
+5. Structured fail marker + SLO `streaming_failure` fields
 
+### Verification (streaming guard patch)
 ```powershell
-py -3.11 -m pytest tests/unit/test_quoter_transport_dispatch.py tests/unit/test_m9_p0_integration_wiring.py tests/unit/test_reject_cache_post_depth_hash.py tests/unit/test_depth_contract_cycle_verdict.py tests/unit/test_pool_scorecard_toxic_stable.py tests/unit/test_m9_runner_universe_integration.py -q
-# 38 passed
+py -3.11 -m pytest tests/unit/test_streaming_integration.py -q
+# 23 passed
 
 py -3.11 scripts/check_repo_safety.py
-# PASS
-
-git diff --check
 # PASS
 
 py -3.11 scripts/check_quality_ratchet.py --pip-audit
 # PASS
 
 py -3.11 scripts/ci_full_pipeline.py --mode ci
-# ALL REQUIRED GATES PASSED; collected 7396 items; 7357 passed, 39 skipped
+# ALL REQUIRED GATES PASSED; collected 7400 items; 7361 passed, 39 skipped
 ```
 
-### NOT RUN
-- Fresh M8→M9 bundle (scheduled immediately after commit in this session)
-- `scripts/m8_m9_runtime_truth_gate.py --phase post_depth` on new session
+### Retry command (after guard lands)
+```powershell
+py -3.11 start.py -m8_m9 --streaming --sniper-batch-minutes 15 --no-dashboard --new-session --force-rerun-steps --pipeline-log data/tmp/m8_m9_p0_fixed_retry.log
+```
 
-Status files (`Status_M8*.md`, `Status_M9.md`) not updated — no fresh runtime evidence yet.
+Status files (`Status_M8*.md`, `Status_M9.md`) not updated — no valid same-session M9 evidence.

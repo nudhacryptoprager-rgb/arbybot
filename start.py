@@ -30,7 +30,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 import yaml
 
@@ -2617,6 +2617,64 @@ def _write_pipeline_done_marker(*, fail_path: Path, done_path: Path) -> None:
     done_path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
 
 
+def resolve_pipeline_session_id(args: argparse.Namespace) -> str:
+    """Resolve pipeline session id from CLI flags and environment."""
+    if bool(getattr(args, "new_session", False)):
+        return new_pipeline_session_id()
+    resume_session = str(getattr(args, "resume_session", "") or "").strip()
+    if resume_session:
+        return resume_session
+    return os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip() or new_pipeline_session_id()
+
+
+def validate_pipeline_session_cli_args(args: argparse.Namespace) -> Optional[str]:
+    """Return an error message when session CLI flags are mutually incompatible."""
+    new_session = bool(getattr(args, "new_session", False))
+    resume_session = str(getattr(args, "resume_session", "") or "").strip()
+    force_rerun = bool(getattr(args, "force_rerun_steps", False))
+    if new_session and resume_session:
+        return "--new-session and --resume-session are mutually exclusive"
+    if resume_session and force_rerun:
+        return (
+            "--resume-session cannot be used with --force-rerun-steps; "
+            "resume reuses immutable batch manifests without sniper rewrite"
+        )
+    return None
+
+
+def _format_streaming_preflight_fail_text(conflict: Any) -> str:
+    payload = conflict.to_dict()
+    lines = [
+        "preflight_streaming_session: STREAMING_SESSION_REUSE_REQUIRES_NEW_SESSION",
+        f"session_id={payload['session_id']}",
+        f"batch_index={payload['batch_index']}",
+        f"manifest_fingerprint={payload['manifest_fingerprint']}",
+        f"current_sniper_fingerprint={payload['current_sniper_fingerprint']}",
+        f"remediation={payload['remediation']}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _write_streaming_preflight_failure(
+    *,
+    conflict: Any,
+    fail_path: Path,
+    slo_tracker: PipelineSloTracker,
+    pipeline_session_id: str,
+    pipeline_mode: str,
+) -> int:
+    reason = conflict.failure_reason()
+    fail_path.write_text(_format_streaming_preflight_fail_text(conflict), encoding="utf-8")
+    slo_tracker.mark_failed("preflight_streaming_session", reason)
+    slo_tracker.write(
+        session_id=pipeline_session_id,
+        pipeline_mode=pipeline_mode,
+        streaming_failure=conflict.to_dict(),
+    )
+    print(f"ERROR: {reason}", flush=True)
+    return 2
+
+
 def _step_slo_probe_metrics(step_name: str) -> dict[str, Any]:
     if "m8_1_stable_anchor" not in step_name:
         return {}
@@ -2647,10 +2705,13 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         )
         return CROSS_CHAIN_RESEARCH_BLOCKED_EXIT
 
-    pipeline_session_id = (
-        os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip() or new_pipeline_session_id()
-    )
+    pipeline_session_id = resolve_pipeline_session_id(args)
     os.environ[ENV_PIPELINE_SESSION_ID] = pipeline_session_id
+
+    session_cli_error = validate_pipeline_session_cli_args(args)
+    if session_cli_error:
+        print(f"ERROR: {session_cli_error}", flush=True)
+        return 2
 
     steps = build_project_pipeline_steps(args)
     step_names = [str(step["name"]) for step in steps]
@@ -2680,6 +2741,25 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
         except FileNotFoundError:
             pass
 
+    force_rerun = bool(getattr(args, "force_rerun_steps", False))
+    if streaming and force_rerun and not getattr(args, "dry_run", False):
+        from m8.discovery.streaming_handoff import detect_streaming_force_rerun_conflict
+
+        batch_count = int(os.environ.get(ENV_STREAMING_FINAL_BATCH_INDEX, "0") or "0")
+        if batch_count > 0:
+            conflict = detect_streaming_force_rerun_conflict(
+                pipeline_session_id,
+                range(1, batch_count + 1),
+            )
+            if conflict is not None:
+                return _write_streaming_preflight_failure(
+                    conflict=conflict,
+                    fail_path=fail_path,
+                    slo_tracker=slo_tracker,
+                    pipeline_session_id=pipeline_session_id,
+                    pipeline_mode=pipeline_mode,
+                )
+
     if not getattr(args, "dry_run", False):
         cleared = _clear_stale_fail_markers(pipeline_mode, step_names)
         if cleared:
@@ -2694,7 +2774,6 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
     print(f"Project pipeline: {args.pipeline} steps={len(steps)} log={log_path}")
     if getattr(args, "dry_run", False):
         _print_rpc_policy_table(steps)
-    force_rerun = bool(getattr(args, "force_rerun_steps", False))
     with log_path.open("a", encoding="utf-8", buffering=1) as log_fh:
         log_fh.write(f"=== start_pipeline mode={args.pipeline} ===\n")
         log_fh.write(f"pipeline_session_id={pipeline_session_id}\n")
@@ -3148,6 +3227,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Ignore per-step .done markers under data/tmp/start_pipeline_steps/",
+    )
+    ap.add_argument(
+        "--new-session",
+        action="store_true",
+        default=False,
+        help="Start a fresh pipeline session id instead of reusing ARBY_PIPELINE_SESSION_ID",
+    )
+    ap.add_argument(
+        "--resume-session",
+        default=None,
+        metavar="SESSION_ID",
+        help="Explicitly resume an existing streaming session without forced sniper rerun",
     )
     ap.add_argument(
         "--pipeline-log",
