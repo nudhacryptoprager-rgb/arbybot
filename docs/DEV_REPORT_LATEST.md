@@ -3,92 +3,69 @@
 ## 0) Meta
 timestamp_utc: 2026-07-08T08:18:55
 canonical_rolling_timestamp: 2026-07-08T08:18:55
-smoke_run_timestamp: 2026-07-26T14:31:13Z
-fresh_bundle_session_id: 2026-07-26T13:04:06Z
-fresh_bundle_result: COMPLETED_EXIT_0
-fresh_bundle_elapsed_s: 8268
-goal_status: IN_PROGRESS
-primary_blocker: ECON_RPC_QUOTE_NOT_ATTEMPTED
-prior_blocker_resolved: M8_SELF_TEST_SKIPPED_FALSE_BLOCKER_ON_VALID_STREAMING_CHECKPOINT
-runtime_smoke: session 2026-07-26T13:04:06Z — M8 batches 1-3 PASS; truth gates PASS; M9 shadow ran; economics NOT proven
-economics_claim: NOT_PROVEN
-docs_reread_confirmed: true
-run_id: m8-self-test-checkpoint-contract-fix-2026-07-26
-mode: self_test_source artifact field, checkpoint-aware health gate, session-namespaced effective inventory
-config: config/exotic_base_anchor.yaml
-pipeline_log: data/tmp/m8_m9_batch62_retry.log
 rolling_run_dir: data/runs/ci_m5_gate_arbitrum_one_20260708_101645_712808
+session_patch_timestamp_utc: 2026-07-26T17:30:00Z
+goal_status: IN_PROGRESS
+primary_blocker_of_session: P0_CAPACITY_CONTRACT_AND_QUARANTINE_TRACE_EDGE_CASES
+runtime_validation: NOT RUN
+docs_reread_confirmed: true
+run_id: m9-p0-capacity-contract-quarantine-trace-fix-2026-07-26
+mode: P0 fail-close + quarantine trace/TTL patch-set (iteration 3)
+config: config/exotic_base_anchor.yaml
+prior_bundle_session_id: 2026-07-26T13:04:06Z
 
 ## Session Completion
-session_goal: run fresh M8→M9 bundle after checkpoint self-test contract fix
+session_goal: перевірити другу P0 integration-ітерацію
 goal_status: IN_PROGRESS
-primary_blocker_of_session: ECON_RPC_QUOTE_NOT_ATTEMPTED
-blocker_status_after: M8 batch-2 false blocker resolved; pipeline completed exit=0; M9 lane acceptance BLOCKED on admission/economics
+primary_blocker_of_session: P0_CAPACITY_CONTRACT_AND_QUARANTINE_TRACE_EDGE_CASES
 close_allowed: false
+remaining_blockers: fresh runtime evidence after P0 trace/TTL patch-set
 docs_reread_confirmed: true
 
-## Fresh bundle runtime (2026-07-26T13:04:06Z)
+## P0 patch-set (iteration 3)
 
-### Pipeline
-- exit_code: 0
-- elapsed: ~8268s (~2h18m)
-- SLO pipeline_status: completed
-- SLO failed_steps: []
+### Fixes applied
+1. `require_contract_binding` when capacity diagnostic doc is loaded (not gated on non-empty `cycle_contract_by_id`)
+2. `session_quarantine_filtered_cycle_ids` tracked in runner and passed to `capacity_scope`
+3. `SESSION_POOL_QUARANTINE` explicit `block_reason` in `capacity_contract_trace` (not contract mismatch)
+4. Session quarantine filter runs before `shadow_selected_cycle_ids` admission
+5. `load_session_pool_quarantine_addresses()` skips expired `retry_after_utc` entries
+6. `cycle_contract_hash()` uses `<none>` marker for `None` (distinct from `0`)
+7. Incremental quarantine via `merge_pool_observations` + refresh on `new_results` only
+8. Lane acceptance + control dashboard counts for quarantine/contract-missing blockers
+9. `CAPACITY_CONTRACT_MISSING` added to deterministic reject statuses
 
-### M8 sniper batches
-| step | exit | notes |
-|------|------|-------|
-| m8_sniper_acceptance_batch_1 | 0 | self-test live; checkpoint written |
-| m8_sniper_acceptance_batch_2 | 0 | **was exit=5 before fix**; checkpoint skip |
-| m8_sniper_acceptance_batch_3 | 0 | checkpoint skip |
+### Target files
+- `m9/graph_arb/runner.py`
+- `m9/graph_arb/artifacts.py`
+- `m9/graph_arb/pool_scorecard.py`
+- `m9/graph_arb/depth_contract.py`
+- `scripts/m9_lane_acceptance_report.py`
+- `api/control_projection.py`
+- `tests/unit/test_m9_p0_integration_wiring.py`
+- `tests/unit/test_depth_contract_cycle_verdict.py`
 
-### Checkpoint contract (batch 2 fix verified)
-- checkpoint: `data/tmp/m8_sniper_streaming_checkpoint_2026-07-26T13_04_06Z.json`
-- schema: `m8_sniper_checkpoint.2`
-- session_id match: yes (`2026-07-26T13:04:06Z`)
-- rolling sniper `self_test_source`: `checkpoint`
-- rolling sniper `reasons`: [] (no `SELF_TEST_SKIPPED`)
-- `m8_health.goal_status`: REACHED
-- `m8_health.blockers`: []
-- metrics: rpc_errors=0/36, ws_connected=true, ws_subscriptions=12, candidates=33
+## Verification (same session)
 
-### Session namespace (Batch 6.2)
-- effective_inventory_path: `data/tmp/m9_effective_execution_inventory_2026-07-26T13_04_06Z.json`
-- no `_unknown` path observed
-- session_id aligned across checkpoint, truth gates, effective inventory
+```powershell
+py -3.11 -m pytest tests/unit/test_quoter_transport_dispatch.py tests/unit/test_m9_p0_integration_wiring.py tests/unit/test_reject_cache_post_depth_hash.py tests/unit/test_depth_contract_cycle_verdict.py tests/unit/test_pool_scorecard_toxic_stable.py tests/unit/test_m9_runner_universe_integration.py -q
+# 38 passed
 
-### Truth gates
-| phase | truth_status | blockers |
-|-------|--------------|----------|
-| upstream (final) | PASS | [] |
-| bundle | PASS | [] |
-| post_depth | PASS | [] |
+py -3.11 scripts/check_repo_safety.py
+# PASS
 
-### M9 shadow / economics
-- shadow exit: 0
-- cycles_found: 2468
-- cycles_quoteable: 0
-- qsr: 0.8841
-- econ_rpc_quote_attempts: 0
-- depth_known_rate (post broad enrich): 0.7597
-- active_routes: 129
+git diff --check
+# PASS
 
-### M9 lane acceptance
-- report goal_status: BLOCKED
-- m8_2_upstream: REACHED
-- m9_blockers: CAPACITY_VALID_CYCLES_NOT_QUOTED_IN_SHADOW, CODE_OR_POLICY_ADMISSION_BLOCKED_BEFORE_ECONOMIC_QUOTE, DISCOVERY_QSR_NOT_QUOTE_HEALTH, ECON_RPC_QUOTES_ZERO, ECON_RPC_QUOTE_NOT_ATTEMPTED, FOUR_LEG_PRODUCTIVE_COVERAGE_ZERO, FRESH_LONG_TAIL_QUOTE_READY_ZERO, NO_CROSS_MECHANIC_CYCLES_QUOTEABLE, NO_QUOTEABLE_CYCLES
+py -3.11 scripts/check_quality_ratchet.py --pip-audit
+# PASS
 
-## Code changes (checkpoint self-test contract)
+py -3.11 scripts/ci_full_pipeline.py --mode ci
+# ALL REQUIRED GATES PASSED; collected 7396 items; 7357 passed, 39 skipped
+```
 
-1. `m8/runtime/smoke_run.py` — `self_test_source` live|checkpoint|skipped_unverified
-2. `monitoring/sniper_health.py` — block only `skipped_unverified`
-3. `monitoring/sniper_artifacts.py` — artifact field `self_test_source`
-4. Tests: `test_m8_sniper_health.py` — batch 1→2 integration
+### NOT RUN
+- Fresh M8→M9 bundle (scheduled immediately after commit in this session)
+- `scripts/m8_m9_runtime_truth_gate.py --phase post_depth` on new session
 
-Status files not updated.
-
-## Verification
-
-- targeted tests: 23 PASS
-- full CI: 7320 passed, 39 skipped
-- fresh bundle: COMPLETED exit=0 (session 2026-07-26T13:04:06Z)
+Status files (`Status_M8*.md`, `Status_M9.md`) not updated — no fresh runtime evidence yet.

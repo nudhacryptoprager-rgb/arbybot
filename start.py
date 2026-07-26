@@ -239,19 +239,53 @@ PATIENT_LANE_DIAGNOSTIC_PATH = Path("data/tmp/m8_patient_lane_diagnostics_latest
 HOT_LOOP_EVENT_INTERVAL_S = 300
 
 
-def _fresh_quote_ready_count() -> int:
-    """Event-trigger gate: M9 depth/capacity only when fresh long-tail quote-ready > 0."""
+def _fresh_quote_ready_count(*, bridge_path: Path | None = None) -> int:
+    """Event-trigger gate: M9 depth/capacity only when fresh long-tail quote-ready > 0.
+
+    When ``ENV_PIPELINE_SESSION_ID`` is set, the bridge ``session_id`` must match.
+    """
+    from core.pipeline_provenance import pipeline_session_id
+    from m9.graph_arb.bridge_canonical import PRODUCTION_BRIDGE_PATH
+
+    pipeline_sid = pipeline_session_id()
+
+    def _session_bound_count(doc: dict) -> int:
+        bsm = doc.get("bridge_source_metrics") or {}
+        count = int(bsm.get("fresh_long_tail_quote_ready_tokens") or 0)
+        session = (
+            doc.get("session_id")
+            or bsm.get("session_id")
+            or (doc.get("run_context") or {}).get("pipeline_session_id")
+        )
+        if count <= 0 or not session:
+            return 0
+        if pipeline_sid and str(session) != str(pipeline_sid):
+            return 0
+        return count
+
+    try:
+        path = bridge_path or Path(PRODUCTION_BRIDGE_PATH)
+        if path.is_file():
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            count = _session_bound_count(doc)
+            if count > 0:
+                return count
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
     for path in (Path(M9_TTM_NARROW_BRIDGE), TIME_TO_MIRROR_SLA_PATH):
         if not path.is_file():
             continue
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
-            count = int(doc.get("fresh_long_tail_quote_ready_tokens") or 0)
+            count = _session_bound_count(doc)
             if count > 0:
                 return count
             funnel = doc.get("mirror_yield_funnel") or {}
             count = int(funnel.get("fresh_long_tail_quote_ready_tokens") or 0)
-            if count > 0:
+            session = doc.get("session_id") or (doc.get("run_context") or {}).get(
+                "pipeline_session_id"
+            )
+            if count > 0 and session and (not pipeline_sid or str(session) == str(pipeline_sid)):
                 return count
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             continue
@@ -271,14 +305,14 @@ def _resolve_m9_effective_inventory_materialize_env() -> dict[str, str]:
     }
 
 
-def _resolve_m9_shadow_step_env() -> dict[str, str]:
+def _resolve_m9_shadow_step_env(*, bridge_path: Path | None = None) -> dict[str, str]:
     """Capacity-prioritized shadow with explicit lane mode for economics verdict."""
     from m9.graph_arb.effective_inventory import (
         ENV_ALLOW_LIVE_MATERIALIZE,
         resolve_effective_inventory_path,
     )
 
-    fresh = _fresh_quote_ready_count()
+    fresh = _fresh_quote_ready_count(bridge_path=bridge_path)
     env = {
         "ARBY_M9_CAPACITY_PRIORITIZED": "1",
         "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
@@ -1273,8 +1307,10 @@ def _run_pipeline_step_subprocess(
     cmd = _resolve_streaming_step_cmd(step, list(step["cmd"]))
     env = os.environ.copy()
     base_env = dict(step.get("env") or {})
-    if name in {"m9_shadow_10m", "m9_patient_shadow_10m"}:
-        base_env.update(_resolve_m9_shadow_step_env())
+    if name in {"m9_shadow_10m", "m9_patient_shadow_10m", "m9_capacity_diagnostic"}:
+        from m9.graph_arb.bridge_canonical import PRODUCTION_BRIDGE_PATH
+
+        base_env.update(_resolve_m9_shadow_step_env(bridge_path=Path(PRODUCTION_BRIDGE_PATH)))
     env.update(base_env)
     pipeline_sid = os.environ.get(ENV_PIPELINE_SESSION_ID, "").strip()
     if pipeline_sid:

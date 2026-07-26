@@ -611,6 +611,7 @@ def probe_route_marginal_depth(
         marginal_impact,
         merge_depth_with_analytical,
         merge_ladder_results,
+        probe_ladder_usd_for_impact,
         v2_analytical_depth_usd,
         v3_liquidity_depth_lower_bound_usd,
     )
@@ -810,10 +811,6 @@ def probe_route_marginal_depth(
         result["probe_error"] = "REF_QUOTE_FAILED"
         return result
 
-    ladder = list(PROBE_LADDER_USD)
-    if probe_size_usd not in ladder:
-        ladder = sorted(set(ladder + [float(probe_size_usd)]))
-
     def _amount_in_for_usd(usd: float) -> int:
         return int(usd / anchor_price * (10 ** anchor_dec))
 
@@ -825,6 +822,21 @@ def probe_route_marginal_depth(
         if out is None:
             return None
         return amt_in, out
+
+    first_probe = _quote_usd(float(PROBE_LADDER_USD[0]))
+    first_impact: Optional[float] = None
+    if first_probe is not None:
+        probe_in, probe_out = first_probe
+        first_impact = marginal_impact(ref_in, ref_out, probe_in, probe_out)
+
+    ladder = list(
+        probe_ladder_usd_for_impact(
+            first_impact,
+            thin_candidate=bool(route.get("thin_liquidity_candidate")),
+        )
+    )
+    if probe_size_usd not in ladder:
+        ladder = sorted(set(ladder + [float(probe_size_usd)]))
 
     rung_results: List[Dict[str, Any]] = []
     prev_low_usd: Optional[float] = None

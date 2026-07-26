@@ -490,6 +490,15 @@ class ControlProjectionBuilder:
                 else None,
                 "capacity_quoted_rate": round(cap_quoted / cap_valid, 4) if cap_valid else None,
                 "econ_rpc_quote_attempts": econ_rpc,
+                "session_quarantine_filtered_count": int(
+                    scan_scope.get("session_quarantine_filtered_count") or 0
+                ),
+                "deterministic_reject_cache_hit_count": int(
+                    scan_scope.get("deterministic_reject_cache_hit_count") or 0
+                ),
+                "capacity_contract_missing_count": int(
+                    scan_scope.get("capacity_contract_missing_count") or 0
+                ),
             },
             "economics_not_yet_tested": economics_not_yet_tested,
             "reason_histogram": reason_histogram,

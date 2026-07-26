@@ -244,8 +244,9 @@ def _get_provider_throttle_snapshot() -> "dict | None":
 def _connect_rpc(chain: str) -> "object | None":
     """Attempt to connect to the chain RPC. Returns Web3 instance or None."""
     try:
-        from core.rpc_urls import get_rpc_url  # type: ignore[import]
         from web3 import Web3  # type: ignore[import]
+
+        from core.rpc_urls import get_rpc_url  # type: ignore[import]
 
         url = get_rpc_url(chain)
         w3 = Web3(Web3.HTTPProvider(url))
@@ -326,9 +327,10 @@ def _write_revert_quarantine(
     no liquidity/hooks often manifest as RPC-level errors rather than EVM reverts.
     """
     import json as _json
-    from datetime import datetime as _dt, timezone as _tz
-    from pathlib import Path as _Path
     from collections import defaultdict as _dd
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+    from pathlib import Path as _Path
 
     # Accumulate per-route leg error counts
     from m9.graph_arb.quote_reject_classify import (
@@ -434,7 +436,8 @@ def _write_phantom_quarantine(
     """Persist pools that produced PHANTOM_QUOTE_BPS_OVERFLOW cycle rejects."""
     import json as _json
     from collections import Counter as _Counter
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
     from pathlib import Path as _Path
 
     pool_counts: "_Counter[str]" = _Counter()
@@ -768,14 +771,14 @@ def main(argv: "list[str] | None" = None) -> int:
 
 
 def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
-    import logging
-    from m9.graph_arb.builder import (
-        build_graph_from_inventory, graph_token_count, graph_edge_count, graph_route_count,
-        extract_inventory_stats, best_inventory_path,
-    )
-    from m9.graph_arb.finder import find_cycles, analyze_topology, rank_cycles
-    from m9.graph_arb.topology_diagnostic import count_cycles_by_length
     from m9.graph_arb.artifacts import build_artifact, write_artifact
+    from m9.graph_arb.builder import (
+        best_inventory_path,
+        build_graph_from_inventory,
+        extract_inventory_stats,
+    )
+    from m9.graph_arb.finder import analyze_topology, find_cycles, rank_cycles
+    from m9.graph_arb.topology_diagnostic import count_cycles_by_length
 
     # Safe for minimal argparse.Namespace in gate/regression tests (no parser defaults).
     duration_minutes = float(
@@ -801,6 +804,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 "cycles_at_production_floor": int(
                     _cap_doc.get("cycles_at_production_floor") or 0
                 ),
+                "cycle_contract_by_id": dict(_cap_doc.get("cycle_contract_by_id") or {}),
+                "cycle_capacity_verdicts": list(_cap_doc.get("cycle_capacity_verdicts") or []),
             }
         elif getattr(args, "require_cycles_at_floor", False):
             log.error("SHADOW_CAPACITY_GATE: capacity diagnostic missing: %s", cap_path)
@@ -850,7 +855,6 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     def _write_runner_preflight(status: str, detail: str = "") -> None:
         """Mark run start so killed/background launches are detectable in artifact."""
-        import json as _pf_json
 
         pre = {
             "schema_family": "m9_graph_arb",
@@ -1114,7 +1118,6 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         with open(inventory_path, encoding="utf-8") as _inv_fh:
             _inv_raw = _json_bridge.load(_inv_fh)
         from m9.graph_arb.cycle_lane_prefilter import build_route_metadata_from_routes
-
         from m9.graph_arb.verified_mirror import (
             direct_sniper_pool_addrs,
             verified_mirror_pool_addrs,
@@ -1257,6 +1260,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _cycles_after_quarantine: Optional[int] = None
     _discovery_cycles_found: "Optional[int]" = None
     _discovery_cycles_by_length: "Optional[Dict[str, int]]" = None
+    _runner_sid: Optional[str] = None
+    _session_quarantine_pools: Set[str] = set()
     _depth_hard_pools: "frozenset[str]" = frozenset()
     _diag_admission_mode: Optional[str] = None
     if _lane == "productive":
@@ -1264,12 +1269,33 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
         _diag_admission_mode = get_diagnostic_admission_mode()
         import json as _q_json
-        from m9.graph_arb.diagnostic_quarantine import build_quarantine_plan, get_diagnostic_quarantine_mode
+
+        from m9.graph_arb.diagnostic_quarantine import (
+            build_quarantine_plan,
+            get_diagnostic_quarantine_mode,
+        )
         from m9.graph_arb.pool_depth_filter import load_quarantined_pool_addresses
 
         _quarantine_path = getattr(args, "pool_quarantine_path", "data/quarantine/m9_pool_depth_quarantine.json")
         _depth_hard_pools = load_quarantined_pool_addresses(_quarantine_path, hard_only=True) or frozenset()
         _depth_quarantine_skipped = len(_depth_hard_pools)
+
+        from m9.graph_arb.pool_scorecard import load_session_pool_quarantine_addresses
+        from m9.graph_arb.universe_contract import resolve_session_id
+
+        _runner_sid = resolve_session_id(getattr(args, "session_id", None))
+        _session_quarantine_pools = (
+            load_session_pool_quarantine_addresses(_runner_sid)
+            if _runner_sid
+            else set()
+        )
+        if _session_quarantine_pools:
+            _depth_hard_pools = frozenset(set(_depth_hard_pools) | _session_quarantine_pools)
+            log.info(
+                "Session pool quarantine: merged %d pools from session %s",
+                len(_session_quarantine_pools),
+                _runner_sid,
+            )
 
         _rq_data: Optional[Dict[str, Any]] = None
         _pq_data: Optional[Dict[str, Any]] = None
@@ -1995,8 +2021,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Deadline-aware quote loop: run sweeps until wall-clock deadline expires.
     # Each sweep quotes a batch of max_cycles_per_sweep cycles, then writes a
     # partial artifact so the rolling artifact stays fresh even mid-soak.
-    from m9.graph_arb.quoter import schedule_cycle_quotes
     from m9.graph_arb.quote_timeline import QuoteTimelineTracker
+    from m9.graph_arb.quoter import schedule_cycle_quotes
 
     _quote_timeline = QuoteTimelineTracker()
     deadline = started_at + duration_minutes * 60.0
@@ -2021,8 +2047,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Step 8: Provider router — primary + optional secondary RPC with 429 failover.
     # Use from_env() so BASE_RPC_POOL / ARBY_USE_PUBLIC_POOL are picked up automatically.
     # Pass secondary from CLI/ENV; extras pool comes from from_env() via the factory.
-    from m9.graph_arb.provider_router import ProviderRouter
     from core.rpc_urls import iter_public_http_fallbacks
+    from m9.graph_arb.provider_router import ProviderRouter
     _secondary_rpc = getattr(args, "secondary_rpc", None) or os.environ.get("BASE_RPC_SECONDARY")
     _chain_name = getattr(args, "chain", "base") or "base"
     _extras_pool: list = []
@@ -2059,10 +2085,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _prequote_enabled = not getattr(args, "no_prequote", False) and bool(rpc_url)
     _prequote_min_bps: float = getattr(args, "prequote_min_bps", -500.0)
     if _prequote_enabled:
-        from m9.graph_arb.multicall_snapshot import snapshot_pool_states as _snapshot_pool_states
+        from m9.graph_arb.multicall_snapshot import get_adaptive_chunk_scale as _get_chunk_scale
         from m9.graph_arb.multicall_snapshot import get_multicall_stats as _get_multicall_stats
         from m9.graph_arb.multicall_snapshot import reset_multicall_stats as _reset_multicall_stats
-        from m9.graph_arb.multicall_snapshot import get_adaptive_chunk_scale as _get_chunk_scale
+        from m9.graph_arb.multicall_snapshot import snapshot_pool_states as _snapshot_pool_states
         from m9.graph_arb.v3_prequote import should_skip_cycle as _should_skip_cycle
         _reset_multicall_stats()  # start fresh for this run
         log.info(
@@ -2076,6 +2102,43 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         _get_chunk_scale = lambda: None  # type: ignore[assignment]
 
     _total_prequote_skipped = 0
+    # Step 4 (P0): deterministic-reject cache. A frozen post-depth inventory
+    # produces identical DEPTH_BELOW_ECONOMICS_FLOOR / DEPTH_UNRESOLVED /
+    # structural-quarantine verdicts every sweep; recomputing them 297× wastes
+    # the entire RPC budget. Cache by (cycle_id, post_depth_content_hash,
+    # economics_profile, sizing_policy_version) for the run lifetime.
+    # Transient outcomes (RPC timeout, 429, provider failure) are NOT cached.
+    _DETERMINISTIC_REJECT_STATUSES = frozenset(
+        {
+            "DEPTH_BELOW_ECONOMICS_FLOOR",
+            "DEPTH_UNRESOLVED",
+            "DEPTH_BELOW_LIVENESS_FLOOR",
+            "TOKEN_DECIMALS_UNKNOWN",
+            "UNKNOWN_PRICE",
+            "ZERO_AMOUNT_IN",
+            "LEG_CAPACITY_REJECT",
+            "CAPACITY_CONTRACT_MISMATCH",
+            "CAPACITY_CONTRACT_MISSING",
+        }
+    )
+    _reject_cache: "Dict[str, CycleQuoteResult]" = {}
+    _post_depth_hash = ""
+    try:
+        from m9.graph_arb.effective_inventory import build_route_universe_identity
+
+        _post_depth_hash = str(
+            (build_route_universe_identity(inventory_path) or {}).get("post_depth_content_hash")
+            or ""
+        )
+    except Exception:
+        _post_depth_hash = ""
+    _cache_key_parts = (
+        _post_depth_hash,
+        str(getattr(_cost_model, "get", lambda *a: {})("active_economics_profile") or ""),
+        os.environ.get("ARBY_M9_SIZING_POLICY_VERSION", "1"),
+    )
+    _cycle_contract_by_id = dict(_capacity_scope.get("cycle_contract_by_id") or {})
+    _require_contract_binding = bool(cap_path_str and _cap_doc is not None)
     # Step 9 (GPT fix): 429-adaptive prequote threshold.
     # When multicall 429 rate spikes (>=10 per sweep), raise _prequote_min_bps to shed load.
     # After 5 stable sweeps (delta_429 < 5 each), relax back toward original value.
@@ -2096,6 +2159,9 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _last_quote_rpc: "Optional[str]" = rpc_url
     # Step 4 (GPT session-14): Collect per-sweep active RPC netloc for artifact traceability.
     _active_rpc_by_sweep: "Dict[int, str]" = {}
+    _deterministic_cache_hit_cycle_ids: Set[str] = set()
+    _session_quarantine_filtered_cycle_ids: Set[str] = set()
+    _pool_observations: Dict[str, Any] = {}
 
     while time.monotonic() < deadline:
         if _cycle_scheduler is not None:
@@ -2129,6 +2195,27 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
                 # cycle_count < max_per_sweep — all cycles covered in one sweep
                 if sweep_num > 0:
                     break
+
+        if _session_quarantine_pools:
+            _sq_before = len(batch)
+            _sq_kept = []
+            for _cyc in batch:
+                if any(
+                    str(getattr(_edge, "pool_address", "") or "").lower()
+                    in _session_quarantine_pools
+                    for _edge in _cyc.edges
+                ):
+                    _session_quarantine_filtered_cycle_ids.add(_cyc.cycle_id)
+                else:
+                    _sq_kept.append(_cyc)
+            batch = _sq_kept
+            if len(batch) != _sq_before:
+                log.debug(
+                    "Session quarantine filtered %d/%d cycles (sweep %d)",
+                    _sq_before - len(batch),
+                    _sq_before,
+                    sweeps_completed + 1,
+                )
 
         for _c in batch:
             _selected_shadow_cycle_ids.add(_c.cycle_id)
@@ -2203,15 +2290,56 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         if _depth_skipped:
             all_results.extend(_depth_skipped)
-        from m9.graph_arb.cycle_capacity import is_econ_rpc_quote_attempt
+        from m9.graph_arb.cycle_capacity import (
+            apply_economics_capacity_gate,
+            is_econ_rpc_quote_attempt,
+        )
 
         _econ_floor_for_timeline = 180.0
         if _cost_model:
             from m9.graph_arb.size_truth import active_economics_floor_usd
 
             _econ_floor_for_timeline = active_economics_floor_usd(_cost_model)
-        new_results = schedule_cycle_quotes(
+        _econ_gated_batch, _econ_skipped, _econ_gate_meta = apply_economics_capacity_gate(
             _depth_gated_batch,
+            _econ_floor_for_timeline,
+            contract_by_cycle_id=_cycle_contract_by_id or None,
+            require_contract_binding=_require_contract_binding,
+        )
+        if _econ_skipped:
+            all_results.extend(_econ_skipped)
+        if _econ_gate_meta.get("contract_mismatches") or _econ_gate_meta.get("contract_missing"):
+            log.error(
+                "CAPACITY_CONTRACT_MISMATCH cycles=%s missing=%s",
+                _econ_gate_meta.get("contract_mismatches"),
+                _econ_gate_meta.get("contract_missing"),
+            )
+        # Step 4 (P0): serve deterministic rejects from cache. Split the batch
+        # into cached (skip RPC) and live (still quote) subsets. Cached rows
+        # are appended to all_results exactly once per (cycle_id, policy) so
+        # downstream metrics see the verdict without 297× recompute.
+        _live_batch: list = []
+        _cache_hits_this_sweep = 0
+        for _cyc in _econ_gated_batch:
+            _key = "|".join(
+                (
+                    _cyc.cycle_id,
+                    *_cache_key_parts,
+                )
+            )
+            _cached = _reject_cache.get(_key)
+            if _cached is not None and _cached.status in _DETERMINISTIC_REJECT_STATUSES:
+                _deterministic_cache_hit_cycle_ids.add(_cyc.cycle_id)
+                _cache_hits_this_sweep += 1
+                continue
+            _live_batch.append(_cyc)
+        if _cache_hits_this_sweep:
+            log.debug(
+                "Deterministic-reject cache: %d/%d cycles served from cache (sweep %d)",
+                _cache_hits_this_sweep, len(_econ_gated_batch), sweeps_completed + 1,
+            )
+        new_results = schedule_cycle_quotes(
+            _live_batch,
             w3=w3,
             sizes_usd=tuple(args.sizes_usd),
             timeout_s=getattr(args, "quote_timeout_s", 10.0),
@@ -2226,6 +2354,32 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             queue_delay_s=time.monotonic() - started_at,
         )
         all_results.extend(new_results)
+        if _lane == "productive" and _runner_sid and new_results:
+            from m9.graph_arb.pool_scorecard import (
+                merge_pool_observations,
+                refresh_session_pool_quarantine,
+            )
+
+            merge_pool_observations(_pool_observations, new_results)
+            _session_quarantine_pools = refresh_session_pool_quarantine(
+                new_results,
+                session_id=_runner_sid,
+                observations=_pool_observations,
+            )
+        # Step 4 (P0): populate the deterministic-reject cache from this sweep's
+        # outcomes. Only structural/policy statuses are cached — transient
+        # failures (QUOTE_FAILED, CYCLE_QUOTE_TIMEOUT, RPC errors) stay live so
+        # a flaky provider does not permanently condemn a cycle.
+        for qr in new_results:
+            if qr.status in _DETERMINISTIC_REJECT_STATUSES and getattr(qr, "cycle", None) is not None:
+                _key = "|".join(
+                    (
+                        qr.cycle.cycle_id,
+                        *_cache_key_parts,
+                    )
+                )
+                if _key not in _reject_cache:
+                    _reject_cache[_key] = qr
         for qr in new_results:
             if is_econ_rpc_quote_attempt(qr, _econ_floor_for_timeline):
                 if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS"):
@@ -2610,6 +2764,12 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         capacity_scope={
             **_capacity_scope,
             "shadow_selected_cycle_ids": sorted(_selected_shadow_cycle_ids),
+            "deterministic_reject_cache_hit_cycle_ids": sorted(
+                _deterministic_cache_hit_cycle_ids
+            ),
+            "session_quarantine_filtered_cycle_ids": sorted(
+                _session_quarantine_filtered_cycle_ids
+            ),
         },
         quote_timeline=_quote_timeline.to_scan_scope(),
     )

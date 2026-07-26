@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from m9.graph_arb.adapter_families import route_family
 from m9.graph_arb.finder import find_cycles
-from m9.graph_arb.models import GraphCycle, GraphEdge
+from m9.graph_arb.models import GraphCycle, GraphEdge, CycleQuoteResult
 from m9.graph_arb.per_dex_sizing import depth_fraction_for_family
 from m9.graph_arb.size_truth import (
     economic_size_floor_for_profile,
@@ -23,6 +23,13 @@ _ECON_GATE_ONLY_STATUSES = frozenset(
         "LEG_CAPACITY_REJECT",
     }
 )
+
+_VERDICT_TO_STATUS = {
+    "ready": None,
+    "below_economics_floor": "DEPTH_BELOW_ECONOMICS_FLOOR",
+    "unknown_depth": "DEPTH_UNRESOLVED",
+    "empty_cycle": "DEPTH_UNRESOLVED",
+}
 
 
 def edge_usable_capacity_usd(edge: GraphEdge) -> Optional[float]:
@@ -397,6 +404,110 @@ def production_conservative_floor(
     return economic_size_floor_for_profile(cm, "production_conservative")
 
 
+def synthetic_economics_capacity_reject(
+    cycle: GraphCycle,
+    verdict: Any,
+    *,
+    economics_floor_usd: float,
+) -> "CycleQuoteResult":
+    """Build a pre-RPC reject row from a :class:`CycleCapacityVerdict`."""
+    from m9.graph_arb.depth_contract import REASON_UNKNOWN_DEPTH
+    from m9.graph_arb.depth_telemetry import REJECT_DEPTH_BELOW_ECONOMICS_FLOOR
+    from m9.graph_arb.models import CycleQuoteResult
+
+    reason = str(getattr(verdict, "reason", "") or "")
+    if reason == REASON_UNKNOWN_DEPTH:
+        status = "DEPTH_UNRESOLVED"
+        reject_reason = "DEPTH_UNRESOLVED"
+    else:
+        status = "DEPTH_BELOW_ECONOMICS_FLOOR"
+        reject_reason = REJECT_DEPTH_BELOW_ECONOMICS_FLOOR
+    return CycleQuoteResult(
+        cycle=cycle,
+        size_usd=float(economics_floor_usd),
+        amount_in=0,
+        amount_out=0,
+        gross_bps=0.0,
+        status=status,
+        reject_reason=reject_reason,
+        leg_results=[],
+        elapsed_s=0.0,
+        cycle_min_depth_usd=getattr(cycle, "min_effective_depth_usd", None),
+        rpc_dispatched=False,
+        transport_call_count=0,
+    )
+
+
+def apply_economics_capacity_gate(
+    cycles: List[GraphCycle],
+    economics_floor_usd: float,
+    *,
+    contract_by_cycle_id: Optional[Dict[str, str]] = None,
+    require_contract_binding: bool = False,
+) -> Tuple[List[GraphCycle], List[CycleQuoteResult], Dict[str, Any]]:
+    """Partition cycles by canonical economics-capacity verdict before RPC."""
+    from m9.graph_arb.depth_contract import (
+        cycle_contract_hash,
+        evaluate_cycle_economic_capacity,
+    )
+
+    quote_batch: List[GraphCycle] = []
+    skipped: List[CycleQuoteResult] = []
+    verdicts: Dict[str, Any] = {}
+    mismatches: List[str] = []
+    missing: List[str] = []
+    expected = contract_by_cycle_id or {}
+
+    def _contract_reject(cycle: GraphCycle, *, reason: str) -> CycleQuoteResult:
+        return CycleQuoteResult(
+            cycle=cycle,
+            size_usd=float(economics_floor_usd),
+            amount_in=0,
+            amount_out=0,
+            gross_bps=0.0,
+            status="CAPACITY_CONTRACT_MISMATCH",
+            reject_reason=reason,
+            leg_results=[],
+            elapsed_s=0.0,
+            rpc_dispatched=False,
+            transport_call_count=0,
+        )
+
+    for cycle in cycles:
+        verdict = evaluate_cycle_economic_capacity(cycle, economics_floor_usd)
+        verdict_dict = verdict.to_dict()
+        verdict_dict["cycle_contract_hash"] = cycle_contract_hash(verdict)
+        verdicts[cycle.cycle_id] = verdict_dict
+        exp_hash = expected.get(cycle.cycle_id)
+        if require_contract_binding:
+            if not exp_hash:
+                missing.append(cycle.cycle_id)
+                skipped.append(_contract_reject(cycle, reason="CAPACITY_CONTRACT_MISSING"))
+                continue
+            if exp_hash != verdict_dict["cycle_contract_hash"]:
+                mismatches.append(cycle.cycle_id)
+                skipped.append(_contract_reject(cycle, reason="CAPACITY_CONTRACT_MISMATCH"))
+                continue
+        elif exp_hash and exp_hash != verdict_dict["cycle_contract_hash"]:
+            mismatches.append(cycle.cycle_id)
+            skipped.append(_contract_reject(cycle, reason="CAPACITY_CONTRACT_MISMATCH"))
+            continue
+        if verdict.ready:
+            quote_batch.append(cycle)
+        else:
+            skipped.append(
+                synthetic_economics_capacity_reject(
+                    cycle, verdict, economics_floor_usd=economics_floor_usd
+                )
+            )
+    meta = {
+        "verdicts": verdicts,
+        "contract_mismatches": mismatches,
+        "contract_missing": missing,
+    }
+    return quote_batch, skipped, meta
+
+
 def collect_cycles_at_floor(
     adjacency: Dict[str, Dict[str, List[GraphEdge]]],
     *,
@@ -727,6 +838,24 @@ def run_capacity_cycle_diagnostic(
         floor_usd=active_floor,
         max_cycles=max_cycles,
     )
+    from m9.graph_arb.depth_contract import (
+        cycle_contract_hash,
+        evaluate_cycle_economic_capacity,
+    )
+
+    cycle_capacity_verdicts: List[Dict[str, Any]] = []
+    verdict_qualified: List[GraphCycle] = []
+    for cycle in all_cycles:
+        verdict = evaluate_cycle_economic_capacity(cycle, active_floor)
+        row = verdict.to_dict()
+        row["cycle_contract_hash"] = cycle_contract_hash(verdict)
+        cycle_capacity_verdicts.append(row)
+        if verdict.ready:
+            verdict_qualified.append(cycle)
+    verdict_qualified_ids = {c.cycle_id for c in verdict_qualified}
+    capacity_valid_ids = [c.cycle_id for c in qualified if c.cycle_id in verdict_qualified_ids]
+    if not capacity_valid_ids:
+        capacity_valid_ids = [c.cycle_id for c in verdict_qualified]
 
     samples: List[Dict[str, Any]] = []
     for cycle in qualified[:sample_limit]:
@@ -787,7 +916,13 @@ def run_capacity_cycle_diagnostic(
         "cycles_at_econ_floor": cycles_at_active,
         "cycles_at_production_floor": cycles_at_prod,
         "cycles_at_econ_floor_by_length": by_length,
-        "capacity_valid_cycle_ids": [c.cycle_id for c in qualified],
+        "capacity_valid_cycle_ids": capacity_valid_ids,
+        "cycle_capacity_verdicts": cycle_capacity_verdicts,
+        "cycle_contract_by_id": {
+            row["cycle_id"]: row["cycle_contract_hash"]
+            for row in cycle_capacity_verdicts
+            if row.get("ready")
+        },
         "sample_cycles_at_econ_floor": samples,
         "blocker_hint": blocker_hint,
         "top_bottleneck_legs": top_legs,
@@ -804,6 +939,23 @@ def run_capacity_cycle_diagnostic(
             config_path=config_path,
         )
     return report
+
+
+def evaluate_cycle_economic_capacity(
+    cycle: GraphCycle,
+    economics_floor_usd: float,
+):
+    """Re-export of the canonical verdict from :mod:`depth_contract`.
+
+    Kept here so legacy callers (capacity diagnostic, runner) import from
+    ``cycle_capacity`` without churn.  New code should import from
+    ``m9.graph_arb.depth_contract`` directly.
+    """
+    from m9.graph_arb.depth_contract import (
+        evaluate_cycle_economic_capacity as _evaluate,
+    )
+
+    return _evaluate(cycle, economics_floor_usd)
 
 
 def is_econ_gate_attempt(qr: Any, econ_floor_usd: float) -> bool:
@@ -828,6 +980,8 @@ def is_econ_rpc_quote_attempt(qr: Any, econ_floor_usd: float) -> bool:
     sz = float(getattr(qr, "size_usd", 0.0) or 0.0)
     if sz < float(econ_floor_usd):
         return False
+    if bool(getattr(qr, "rpc_dispatched", False)):
+        return True
     status = str(getattr(qr, "status", "") or "")
     if status in _ECON_GATE_ONLY_STATUSES:
         return False

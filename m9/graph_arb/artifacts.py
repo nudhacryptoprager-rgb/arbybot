@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from m9.graph_arb.models import CycleQuoteResult, GraphTopology
@@ -1333,6 +1333,14 @@ def build_artifact(
                 if is_econ_rpc_quote_attempt(qr, _econ_floor_usd)
             }
         )
+        quoted_success_ids = sorted(
+            {
+                qr.cycle.cycle_id
+                for qr in cycle_results
+                if qr.cycle.cycle_id in set(quoted_ids)
+                and str(getattr(qr, "status", "")) in ("POSITIVE_GROSS", "NEGATIVE_GROSS")
+            }
+        )
         selected_ids = [
             str(cid)
             for cid in (capacity_scope.get("shadow_selected_cycle_ids") or [])
@@ -1341,6 +1349,101 @@ def build_artifact(
         overlap = len(set(cap_ids) & set(quoted_ids))
         scan_scope["capacity_valid_cycle_ids"] = cap_ids
         scan_scope["shadow_quoted_cycle_ids"] = quoted_ids
+        # Step 3 (P0): per-cycle capacity-runner contract trace. For every
+        # capacity-valid cycle we record whether it was selected by the shadow
+        # scheduler, whether an RPC quote was dispatched, and — if not — the
+        # precise pre-RPC block reason. This makes the impossible state
+        # (capacity_valid ∩ selected, quoted=∅) debuggable instead of silent.
+        _selected_set = set(selected_ids)
+        _quoted_set = set(quoted_ids)
+        _quoted_success_set = set(quoted_success_ids)
+        _cache_hit_ids = set(
+            capacity_scope.get("deterministic_reject_cache_hit_cycle_ids") or []
+        )
+        _session_quarantine_ids = set(
+            capacity_scope.get("session_quarantine_filtered_cycle_ids") or []
+        )
+        _EXPLAINED_PRE_RPC_BLOCKERS = frozenset(
+            {
+                "NOT_SELECTED_BY_SCHEDULER",
+                "DETERMINISTIC_REJECT_CACHE_HIT",
+                "SESSION_POOL_QUARANTINE",
+                "CAPACITY_CONTRACT_MISSING",
+                "CAPACITY_CONTRACT_MISMATCH",
+            }
+        )
+        _reject_by_cycle: Dict[str, str] = {}
+        for qr in cycle_results:
+            cyc = getattr(qr, "cycle", None)
+            if cyc is None or cyc.cycle_id not in set(cap_ids):
+                continue
+            if cyc.cycle_id in _quoted_set:
+                continue
+            status = str(getattr(qr, "status", "") or "")
+            if status in ("DEPTH_BELOW_ECONOMICS_FLOOR", "DEPTH_UNRESOLVED"):
+                _reject_by_cycle[cyc.cycle_id] = status
+            elif status == "DEPTH_BELOW_LIVENESS_FLOOR":
+                _reject_by_cycle[cyc.cycle_id] = status
+            elif status in ("TOKEN_DECIMALS_UNKNOWN", "UNKNOWN_PRICE", "ZERO_AMOUNT_IN"):
+                _reject_by_cycle[cyc.cycle_id] = status
+            elif status == "LEG_CAPACITY_REJECT":
+                _reject_by_cycle[cyc.cycle_id] = status
+            elif status == "CAPACITY_CONTRACT_MISMATCH":
+                _reject_by_cycle[cyc.cycle_id] = str(
+                    getattr(qr, "reject_reason", "") or status
+                )
+            elif status in ("QUOTE_FAILED", "CYCLE_QUOTE_TIMEOUT", "CYCLE_QUOTE_FAILED"):
+                _reject_by_cycle[cyc.cycle_id] = status
+            elif not qr.leg_results and status:
+                _reject_by_cycle[cyc.cycle_id] = status or "NO_LEGS"
+        capacity_contract_trace = []
+        for cid in cap_ids:
+            selected = cid in _selected_set
+            cache_hit = cid in _cache_hit_ids
+            rpc_dispatched = cid in _quoted_set
+            quoted = cid in _quoted_success_set
+            block_reason = _reject_by_cycle.get(cid)
+            session_quarantine = cid in _session_quarantine_ids
+            if session_quarantine and not block_reason:
+                block_reason = "SESSION_POOL_QUARANTINE"
+            elif cache_hit and not block_reason:
+                block_reason = "DETERMINISTIC_REJECT_CACHE_HIT"
+            elif not selected and not block_reason:
+                block_reason = "NOT_SELECTED_BY_SCHEDULER"
+            capacity_contract_trace.append(
+                {
+                    "cycle_id": cid,
+                    "capacity_valid": True,
+                    "selected": selected,
+                    "cache_hit": cache_hit,
+                    "session_quarantine": session_quarantine,
+                    "rpc_dispatched": rpc_dispatched,
+                    "quoted": quoted,
+                    "block_reason": block_reason,
+                }
+            )
+        scan_scope["capacity_contract_trace"] = capacity_contract_trace
+        scan_scope["session_quarantine_filtered_count"] = len(_session_quarantine_ids)
+        scan_scope["deterministic_reject_cache_hit_count"] = len(_cache_hit_ids)
+        scan_scope["capacity_contract_missing_count"] = sum(
+            1
+            for t in capacity_contract_trace
+            if t.get("block_reason") == "CAPACITY_CONTRACT_MISSING"
+        )
+        scan_scope["capacity_contract_mismatches"] = [
+            t for t in capacity_contract_trace
+            if t["capacity_valid"]
+            and (
+                (
+                    t["selected"]
+                    and not t["rpc_dispatched"]
+                    and not t.get("cache_hit")
+                    and not t.get("session_quarantine")
+                    and t.get("block_reason") not in _EXPLAINED_PRE_RPC_BLOCKERS
+                )
+                or (t["rpc_dispatched"] and not t["quoted"] and not t["block_reason"])
+            )
+        ]
         if quote_timeline:
             scan_scope.update(quote_timeline)
         if selected_ids:
@@ -1419,6 +1522,36 @@ def build_artifact(
         econ_rpc_attempts=_econ_rpc_attempts,
         cycles_quoteable=cycles_quoteable,
     )
+    # Step 1 (P0): honest metric semantics. ``cycles_found`` historically counts
+    # attempt rows (one cycle quoted many times across sweeps), not unique
+    # cycles. We keep the legacy field for schema compatibility but add explicit
+    # ``quote_attempt_rows`` and ``unique_cycles_evaluated`` so downstream
+    # consumers cannot mistake repeats for breadth.
+    quote_attempt_rows = len(cycle_results)
+    unique_cycle_ids = {qr.cycle.cycle_id for qr in cycle_results if getattr(qr, "cycle", None) is not None}
+    unique_cycles_evaluated = len(unique_cycle_ids)
+    # transport_qsr: success rate over *actual RPC quote attempts* only.
+    # Pre-RPC policy rejects must not inflate this metric. None when no dispatch.
+    _rpc_attempt_rows = [
+        qr for qr in cycle_results
+        if bool(getattr(qr, "rpc_dispatched", False))
+        or int(getattr(qr, "transport_call_count", 0) or 0) > 0
+    ]
+    if _rpc_attempt_rows:
+        _rpc_ok = sum(
+            1 for qr in _rpc_attempt_rows
+            if str(qr.status) in ("POSITIVE_GROSS", "NEGATIVE_GROSS")
+        )
+        transport_qsr = round(_rpc_ok / len(_rpc_attempt_rows), 4)
+    else:
+        transport_qsr = None
+    # economic_test_status: was the market economics actually probed at econ size?
+    if _econ_rpc_attempts > 0:
+        economic_test_status = "TESTED"
+    elif quote_attempt_rows == 0:
+        economic_test_status = "NOT_RUN"
+    else:
+        economic_test_status = "NOT_TESTED"
     discovery_qsr = round(qsr, 4) if cycles_found else 0.0
     depth_admission_rate = (
         round(_econ_gate_attempts / cycles_found, 4) if cycles_found else 0.0
@@ -1488,6 +1621,8 @@ def build_artifact(
         "depth_admission_rate": depth_admission_rate,
         "rpc_quote_attempt_rate": rpc_quote_attempt_rate,
         "rpc_quote_success_rate": rpc_quote_success_rate,
+        "transport_qsr": transport_qsr,
+        "economic_test_status": economic_test_status,
         "quote_rpc_error_rate": quote_rpc_error_rate,
         "quote_revert_rate": quote_revert_rate,
         "router_sim_bps_floor": _ROUTER_SIM_BPS_FLOOR,
@@ -1608,6 +1743,17 @@ def build_artifact(
     # promote into data/quarantine/m9_pool_depth_quarantine.json.
     _pool_scorecards = build_pool_scorecards(cycle_results)
     _pool_quarantine_recommendations = recommend_quarantine(_pool_scorecards)
+    _session_pool_quarantine_path = None
+    if _pool_quarantine_recommendations:
+        from m9.graph_arb.pool_scorecard import materialize_session_pool_quarantine
+        from m9.graph_arb.universe_contract import resolve_session_id
+
+        _sid = resolve_session_id()
+        if _sid:
+            _session_pool_quarantine_path = materialize_session_pool_quarantine(
+                _pool_quarantine_recommendations,
+                session_id=_sid,
+            )
 
     # Dashboard fields: pull M8 cycle participation metrics from bridge_source_metrics
     # to top-level so CI gates and dashboards can read them without nested traversal.
@@ -1661,6 +1807,11 @@ def build_artifact(
         "strategy_gate_acceptance": strategy_gate_acceptance,
         "execution_mode": execution_mode,
         "cycles_found": cycles_found,
+        "cycles_found_semantics": "attempt_rows_legacy",
+        "quote_attempt_rows": quote_attempt_rows,
+        "unique_cycles_evaluated": unique_cycles_evaluated,
+        "economic_test_status": economic_test_status,
+        "transport_qsr": transport_qsr,
         "cycle_lengths_used": list(cycle_lengths_used) if cycle_lengths_used else [],
         "cycles_found_by_length": _unique_cycle_counts_by_length(cycle_results),
         "cycles_quoteable_by_length": _unique_cycle_counts_by_length(
@@ -1816,6 +1967,7 @@ def build_artifact(
         "toxic_pool_families": _toxic_pool_families,
         "pool_scorecards": _pool_scorecards,
         "pool_quarantine_recommendations": _pool_quarantine_recommendations,
+        "session_pool_quarantine_path": _session_pool_quarantine_path,
         "graph_topology": graph_topology,
         "topology_gate": topology_gate,
         "discovery_cycles_found": discovery_cycles_found,
@@ -2048,9 +2200,25 @@ def build_artifact(
         "threshold": 50,
         "pass": _failover < 50,
     }
+    # Step 1 (P0): split operational vs economics gates. The historical
+    # ``all_pass`` could be true while cycles_quoteable=0 and
+    # econ_rpc_quote_attempts=0 — i.e. infra healthy but economics untested.
+    # ``operational_all_pass`` keeps the legacy infra semantics; the new
+    # ``economics_all_pass`` is false whenever the market was not actually
+    # probed at economics size or produced zero quoteable cycles.
     runtime_gates["all_pass"] = all(
         v["pass"] for v in runtime_gates.values() if isinstance(v, dict) and "pass" in v
     )
+    runtime_gates["operational_all_pass"] = runtime_gates["all_pass"]
+    _econ_tested = (
+        int(_econ_rpc_attempts) > 0 and int(cycles_quoteable) > 0
+    )
+    runtime_gates["economics_all_pass"] = bool(_econ_tested)
+    runtime_gates["economic_test_status"] = economic_test_status
+    if pool_quality_lane == "productive":
+        runtime_gates["all_pass"] = bool(
+            runtime_gates["operational_all_pass"] and runtime_gates["economics_all_pass"]
+        )
     artifact["runtime_gates"] = runtime_gates
 
     _layer = _compute_layer_telemetry(

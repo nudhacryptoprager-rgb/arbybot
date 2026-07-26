@@ -5,15 +5,35 @@ so fallback-capped depths are not mistaken for measured market capacity.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 PROBE_LADDER_USD: Tuple[float, ...] = (100.0, 500.0, 2500.0, 10_000.0, 50_000.0)
+
+# Step 8 (P1): adaptive thin-candidate ladder. When a pool's first $100 rung
+# already shows toxic impact, the standard ladder cannot resolve whether the
+# true capacity is $1 or $60 — both collapse to ~$10 via the linear extrapolation
+# ``capacity = size * 0.1 / impact``. This lower ladder is opt-in (caller passes
+# a thin-candidate flag) so global probe cost stays bounded.
+PROBE_LADDER_THIN_USD: Tuple[float, ...] = (10.0, 25.0, 50.0, 100.0)
 
 DEPTH_PROBE_MEASURED_CAPACITY = "MEASURED_CAPACITY"
 DEPTH_PROBE_LOWER_BOUND_AT_MAX = "LOWER_BOUND_AT_MAX_PROBE"
 DEPTH_PROBE_TOO_THIN = "TOO_THIN"
 DEPTH_PROBE_UNKNOWN = "UNKNOWN"
 DEPTH_PROBE_ANALYTICAL_SUSPECT = "ANALYTICAL_SUSPECT"
+
+def probe_ladder_usd_for_impact(
+    first_rung_impact: Optional[float],
+    *,
+    thin_candidate: bool = False,
+) -> Tuple[float, ...]:
+    """Select standard vs thin ladder based on early impact signal."""
+    if thin_candidate:
+        return PROBE_LADDER_THIN_USD
+    if first_rung_impact is not None and first_rung_impact > _IMPACT_THRESHOLD_TOXIC:
+        return PROBE_LADDER_THIN_USD
+    return PROBE_LADDER_USD
+
 
 MAX_SANE_DEPTH_USD: float = 10_000_000.0
 MIN_SANE_MEASURED_DEPTH_USD: float = 50.0

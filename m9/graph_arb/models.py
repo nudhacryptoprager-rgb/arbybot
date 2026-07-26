@@ -229,6 +229,9 @@ class CycleQuoteResult:
     # Phantom validation RCA (set when reject_reason=PHANTOM_QUOTE_BPS_OVERFLOW)
     raw_gross_bps: Optional[float] = None  # gross before phantom zeroing
     phantom_ceiling_bps: Optional[float] = None  # depth-aware ceiling that was exceeded
+    # True once quote transport dispatches at least one on-chain leg RPC.
+    rpc_dispatched: bool = False
+    transport_call_count: int = 0
 
 
 @dataclass

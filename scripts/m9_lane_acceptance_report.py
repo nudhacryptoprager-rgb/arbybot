@@ -763,15 +763,31 @@ def _m9_economics_blockers(
     quoted_ids = list(scan_scope.get("shadow_quoted_cycle_ids") or [])
     if cycles_at_prod > 0 and cap_ids and not quoted_ids:
         blockers.append("CAPACITY_VALID_CYCLES_NOT_QUOTED_IN_SHADOW")
+    if int(scan_scope.get("session_quarantine_filtered_count") or 0) > 0:
+        if not quoted_ids:
+            blockers.append("SESSION_POOL_QUARANTINE_BLOCKED_QUOTES")
+    if int(scan_scope.get("capacity_contract_missing_count") or 0) > 0:
+        blockers.append("CAPACITY_CONTRACT_MISSING_IN_SHADOW")
     shadow_lane_mode = str(scan_scope.get("shadow_lane_mode") or "")
     if shadow_lane_mode == "broad_graph_diagnostic":
         blockers.append("BROAD_GRAPH_DIAGNOSTIC_NOT_LONG_TAIL_ECONOMICS")
     bsm = (bridge or {}).get("bridge_source_metrics") or {}
+    # Step 6 (P0): only honour fresh_ready when the bridge carries a session_id
+    # (provenance binding). A stale bridge without session must not flip the
+    # lane to long_tail_target while acceptance reads the current bridge.
+    bridge_session = (
+        (bridge or {}).get("session_id")
+        or bsm.get("session_id")
+        or ((bridge or {}).get("run_context") or {}).get("pipeline_session_id")
+    )
     fresh_ready = int(
         bsm.get("fresh_long_tail_quote_ready_tokens")
         or (bridge or {}).get("fresh_long_tail_quote_ready_tokens")
         or 0
     )
+    if not bridge_session:
+        # No session binding → treat as not fresh to avoid contradictory verdicts.
+        fresh_ready = 0
     if shadow_lane_mode == "long_tail_target" and fresh_ready <= 0:
         blockers.append("FRESH_LONG_TAIL_QUOTE_READY_ZERO")
 

@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 CANONICAL_BRIDGE_PATH = Path("data/tmp/m9_bridge_inventory_graph_handoff_latest.json")
 CANONICAL_POINTER_PATH = Path("data/tmp/m9_bridge_canonical_pointer.json")
 LEGACY_SHADOW_BRIDGE_PATH = Path("data/tmp/m9_bridge_inventory_shadow_latest.json")
+# Production bridge written by the pipeline (start.py add_m9()).
+PRODUCTION_BRIDGE_PATH = "data/tmp/m9_bridge_inventory_production_latest.json"
 
 
 def sync_bridge_canonical(source: Path, *, metrics: Optional[Dict[str, Any]] = None) -> None:

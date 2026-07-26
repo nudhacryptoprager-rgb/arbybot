@@ -327,21 +327,32 @@ def quote_cycle_sync(
     initial_amount = int(size_usd / token_price * (10 ** int(start_edge.token_in_decimals)))
     current_amount = initial_amount
     leg_results: List[QuoteResult] = []
+    _rpc_dispatched = False
+    _transport_calls = 0
 
-    from core.rpc_dispatch_hooks import clear_on_rpc_dispatch, set_on_rpc_dispatch
+    def _finalize_transport(qr: CycleQuoteResult) -> CycleQuoteResult:
+        qr.rpc_dispatched = _rpc_dispatched
+        qr.transport_call_count = _transport_calls
+        return qr
 
-    if quote_timeline is not None and econ_floor_usd is not None:
-        set_on_rpc_dispatch(
-            lambda: quote_timeline.try_mark_econ_dispatch(
+    def _on_transport_dispatch() -> None:
+        nonlocal _rpc_dispatched, _transport_calls
+        _rpc_dispatched = True
+        _transport_calls += 1
+        if quote_timeline is not None and econ_floor_usd is not None:
+            quote_timeline.try_mark_econ_dispatch(
                 size_usd=float(size_usd),
                 econ_floor_usd=float(econ_floor_usd),
                 queue_delay_s=float(queue_delay_s),
             )
-        )
+
+    from core.rpc_dispatch_hooks import clear_on_rpc_dispatch, set_on_rpc_dispatch
+
+    set_on_rpc_dispatch(_on_transport_dispatch)
     try:
         for leg_index, edge in enumerate(cycle.edges):
             if time.monotonic() - started > timeout_s:
-                return CycleQuoteResult(
+                return _finalize_transport(CycleQuoteResult(
                     cycle=cycle,
                     size_usd=size_usd,
                     amount_in=initial_amount,
@@ -351,7 +362,7 @@ def quote_cycle_sync(
                     reject_reason="TIMEOUT",
                     leg_results=leg_results,
                     elapsed_s=time.monotonic() - started,
-                )
+                ))
 
             route = _make_dex_route(edge)
             token_in = _make_token_info(edge.token_in_sym, edge.token_in_addr, edge.token_in_decimals)
@@ -361,7 +372,7 @@ def quote_cycle_sync(
             if leg_index > 0 and leg_results:
                 _prev_out = getattr(leg_results[-1], "amount_out", None)
                 if _prev_out is not None and int(_prev_out) != int(current_amount):
-                    return CycleQuoteResult(
+                    return _finalize_transport(CycleQuoteResult(
                         cycle=cycle,
                         size_usd=size_usd,
                         amount_in=initial_amount,
@@ -371,7 +382,7 @@ def quote_cycle_sync(
                         reject_reason=_REJECT_AMOUNT_CONTINUITY_VIOLATION,
                         leg_results=leg_results,
                         elapsed_s=time.monotonic() - started,
-                    )
+                    ))
 
             leg_result = _probe_leg(
                 w3, route, token_in, token_out, current_amount,
@@ -386,7 +397,7 @@ def quote_cycle_sync(
                     _REJECT_ONE_DIRECTION_ONLY,
                     "NO_ACTIVE_LIQUIDITY_FOR_TOKEN_IN",
                 ):
-                    return CycleQuoteResult(
+                    return _finalize_transport(CycleQuoteResult(
                         cycle=cycle,
                         size_usd=size_usd,
                         amount_in=initial_amount,
@@ -396,8 +407,8 @@ def quote_cycle_sync(
                         reject_reason=_cap_reject,
                         leg_results=leg_results,
                         elapsed_s=time.monotonic() - started,
-                    )
-                return CycleQuoteResult(
+                    ))
+                return _finalize_transport(CycleQuoteResult(
                     cycle=cycle,
                     size_usd=size_usd,
                     amount_in=initial_amount,
@@ -407,7 +418,7 @@ def quote_cycle_sync(
                     reject_reason=_REJECT_CYCLE_QUOTE_FAILED,
                     leg_results=leg_results,
                     elapsed_s=time.monotonic() - started,
-                )
+                ))
             current_amount = leg_result.amount_out
     finally:
         clear_on_rpc_dispatch()
@@ -417,7 +428,7 @@ def quote_cycle_sync(
     sanity_reject = check_cycle_leg_sanity(cycle, leg_results)
     if sanity_reject:
         if sanity_reject == _REJECT_AMOUNT_CONTINUITY_VIOLATION:
-            return CycleQuoteResult(
+            return _finalize_transport(CycleQuoteResult(
                 cycle=cycle,
                 size_usd=size_usd,
                 amount_in=initial_amount,
@@ -427,8 +438,8 @@ def quote_cycle_sync(
                 reject_reason=_REJECT_AMOUNT_CONTINUITY_VIOLATION,
                 leg_results=leg_results,
                 elapsed_s=time.monotonic() - started,
-            )
-        return CycleQuoteResult(
+            ))
+        return _finalize_transport(CycleQuoteResult(
             cycle=cycle,
             size_usd=size_usd,
             amount_in=initial_amount,
@@ -438,7 +449,7 @@ def quote_cycle_sync(
             reject_reason=sanity_reject,
             leg_results=leg_results,
             elapsed_s=time.monotonic() - started,
-        )
+        ))
 
     # Calculate gross_bps
     if initial_amount > 0:
@@ -482,7 +493,7 @@ def quote_cycle_sync(
             if _cycle_depth is None and _legs_ok:
                 # Unknown-depth probe/micro quotes can show large negative gross while
                 # every leg returned a real on-chain price — count as quoteable liveness.
-                return CycleQuoteResult(
+                return _finalize_transport(CycleQuoteResult(
                     cycle=cycle,
                     size_usd=size_usd,
                     amount_in=initial_amount,
@@ -495,11 +506,11 @@ def quote_cycle_sync(
                     raw_gross_bps=round(gross_bps, 4),
                     phantom_ceiling_bps=round(_max_reasonable_bps, 4),
                     cycle_min_depth_usd=_cycle_depth,
-                )
+                ))
             _ovf_status, _ovf_reject = oversized_reject_for_depth(
                 _cycle_depth, gross_bps=gross_bps
             )
-        return CycleQuoteResult(
+        return _finalize_transport(CycleQuoteResult(
             cycle=cycle,
             size_usd=size_usd,
             amount_in=initial_amount,
@@ -512,11 +523,11 @@ def quote_cycle_sync(
             raw_gross_bps=round(gross_bps, 4),
             phantom_ceiling_bps=round(_max_reasonable_bps, 4),
             cycle_min_depth_usd=_cycle_depth,
-        )
+        ))
 
     status = STATUS_POSITIVE_GROSS if gross_bps > 0 else STATUS_NEGATIVE_GROSS
 
-    return CycleQuoteResult(
+    return _finalize_transport(CycleQuoteResult(
         cycle=cycle,
         size_usd=size_usd,
         amount_in=initial_amount,
@@ -527,7 +538,7 @@ def quote_cycle_sync(
         leg_results=leg_results,
         elapsed_s=time.monotonic() - started,
         cycle_min_depth_usd=_cycle_depth,
-    )
+    ))
 
 
 def quote_cycle_dynamic_sync(
