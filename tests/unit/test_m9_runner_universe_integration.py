@@ -93,7 +93,7 @@ def test_runner_exit_8_on_effective_inventory_prep_failure(bridge_and_capacity, 
         raise ValueError("PRE_DEPTH_INVENTORY")
 
     monkeypatch.setattr(
-        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        "m9.graph_arb.effective_inventory.ensure_effective_inventory",
         _raise,
     )
 
@@ -173,7 +173,7 @@ def test_capacity_and_runner_share_effective_inventory_path(
         return out
 
     monkeypatch.setattr(
-        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        "m9.graph_arb.effective_inventory.ensure_effective_inventory",
         _prepare,
     )
     cap_path.write_text(
@@ -243,7 +243,7 @@ def test_runner_exit_7_writes_mismatch_artifact(bridge_and_capacity, monkeypatch
     monkeypatch.delenv("ARBY_PIPELINE_SESSION_ID", raising=False)
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "sess_a")
     monkeypatch.setattr(
-        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        "m9.graph_arb.effective_inventory.ensure_effective_inventory",
         lambda inventory_path, *args, **kwargs: inventory_path,
     )
 
@@ -299,7 +299,7 @@ def test_runner_accepts_matching_capacity_contract(bridge_and_capacity, monkeypa
     )
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "sess_b")
     monkeypatch.setattr(
-        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        "m9.graph_arb.effective_inventory.ensure_effective_inventory",
         lambda inventory_path, *args, **kwargs: inventory_path,
     )
 
@@ -352,7 +352,7 @@ def test_successful_runner_stamps_provenance_and_universe_contract(
     )
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "sess_stamp")
     monkeypatch.setattr(
-        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        "m9.graph_arb.effective_inventory.ensure_effective_inventory",
         lambda inventory_path, *args, **kwargs: inventory_path,
     )
 

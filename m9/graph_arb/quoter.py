@@ -265,6 +265,9 @@ def quote_cycle_sync(
     timeout_s: float = 10.0,
     quote_backend: str = BACKEND_DIRECT_HTTP,
     rpc_url: Optional[str] = None,
+    quote_timeline: Any = None,
+    econ_floor_usd: Optional[float] = None,
+    queue_delay_s: float = 0.0,
 ) -> CycleQuoteResult:
     """Quote all legs of a cycle synchronously and return cumulative result."""
     started = time.monotonic()
@@ -358,6 +361,13 @@ def quote_cycle_sync(
                     leg_results=leg_results,
                     elapsed_s=time.monotonic() - started,
                 )
+
+        if leg_index == 0 and quote_timeline is not None and econ_floor_usd is not None:
+            quote_timeline.try_mark_econ_dispatch(
+                size_usd=size_usd,
+                econ_floor_usd=float(econ_floor_usd),
+                queue_delay_s=float(queue_delay_s),
+            )
 
         leg_result = _probe_leg(
             w3, route, token_in, token_out, current_amount,
@@ -524,6 +534,9 @@ def quote_cycle_dynamic_sync(
     rpc_url: Optional[str] = None,
     depth_aware: bool = True,
     depth_size_fraction: float = _DEPTH_SIZE_FRACTION,
+    quote_timeline: Any = None,
+    econ_floor_usd: Optional[float] = None,
+    queue_delay_s: float = 0.0,
 ) -> CycleQuoteResult:
     """Quote a cycle across a bounded USD ladder and select the best size.
 
@@ -611,6 +624,9 @@ def quote_cycle_dynamic_sync(
             per_size_timeout,
             quote_backend,
             rpc_url,
+            quote_timeline=quote_timeline,
+            econ_floor_usd=econ_floor_usd,
+            queue_delay_s=queue_delay_s,
         )
         results.append(result)
         depth_curve.append(
@@ -708,6 +724,9 @@ def schedule_cycle_quotes(
     rpc_url: Optional[str] = None,
     dynamic_sizes: bool = False,
     dynamic_size_limit: Optional[int] = None,
+    quote_timeline: Any = None,
+    econ_floor_usd: Optional[float] = None,
+    queue_delay_s: float = 0.0,
 ) -> List[CycleQuoteResult]:
     """Quote all cycles in parallel using ThreadPoolExecutor.
 
@@ -735,6 +754,8 @@ def schedule_cycle_quotes(
                     pool.submit(
                         quote_cycle_dynamic_sync, cycle, tuple(sizes_usd), w3,
                         token_prices, timeout_s, quote_backend, rpc_url,
+                        True, _DEPTH_SIZE_FRACTION,
+                        quote_timeline, econ_floor_usd, queue_delay_s,
                     )
                 )
             else:
@@ -742,6 +763,7 @@ def schedule_cycle_quotes(
                     pool.submit(
                         quote_cycle_sync, cycle, size_usd, w3, token_prices,
                         timeout_s, quote_backend, rpc_url,
+                        quote_timeline, econ_floor_usd, queue_delay_s,
                     )
                 )
         futures = [

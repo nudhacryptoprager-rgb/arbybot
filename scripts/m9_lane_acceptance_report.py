@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from m8.discovery.fresh_direct_queue import build_fresh_direct_queue_snapshot
 from monitoring.sniper_artifacts import (  # noqa: E402
     M9_SNIPER_BLOCKER,
     assess_sniper_artifact_for_m9,
@@ -245,21 +246,52 @@ def _sniper_to_shadow_quote_slo_gate(
         }
     scan_scope = (shadow or {}).get("scan_scope") or {}
     quoted_ids = list(scan_scope.get("shadow_quoted_cycle_ids") or [])
+    econ_attempts = int(
+        ((shadow or {}).get("quote_size_truth") or {}).get("econ_rpc_quote_attempts") or 0
+    )
     sniper_ts = _parse_iso_ts(sniper.get("generated_at_utc"))
-    first_quote_ts = _parse_iso_ts(scan_scope.get("first_shadow_quote_at_utc"))
+    first_attempt_ts = _parse_iso_ts(scan_scope.get("first_econ_rpc_attempt_at_utc"))
+    first_quote_ts = _parse_iso_ts(
+        scan_scope.get("first_successful_econ_quote_at_utc")
+        or scan_scope.get("first_shadow_quote_at_utc")
+    )
     latency_s: Optional[float] = None
-    if sniper_ts is not None and first_quote_ts is not None:
+    slo_status = "PASS"
+
+    if econ_attempts == 0:
+        blockers.append("SNIPER_TO_SHADOW_QUOTE_NOT_MEASURED")
+        slo_status = "NOT_MEASURED"
+    elif sniper_ts is not None and first_attempt_ts is not None:
+        latency_s = (first_attempt_ts - sniper_ts).total_seconds()
+        if latency_s > SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS:
+            blockers.append("SNIPER_TO_SHADOW_QUOTE_SLO_EXCEEDED")
+            slo_status = "BLOCKED"
+    elif sniper_ts is not None and first_quote_ts is not None:
         latency_s = (first_quote_ts - sniper_ts).total_seconds()
         if latency_s > SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS:
             blockers.append("SNIPER_TO_SHADOW_QUOTE_SLO_EXCEEDED")
-    elif quoted_ids and sniper_ts is not None:
+            slo_status = "BLOCKED"
+    elif quoted_ids:
         blockers.append("SNIPER_TO_SHADOW_QUOTE_SLO_UNMEASURED")
+        slo_status = "BLOCKED"
+    elif econ_attempts > 0:
+        blockers.append("SNIPER_TO_SHADOW_QUOTE_SLO_UNMEASURED")
+        slo_status = "BLOCKED"
+
+    if blockers and slo_status == "PASS":
+        slo_status = "BLOCKED"
+
     return {
-        "slo_status": "PASS" if not blockers else "BLOCKED",
+        "slo_status": slo_status,
         "blockers": sorted(set(blockers)),
         "slo_budget_seconds": SNIPER_TO_SHADOW_QUOTE_SLO_SECONDS,
         "latency_seconds": round(latency_s, 1) if latency_s is not None else None,
+        "econ_rpc_quote_attempts": econ_attempts,
         "sniper_generated_at_utc": sniper.get("generated_at_utc"),
+        "first_econ_rpc_attempt_at_utc": scan_scope.get("first_econ_rpc_attempt_at_utc"),
+        "first_successful_econ_quote_at_utc": scan_scope.get(
+            "first_successful_econ_quote_at_utc"
+        ),
         "first_shadow_quote_at_utc": scan_scope.get("first_shadow_quote_at_utc"),
     }
 
@@ -1093,6 +1125,7 @@ def build_acceptance_report(
         {
             "layer": "M8_fresh_direct_cohort",
             **_fresh_direct_cohort_counters(bridge, shadow, bsm),
+            **build_fresh_direct_queue_snapshot(bridge=bridge, shadow=shadow),
         },
         {
             "layer": "M8_cohorts",
@@ -1279,7 +1312,7 @@ def build_acceptance_report(
         shadow=shadow,
         skip_shadow=skip_shadow,
     )
-    if pipeline_slo_gate["slo_status"] == "BLOCKED":
+    if pipeline_slo_gate["slo_status"] in ("BLOCKED", "NOT_MEASURED"):
         upstream_blockers.extend(pipeline_slo_gate["blockers"])
 
     m9_quote_validation_blockers: List[str] = []

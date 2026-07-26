@@ -164,7 +164,7 @@ def main() -> int:
     floors = _parse_floors(args.floors)
 
     from m9.graph_arb.effective_inventory import (
-        prepare_effective_execution_inventory,
+        load_effective_inventory,
         resolve_effective_inventory_path,
     )
 
@@ -173,15 +173,16 @@ def main() -> int:
         str(args.effective_inventory_path or "").strip()
         or resolve_effective_inventory_path(session_id)
     )
-    require_post_depth = args.lane == "productive" and not args.allow_pre_depth_inventory
-    effective_inventory_path = prepare_effective_execution_inventory(
-        args.bridge,
-        args.config,
-        chain=args.chain,
-        output_path=effective_out,
-        session_id=session_id,
-        require_post_depth=require_post_depth,
-    )
+    try:
+        effective_inventory_path = load_effective_inventory(
+            session_id=session_id,
+            effective_path=effective_out,
+            source_bridge_path=args.bridge,
+            config_path=args.config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     report = run_capacity_cycle_diagnostic(
         inventory_path=effective_inventory_path,
         config_path=args.config,
@@ -228,8 +229,7 @@ def main() -> int:
 
     out = Path(args.output)
     if args.quarantine_rca:
-        bridge_path = Path(args.bridge)
-        with bridge_path.open(encoding="utf-8") as fh:
+        with Path(effective_inventory_path).open(encoding="utf-8") as fh:
             inv = json.load(fh)
         from m9.graph_arb.quarantine_depth_rca import run_quarantine_depth_rca
 

@@ -1008,6 +1008,7 @@ def build_artifact(
     cycle_lengths_used: "Optional[Tuple[int, ...]]" = None,
     discovery_cycles_by_length: Optional[Dict[str, int]] = None,
     capacity_scope: Optional[Dict[str, Any]] = None,
+    quote_timeline: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the canonical M9 rolling artifact dict.
 
@@ -1340,27 +1341,8 @@ def build_artifact(
         overlap = len(set(cap_ids) & set(quoted_ids))
         scan_scope["capacity_valid_cycle_ids"] = cap_ids
         scan_scope["shadow_quoted_cycle_ids"] = quoted_ids
-        if quoted_ids:
-            _econ_quoted = [
-                qr
-                for qr in cycle_results
-                if is_econ_rpc_quote_attempt(qr, _econ_floor_usd)
-                and qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS")
-            ]
-            if _econ_quoted:
-                first_elapsed = min(qr.elapsed_s for qr in _econ_quoted)
-                try:
-                    from datetime import datetime, timedelta, timezone
-
-                    start_dt = datetime.fromisoformat(
-                        str(run_timestamp).replace("Z", "+00:00")
-                    )
-                    first_dt = start_dt + timedelta(seconds=float(first_elapsed))
-                    scan_scope["first_shadow_quote_at_utc"] = first_dt.astimezone(
-                        timezone.utc
-                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
-                except Exception:
-                    scan_scope["first_shadow_quote_at_utc"] = run_timestamp
+        if quote_timeline:
+            scan_scope.update(quote_timeline)
         if selected_ids:
             scan_scope["shadow_selected_cycle_ids"] = selected_ids
             cap_selected_overlap = len(set(cap_ids) & set(selected_ids))

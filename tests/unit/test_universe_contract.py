@@ -18,6 +18,7 @@ def _graph_fp(**overrides):
         "graph_route_count": 1,
         "route_universe_hash": "abc123",
         "post_depth_content_hash": "posthash",
+        "execution_content_fingerprint": "execfp123",
     }
     base.update(overrides)
     return base
@@ -90,6 +91,7 @@ def test_validate_passes_when_contracts_match():
         "graph_route_count",
         "route_universe_hash",
         "post_depth_content_hash",
+        "execution_content_fingerprint",
     )
     cap = {
         "universe_contract": dict(runner),
@@ -135,7 +137,7 @@ def test_graph_route_count_is_required_compare_key():
 
     assert "graph_route_count" in _GRAPH_COMPARE_KEYS
     assert "route_universe_hash" in _GRAPH_COMPARE_KEYS
-    assert "post_depth_content_hash" in _GRAPH_COMPARE_KEYS
+    assert "execution_content_fingerprint" in _GRAPH_COMPARE_KEYS
 
 
 def test_contract_schema_version_v2():

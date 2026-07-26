@@ -623,6 +623,12 @@ def test_lane_report_shadow_accepted_goal_reached(monkeypatch, tmp_path):
             "cross_mechanic_cycles_found": 4,
             "cross_mechanic_cycles_quoteable": 2,
             "qsr": 0.5,
+            "quote_size_truth": {"econ_rpc_quote_attempts": 5},
+            "scan_scope": {
+                "shadow_quoted_cycle_ids": ["c1"],
+                "first_econ_rpc_attempt_at_utc": aligned,
+                "first_successful_econ_quote_at_utc": aligned,
+            },
         },
         rca=None,
         m8_2_report={
@@ -836,9 +842,11 @@ def test_sniper_to_shadow_quote_slo_exceeded_blocker():
         bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
         shadow={
             "cycles_found": 5,
+            "quote_size_truth": {"econ_rpc_quote_attempts": 2},
             "scan_scope": {
                 "shadow_quoted_cycle_ids": ["c1"],
-                "first_shadow_quote_at_utc": "2026-07-25T11:00:00Z",
+                "first_econ_rpc_attempt_at_utc": "2026-07-25T11:00:00Z",
+                "first_successful_econ_quote_at_utc": "2026-07-25T11:00:00Z",
             },
         },
         rca=None,
@@ -847,6 +855,25 @@ def test_sniper_to_shadow_quote_slo_exceeded_blocker():
     )
     assert report["pipeline_slo_gate"]["slo_status"] == "BLOCKED"
     assert "SNIPER_TO_SHADOW_QUOTE_SLO_EXCEEDED" in report["upstream_blockers"]
+
+
+def test_sniper_to_shadow_quote_not_measured_when_zero_attempts():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "generated_at_utc": "2026-07-25T10:00:00Z"},
+        anchor={"metrics": {}},
+        expansion={"metrics": {"handoff_ready": True}},
+        bridge={"active_routes": [], "bridge_source_metrics": {"graph_ready_from_m8": 1}},
+        shadow={
+            "cycles_found": 5,
+            "quote_size_truth": {"econ_rpc_quote_attempts": 0},
+            "scan_scope": {"shadow_quoted_cycle_ids": []},
+        },
+        rca=None,
+        m8_2_report={"handoff_ready": True, "goal_status": "REACHED"},
+        capacity_metrics={"capacity_valid_cycle_ids": ["c1"]},
+    )
+    assert report["pipeline_slo_gate"]["slo_status"] == "NOT_MEASURED"
+    assert "SNIPER_TO_SHADOW_QUOTE_NOT_MEASURED" in report["upstream_blockers"]
 
 
 def test_capacity_valid_no_shadow_quote_overlap_blocker():

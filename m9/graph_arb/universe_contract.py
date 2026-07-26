@@ -28,6 +28,7 @@ _GRAPH_COMPARE_KEYS = (
     "graph_route_count",
     "route_universe_hash",
     "post_depth_content_hash",
+    "execution_content_fingerprint",
 )
 
 
@@ -160,6 +161,7 @@ def build_graph_fingerprint(
         "graph_route_count": int(graph_route_count(adjacency)) if adjacency else 0,
         "route_universe_hash": identity.get("route_universe_hash"),
         "post_depth_content_hash": identity.get("post_depth_content_hash"),
+        "execution_content_fingerprint": identity.get("execution_content_fingerprint"),
         "admission_policy": admission_policy_label(
             lane=lane,
             require_factory_verified=require_factory_verified,

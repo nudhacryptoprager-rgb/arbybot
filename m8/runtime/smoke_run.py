@@ -1199,6 +1199,8 @@ def _build_and_write_artifact(
             extra={"context": {"violations": violations}},
         )
 
+    _maybe_ingest_state_repository(artifact)
+
     # Step 8: When an isolated --dex run is active, write to data/tmp/ (NOT _rolling/)
     # to avoid polluting the canonical rolling artifact set.  The canonical
     # new_pool_sniper_latest.json in _rolling is only written for full all-factory runs.
@@ -1225,6 +1227,19 @@ def _build_and_write_artifact(
         },
     )
     return artifact
+
+
+def _maybe_ingest_state_repository(artifact: Dict[str, Any]) -> None:
+    """Optional vertical migration: mirror sniper events into StateRepository."""
+    if not env_flag_enabled("ARBY_STATE_REPOSITORY_ENABLED"):
+        return
+    from m8.runtime.state_repository_ingest import ingest_sniper_artifact_to_repository
+
+    stats = ingest_sniper_artifact_to_repository(artifact, mutate_artifact=artifact)
+    logger.info(
+        "state_repository_ingest_complete",
+        extra={"context": stats},
+    )
 
 
 def _sync_pending_registry_from_events(
@@ -1580,6 +1595,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="If set, only listen to this DEX (e.g. 'pancakeswap_v3'). "
              "Useful for isolated single-DEX WS gates.",
     )
+    parser.add_argument(
+        "--write-checkpoint",
+        default=None,
+        help="Write sniper streaming checkpoint artifact after successful self-test.",
+    )
+    parser.add_argument(
+        "--checkpoint-artifact",
+        default=None,
+        help="Validate checkpoint artifact before allowing skip-self-test.",
+    )
+    parser.add_argument(
+        "--streaming-batch-index",
+        type=int,
+        default=1,
+        help="Streaming batch index (used for checkpoint validation).",
+    )
     args = parser.parse_args(argv)
 
     # Offline via ENV as well
@@ -1591,7 +1622,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     setup_logging(json_format=args.log_json)
 
     if args.acceptance_run:
-        if args.skip_self_test:
+        if args.skip_self_test and not args.checkpoint_artifact:
             logger.error(
                 "acceptance_run_forbids_skip_self_test",
                 extra={"context": {"flag": "--skip-self-test"}},
@@ -1787,11 +1818,49 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not self_test_ok:
                 logger.error("self_test_FAILED -- aborting run (use --skip-self-test to bypass)")
                 return 3
+            if args.write_checkpoint:
+                from core.pipeline_provenance import pipeline_session_id
+                from m8.runtime.sniper_checkpoint import (
+                    build_factory_config_fingerprint,
+                    write_checkpoint_artifact,
+                )
+
+                write_checkpoint_artifact(
+                    args.write_checkpoint,
+                    session_id=pipeline_session_id(),
+                    chain=args.chain,
+                    rpc_url=getattr(rpc_lane, "http_url", None),
+                    factory_config_fingerprint=build_factory_config_fingerprint(configs),
+                    self_test_results=self_test_results,
+                    batch_index=int(args.streaming_batch_index or 1),
+                )
         else:
-            self_test_results: Dict[str, Any] = {}
+            from core.pipeline_provenance import pipeline_session_id
+            from m8.runtime.sniper_checkpoint import (
+                build_factory_config_fingerprint,
+                load_checkpoint,
+                validate_checkpoint_for_batch,
+            )
+
+            checkpoint = load_checkpoint(args.checkpoint_artifact or "")
+            blockers = validate_checkpoint_for_batch(
+                checkpoint,
+                batch_index=int(args.streaming_batch_index or 2),
+                session_id=pipeline_session_id(),
+                chain=args.chain,
+                rpc_url=getattr(rpc_lane, "http_url", None),
+                factory_config_fingerprint=build_factory_config_fingerprint(configs),
+            )
+            if blockers:
+                logger.error(
+                    "checkpoint_validation_failed",
+                    extra={"context": {"blockers": blockers}},
+                )
+                return 4
+            self_test_results = dict((checkpoint or {}).get("self_test_results") or {})
             logger.warning(
-                "self_test_skipped_via_flag",
-                extra={"context": {"reason": "--skip-self-test is set; historical parser check bypassed"}},
+                "self_test_skipped_via_checkpoint",
+                extra={"context": {"checkpoint": args.checkpoint_artifact}},
             )
 
         # Store self-test results in the funnel for artifact inclusion.

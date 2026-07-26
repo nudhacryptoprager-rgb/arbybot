@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 # Process lock file
 _LOCK_FILE = "data/tmp/m9_runner.lock"
@@ -184,80 +183,6 @@ def _write_shadow_lane_blocked_artifact(
     )
 
 
-def _write_capacity_universe_mismatch_artifact(
-    *,
-    args: argparse.Namespace,
-    log: Any,
-    run_timestamp: str,
-    started_at: float,
-    inventory_path: str,
-    capacity_scope: Dict[str, Any],
-    capacity_doc: Dict[str, Any],
-    runner_contract: Dict[str, Any],
-    mismatches: List[str],
-    process_id: int,
-    duration_minutes: float,
-) -> None:
-    """Emit canonical shadow artifact when capacity universe contract mismatches runner."""
-    from core.pipeline_provenance import apply_pipeline_provenance
-    from m9.graph_arb.artifacts import build_artifact, write_artifact
-    from m9.graph_arb.models import GraphTopology
-    from m9.graph_arb.universe_contract import BLOCKER_CAPACITY_UNIVERSE_MISMATCH
-
-    artifact_path = getattr(
-        args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
-    )
-    empty_topology = GraphTopology(
-        token_count=0,
-        edge_count=0,
-        route_count=0,
-        hub_tokens=[],
-        dead_end_tokens=[],
-        missing_edges_for_3cycle=[],
-        adjacency_summary={},
-    )
-    cap_contract = (capacity_doc or {}).get("universe_contract") or {}
-    artifact = build_artifact(
-        chain=args.chain,
-        duration_minutes=duration_minutes,
-        cycle_results=[],
-        topology=empty_topology,
-        sizes_usd=tuple(getattr(args, "sizes_usd", None) or (100.0,)),
-        run_timestamp=run_timestamp,
-        started_at_mono=started_at,
-        elapsed_s=time.monotonic() - started_at,
-        sweeps_completed=0,
-        process_id=process_id,
-        python_executable=sys.executable,
-        venv_active=bool(os.environ.get("VIRTUAL_ENV")),
-        cycles_found_topology=0,
-        inventory_path=inventory_path,
-        config_path=args.config,
-        capacity_scope={
-            **capacity_scope,
-            "universe_mismatch_keys": list(mismatches),
-            "capacity_universe_contract": cap_contract,
-        },
-        scan_scope={
-            "shadow_lane_blocker": BLOCKER_CAPACITY_UNIVERSE_MISMATCH,
-            "universe_mismatch_keys": list(mismatches),
-        },
-    )
-    artifact["runner_outcome"] = BLOCKER_CAPACITY_UNIVERSE_MISMATCH
-    artifact["shadow_lane_blocker"] = BLOCKER_CAPACITY_UNIVERSE_MISMATCH
-    artifact["universe_mismatch_keys"] = list(mismatches)
-    artifact["capacity_universe_contract"] = cap_contract
-    provenance_out = apply_pipeline_provenance(artifact, run_timestamp=run_timestamp)
-    artifact.update(provenance_out)
-    artifact["universe_contract"] = dict(runner_contract)
-    write_artifact(artifact, artifact_path)
-    log.info(
-        "Wrote capacity universe mismatch artifact: mismatches=%s path=%s",
-        mismatches,
-        artifact_path,
-    )
-
-
 def _stamp_runner_completion_provenance(
     artifact: Dict[str, Any],
     *,
@@ -276,145 +201,6 @@ def _stamp_runner_completion_provenance(
     if session_id:
         artifact["session_id"] = session_id
     artifact["effective_inventory_path"] = inventory_path
-
-
-def _validate_capacity_universe_or_exit(
-    *,
-    args: argparse.Namespace,
-    log: Any,
-    cap_path_str: str,
-    cap_doc: Dict[str, Any],
-    capacity_scope: Dict[str, Any],
-    inventory_path: str,
-    cycle_lengths: tuple[int, ...],
-    active_profile: str,
-    run_timestamp: str,
-    started_at: float,
-    process_id: int,
-    duration_minutes: float,
-) -> tuple[Optional[Dict[str, Any]], Optional[int]]:
-    """Build runner universe contract on effective inventory; exit 7 on mismatch."""
-    from m9.graph_arb.universe_contract import (
-        build_runner_admission_graph_fingerprint,
-        build_universe_contract,
-        resolve_session_id,
-        validate_capacity_for_runner,
-    )
-
-    pool_lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
-    require_fv = bool(getattr(args, "require_factory_verified", False))
-    graph_fp = build_runner_admission_graph_fingerprint(
-        inventory_path=inventory_path,
-        config_path=args.config,
-        lane=pool_lane,
-        require_factory_verified=require_fv,
-    )
-    runner_contract = build_universe_contract(
-        inventory_path=inventory_path,
-        config_path=args.config,
-        lane=pool_lane,
-        require_factory_verified=require_fv,
-        cycle_lengths=cycle_lengths,
-        active_economics_profile=active_profile,
-        session_id=resolve_session_id(getattr(args, "session_id", None)),
-        graph_fingerprint=graph_fp,
-    )
-    capacity_scope["universe_contract"] = runner_contract
-    ok, mismatches = validate_capacity_for_runner(
-        cap_doc,
-        runner_contract,
-        require_session_binding=True,
-    )
-    if ok:
-        return runner_contract, None
-    log.error(
-        "CAPACITY_UNIVERSE_MISMATCH: capacity diagnostic built for a different "
-        "universe than runner (mismatches=%s path=%s effective_inventory=%s)",
-        mismatches,
-        cap_path_str,
-        inventory_path,
-    )
-    _write_capacity_universe_mismatch_artifact(
-        args=args,
-        log=log,
-        run_timestamp=run_timestamp,
-        started_at=started_at,
-        inventory_path=inventory_path,
-        capacity_scope=capacity_scope,
-        capacity_doc=cap_doc,
-        runner_contract=runner_contract,
-        mismatches=mismatches,
-        process_id=process_id,
-        duration_minutes=duration_minutes,
-    )
-    return runner_contract, EXIT_CAPACITY_UNIVERSE_MISMATCH
-
-
-def _write_effective_inventory_prep_failed_artifact(
-    *,
-    args: argparse.Namespace,
-    log: Any,
-    run_timestamp: str,
-    started_at: float,
-    inventory_path: str,
-    failure_reason: str,
-    process_id: int,
-    duration_minutes: float,
-) -> None:
-    """Emit canonical shadow artifact when effective inventory preparation fails."""
-    from m9.graph_arb.artifacts import build_artifact, write_artifact
-    from m9.graph_arb.models import GraphTopology
-
-    artifact_path = getattr(
-        args, "artifact_path", "data/runs/_rolling/m9_graph_latest.json"
-    )
-    empty_topology = GraphTopology(
-        token_count=0,
-        edge_count=0,
-        route_count=0,
-        hub_tokens=[],
-        dead_end_tokens=[],
-        missing_edges_for_3cycle=[],
-        adjacency_summary={},
-    )
-    artifact = build_artifact(
-        chain=args.chain,
-        duration_minutes=duration_minutes,
-        cycle_results=[],
-        topology=empty_topology,
-        sizes_usd=tuple(getattr(args, "sizes_usd", None) or (100.0,)),
-        run_timestamp=run_timestamp,
-        started_at_mono=started_at,
-        elapsed_s=time.monotonic() - started_at,
-        sweeps_completed=0,
-        process_id=process_id,
-        python_executable=sys.executable,
-        venv_active=bool(os.environ.get("VIRTUAL_ENV")),
-        inventory_path=inventory_path,
-        config_path=args.config,
-        scan_scope={
-            "shadow_lane_blocker": BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED,
-            "effective_inventory_prep_failure": failure_reason,
-        },
-    )
-    artifact["runner_outcome"] = BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED
-    artifact["shadow_lane_blocker"] = BLOCKER_EFFECTIVE_INVENTORY_PREP_FAILED
-    artifact["effective_inventory_prep_failure"] = failure_reason
-    from m9.graph_arb.universe_contract import resolve_session_id
-
-    _stamp_runner_completion_provenance(
-        artifact,
-        run_timestamp=run_timestamp,
-        universe_contract=None,
-        inventory_path=inventory_path,
-        session_id=resolve_session_id(getattr(args, "session_id", None)),
-    )
-    write_artifact(artifact, artifact_path)
-    log.error(
-        "Effective inventory preparation failed: %s (path=%s)",
-        failure_reason,
-        inventory_path,
-    )
 
 
 def _iso_now() -> str:
@@ -1587,59 +1373,17 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     _runner_universe_contract: Optional[Dict[str, Any]] = None
     _productive_lane = bool(getattr(args, "productive_lane", False))
     if _productive_lane:
-        from m9.graph_arb.effective_inventory import (
-            prepare_effective_execution_inventory,
-            resolve_effective_inventory_path,
+        from m9.graph_arb.runner_services.inventory_admission import (
+            admit_productive_inventory,
         )
-        from m9.graph_arb.route_quarantine import merge_paused_pools_from_lane_rca
-        from m9.graph_arb.universe_contract import resolve_session_id
 
-        try:
-            _rq_merge = merge_paused_pools_from_lane_rca()
-            if _rq_merge.get("added"):
-                log.info(
-                    "Hard quarantine: added %d paused Balancer pools from lane RCA",
-                    _rq_merge["added"],
-                )
-        except Exception as _rq_exc:
-            log.debug("Paused-pool quarantine merge skipped: %s", _rq_exc)
-
-        _runner_sid = resolve_session_id(getattr(args, "session_id", None))
-        _effective_out = (
-            str(getattr(args, "effective_inventory_path", "") or "").strip()
-            or resolve_effective_inventory_path(_runner_sid)
-        )
-        try:
-            inventory_path = prepare_effective_execution_inventory(
-                inventory_path,
-                args.config,
-                chain=args.chain,
-                output_path=_effective_out,
-                session_id=_runner_sid,
-                require_post_depth=True,
-            )
-            log.info("Effective execution inventory: path=%s", inventory_path)
-        except Exception as _prep_exc:
-            _write_effective_inventory_prep_failed_artifact(
-                args=args,
-                log=log,
-                run_timestamp=run_timestamp,
-                started_at=started_at,
-                inventory_path=inventory_path,
-                failure_reason=str(_prep_exc),
-                process_id=process_id,
-                duration_minutes=duration_minutes,
-            )
-            return EXIT_EFFECTIVE_INVENTORY_PREP_FAILED
-
-    if cap_path_str and _cap_doc is not None:
-        _runner_universe_contract, _universe_exit = _validate_capacity_universe_or_exit(
+        _admission = admit_productive_inventory(
             args=args,
             log=log,
+            inventory_path=inventory_path,
             cap_path_str=cap_path_str,
             cap_doc=_cap_doc,
             capacity_scope=_capacity_scope,
-            inventory_path=inventory_path,
             cycle_lengths=_cycle_lengths,
             active_profile=_active_profile,
             run_timestamp=run_timestamp,
@@ -1647,26 +1391,33 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             process_id=process_id,
             duration_minutes=duration_minutes,
         )
-        if _universe_exit is not None:
-            return _universe_exit
+        inventory_path = _admission.inventory_path
+        _runner_universe_contract = _admission.runner_universe_contract
+        _truth_prices = _admission.truth_prices
+        if _admission.exit_code is not None:
+            return _admission.exit_code
 
-    try:
-        from m9.graph_arb.token_price_fetcher import (
-            build_dual_key_price_map,
-            extend_price_map_from_inventory,
-            fetch_token_prices_usd,
-        )
+    if _truth_prices is None:
+        try:
+            from m9.graph_arb.token_price_fetcher import (
+                build_dual_key_price_map,
+                extend_price_map_from_inventory,
+                fetch_token_prices_usd,
+            )
 
-        _truth_w3 = _connect_rpc(args.chain) if rpc_url else None
-        _truth_price_result = fetch_token_prices_usd(timeout_s=3.0)
-        _truth_prices = extend_price_map_from_inventory(
-            inventory_path,
-            args.config,
-            _truth_price_result.prices_by_address
-            or build_dual_key_price_map(_truth_price_result.prices),
-        )
-    except Exception as _price_exc:
-        log.debug("Quote-size truth price map skipped: %s", _price_exc)
+            _truth_w3 = _connect_rpc(args.chain) if rpc_url else None
+            _truth_price_result = fetch_token_prices_usd(timeout_s=3.0)
+            _truth_prices = extend_price_map_from_inventory(
+                inventory_path,
+                args.config,
+                _truth_price_result.prices_by_address
+                or build_dual_key_price_map(_truth_price_result.prices),
+            )
+        except Exception as _price_exc:
+            log.debug("Quote-size truth price map skipped: %s", _price_exc)
+    elif rpc_url:
+        _truth_w3 = _connect_rpc(args.chain)
+        log.info("Using frozen token prices from materialized effective inventory")
 
     if _lane == "productive":
         try:
@@ -2197,24 +1948,33 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         write_artifact(artifact, artifact_path)
         return EXIT_OK
 
-    # Крок 3: Fetch live token prices from CoinGecko; fall back to hardcoded dict.
-    from m9.graph_arb.token_price_fetcher import fetch_token_prices_usd
-    _price_result = fetch_token_prices_usd(timeout_s=5.0)
-    from m9.graph_arb.token_price_fetcher import (
-        build_dual_key_price_map,
-        extend_price_map_from_inventory,
-    )
+    # Крок 3: Fetch live token prices unless productive lane uses frozen manifest snapshot.
+    _allow_live_quote_prices = os.environ.get(
+        "ARBY_M9_ALLOW_LIVE_QUOTE_PRICES", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if getattr(args, "productive_lane", False) and _truth_prices and not _allow_live_quote_prices:
+        _runtime_token_prices = dict(_truth_prices)
+        log.info("Quote path using frozen token prices from effective inventory manifest")
+    else:
+        from m9.graph_arb.token_price_fetcher import fetch_token_prices_usd
 
-    _runtime_token_prices: dict = extend_price_map_from_inventory(
-        inventory_path,
-        args.config,
-        _price_result.prices_by_address
-        or build_dual_key_price_map(_price_result.prices),
-    )
-    log.info(
-        "Token prices: source=%s stale=%s",
-        _price_result.source, _price_result.stale,
-    )
+        _price_result = fetch_token_prices_usd(timeout_s=5.0)
+        from m9.graph_arb.token_price_fetcher import (
+            build_dual_key_price_map,
+            extend_price_map_from_inventory,
+        )
+
+        _runtime_token_prices = extend_price_map_from_inventory(
+            inventory_path,
+            args.config,
+            _price_result.prices_by_address
+            or build_dual_key_price_map(_price_result.prices),
+        )
+        log.info(
+            "Token prices: source=%s stale=%s",
+            _price_result.source,
+            _price_result.stale,
+        )
 
     # Connect RPC
     w3 = _connect_rpc(args.chain)
@@ -2236,6 +1996,9 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     # Each sweep quotes a batch of max_cycles_per_sweep cycles, then writes a
     # partial artifact so the rolling artifact stays fresh even mid-soak.
     from m9.graph_arb.quoter import schedule_cycle_quotes
+    from m9.graph_arb.quote_timeline import QuoteTimelineTracker
+
+    _quote_timeline = QuoteTimelineTracker()
     deadline = started_at + duration_minutes * 60.0
     max_per_sweep = getattr(args, "max_cycles_per_sweep", 200)
     cycle_count = len(ranked)
@@ -2440,6 +2203,13 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         )
         if _depth_skipped:
             all_results.extend(_depth_skipped)
+        from m9.graph_arb.cycle_capacity import is_econ_rpc_quote_attempt
+
+        _econ_floor_for_timeline = 180.0
+        if _cost_model:
+            from m9.graph_arb.size_truth import active_economics_floor_usd
+
+            _econ_floor_for_timeline = active_economics_floor_usd(_cost_model)
         new_results = schedule_cycle_quotes(
             _depth_gated_batch,
             w3=w3,
@@ -2451,8 +2221,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             token_prices=_runtime_token_prices,
             dynamic_sizes=getattr(args, "dynamic_sizes", False),
             dynamic_size_limit=getattr(args, "dynamic_size_max_cycles", 3),
+            quote_timeline=_quote_timeline,
+            econ_floor_usd=_econ_floor_for_timeline,
+            queue_delay_s=time.monotonic() - started_at,
         )
         all_results.extend(new_results)
+        for qr in new_results:
+            if is_econ_rpc_quote_attempt(qr, _econ_floor_for_timeline):
+                if qr.status in ("POSITIVE_GROSS", "NEGATIVE_GROSS"):
+                    _quote_timeline.mark_successful_quote(rpc_duration_s=qr.elapsed_s)
         # Feed results back to priority scheduler for adaptive score update
         if _cycle_scheduler is not None:
             _cycle_scheduler.record_results(new_results)
@@ -2599,6 +2376,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             cost_model=_cost_model,
             active_rpc_by_sweep=dict(_active_rpc_by_sweep),
             capacity_scope=_capacity_scope_runtime,
+            quote_timeline=_quote_timeline.to_scan_scope(),
         )
         write_artifact(partial, artifact_path)
         positive_so_far = sum(1 for qr in all_results if qr.gross_bps > 0)
@@ -2833,6 +2611,7 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             **_capacity_scope,
             "shadow_selected_cycle_ids": sorted(_selected_shadow_cycle_ids),
         },
+        quote_timeline=_quote_timeline.to_scan_scope(),
     )
     artifact["run_status"] = "COMPLETED"
     artifact["runner_outcome"] = "COMPLETED"

@@ -130,6 +130,7 @@ HOT_PAIRS_CACHE_DIR = Path("data") / "cache"
 RUN_DIR_RE = re.compile(r"^\[ONLINE\] RunDir:\s*(.+)\s*$")
 PRODUCTION_BRIDGE = "data/tmp/m9_bridge_inventory_production_latest.json"
 CAPACITY_DIAGNOSTIC = "data/tmp/m9_capacity_cycle_diagnostic_latest.json"
+M8_SNIPER_STREAMING_CHECKPOINT = "data/tmp/m8_sniper_streaming_checkpoint.json"
 M9_SHADOW_ARTIFACT = "data/tmp/m9_graph_handoff_quote_validation_10m.json"
 M9_PATIENT_SHADOW_ARTIFACT = "data/tmp/m9_patient_lane_shadow_10m.json"
 M9_RCA_ARTIFACT = "data/tmp/m9_quote_lane_rca_graph_handoff_latest.json"
@@ -251,15 +252,32 @@ def _fresh_quote_ready_count() -> int:
     return 0
 
 
+def _resolve_m9_effective_inventory_materialize_env() -> dict[str, str]:
+    """Env for the single-writer effective inventory materialization stage."""
+    from m9.graph_arb.effective_inventory import (
+        ENV_ALLOW_LIVE_MATERIALIZE,
+        resolve_effective_inventory_path,
+    )
+
+    return {
+        "ARBY_M9_EFFECTIVE_INVENTORY_PATH": resolve_effective_inventory_path(),
+        ENV_ALLOW_LIVE_MATERIALIZE: "1",
+    }
+
+
 def _resolve_m9_shadow_step_env() -> dict[str, str]:
     """Capacity-prioritized shadow with explicit lane mode for economics verdict."""
-    from m9.graph_arb.effective_inventory import resolve_effective_inventory_path
+    from m9.graph_arb.effective_inventory import (
+        ENV_ALLOW_LIVE_MATERIALIZE,
+        resolve_effective_inventory_path,
+    )
 
     fresh = _fresh_quote_ready_count()
     env = {
         "ARBY_M9_CAPACITY_PRIORITIZED": "1",
         "ARBY_M9_CYCLE_LENGTHS": "2,3,4",
         "ARBY_M9_EFFECTIVE_INVENTORY_PATH": resolve_effective_inventory_path(),
+        ENV_ALLOW_LIVE_MATERIALIZE: "0",
     }
     if fresh > 0:
         env["ARBY_M9_SHADOW_LANE_MODE"] = "long_tail_target"
@@ -1336,21 +1354,38 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 batch_minutes=batch_minutes,
             )
             for batch_index, batch_dur in enumerate(batches, start=1):
+                sniper_cmd = _productive_rpc_cmd(
+                    "-u",
+                    "scripts/sniper_smoke_run.py",
+                    "--chain",
+                    "base",
+                    "--duration-minutes",
+                    str(batch_dur),
+                    "--acceptance-run",
+                    "--blocks-back",
+                    "50",
+                    "--streaming-batch-index",
+                    str(batch_index),
+                )
+                sniper_env = {"ARBY_SNIPER_ENABLE": "1"}
+                if batch_index == 1:
+                    sniper_cmd.extend(
+                        ["--write-checkpoint", M8_SNIPER_STREAMING_CHECKPOINT]
+                    )
+                else:
+                    sniper_cmd.extend(
+                        [
+                            "--skip-self-test",
+                            "--skip-preflight",
+                            "--checkpoint-artifact",
+                            M8_SNIPER_STREAMING_CHECKPOINT,
+                        ]
+                    )
                 steps.append(
                     _pipeline_step(
                         f"m8_sniper_acceptance_batch_{batch_index}",
-                        _productive_rpc_cmd(
-                            "-u",
-                            "scripts/sniper_smoke_run.py",
-                            "--chain",
-                            "base",
-                            "--duration-minutes",
-                            str(batch_dur),
-                            "--acceptance-run",
-                            "--blocks-back",
-                            "50",
-                        ),
-                        env={"ARBY_SNIPER_ENABLE": "1"},
+                        sniper_cmd,
+                        env=sniper_env,
                         streaming_batch_index=batch_index,
                     )
                 )
@@ -1979,8 +2014,29 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         )
         steps.append(
             _pipeline_step(
+                "m9_prepare_effective_inventory",
+                _productive_rpc_cmd(
+                    "scripts/m9_prepare_effective_inventory.py",
+                    "--bridge",
+                    PRODUCTION_BRIDGE,
+                    "--config",
+                    "config/exotic_base_anchor.yaml",
+                    "--chain",
+                    "base",
+                ),
+                env=_resolve_m9_effective_inventory_materialize_env(),
+            )
+        )
+        steps.append(
+            _pipeline_step(
                 "m9_topology_diagnostic",
-                _py_cmd("scripts/m9_graph_topology_diagnostic.py", "--inventory", PRODUCTION_BRIDGE, "--cycle-lengths", "2,3,4"),
+                _py_cmd(
+                    "scripts/m9_graph_topology_diagnostic.py",
+                    "--inventory",
+                    _resolve_m9_effective_inventory_materialize_env()["ARBY_M9_EFFECTIVE_INVENTORY_PATH"],
+                    "--cycle-lengths",
+                    "2,3,4",
+                ),
             )
         )
         steps.append(
@@ -1997,6 +2053,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     "--output",
                     CAPACITY_DIAGNOSTIC,
                 ),
+                env=_resolve_m9_shadow_step_env(),
                 allow_exit_codes=(0, 2),
             )
         )
