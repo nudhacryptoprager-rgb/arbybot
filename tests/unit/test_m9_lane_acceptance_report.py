@@ -730,3 +730,99 @@ def test_m9_blockers_admission_before_quote_not_market_negative():
     assert "NO_POSITIVE_GROSS" not in blockers
     assert "BROAD_GRAPH_DIAGNOSTIC_NOT_LONG_TAIL_ECONOMICS" in blockers
     assert "CAPACITY_VALID_CYCLES_NOT_QUOTED_IN_SHADOW" in blockers
+
+
+def test_freshness_gate_session_aligned_allows_longer_window(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    import scripts.m9_lane_acceptance_report as mod
+
+    now_fixed = datetime(2026, 7, 25, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(mod, "_now_utc", lambda: now_fixed)
+    aligned = "2026-07-25T11:50:00Z"
+    sid = "sess_aligned"
+    fresh_registry = tmp_path / "registry.json"
+    fresh_registry.write_text(
+        '{"schema_version":"m8_3_token_metadata_registry_v2","tokens":{},'
+        '"route_coverage":{"cycle_participating_routes":{"legs_total":10,'
+        '"economics_grade_known_rate":0.98}},"generated_at_utc":"'
+        + aligned
+        + '","session_id":"'
+        + sid
+        + '"}',
+        encoding="utf-8",
+    )
+    report = mod.build_acceptance_report(
+        sniper={
+            "status": "ACTIVE",
+            "generated_at_utc": aligned,
+            "session_id": sid,
+            "metrics": {},
+            "recent_events": [],
+        },
+        anchor={"metrics": {}},
+        expansion={"metrics": {}},
+        bridge={
+            "generated_at_utc": aligned,
+            "session_id": sid,
+            "active_routes": [],
+            "bridge_source_metrics": {
+                "graph_ready_from_m8": 1,
+                "sniper_generated_at_utc": aligned,
+            },
+        },
+        shadow={
+            "generated_at_utc": aligned,
+            "session_id": sid,
+            "cycles_found": 10,
+            "cycles_quoteable": 0,
+            "run_context": {"session_id": sid},
+        },
+        rca=None,
+        m8_2_report={
+            "goal_status": "REACHED",
+            "handoff_ready": True,
+            "session_id": sid,
+            "generated_at_utc": aligned,
+        },
+        capacity_metrics={
+            "generated_at_utc": aligned,
+            "session_id": sid,
+            "capacity_valid_cycle_ids": ["c1"],
+            "universe_contract": {"session_id": sid},
+        },
+        m8_3_registry_path=str(fresh_registry),
+    )
+    fg = report["freshness_gate"]
+    assert "SESSION_ID_MISMATCH" not in fg["blockers"]
+    assert "MIXED_RUNTIME_WINDOW" not in fg["blockers"]
+
+
+def test_capacity_selected_but_not_quoted_blocker():
+    report = build_acceptance_report(
+        sniper={"status": "ACTIVE", "metrics": {}, "recent_events": []},
+        anchor={"metrics": {}},
+        expansion={"metrics": {"handoff_ready": True}},
+        bridge={
+            "active_routes": [],
+            "bridge_source_metrics": {"graph_ready_from_m8": 1},
+        },
+        shadow={
+            "cycles_found": 10,
+            "cycles_quoteable": 0,
+            "scan_scope": {
+                "capacity_valid_cycle_ids": ["c1", "c2"],
+                "shadow_selected_cycle_ids": ["c1", "c2"],
+                "shadow_quoted_cycle_ids": [],
+            },
+            "quote_size_truth": {"econ_rpc_quote_attempts": 0},
+        },
+        rca=None,
+        m8_2_report={"handoff_ready": True, "goal_status": "REACHED"},
+        capacity_metrics={
+            "capacity_valid_cycle_ids": ["c1", "c2"],
+            "universe_contract": {"session_id": "sess_q"},
+            "session_id": "sess_q",
+        },
+    )
+    assert "CAPACITY_SELECTED_BUT_NOT_QUOTED" in report["m9_quote_validation_blockers"]

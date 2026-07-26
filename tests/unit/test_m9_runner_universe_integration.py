@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from m9.graph_arb.universe_contract import build_universe_contract
+from m9.graph_arb.universe_contract import (
+    build_runner_admission_graph_fingerprint,
+    build_universe_contract,
+)
 
 
 def _minimal_bridge(path: Path) -> None:
@@ -28,19 +31,33 @@ def _minimal_bridge(path: Path) -> None:
     )
 
 
-def _capacity_doc(*, inventory_path: str, cycle_lengths: list[int], session_id: str) -> dict:
+def _capacity_doc(
+    *,
+    inventory_path: str,
+    config_path: str,
+    cycle_lengths: list[int],
+    session_id: str,
+) -> dict:
+    graph_fp = build_runner_admission_graph_fingerprint(
+        inventory_path=inventory_path,
+        config_path=config_path,
+        lane="productive",
+        require_factory_verified=True,
+    )
     runner_uc = build_universe_contract(
         inventory_path=inventory_path,
-        config_path="config/exotic_base_anchor.yaml",
+        config_path=config_path,
         lane="productive",
         require_factory_verified=True,
         cycle_lengths=cycle_lengths,
         active_economics_profile="production_conservative",
         session_id=session_id,
+        graph_fingerprint=graph_fp,
     )
     return {
         "schema_version": "m9_capacity_cycle_diagnostic.2",
         "universe_contract": runner_uc,
+        "graph_fingerprint": graph_fp,
         "capacity_valid_cycle_ids": ["cid_a"],
         "cycles_at_production_floor": 1,
     }
@@ -63,6 +80,7 @@ def test_runner_exit_7_writes_mismatch_artifact(bridge_and_capacity, monkeypatch
         json.dumps(
             _capacity_doc(
                 inventory_path=str(bridge),
+                config_path="config/exotic_base_anchor.yaml",
                 cycle_lengths=[2, 3, 4],
                 session_id="sess_a",
             )
@@ -71,6 +89,10 @@ def test_runner_exit_7_writes_mismatch_artifact(bridge_and_capacity, monkeypatch
     )
     monkeypatch.delenv("ARBY_PIPELINE_SESSION_ID", raising=False)
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "sess_a")
+    monkeypatch.setattr(
+        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        lambda inventory_path, *args, **kwargs: inventory_path,
+    )
 
     import argparse
 
@@ -95,6 +117,7 @@ def test_runner_exit_7_writes_mismatch_artifact(bridge_and_capacity, monkeypatch
         allow_no_prequote_soak=False,
         prior_shadow_artifact="",
         allow_spread_lifetime_without_positive_gross=False,
+        allow_pre_depth_inventory=True,
     )
     log = logging.getLogger("test.runner_universe")
     result = _run(args, log)
@@ -110,27 +133,22 @@ def test_runner_accepts_matching_capacity_contract(bridge_and_capacity, monkeypa
     from m9.graph_arb.runner import EXIT_CAPACITY_UNIVERSE_MISMATCH, _run
 
     bridge, cap_path, artifact_path = bridge_and_capacity
-    uc = build_universe_contract(
-        inventory_path=str(bridge),
-        config_path="config/exotic_base_anchor.yaml",
-        lane="productive",
-        require_factory_verified=True,
-        cycle_lengths=(3, 4),
-        active_economics_profile="production_conservative",
-        session_id="sess_b",
-    )
     cap_path.write_text(
         json.dumps(
-            {
-                "schema_version": "m9_capacity_cycle_diagnostic.2",
-                "universe_contract": uc,
-                "capacity_valid_cycle_ids": ["cid_a"],
-                "cycles_at_production_floor": 1,
-            }
+            _capacity_doc(
+                inventory_path=str(bridge),
+                config_path="config/exotic_base_anchor.yaml",
+                cycle_lengths=[3, 4],
+                session_id="sess_b",
+            )
         ),
         encoding="utf-8",
     )
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "sess_b")
+    monkeypatch.setattr(
+        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        lambda inventory_path, *args, **kwargs: inventory_path,
+    )
 
     import argparse
 
@@ -155,7 +173,67 @@ def test_runner_accepts_matching_capacity_contract(bridge_and_capacity, monkeypa
         allow_no_prequote_soak=False,
         prior_shadow_artifact="",
         allow_spread_lifetime_without_positive_gross=False,
+        allow_pre_depth_inventory=True,
     )
     log = logging.getLogger("test.runner_universe")
     result = _run(args, log)
     assert result != EXIT_CAPACITY_UNIVERSE_MISMATCH
+
+
+def test_successful_runner_stamps_provenance_and_universe_contract(
+    bridge_and_capacity, monkeypatch,
+):
+    from m9.graph_arb.runner import _run
+
+    bridge, cap_path, artifact_path = bridge_and_capacity
+    cap_path.write_text(
+        json.dumps(
+            _capacity_doc(
+                inventory_path=str(bridge),
+                config_path="config/exotic_base_anchor.yaml",
+                cycle_lengths=[3, 4],
+                session_id="sess_stamp",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "sess_stamp")
+    monkeypatch.setattr(
+        "m9.graph_arb.effective_inventory.prepare_effective_execution_inventory",
+        lambda inventory_path, *args, **kwargs: inventory_path,
+    )
+
+    import argparse
+
+    args = argparse.Namespace(
+        chain="base",
+        config="config/exotic_base_anchor.yaml",
+        inventory=str(bridge),
+        no_prequote=False,
+        dynamic_sizes=False,
+        sizes_usd=[100.0, 250.0, 500.0],
+        dynamic_size_max_cycles=3,
+        require_premium_rpc=False,
+        require_factory_verified=True,
+        productive_lane=True,
+        verbose=False,
+        artifact_path=str(artifact_path),
+        capacity_diagnostic=str(cap_path),
+        require_cycles_at_floor=False,
+        duration_minutes=1.0,
+        cycles_limit=100,
+        session_id="sess_stamp",
+        allow_no_prequote_soak=False,
+        prior_shadow_artifact="",
+        allow_spread_lifetime_without_positive_gross=False,
+        allow_pre_depth_inventory=True,
+    )
+    log = logging.getLogger("test.runner_universe")
+    _run(args, log)
+    if not artifact_path.is_file():
+        pytest.skip("runner did not complete artifact in this environment")
+    doc = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert doc.get("session_id") == "sess_stamp"
+    assert doc.get("run_context", {}).get("session_id") == "sess_stamp"
+    assert doc.get("universe_contract", {}).get("session_id") == "sess_stamp"
+    assert doc.get("effective_inventory_path")

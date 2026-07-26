@@ -10,15 +10,30 @@ from m9.graph_arb.universe_contract import (
 )
 
 
+def _graph_fp(**overrides):
+    base = {
+        "resolved_inventory_path": "/data/tmp/bridge.json",
+        "active_route_count": 1,
+        "graph_edge_count": 2,
+        "graph_route_count": 1,
+    }
+    base.update(overrides)
+    return base
+
+
 def _runner_contract(**overrides):
+    fp = overrides.pop("graph_fingerprint", None) or _graph_fp()
     base = build_universe_contract(
-        inventory_path="data/tmp/bridge.json",
-        config_path="config/exotic_base_anchor.yaml",
-        lane="productive",
-        require_factory_verified=True,
-        cycle_lengths=(3, 4),
-        active_economics_profile="production_conservative",
-        session_id="sess_a",
+        inventory_path=overrides.pop("inventory_path", "data/tmp/bridge.json"),
+        config_path=overrides.pop("config_path", "config/exotic_base_anchor.yaml"),
+        lane=overrides.pop("lane", "productive"),
+        require_factory_verified=overrides.pop("require_factory_verified", True),
+        cycle_lengths=overrides.pop("cycle_lengths", (3, 4)),
+        active_economics_profile=overrides.pop(
+            "active_economics_profile", "production_conservative"
+        ),
+        session_id=overrides.pop("session_id", "sess_a"),
+        graph_fingerprint=fp,
     )
     base.update(overrides)
     return base
@@ -66,10 +81,56 @@ def test_validate_requires_universe_contract_field():
 
 def test_validate_passes_when_contracts_match():
     runner = _runner_contract()
-    cap = {"universe_contract": dict(runner)}
+    graph_keys = (
+        "resolved_inventory_path",
+        "active_route_count",
+        "graph_edge_count",
+        "graph_route_count",
+    )
+    cap = {
+        "universe_contract": dict(runner),
+        "graph_fingerprint": {
+            key: runner[key]
+            for key in graph_keys
+            if key in runner
+        },
+    }
     ok, mismatches = validate_capacity_for_runner(cap, runner)
     assert ok
     assert mismatches == []
+
+
+def test_validate_fail_close_missing_graph_fingerprint():
+    runner = _runner_contract()
+    cap = {"universe_contract": dict(runner)}
+    ok, mismatches = validate_capacity_for_runner(cap, runner)
+    assert not ok
+    assert "graph_fingerprint_missing_in_capacity" in mismatches
+
+
+def test_compare_fail_close_missing_runner_graph_keys():
+    runner = _runner_contract()
+    for key in (
+        "resolved_inventory_path",
+        "active_route_count",
+        "graph_edge_count",
+        "graph_route_count",
+    ):
+        broken = dict(runner)
+        broken.pop(key, None)
+        mismatches = compare_universe_contracts(
+            broken, runner, require_graph_fingerprint=True
+        )
+        assert f"graph_fingerprint_missing_in_runner_{key}" in mismatches
+
+
+def test_graph_route_count_is_required_compare_key():
+    assert "graph_route_count" in (
+        "resolved_inventory_path",
+        "active_route_count",
+        "graph_edge_count",
+        "graph_route_count",
+    )
 
 
 def test_contract_schema_version_v2():

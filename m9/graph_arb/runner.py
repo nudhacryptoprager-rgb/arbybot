@@ -256,6 +256,98 @@ def _write_capacity_universe_mismatch_artifact(
     )
 
 
+def _stamp_runner_completion_provenance(
+    artifact: Dict[str, Any],
+    *,
+    run_timestamp: str,
+    universe_contract: Optional[Dict[str, Any]],
+    inventory_path: str,
+    session_id: Optional[str],
+) -> None:
+    """Stamp session/provenance/effective universe on normal completion artifacts."""
+    from core.pipeline_provenance import apply_pipeline_provenance
+
+    provenance_out = apply_pipeline_provenance(artifact, run_timestamp=run_timestamp)
+    artifact.update(provenance_out)
+    if universe_contract:
+        artifact["universe_contract"] = dict(universe_contract)
+    if session_id:
+        artifact["session_id"] = session_id
+    artifact["effective_inventory_path"] = inventory_path
+
+
+def _validate_capacity_universe_or_exit(
+    *,
+    args: argparse.Namespace,
+    log: Any,
+    cap_path_str: str,
+    cap_doc: Dict[str, Any],
+    capacity_scope: Dict[str, Any],
+    inventory_path: str,
+    cycle_lengths: tuple[int, ...],
+    active_profile: str,
+    run_timestamp: str,
+    started_at: float,
+    process_id: int,
+    duration_minutes: float,
+) -> tuple[Optional[Dict[str, Any]], Optional[int]]:
+    """Build runner universe contract on effective inventory; exit 7 on mismatch."""
+    from m9.graph_arb.universe_contract import (
+        build_runner_admission_graph_fingerprint,
+        build_universe_contract,
+        resolve_session_id,
+        validate_capacity_for_runner,
+    )
+
+    pool_lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
+    require_fv = bool(getattr(args, "require_factory_verified", False))
+    graph_fp = build_runner_admission_graph_fingerprint(
+        inventory_path=inventory_path,
+        config_path=args.config,
+        lane=pool_lane,
+        require_factory_verified=require_fv,
+    )
+    runner_contract = build_universe_contract(
+        inventory_path=inventory_path,
+        config_path=args.config,
+        lane=pool_lane,
+        require_factory_verified=require_fv,
+        cycle_lengths=cycle_lengths,
+        active_economics_profile=active_profile,
+        session_id=resolve_session_id(getattr(args, "session_id", None)),
+        graph_fingerprint=graph_fp,
+    )
+    capacity_scope["universe_contract"] = runner_contract
+    ok, mismatches = validate_capacity_for_runner(
+        cap_doc,
+        runner_contract,
+        require_session_binding=True,
+    )
+    if ok:
+        return runner_contract, None
+    log.error(
+        "CAPACITY_UNIVERSE_MISMATCH: capacity diagnostic built for a different "
+        "universe than runner (mismatches=%s path=%s effective_inventory=%s)",
+        mismatches,
+        cap_path_str,
+        inventory_path,
+    )
+    _write_capacity_universe_mismatch_artifact(
+        args=args,
+        log=log,
+        run_timestamp=run_timestamp,
+        started_at=started_at,
+        inventory_path=inventory_path,
+        capacity_scope=capacity_scope,
+        capacity_doc=cap_doc,
+        runner_contract=runner_contract,
+        mismatches=mismatches,
+        process_id=process_id,
+        duration_minutes=duration_minutes,
+    )
+    return runner_contract, EXIT_CAPACITY_UNIVERSE_MISMATCH
+
+
 def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -774,12 +866,17 @@ def main(argv: "list[str] | None" = None) -> int:
         default=None,
         help="Pipeline session id (fallback: ARBY_PIPELINE_SESSION_ID env)",
     )
+    parser.add_argument(
+        "--allow-pre-depth-inventory",
+        action="store_true",
+        help="Skip post-depth inventory requirement for effective execution prep (debug/tests)",
+    )
 
     args = parser.parse_args(argv)
     if getattr(args, "session_id", None):
-        from m9.graph_arb.universe_contract import apply_explicit_session_id
+        from m9.graph_arb.universe_contract import bind_cli_session_to_env
 
-        apply_explicit_session_id(args.session_id)
+        bind_cli_session_to_env(args.session_id)
     _setup_logging(args.verbose)
 
     import logging
@@ -1129,52 +1226,6 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         args.chain, args.config, inventory_path,
     )
 
-    _runner_universe_contract: Optional[Dict[str, Any]] = None
-    if cap_path_str and _cap_doc is not None:
-        from m9.graph_arb.universe_contract import (
-            apply_explicit_session_id,
-            build_universe_contract,
-            validate_capacity_for_runner,
-        )
-
-        _pool_lane = "productive" if getattr(args, "productive_lane", False) else "discovery"
-        _runner_universe_contract = build_universe_contract(
-            inventory_path=inventory_path,
-            config_path=args.config,
-            lane=_pool_lane,
-            require_factory_verified=bool(getattr(args, "require_factory_verified", False)),
-            cycle_lengths=_cycle_lengths,
-            active_economics_profile=_active_profile,
-            session_id=apply_explicit_session_id(getattr(args, "session_id", None)),
-        )
-        _capacity_scope["universe_contract"] = _runner_universe_contract
-        ok, mismatches = validate_capacity_for_runner(
-            _cap_doc,
-            _runner_universe_contract,
-            require_session_binding=True,
-        )
-        if not ok:
-            log.error(
-                "CAPACITY_UNIVERSE_MISMATCH: capacity diagnostic built for a different "
-                "universe than runner (mismatches=%s path=%s)",
-                mismatches,
-                cap_path_str,
-            )
-            _write_capacity_universe_mismatch_artifact(
-                args=args,
-                log=log,
-                run_timestamp=run_timestamp,
-                started_at=started_at,
-                inventory_path=inventory_path,
-                capacity_scope=_capacity_scope,
-                capacity_doc=_cap_doc or {},
-                runner_contract=_runner_universe_contract,
-                mismatches=mismatches,
-                process_id=process_id,
-                duration_minutes=duration_minutes,
-            )
-            return EXIT_CAPACITY_UNIVERSE_MISMATCH
-
     # Extract inventory stats (Funnel A + reject taxonomy) before building graph
     inv_stats = extract_inventory_stats(inventory_path)
     funnel_a = inv_stats.get("funnel_a")
@@ -1451,14 +1502,10 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
 
     _truth_prices: Optional[Dict[str, float]] = None
     _truth_w3: Optional[Any] = None
+    _runner_universe_contract: Optional[Dict[str, Any]] = None
     try:
-        from m9.graph_arb.inventory_truth import enrich_inventory_for_quote_truth
+        from m9.graph_arb.effective_inventory import prepare_effective_execution_inventory
         from m9.graph_arb.route_quarantine import merge_paused_pools_from_lane_rca
-        from m9.graph_arb.token_price_fetcher import (
-            build_dual_key_price_map,
-            extend_price_map_from_inventory,
-            fetch_token_prices_usd,
-        )
 
         try:
             _rq_merge = merge_paused_pools_from_lane_rca()
@@ -1470,6 +1517,46 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
         except Exception as _rq_exc:
             log.debug("Paused-pool quarantine merge skipped: %s", _rq_exc)
 
+        _require_post_depth = getattr(args, "require_post_depth_inventory", None)
+        if _require_post_depth is None:
+            _require_post_depth = bool(getattr(args, "productive_lane", False)) and not bool(
+                getattr(args, "allow_pre_depth_inventory", False)
+            )
+        inventory_path = prepare_effective_execution_inventory(
+            inventory_path,
+            args.config,
+            chain=args.chain,
+            require_post_depth=bool(_require_post_depth),
+        )
+        log.info("Effective execution inventory: path=%s", inventory_path)
+    except Exception as _truth_exc:
+        log.warning("Effective execution inventory preparation skipped: %s", _truth_exc)
+
+    if cap_path_str and _cap_doc is not None:
+        _runner_universe_contract, _universe_exit = _validate_capacity_universe_or_exit(
+            args=args,
+            log=log,
+            cap_path_str=cap_path_str,
+            cap_doc=_cap_doc,
+            capacity_scope=_capacity_scope,
+            inventory_path=inventory_path,
+            cycle_lengths=_cycle_lengths,
+            active_profile=_active_profile,
+            run_timestamp=run_timestamp,
+            started_at=started_at,
+            process_id=process_id,
+            duration_minutes=duration_minutes,
+        )
+        if _universe_exit is not None:
+            return _universe_exit
+
+    try:
+        from m9.graph_arb.token_price_fetcher import (
+            build_dual_key_price_map,
+            extend_price_map_from_inventory,
+            fetch_token_prices_usd,
+        )
+
         _truth_w3 = _connect_rpc(args.chain) if rpc_url else None
         _truth_price_result = fetch_token_prices_usd(timeout_s=3.0)
         _truth_prices = extend_price_map_from_inventory(
@@ -1478,15 +1565,8 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             _truth_price_result.prices_by_address
             or build_dual_key_price_map(_truth_price_result.prices),
         )
-        inventory_path = enrich_inventory_for_quote_truth(
-            inventory_path,
-            args.config,
-            w3=_truth_w3,
-            token_prices=_truth_prices,
-        )
-        log.info("Quote-size truth inventory enrichment: path=%s", inventory_path)
-    except Exception as _truth_exc:
-        log.warning("Quote-size truth enrichment skipped: %s", _truth_exc)
+    except Exception as _price_exc:
+        log.debug("Quote-size truth price map skipped: %s", _price_exc)
 
     if _lane == "productive":
         try:
@@ -1613,6 +1693,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
             route_meta_by_pool=_route_meta_by_pool or None,
             cost_model=_cost_model,
             capacity_scope=_capacity_scope,
+        )
+        from m9.graph_arb.universe_contract import resolve_session_id
+
+        _stamp_runner_completion_provenance(
+            artifact,
+            run_timestamp=run_timestamp,
+            universe_contract=_runner_universe_contract,
+            inventory_path=inventory_path,
+            session_id=resolve_session_id(getattr(args, "session_id", None)),
         )
         write_artifact(artifact, artifact_path)
         return EXIT_CONFIG_ERROR
@@ -2652,6 +2741,15 @@ def _run(args: argparse.Namespace, log: "logging.Logger") -> int:
     )
     if not artifact["duration_fulfilled"]:
         artifact["runner_outcome"] = "ENDED_EARLY"
+    from m9.graph_arb.universe_contract import resolve_session_id
+
+    _stamp_runner_completion_provenance(
+        artifact,
+        run_timestamp=run_timestamp,
+        universe_contract=_runner_universe_contract,
+        inventory_path=inventory_path,
+        session_id=resolve_session_id(getattr(args, "session_id", None)),
+    )
     write_artifact(artifact, artifact_path)
 
     # Write QUOTE_REVERT quarantine: routes whose legs failed exclusively with QUOTE_REVERT.

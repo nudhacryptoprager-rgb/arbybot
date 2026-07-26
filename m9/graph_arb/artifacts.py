@@ -2090,6 +2090,13 @@ def write_artifact(artifact: Dict[str, Any], artifact_path: str = ROLLING_PATH) 
     import time as _time
     import uuid
 
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        norm = str(artifact_path).replace("\\", "/")
+        if "data/runs/_rolling" in norm and "docs/artifacts" not in norm:
+            raise RuntimeError(
+                f"Tests must not write rolling artifacts: {artifact_path}"
+            )
+
     path = os.path.abspath(artifact_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # Per-write unique tmp avoids WinError 2 when concurrent runners share path.tmp

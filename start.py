@@ -2004,25 +2004,6 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 allow_exit_codes=(0, 2),
             )
         )
-        if use_batched_final:
-            steps.append(
-                _pipeline_step(
-                    "m8_2_acceptance_final_batch",
-                    _py_cmd(
-                        "scripts/m8_2_acceptance_report.py",
-                        "--hints",
-                        STREAMING_M82_HINTS_SENTINEL,
-                        "--radar",
-                        STREAMING_M82_RADAR_SENTINEL,
-                        "--expansion",
-                        STREAMING_M82_EXPANSION_SENTINEL,
-                        "--output",
-                        STREAMING_M82_ACCEPTANCE_SENTINEL,
-                    ),
-                    streaming_final_batch=True,
-                    allow_exit_codes=(0, 1),
-                )
-            )
         if include_shadow:
             steps.append(
                 _pipeline_step(
@@ -2054,6 +2035,25 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                         M9_SHADOW_ARTIFACT,
                     ),
                     env=_resolve_m9_shadow_step_env(),
+                )
+            )
+        if use_batched_final:
+            steps.append(
+                _pipeline_step(
+                    "m8_2_acceptance_final_batch",
+                    _py_cmd(
+                        "scripts/m8_2_acceptance_report.py",
+                        "--hints",
+                        STREAMING_M82_HINTS_SENTINEL,
+                        "--radar",
+                        STREAMING_M82_RADAR_SENTINEL,
+                        "--expansion",
+                        STREAMING_M82_EXPANSION_SENTINEL,
+                        "--output",
+                        STREAMING_M82_ACCEPTANCE_SENTINEL,
+                    ),
+                    streaming_final_batch=True,
+                    allow_exit_codes=(0, 1),
                 )
             )
         lane_acceptance_cmd = [

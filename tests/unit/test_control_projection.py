@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import json
 
-from api.control_projection import build_control_funnel, build_control_traces
+from api.control_projection import (
+    build_control_funnel,
+    build_control_traces,
+    sanitize_repo_relative_json_path,
+)
 
 
 def test_control_funnel_economics_not_yet_tested(tmp_path):
@@ -72,3 +76,31 @@ def test_control_funnel_uses_pipeline_shadow_path(tmp_path):
     funnel = build_control_funnel(tmp_path)
     assert funnel["shadow_source_path"] == "data/tmp/m9_shadow_capacity_smoke.json"
     assert funnel["economics_not_yet_tested"] is True
+
+
+def test_sanitize_repo_relative_json_path_rejects_absolute_and_dotdot(tmp_path):
+    (tmp_path / "data/tmp").mkdir(parents=True)
+    good = tmp_path / "data/tmp/ok.json"
+    good.write_text("{}", encoding="utf-8")
+    assert sanitize_repo_relative_json_path(tmp_path, "data/tmp/ok.json") == "data/tmp/ok.json"
+    assert sanitize_repo_relative_json_path(tmp_path, str(good)) is None
+    assert sanitize_repo_relative_json_path(tmp_path, "data/tmp/../secret.json") is None
+    assert sanitize_repo_relative_json_path(tmp_path, "data/tmp/missing.json") is None
+
+
+def test_control_funnel_marks_fixture_shadow_not_runtime_evidence(tmp_path):
+    (tmp_path / "data/tmp").mkdir(parents=True)
+    (tmp_path / "data/runs/_rolling").mkdir(parents=True)
+    (tmp_path / "data/runs/_rolling/m9_graph_latest.json").write_text(
+        json.dumps(
+            {
+                "config_path": "_nonexistent_config_for_gate_test.yaml",
+                "cycles_found": 10,
+                "quote_size_truth": {"econ_rpc_quote_attempts": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    funnel = build_control_funnel(tmp_path)
+    assert funnel["shadow_runtime_evidence_status"] == "NOT_RUNTIME_EVIDENCE"
+    assert funnel["shadow_fixture_rejected"] is True

@@ -1,6 +1,7 @@
 """Shared M9 shadow/capacity universe contract — binds diagnostic and runner inputs."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -24,6 +25,7 @@ _GRAPH_COMPARE_KEYS = (
     "resolved_inventory_path",
     "active_route_count",
     "graph_edge_count",
+    "graph_route_count",
 )
 
 
@@ -52,13 +54,26 @@ def admission_policy_label(
     )
 
 
-def apply_explicit_session_id(session_id: Optional[str]) -> Optional[str]:
-    """Bind explicit CLI session id; env remains fallback only."""
+def resolve_session_id(explicit: Optional[str] = None) -> Optional[str]:
+    """Resolve session id from explicit CLI value or env fallback (no env mutation)."""
+    sid = str(explicit or "").strip()
+    if sid:
+        return sid
+    return pipeline_session_id()
+
+
+def bind_cli_session_to_env(session_id: Optional[str]) -> Optional[str]:
+    """CLI entry only: bind explicit session id to env for subprocess compatibility."""
     explicit = str(session_id or "").strip()
     if explicit:
         os.environ[ENV_PIPELINE_SESSION_ID] = explicit
         return explicit
     return pipeline_session_id()
+
+
+def apply_explicit_session_id(session_id: Optional[str]) -> Optional[str]:
+    """Deprecated alias — prefer resolve_session_id / bind_cli_session_to_env."""
+    return bind_cli_session_to_env(session_id)
 
 
 def resolve_cycle_lengths_from_config(
@@ -95,6 +110,35 @@ def resolve_cycle_lengths_from_config(
     return default
 
 
+def load_active_route_count(inventory_path: str) -> int:
+    try:
+        inv = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
+        return len(inv.get("active_routes") or [])
+    except Exception:
+        return 0
+
+
+def build_pregraph_admission_adjacency(
+    *,
+    inventory_path: str,
+    config_path: str,
+    lane: str,
+    require_factory_verified: bool,
+) -> Any:
+    """Build graph with the same admission policy as capacity diagnostic (pre-quarantine)."""
+    from m9.graph_arb.builder import build_graph_from_inventory
+
+    return build_graph_from_inventory(
+        inventory_path=inventory_path,
+        config_path=config_path,
+        lane=lane,
+        require_factory_verified=require_factory_verified,
+        diagnostic_admission_mode=(
+            "topology_probe" if lane == "productive" else None
+        ),
+    )
+
+
 def build_graph_fingerprint(
     *,
     inventory_path: str,
@@ -117,6 +161,40 @@ def build_graph_fingerprint(
     }
 
 
+def build_runner_admission_graph_fingerprint(
+    *,
+    inventory_path: str,
+    config_path: str,
+    lane: str,
+    require_factory_verified: bool,
+) -> Dict[str, Any]:
+    """Deterministic pre-graph admission fingerprint shared with capacity diagnostic."""
+    adjacency = build_pregraph_admission_adjacency(
+        inventory_path=inventory_path,
+        config_path=config_path,
+        lane=lane,
+        require_factory_verified=require_factory_verified,
+    )
+    return build_graph_fingerprint(
+        inventory_path=inventory_path,
+        adjacency=adjacency,
+        active_route_count=load_active_route_count(inventory_path),
+        lane=lane,
+        require_factory_verified=require_factory_verified,
+    )
+
+
+def enrich_contract_with_graph_fingerprint(
+    contract: Mapping[str, Any],
+    graph_fingerprint: Mapping[str, Any],
+) -> Dict[str, Any]:
+    out = dict(contract)
+    for key in _GRAPH_COMPARE_KEYS:
+        if key in graph_fingerprint:
+            out[key] = graph_fingerprint.get(key)
+    return out
+
+
 def build_universe_contract(
     *,
     inventory_path: str,
@@ -128,7 +206,7 @@ def build_universe_contract(
     session_id: Optional[str] = None,
     graph_fingerprint: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    sid = (session_id or pipeline_session_id() or "").strip() or None
+    sid = (session_id or resolve_session_id() or "").strip() or None
     contract: Dict[str, Any] = {
         "schema_version": CONTRACT_SCHEMA_VERSION,
         "inventory_path": normalize_artifact_path(inventory_path),
@@ -144,14 +222,7 @@ def build_universe_contract(
         ),
     }
     if graph_fingerprint:
-        contract.update(
-            {
-                "resolved_inventory_path": graph_fingerprint.get("resolved_inventory_path"),
-                "active_route_count": graph_fingerprint.get("active_route_count"),
-                "graph_edge_count": graph_fingerprint.get("graph_edge_count"),
-                "graph_route_count": graph_fingerprint.get("graph_route_count"),
-            }
-        )
+        contract = enrich_contract_with_graph_fingerprint(contract, graph_fingerprint)
     return contract
 
 
@@ -160,7 +231,11 @@ def contract_from_capacity_doc(doc: Optional[Mapping[str, Any]]) -> Optional[Dic
         return None
     uc = doc.get("universe_contract")
     if isinstance(uc, Mapping) and uc.get("schema_version"):
-        return dict(uc)
+        out = dict(uc)
+        fp = doc.get("graph_fingerprint") or {}
+        if isinstance(fp, Mapping) and fp:
+            out = enrich_contract_with_graph_fingerprint(out, fp)
+        return out
     fp = doc.get("graph_fingerprint") or {}
     return build_universe_contract(
         inventory_path=str(doc.get("inventory_path") or ""),
@@ -194,11 +269,27 @@ def _compare_session_ids(
     return mismatches
 
 
+def _graph_fingerprint_required(
+    expected: Mapping[str, Any],
+    actual: Mapping[str, Any],
+    *,
+    require_graph_fingerprint: bool,
+) -> bool:
+    if require_graph_fingerprint:
+        return True
+    for contract in (expected, actual):
+        schema = str(contract.get("schema_version") or "")
+        if schema.endswith(".2"):
+            return True
+    return False
+
+
 def compare_universe_contracts(
     expected: Mapping[str, Any],
     actual: Mapping[str, Any],
     *,
     require_session_binding: bool = True,
+    require_graph_fingerprint: bool = False,
 ) -> List[str]:
     mismatches: List[str] = []
     for key in _COMPARE_KEYS:
@@ -210,13 +301,23 @@ def compare_universe_contracts(
             continue
         if ev != av:
             mismatches.append(key)
+
+    req_fp = _graph_fingerprint_required(
+        expected, actual, require_graph_fingerprint=require_graph_fingerprint
+    )
     for key in _GRAPH_COMPARE_KEYS:
         ev = expected.get(key)
         av = actual.get(key)
-        if ev is None or av is None:
-            continue
-        if ev != av:
+        if req_fp:
+            if ev is None:
+                mismatches.append(f"graph_fingerprint_missing_in_runner_{key}")
+            if av is None:
+                mismatches.append(f"graph_fingerprint_missing_in_capacity_{key}")
+            if ev is not None and av is not None and ev != av:
+                mismatches.append(key)
+        elif ev is not None and av is not None and ev != av:
             mismatches.append(key)
+
     mismatches.extend(
         _compare_session_ids(
             expected.get("session_id"),
@@ -232,6 +333,7 @@ def validate_capacity_for_runner(
     runner_contract: Mapping[str, Any],
     *,
     require_session_binding: bool = True,
+    require_graph_fingerprint: bool = True,
 ) -> Tuple[bool, List[str]]:
     if not capacity_doc:
         return False, ["capacity_diagnostic_missing"]
@@ -240,10 +342,25 @@ def validate_capacity_for_runner(
         return False, ["universe_contract_missing"]
     if not capacity_doc.get("universe_contract"):
         return False, ["universe_contract_missing"]
+
+    req_fp = _graph_fingerprint_required(
+        runner_contract,
+        cap_contract,
+        require_graph_fingerprint=require_graph_fingerprint,
+    )
+    if req_fp:
+        fp = capacity_doc.get("graph_fingerprint") or {}
+        if not isinstance(fp, Mapping) or not fp:
+            return False, ["graph_fingerprint_missing_in_capacity"]
+        for key in _GRAPH_COMPARE_KEYS:
+            if fp.get(key) is None:
+                return False, [f"graph_fingerprint_missing_in_capacity_{key}"]
+
     mismatches = compare_universe_contracts(
         runner_contract,
         cap_contract,
         require_session_binding=require_session_binding,
+        require_graph_fingerprint=req_fp,
     )
     return len(mismatches) == 0, mismatches
 

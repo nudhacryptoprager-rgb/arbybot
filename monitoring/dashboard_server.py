@@ -1590,14 +1590,26 @@ def build_m9_current_payload(
 
     # Economics metrics
     econ = a.get("economics_metrics") or {}
+    qst = a.get("quote_size_truth") or {}
+    econ_rpc_attempts = int(qst.get("econ_rpc_quote_attempts") or 0)
+    if cycles_found > 0 and econ_rpc_attempts == 0:
+        economic_test_status = "NOT_ECONOMICALLY_TESTED"
+    elif econ_rpc_attempts > 0:
+        economic_test_status = "TESTED"
+    else:
+        economic_test_status = "NOT_RUN"
     economics = {
         "economics_gate_status": scan_status,
         "economics_blocker_class": a.get("economics_blocker_class", "NOT_RUN"),
         "cycles_quoteable": _safe_int(a.get("cycles_quoteable")),
         "cycles_positive_gross": cycles_positive,
+        "qsr_transport": float(qsr) if qsr is not None else None,
         "qsr": float(qsr) if qsr is not None else None,
         "qsr_liveness": a.get("qsr_liveness"),
         "qsr_econ": a.get("qsr_econ"),
+        "economic_test_status": economic_test_status,
+        "econ_rpc_quote_attempts": econ_rpc_attempts,
+        "econ_quote_attempts": int(qst.get("econ_quote_attempts") or 0),
         "p50_gross_bps": econ.get("p50_gross_bps"),
         "p90_gross_bps": econ.get("p90_gross_bps"),
         "quote_rpc_error_rate": a.get("quote_rpc_error_rate"),
@@ -1660,6 +1672,23 @@ def build_m9_current_payload(
         "generated_at_utc": _m8_sniper_ts,
         "artifact_age_s": _m8_sniper_age_s,
         "is_stale": _m8_sniper_age_s is not None and _m8_sniper_age_s > 86400,  # stale if >24h
+    }
+    _bsm = a.get("bridge_source_metrics") or {}
+    _direct_routes = _safe_int(_bsm.get("m8_direct_routes_in_bridge"))
+    _graph_ready_m8 = _safe_int(_bsm.get("graph_ready_from_m8"))
+    m8_cohort_metrics = {
+        "fresh_direct_sniper_routes": _direct_routes,
+        "derived_m8_routes": max(0, _graph_ready_m8 - _direct_routes)
+        if _graph_ready_m8 is not None and _direct_routes is not None
+        else None,
+        "configured_seed_routes": _safe_int(_bsm.get("graph_ready_from_expansion")),
+        "m8_context_token_count": _safe_int(_bsm.get("m8_context_token_count")),
+        "external_hint_matches": _safe_int(_bsm.get("external_hint_matches")),
+        "specialized_index_matches": _safe_int(_bsm.get("specialized_index_matches")),
+        "m8_direct_cycles_found": _safe_int(
+            a.get("m8_direct_cycles_found") or a.get("cycles_with_direct_sniper_pool")
+        ),
+        "m8_direct_cycles_quoteable": _safe_int(a.get("m8_direct_cycles_quoteable")),
     }
 
     # Infra quality block: multicall health + verified inventory + staleness
@@ -1728,12 +1757,22 @@ def build_m9_current_payload(
         file_age_s=file_age_s,
     )
     start_pipeline = build_pipeline_control_plane(now_utc=now_utc)
+    from api.artifact_provenance import is_test_or_fixture_artifact
+
     try:
         from api.control_cache import get_control_projection_cache
 
         m_control_funnel = get_control_projection_cache(".").funnel()[0]
+        shadow_runtime_evidence_status = m_control_funnel.get(
+            "shadow_runtime_evidence_status", "UNKNOWN"
+        )
     except Exception:
         m_control_funnel = {"schema_version": "m_control_funnel_v2", "stages": []}
+        shadow_runtime_evidence_status = (
+            "NOT_RUNTIME_EVIDENCE"
+            if is_test_or_fixture_artifact(a)
+            else ("RUNTIME" if a else "NO_ARTIFACT")
+        )
 
     return {
         "schema_family": "m9_dashboard",
@@ -1741,6 +1780,7 @@ def build_m9_current_payload(
         "now_utc": now_utc.isoformat(),
         "artifact_exists": bool(a),
         "artifact_source_path": artifact_source_path or None,
+        "shadow_runtime_evidence_status": shadow_runtime_evidence_status,
         "artifact_age_s": file_age_s,
         "freshness_s": freshness_s,
         "generated_at_utc": generated_at,
@@ -1768,6 +1808,7 @@ def build_m9_current_payload(
         "top_failed_opportunities": top_failed,
         "m8_1_inventory": m8_1_summary,
         "m8_sniper": m8_sniper_summary,
+        "m8_cohort_metrics": m8_cohort_metrics,
         "scan_scope": a.get("scan_scope") or {},
         "infra_quality": infra_quality,
         "m8_integration": _build_m8_integration_metrics(a),

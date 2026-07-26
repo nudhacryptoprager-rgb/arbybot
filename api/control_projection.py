@@ -32,6 +32,30 @@ _SHADOW_FALLBACK_CANDIDATES = (
 )
 
 
+def sanitize_repo_relative_json_path(
+    repo_root: Path | str,
+    raw_path: str,
+) -> Optional[str]:
+    """Return a safe repo-relative .json path or None when invalid."""
+    raw = str(raw_path or "").strip().replace("\\", "/")
+    if not raw or not raw.lower().endswith(".json"):
+        return None
+    if raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
+        return None
+    parts = [p for p in raw.split("/") if p]
+    if not parts or ".." in parts:
+        return None
+    root = Path(repo_root).resolve()
+    candidate = (root / Path(*parts)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return "/".join(parts)
+
+
 def resolve_mcontrol_shadow_rel_path(
     repo_root: Path | str,
     pipeline_doc: Optional[Mapping[str, Any]] = None,
@@ -56,8 +80,9 @@ def resolve_mcontrol_shadow_rel_path(
     if env_dashboard:
         candidates.append(env_dashboard)
     candidates.extend(list(_SHADOW_FALLBACK_CANDIDATES))
-    for rel in candidates:
-        if (root / rel).is_file():
+    for raw in candidates:
+        rel = sanitize_repo_relative_json_path(root, raw)
+        if rel:
             return rel
     return _ARTIFACT_PATHS["shadow"]
 
@@ -370,9 +395,21 @@ class ControlProjectionBuilder:
         if isinstance(reject_hist, dict):
             reason_histogram = {str(k): int(v or 0) for k, v in reject_hist.items()}
 
-        shadow_fixture_rejected = self._load("shadow") is None and (
-            self.cache.get(self.repo_root / _ARTIFACT_PATHS["shadow"]) is not None
-        )
+        shadow_fixture_rejected = False
+        _shadow_proj = self.cache.get(self.repo_root / shadow_source_path)
+        _shadow_raw: Optional[Dict[str, Any]] = None
+        if _shadow_proj is not None and isinstance(_shadow_proj.data, dict):
+            _shadow_raw = _shadow_proj.data
+        if shadow is None and _shadow_raw is not None and is_test_or_fixture_artifact(
+            _shadow_raw
+        ):
+            shadow_fixture_rejected = True
+        if shadow is not None:
+            shadow_runtime_evidence_status = "RUNTIME"
+        elif shadow_fixture_rejected:
+            shadow_runtime_evidence_status = "NOT_RUNTIME_EVIDENCE"
+        else:
+            shadow_runtime_evidence_status = "NO_ARTIFACT"
 
         economics_not_yet_tested = bool(
             shadow is None
@@ -435,6 +472,7 @@ class ControlProjectionBuilder:
             ),
             "session_id": session_id,
             "shadow_source_path": shadow_source_path,
+            "shadow_runtime_evidence_status": shadow_runtime_evidence_status,
             "coherence": _coherence_status(session_id, loaded),
             "shadow_fixture_rejected": shadow_fixture_rejected,
             "pipeline_step": (pipeline or {}).get("step"),

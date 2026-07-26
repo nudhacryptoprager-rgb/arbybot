@@ -310,14 +310,20 @@ def test_control_funnel_api_route(repo):
 
 def test_control_traces_api_route(repo):
     app = ApiApp(repo)
-    status, _, body = app.handle("GET", "/v1/control/traces")
+    status, headers, body = app.handle("GET", "/v1/control/traces")
     assert status == 200
-    data = _json((status, _, body))
+    data = _json((status, headers, body))
     assert data["schema_version"] == "m_control_traces_v2"
+    etag = headers.get("ETag")
+    assert etag and etag.startswith('W/"')
+    status2, headers2, body2 = app.handle(
+        "GET", "/v1/control/traces", {"If-None-Match": etag}
+    )
+    assert status2 == 304 and body2 == b""
 
     app = ApiApp(repo)
-    status, _, _ = app.handle("POST", "/health/live")
-    assert status == 405
+    status3, _, _ = app.handle("POST", "/health/live")
+    assert status3 == 405
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ import urllib.error
 import urllib.request
 from http.server import HTTPServer
 
+import pytest
+
 
 def test_control_funnel_etag_and_cache_reuse(tmp_path, monkeypatch):
     import api.control_cache as control_cache_mod
@@ -59,16 +61,26 @@ def test_control_funnel_etag_and_cache_reuse(tmp_path, monkeypatch):
         assert body1.get("shadow_source_path") == "data/tmp/m9_shadow_capacity_smoke.json"
 
         req2 = urllib.request.Request(url, headers={"If-None-Match": etag or ""})
-        try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(req2, timeout=5)
-            assert False, "expected HTTP 304"
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 304
+        assert exc_info.value.code == 304
 
         cache = get_control_projection_cache(".")
         assert cache._funnel is not None
         _, etag2 = cache.funnel()
         assert etag2 == etag
+
+        traces_url = f"http://127.0.0.1:{port}/api/control/traces"
+        req3 = urllib.request.Request(traces_url)
+        with urllib.request.urlopen(req3, timeout=5) as resp3:
+            assert resp3.status == 200
+            traces_etag = resp3.headers.get("ETag")
+        req4 = urllib.request.Request(
+            traces_url, headers={"If-None-Match": traces_etag or ""}
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req4, timeout=5)
+        assert exc_info.value.code == 304
     finally:
         server.shutdown()
         server.server_close()

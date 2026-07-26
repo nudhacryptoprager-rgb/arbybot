@@ -116,6 +116,12 @@ def main() -> int:
         help="Match runner productive graph admission (default: true when --lane productive)",
     )
     ap.add_argument(
+        "--allow-pre-depth-inventory",
+        action="store_true",
+        help="Allow capacity on bridge without post-depth enrichment metadata (debug/tests)",
+    )
+    ap.add_argument("--chain", default="base", help="Chain for optional RPC truth enrich")
+    ap.add_argument(
         "--session-id",
         default=None,
         help="Pipeline session id (fallback: ARBY_PIPELINE_SESSION_ID env)",
@@ -127,12 +133,13 @@ def main() -> int:
         run_capacity_cycle_diagnostic,
     )
     from m9.graph_arb.universe_contract import (
-        apply_explicit_session_id,
+        bind_cli_session_to_env,
         build_universe_contract,
         resolve_cycle_lengths_from_config,
+        resolve_session_id,
     )
 
-    apply_explicit_session_id(args.session_id)
+    bind_cli_session_to_env(args.session_id)
 
     require_fv = args.require_factory_verified
     if require_fv is None:
@@ -143,8 +150,18 @@ def main() -> int:
     else:
         lengths = resolve_cycle_lengths_from_config(args.config)
     floors = _parse_floors(args.floors)
+
+    from m9.graph_arb.effective_inventory import prepare_effective_execution_inventory
+
+    require_post_depth = args.lane == "productive" and not args.allow_pre_depth_inventory
+    effective_inventory_path = prepare_effective_execution_inventory(
+        args.bridge,
+        args.config,
+        chain=args.chain,
+        require_post_depth=require_post_depth,
+    )
     report = run_capacity_cycle_diagnostic(
-        inventory_path=args.bridge,
+        inventory_path=effective_inventory_path,
         config_path=args.config,
         cycle_lengths=lengths,
         floors_usd=floors,
@@ -152,6 +169,8 @@ def main() -> int:
         require_factory_verified=require_fv,
         include_four_leg_rca=args.four_leg_rca,
     )
+    report["bridge_inventory_path"] = args.bridge
+    report["effective_inventory_path"] = effective_inventory_path
 
     if args.write_enrichment_targets:
         targets_path = Path(args.write_enrichment_targets)
@@ -202,13 +221,13 @@ def main() -> int:
         report["quarantine_depth_rca_path"] = str(qpath)
     out.parent.mkdir(parents=True, exist_ok=True)
     universe_contract = build_universe_contract(
-        inventory_path=args.bridge,
+        inventory_path=effective_inventory_path,
         config_path=args.config,
         lane=args.lane,
         require_factory_verified=require_fv,
         cycle_lengths=lengths,
         active_economics_profile=str(report.get("active_economics_profile") or ""),
-        session_id=apply_explicit_session_id(args.session_id),
+        session_id=resolve_session_id(args.session_id),
         graph_fingerprint=report.get("graph_fingerprint"),
     )
     stamp_capacity_provenance(report, universe_contract=universe_contract)

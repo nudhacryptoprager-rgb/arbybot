@@ -45,6 +45,10 @@ FRESHNESS_STALE_SECONDS = {
 # count as one runtime window. Guards against stitching unrelated runs.
 FRESHNESS_MISMATCH_SECONDS = 30 * 60  # 30 min
 
+# When session_id binding is exact across bridge/shadow/capacity, allow a wider
+# wall-clock spread before declaring MIXED_RUNTIME_WINDOW.
+SESSION_ALIGNED_MISMATCH_SECONDS = 90 * 60  # 90 min
+
 FRESHNESS_BLOCKER_BY_KEY = {
     "m8_2": "M8_2_STALE",
     "m8_3": "M8_3_STALE",
@@ -109,6 +113,73 @@ def _artifact_timestamps(
     }
 
 
+def _session_id_from_artifact(doc: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not doc:
+        return None
+    sid = doc.get("session_id")
+    if sid:
+        return str(sid)
+    rc = doc.get("run_context")
+    if isinstance(rc, dict) and rc.get("session_id"):
+        return str(rc["session_id"])
+    uc = doc.get("universe_contract")
+    if isinstance(uc, dict) and uc.get("session_id"):
+        return str(uc["session_id"])
+    depth = doc.get("depth_enrichment") or {}
+    if isinstance(depth, dict) and depth.get("depth_enrichment_session_id"):
+        return str(depth["depth_enrichment_session_id"])
+    return None
+
+
+def _session_binding_gate(
+    *,
+    sniper: Optional[Dict[str, Any]],
+    bridge: Optional[Dict[str, Any]],
+    shadow: Optional[Dict[str, Any]],
+    capacity_metrics: Optional[Dict[str, Any]],
+    m8_2_report: Optional[Dict[str, Any]] = None,
+    m8_3_registry: Optional[Dict[str, Any]] = None,
+    skip_shadow: bool = False,
+) -> Dict[str, Any]:
+    """Require exact session_id alignment across M9 execution artifacts."""
+    entries: Dict[str, Optional[Dict[str, Any]]] = {
+        "bridge": bridge,
+        "capacity": capacity_metrics,
+        "shadow": None if skip_shadow else shadow,
+        "sniper": sniper,
+        "m8_2": m8_2_report,
+        "m8_3": m8_3_registry,
+    }
+    per_artifact = {
+        key: sid
+        for key, doc in entries.items()
+        if doc is not None
+        for sid in [_session_id_from_artifact(doc)]
+        if sid
+    }
+    blockers: List[str] = []
+    shared_session: Optional[str] = None
+    core_keys = ("bridge", "capacity") if skip_shadow else ("bridge", "capacity", "shadow")
+    core_present = {k: per_artifact[k] for k in core_keys if k in per_artifact}
+    if len(core_present) >= 2:
+        distinct = set(core_present.values())
+        if len(distinct) > 1:
+            blockers.append("SESSION_ID_MISMATCH")
+        else:
+            shared_session = next(iter(distinct))
+    core_with_docs = [k for k in core_keys if entries.get(k)]
+    if core_with_docs and 0 < len(core_present) < len(core_with_docs):
+        blockers.append("SESSION_ID_INCOMPLETE")
+    return {
+        "session_id": shared_session,
+        "blockers": sorted(set(blockers)),
+        "per_artifact": per_artifact,
+        "missing_session_on": [
+            k for k in core_with_docs if k not in per_artifact
+        ],
+    }
+
+
 def _freshness_gate(
     *,
     sniper: Optional[Dict[str, Any]],
@@ -148,6 +219,16 @@ def _freshness_gate(
     now_dt = now or _now_utc()
 
     blockers: List[str] = []
+    session_binding = _session_binding_gate(
+        sniper=sniper,
+        bridge=bridge,
+        shadow=shadow,
+        capacity_metrics=capacity_metrics,
+        m8_2_report=m8_2_report,
+        m8_3_registry=m8_3_registry,
+        skip_shadow=skip_shadow,
+    )
+    blockers.extend(session_binding["blockers"])
     per_artifact: Dict[str, Dict[str, Any]] = {}
     for key, ts_str in ts_raw.items():
         ts_dt = parsed.get(key)
@@ -184,7 +265,12 @@ def _freshness_gate(
                 )
                 if delta > max_delta:
                     max_delta = delta
-        if max_delta > FRESHNESS_MISMATCH_SECONDS:
+        if max_delta > (
+            SESSION_ALIGNED_MISMATCH_SECONDS
+            if session_binding.get("session_id")
+            and "SESSION_ID_MISMATCH" not in blockers
+            else FRESHNESS_MISMATCH_SECONDS
+        ):
             blockers.append("MIXED_RUNTIME_WINDOW")
 
     return {
@@ -192,6 +278,8 @@ def _freshness_gate(
         "blockers": sorted(set(blockers)),
         "thresholds_seconds": dict(FRESHNESS_STALE_SECONDS),
         "mismatch_threshold_seconds": FRESHNESS_MISMATCH_SECONDS,
+        "session_aligned_mismatch_threshold_seconds": SESSION_ALIGNED_MISMATCH_SECONDS,
+        "session_binding": session_binding,
         "per_artifact": per_artifact,
     }
 
@@ -919,6 +1007,22 @@ def build_acceptance_report(
             "m8_tokens_in": exp_summary.get("m8_tokens_in"),
         },
         {
+            "layer": "M8_cohorts",
+            "fresh_direct_sniper_routes": bsm.get("m8_direct_routes_in_bridge"),
+            "derived_m8_routes": max(
+                0,
+                int(bsm.get("graph_ready_from_m8") or 0)
+                - int(bsm.get("m8_direct_routes_in_bridge") or 0),
+            ),
+            "configured_seed_routes": bsm.get("graph_ready_from_expansion"),
+            "m8_context_token_count": bsm.get("m8_context_token_count"),
+            "external_hint_matches": bsm.get("external_hint_matches"),
+            "specialized_index_matches": bsm.get("specialized_index_matches"),
+            "m8_direct_cycles_found": (shadow or {}).get("m8_direct_cycles_found")
+            or (shadow or {}).get("cycles_with_direct_sniper_pool"),
+            "m8_direct_cycles_quoteable": (shadow or {}).get("m8_direct_cycles_quoteable"),
+        },
+        {
             "layer": "M9_bridge",
             "graph_ready_total": bsm.get("graph_ready_total"),
             "graph_ready_from_expansion": bsm.get("graph_ready_from_expansion"),
@@ -1083,6 +1187,25 @@ def build_acceptance_report(
         upstream_blockers.extend(freshness_gate["blockers"])
 
     m9_quote_validation_blockers: List[str] = []
+    if capacity_metrics and shadow is not None and not skip_shadow:
+        cap_ids = set(capacity_metrics.get("capacity_valid_cycle_ids") or [])
+        scan_scope = (shadow or {}).get("scan_scope") or {}
+        selected_ids = set(scan_scope.get("shadow_selected_cycle_ids") or [])
+        quoted_ids = set(scan_scope.get("shadow_quoted_cycle_ids") or [])
+        if cap_ids and selected_ids and not quoted_ids:
+            m9_quote_validation_blockers.append("CAPACITY_SELECTED_BUT_NOT_QUOTED")
+        cap_inv = str(
+            ((capacity_metrics or {}).get("universe_contract") or {}).get("inventory_path")
+            or (capacity_metrics or {}).get("effective_inventory_path")
+            or ""
+        ).strip()
+        shadow_inv = str(
+            ((shadow or {}).get("universe_contract") or {}).get("inventory_path")
+            or (shadow or {}).get("effective_inventory_path")
+            or ""
+        ).strip()
+        if cap_inv and shadow_inv and cap_inv != shadow_inv:
+            m9_quote_validation_blockers.append("CAPACITY_EXECUTION_INVENTORY_MISMATCH")
     if m8_2_report and m8_2_report.get("handoff_ready") and shadow is not None:
         if shadow_cycles_found == 0:
             m9_quote_validation_blockers.append("UPSTREAM_OK_BUT_NO_CYCLES")
