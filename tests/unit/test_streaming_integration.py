@@ -474,7 +474,10 @@ def test_new_session_ignores_env_and_produces_valid_handoff(tmp_path, monkeypatc
     session_a = "session-a"
     sniper_path = tmp_path / "sniper.json"
     sniper_path.write_text('{"candidates": [{"token0": "0xabc"}]}', encoding="utf-8")
+    streaming_root = tmp_path / "streaming_batches"
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", session_a)
+    monkeypatch.setattr("m8.discovery.streaming_handoff.STREAMING_ROOT_DIR", streaming_root)
+    monkeypatch.setattr("core.pipeline_streaming.STREAMING_ROOT_DIR", streaming_root)
     write_streaming_batch_manifest(
         session_id=session_a,
         batch_index=1,
@@ -494,6 +497,9 @@ def test_new_session_ignores_env_and_produces_valid_handoff(tmp_path, monkeypatc
         expected_session_id=resolved,
     )
     assert manifest["session_id"] == resolved
+    assert not (streaming_root / sanitize_session_id(session_a)).exists() or (
+        streaming_root / sanitize_session_id(resolved)
+    ).exists()
 
 
 def test_resume_session_rejects_force_rerun():

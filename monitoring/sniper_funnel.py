@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
@@ -283,6 +284,12 @@ class FunnelTracker:
         self._factory_last_success_ts: Dict[str, float] = {}
         self._factory_last_error_code: Dict[str, str] = {}
         self._pending_registry_sync: Dict[str, Any] = {}
+        self._last_progress_at_utc: Optional[str] = None
+        self._last_progress_kind: Optional[str] = None
+        self._last_rpc_provider: Optional[str] = None
+        self._last_rpc_method: Optional[str] = None
+        self._last_block_range: Optional[str] = None
+        self._last_progress_mono: float = time.monotonic()
 
     # ------------------------------------------------------------------
     # Mutation helpers
@@ -511,6 +518,42 @@ class FunnelTracker:
         with self._lock:
             self._pending_registry_sync = dict(stats)
 
+    def touch_progress(
+        self,
+        kind: str,
+        *,
+        provider: Optional[str] = None,
+        rpc_method: Optional[str] = None,
+        block_range: Optional[str] = None,
+    ) -> None:
+        with self._lock:
+            self._last_progress_mono = time.monotonic()
+            self._last_progress_at_utc = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            self._last_progress_kind = str(kind)
+            if provider is not None:
+                self._last_rpc_provider = str(provider)
+            if rpc_method is not None:
+                self._last_rpc_method = str(rpc_method)
+            if block_range is not None:
+                self._last_block_range = str(block_range)
+
+    def stall_seconds(self) -> float:
+        with self._lock:
+            return max(0.0, time.monotonic() - self._last_progress_mono)
+
+    def progress_snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "last_progress_at": self._last_progress_at_utc,
+                "stall_seconds": round(max(0.0, time.monotonic() - self._last_progress_mono), 1),
+                "provider": self._last_rpc_provider,
+                "rpc_method": self._last_rpc_method,
+                "block_range": self._last_block_range,
+                "progress_kind": self._last_progress_kind,
+            }
+
     # ------------------------------------------------------------------
     # Read helpers
     # ------------------------------------------------------------------
@@ -611,6 +654,12 @@ class FunnelTracker:
                     == self._factory_poll_errors.get(dex, 0)
                 ),
                 "pending_registry_sync": dict(self._pending_registry_sync),
+                "last_progress_at": self._last_progress_at_utc,
+                "stall_seconds": round(max(0.0, time.monotonic() - self._last_progress_mono), 1),
+                "last_rpc_provider": self._last_rpc_provider,
+                "last_rpc_method": self._last_rpc_method,
+                "last_block_range": self._last_block_range,
+                "last_progress_kind": self._last_progress_kind,
             }
 
     def recent_traces(self, n: int = 20) -> List[Dict[str, Any]]:

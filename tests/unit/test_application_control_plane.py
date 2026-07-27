@@ -6,9 +6,11 @@ import os
 import sys
 import time
 
+import pytest
+
 from application.checkpoint_store import CheckpointStore
 from application.pipeline_stage import PipelineStage, StageResult
-from application.stage_runner import run_stage_subprocess, run_with_retries
+from application.stage_runner import run_stage_subprocess, run_with_retries, terminate_process_tree
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,23 @@ def test_run_stage_subprocess_hard_timeout_kills():
     assert reason is not None and reason.startswith("hard_timeout_")
     assert rc != 0
     assert elapsed < 30
+
+
+def test_run_stage_subprocess_hard_timeout_kills_child_tree(tmp_path):
+    pid_file = tmp_path / "grandchild.pid"
+    script = f"""
+import subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+open(r"{pid_file}", "w", encoding="utf-8").write(str(child.pid))
+time.sleep(120)
+"""
+    rc, reason = run_stage_subprocess([sys.executable, "-c", script], timeout_s=2)
+    assert reason is not None and reason.startswith("hard_timeout_")
+    assert rc != 0
+    assert pid_file.is_file()
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    with pytest.raises((ProcessLookupError, OSError)):
+        os.kill(pid, 0)
 
 
 def test_run_stage_subprocess_stale_heartbeat_kills():

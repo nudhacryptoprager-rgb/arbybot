@@ -832,6 +832,11 @@ def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int
     if explicit is not None:
         return int(explicit)
     name = str(step["name"])
+    if name.startswith("m8_sniper_acceptance_batch_"):
+        from core.pipeline_streaming import resolve_sniper_batch_step_timeout_s
+
+        batch_minutes = int(getattr(args, "sniper_batch_minutes", 15) or 15)
+        return resolve_sniper_batch_step_timeout_s(batch_minutes)
     if name == "m8_2_radar_two_phase":
         radar_timeout = int(getattr(args, "radar_step_timeout_s", 0) or 0)
         if radar_timeout > 0:
@@ -840,6 +845,66 @@ def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int
     if default_timeout > 0:
         return default_timeout
     return DEFAULT_STEP_TIMEOUT_S
+
+
+def _resolve_step_heartbeat_stale_s(
+    step: dict[str, Any],
+    *,
+    default_heartbeat_stale_s: float,
+) -> float:
+    name = str(step.get("name") or "")
+    if name.startswith("m8_sniper_acceptance_batch_"):
+        return min(default_heartbeat_stale_s, 300.0)
+    return default_heartbeat_stale_s
+
+
+def _sniper_failure_context() -> dict[str, Any]:
+    path = Path("data/runs/_rolling/new_pool_sniper_latest.json")
+    if not path.is_file():
+        return {}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    metrics = doc.get("metrics") if isinstance(doc.get("metrics"), dict) else doc
+    if not isinstance(metrics, dict):
+        metrics = {}
+    return {
+        "last_progress_at": metrics.get("last_progress_at"),
+        "stall_seconds": metrics.get("stall_seconds"),
+        "provider": metrics.get("last_rpc_provider") or metrics.get("sniper_rpc_provider"),
+        "rpc_method": metrics.get("last_rpc_method"),
+        "block_range": metrics.get("last_block_range"),
+        "progress_kind": metrics.get("last_progress_kind"),
+    }
+
+
+def _format_step_fail_text(
+    step_name: str,
+    reason: str,
+    *,
+    streaming_failure: dict[str, Any] | None = None,
+) -> str:
+    lines = [f"{step_name}: {reason}"]
+    if streaming_failure:
+        for key in (
+            "session_id",
+            "batch_index",
+            "manifest_fingerprint",
+            "current_sniper_fingerprint",
+            "last_progress_at",
+            "stall_seconds",
+            "provider",
+            "rpc_method",
+            "block_range",
+            "remediation",
+        ):
+            value = streaming_failure.get(key)
+            if value is not None and value != "":
+                lines.append(f"{key}={value}")
+    return "\n".join(lines) + "\n"
 
 
 def _collect_checkpoint_progress(
@@ -2885,13 +2950,17 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
             printable = " ".join(cmd) if cmd else f"<internal:{step.get('internal')}>"
             policy = _classify_step_rpc_policy(cmd) if cmd else "internal:local_py"
             timeout_s = _resolve_step_timeout(step, args)
+            step_heartbeat_stale_s = _resolve_step_heartbeat_stale_s(
+                step,
+                default_heartbeat_stale_s=heartbeat_stale_s,
+            )
             print(f">>> {name}: {printable}")
             print(f"    rpc_policy: {policy}")
-            print(f"    timeout_s: {timeout_s} heartbeat_stale_s: {int(heartbeat_stale_s)}")
+            print(f"    timeout_s: {timeout_s} heartbeat_stale_s: {int(step_heartbeat_stale_s)}")
             log_fh.write(f">>> {name}: {printable}\n")
             log_fh.write(f"    rpc_policy: {policy}\n")
             log_fh.write(
-                f"    timeout_s={timeout_s} heartbeat_stale_s={int(heartbeat_stale_s)}\n"
+                f"    timeout_s={timeout_s} heartbeat_stale_s={int(step_heartbeat_stale_s)}\n"
             )
             log_fh.flush()
             if getattr(args, "dry_run", False):
@@ -2908,7 +2977,7 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                 all_step_names=step_names,
                 log_fh=log_fh,
                 timeout_s=timeout_s,
-                heartbeat_stale_s=heartbeat_stale_s,
+                heartbeat_stale_s=step_heartbeat_stale_s,
             )
             if name == "gate_capacity_shadow":
                 shadow_gate_allowed = rc == 0
@@ -2933,8 +3002,25 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                     log_fh.write(msg)
             if rc not in step["allow_exit_codes"]:
                 reason = fail_reason or f"exit={rc}"
+                streaming_failure = None
+                if name.startswith("m8_sniper_acceptance_batch_"):
+                    streaming_failure = _sniper_failure_context()
+                    batch_match = re.search(r"_batch_(\d+)$", name)
+                    if batch_match:
+                        streaming_failure = {
+                            **streaming_failure,
+                            "session_id": pipeline_session_id,
+                            "batch_index": int(batch_match.group(1)),
+                        }
                 fail_marker.write_text(f"{reason}\n", encoding="utf-8")
-                fail_path.write_text(f"{name}: {reason}\n", encoding="utf-8")
+                fail_path.write_text(
+                    _format_step_fail_text(
+                        name,
+                        reason,
+                        streaming_failure=streaming_failure,
+                    ),
+                    encoding="utf-8",
+                )
                 _write_pipeline_current(
                     {
                         "mode": str(args.pipeline),
@@ -2965,11 +3051,13 @@ def _run_project_pipeline(args: argparse.Namespace) -> int:
                     cache_hits=int(probe_metrics.get("cache_hits") or 0),
                     cache_misses=int(probe_metrics.get("cache_misses") or 0),
                     routes_per_s=probe_metrics.get("routes_per_s"),
+                    extra=streaming_failure,
                 )
                 if not getattr(args, "dry_run", False):
                     slo_tracker.write(
                         session_id=pipeline_session_id,
                         pipeline_mode=pipeline_mode,
+                        streaming_failure=streaming_failure,
                     )
                 return rc or 1
             write_done_record(

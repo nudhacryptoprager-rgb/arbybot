@@ -208,13 +208,16 @@ def test_productive_all_pass_requires_economics():
 
 
 def test_session_quarantine_materialize_and_load(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    active = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recs = [
         {
             "pool_address": "0xabc",
             "pair_id": "DAI_USDC",
             "fee": 0,
             "reject_reason": REASON_TOXIC_STABLE,
-            "retry_after_utc": "2026-07-27T00:00:00Z",
+            "retry_after_utc": active,
             "source": "pool_scorecard",
             "samples": 8,
             "valid_rate": 0.0,

@@ -4,67 +4,69 @@
 timestamp_utc: 2026-07-08T08:18:55
 canonical_rolling_timestamp: 2026-07-08T08:18:55
 rolling_run_dir: data/runs/ci_m5_gate_arbitrum_one_20260708_101645_712808
-session_patch_timestamp_utc: 2026-07-26T19:55:09Z
+session_patch_timestamp_utc: 2026-07-26T20:13:13Z
 goal_status: IN_PROGRESS
-primary_blocker_of_session: SNIPER_FINGERPRINT_MISMATCH
-blocker_type: CODE_OR_ORCHESTRATION
+primary_blocker_of_session: M8_SNIPER_BATCH_2_HARD_TIMEOUT
+blocker_type: CODE_OR_INFRASTRUCTURE
 runtime_validation: FAILED_BEFORE_M9
+valid_partial_evidence: batch_1 upstream gate PASS, session 2026-07-26T20:13:13Z
 docs_reread_confirmed: true
-run_id: m9-streaming-session-preflight-guard-2026-07-26
-mode: streaming session lifecycle guard + P0 patch-set follow-up
+run_id: m8-sniper-batch-timeout-guard-2026-07-26
+mode: sniper bounded timeout / orphan cleanup patch-set
 config: config/exotic_base_anchor.yaml
-failed_bundle_session_id: 2026-07-26T13:04:06Z
-code_revision: dd649eb6288ce0d5b78a6b8d632703b32cde1aea
+code_revision: 8cfa09c6288ce0d5b78a6b8d632703b32cde1aea
 
 ## Session Completion
-session_goal: fresh M8→M9 bundle after P0 integration patch-set
+session_goal: fresh M8→M9 bundle after streaming session guard
 goal_status: IN_PROGRESS
-primary_blocker_of_session: SNIPER_FINGERPRINT_MISMATCH
+primary_blocker_of_session: M8_SNIPER_BATCH_2_HARD_TIMEOUT
 close_allowed: false
-remaining_blockers: streaming session preflight guard; retry bundle in new session namespace
+remaining_blockers: sniper bounded timeout + orphan cleanup; full bundle retry
 docs_reread_confirmed: true
 
-## Online runtime (failed bundle)
+## Online runtime (retry bundle)
 
 ### Command
 ```powershell
-py -3.11 start.py -m8_m9 --streaming --sniper-batch-minutes 15 --no-dashboard --force-rerun-steps --pipeline-log data/tmp/m8_m9_p0_fixed.log
+py -3.11 start.py -m8_m9 --streaming --sniper-batch-minutes 15 --no-dashboard --new-session --force-rerun-steps --pipeline-log data/tmp/m8_m9_p0_fixed_retry.log
 ```
 
 ### Result
-- exit_code: 2
-- elapsed: ~27.5 min
-- failed_step: `m8_1_stable_anchor_batch_1`
-- session_id reused: `2026-07-26T13:04:06Z`
-- root_cause: `SNIPER_FINGERPRINT_MISMATCH` (manifest `fa7f1e44e3c79254` vs rolling sniper `a0421773b10403a7`)
-- M9 shadow: NOT RUN
-- post_depth truth gate: NOT RUN
+- session_id: `2026-07-26T20:13:13Z` (valid runtime namespace)
+- batch_1: PASS through M8.1/M8.2/M8.3 + upstream truth gate
+- batch_2: `m8_sniper_acceptance_batch_2: hard_timeout_7200s`
+- orphan sniper process remained after timeout (manually stopped)
+- M9 shadow / capacity / lane acceptance / post_depth: NOT RUN
 
-### M8 sniper batch 1 (completed before fail)
-- exit: 0
-- candidates: 47
-- RPC errors: 0
-- elapsed: ~1642s
+### Prior failures
+- `2026-07-26T13:04:06Z` + force-rerun: `SNIPER_FINGERPRINT_MISMATCH` (fixed by session guard `8cfa09c`)
 
-## Patch-set in progress (streaming session guard)
+## Patch-set in progress (sniper timeout guard)
 
 ### Target files
-- `m8/discovery/streaming_handoff.py`
+- `application/stage_runner.py`
+- `core/pipeline_streaming.py`
+- `m8/runtime/smoke_run.py`
+- `monitoring/sniper_funnel.py`
 - `start.py`
-- `core/pipeline_slo.py`
+- `tests/unit/test_application_control_plane.py`
+- `tests/unit/test_m8_sniper_rpc_lane.py`
 - `tests/unit/test_streaming_integration.py`
 
-### Planned fixes
-1. `--new-session` creates fresh `pipeline_session_id` (ignores inherited env)
-2. Early preflight blocks `--force-rerun-steps` when immutable batch manifest exists in session
-3. Immutable manifest behavior unchanged (no self-heal on fingerprint mismatch)
-4. `--resume-session` explicit reuse without `--force-rerun-steps`
-5. Structured fail marker + SLO `streaming_failure` fields
+### Fixes
+1. Per-RPC HTTP timeout on sniper providers
+2. Bounded `400_range` split depth + factory poll timeout
+3. Progress watchdog (`SNIPER_STALLED`) with funnel progress fields
+4. In-process batch wall-clock buffer (`duration * 1.45`)
+5. Sniper pipeline step timeout ~22m for 15m batch (not 7200s)
+6. Process-tree kill on hard timeout / stale heartbeat
+7. SLO + fail marker enrichment with progress/provider/block_range
+8. Hermetic streaming integration test (`tmp_path` streaming root)
 
-### Verification (streaming guard patch)
+### Verification (sniper timeout guard patch)
 ```powershell
-py -3.11 -m pytest tests/unit/test_streaming_integration.py -q
-# 23 passed
+py -3.11 -m pytest tests/unit/test_streaming_integration.py tests/unit/test_m8_sniper_rpc_lane.py tests/unit/test_application_control_plane.py -q
+# 50 passed
 
 py -3.11 scripts/check_repo_safety.py
 # PASS
@@ -73,12 +75,12 @@ py -3.11 scripts/check_quality_ratchet.py --pip-audit
 # PASS
 
 py -3.11 scripts/ci_full_pipeline.py --mode ci
-# ALL REQUIRED GATES PASSED; collected 7400 items; 7361 passed, 39 skipped
+# ALL REQUIRED GATES PASSED; collected 7402 items; 7363 passed, 39 skipped
 ```
 
-### Retry command (after guard lands)
+### Retry command (after patch lands)
 ```powershell
-py -3.11 start.py -m8_m9 --streaming --sniper-batch-minutes 15 --no-dashboard --new-session --force-rerun-steps --pipeline-log data/tmp/m8_m9_p0_fixed_retry.log
+py -3.11 start.py -m8_m9 --streaming --sniper-batch-minutes 15 --no-dashboard --new-session --force-rerun-steps --pipeline-log data/tmp/m8_m9_p0_fixed_retry2.log
 ```
 
 Status files (`Status_M8*.md`, `Status_M9.md`) not updated — no valid same-session M9 evidence.

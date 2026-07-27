@@ -51,6 +51,19 @@ def resolve_sniper_minutes(
     return max(5, min(req, int(batch_minutes)))
 
 
+def resolve_sniper_batch_step_timeout_s(batch_minutes: int) -> int:
+    """Hard pipeline timeout for one sniper streaming batch (includes bootstrap slack)."""
+    batch_s = max(5, int(batch_minutes or DEFAULT_SNIPER_BATCH_MINUTES)) * 60
+    # 15-minute batch budget -> ~22-minute wall-clock cap at the pipeline wrapper.
+    return int(batch_s * 1.47)
+
+
+def resolve_sniper_batch_wall_clock_s(duration_minutes: float) -> float:
+    """In-process sniper deadline with buffer over the configured batch minutes."""
+    base_s = max(0.1, float(duration_minutes)) * 60.0
+    return base_s * 1.45
+
+
 def resolve_streaming_batches(
     total_minutes: int,
     *,

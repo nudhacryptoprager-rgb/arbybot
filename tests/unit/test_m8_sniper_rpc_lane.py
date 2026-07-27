@@ -136,6 +136,24 @@ class TestSniperGetLogsFailover(unittest.TestCase):
         self.assertEqual(logs, ["log_after_retry"])
         self.assertEqual(w3.eth.get_logs.call_count, 2)
 
+    def test_400_range_split_depth_is_bounded(self):
+        from m8.runtime import smoke_run as smoke_mod
+
+        funnel = FunnelTracker()
+        lane = _make_lane(
+            [Exception("400 Bad Request: block range too large")],
+            funnel=funnel,
+        )
+        with unittest.mock.patch.object(smoke_mod, "_MAX_GETLOGS_SPLIT_DEPTH", 1):
+            logs, had_err, err = lane._get_logs_lane(
+                {"fromBlock": 1, "toBlock": 200},
+                use_secondary=False,
+                split_depth=1,
+            )
+        self.assertTrue(had_err)
+        self.assertEqual(logs, [])
+        self.assertIn("split depth exhausted", err)
+
 
 class TestSniperArtifactPreserve(unittest.TestCase):
     def test_preserve_recent_events_on_rpc_error(self):

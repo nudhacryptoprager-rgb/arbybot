@@ -106,6 +106,11 @@ except ImportError:  # pragma: no cover
 
 logger = get_logger(__name__)
 
+
+class SniperStalledError(RuntimeError):
+    """Raised when sniper makes no poll/progress within the watchdog window."""
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -115,6 +120,10 @@ _MAX_BLOCKS_PER_CALL: int = 500    # bounded getLogs chunk (v4 factories 408 on 
 _MIN_GETLOGS_CHUNK_BLOCKS: int = 10
 _GETLOGS_TRANSIENT_RETRIES: int = 2
 _GETLOGS_RETRY_DELAY_S: float = 2.0
+_SNIPER_RPC_TIMEOUT_S: float = float(os.environ.get("ARBY_SNIPER_RPC_TIMEOUT_S", "45"))
+_MAX_GETLOGS_SPLIT_DEPTH: int = int(os.environ.get("ARBY_SNIPER_GETLOGS_SPLIT_DEPTH", "16"))
+_GETLOGS_FACTORY_TIMEOUT_S: float = float(os.environ.get("ARBY_SNIPER_FACTORY_TIMEOUT_S", "90"))
+_STALL_WATCHDOG_S: float = float(os.environ.get("ARBY_SNIPER_STALL_SECONDS", "300"))
 _FAILOVER_GETLOGS_ERRORS = frozenset({
     "400_range", "408", "429", "5xx", "timeout",
 })
@@ -492,9 +501,12 @@ def _build_sniper_rpc_lane(
 
     from web3 import Web3
 
-    w3_primary = Web3(Web3.HTTPProvider(primary_url))
+    request_kwargs = {"timeout": _SNIPER_RPC_TIMEOUT_S}
+    w3_primary = Web3(Web3.HTTPProvider(primary_url, request_kwargs=request_kwargs))
     w3_secondary = (
-        Web3(Web3.HTTPProvider(secondary_url)) if secondary_url else None
+        Web3(Web3.HTTPProvider(secondary_url, request_kwargs=request_kwargs))
+        if secondary_url
+        else None
     )
     return SniperRpcLane(
         w3_primary=w3_primary,
@@ -644,7 +656,7 @@ class SniperRpcLane:
         return self.w3_primary
 
     def get_logs(self, params: Dict[str, Any]) -> tuple[List[Any], bool, str]:
-        logs, had_err, err = self._get_logs_lane(params, use_secondary=False)
+        logs, had_err, err = self._get_logs_lane(params, use_secondary=False, split_depth=0)
         if had_err:
             logger.warning(
                 "eth_getLogs failed",
@@ -660,6 +672,7 @@ class SniperRpcLane:
         params: Dict[str, Any],
         *,
         use_secondary: bool,
+        split_depth: int = 0,
     ) -> tuple[List[Any], bool, str]:
         w3 = self.w3_secondary if use_secondary else self.w3_primary
         provider = (
@@ -667,6 +680,13 @@ class SniperRpcLane:
         )
         if w3 is None:
             return [], True, "no secondary sniper RPC configured"
+
+        self.funnel.touch_progress(
+            "eth_getLogs",
+            provider=provider,
+            rpc_method="eth_getLogs",
+            block_range=f"{params.get('fromBlock')}-{params.get('toBlock')}",
+        )
 
         logs, err = _single_get_logs(
             w3,
@@ -686,8 +706,15 @@ class SniperRpcLane:
         if err_type not in _FAILOVER_GETLOGS_ERRORS:
             return [], True, err
 
+        if err_type == "400_range" and split_depth >= _MAX_GETLOGS_SPLIT_DEPTH:
+            return [], True, "block range split depth exhausted"
+
         if not use_secondary and err_type == "400_range":
-            split_logs, split_err, split_str = self._split_range_get_logs(params)
+            split_logs, split_err, split_str = self._split_range_get_logs(
+                params,
+                use_secondary=False,
+                split_depth=split_depth,
+            )
             if not split_err:
                 return split_logs, False, ""
 
@@ -702,11 +729,11 @@ class SniperRpcLane:
                     "provider": provider,
                 }},
             )
-            return self._get_logs_lane(params, use_secondary=True)
+            return self._get_logs_lane(params, use_secondary=True, split_depth=split_depth)
 
         if use_secondary and err_type == "400_range":
             split_logs, split_err, split_str = self._split_range_get_logs(
-                params, use_secondary=True
+                params, use_secondary=True, split_depth=split_depth
             )
             if not split_err:
                 return split_logs, False, ""
@@ -719,6 +746,7 @@ class SniperRpcLane:
         params: Dict[str, Any],
         *,
         use_secondary: bool = False,
+        split_depth: int = 0,
     ) -> tuple[List[Any], bool, str]:
         from_b = _parse_block_num(params.get("fromBlock", 0))
         to_b = _parse_block_num(params.get("toBlock", from_b))
@@ -735,12 +763,12 @@ class SniperRpcLane:
         right["toBlock"] = to_b
 
         left_logs, left_err, left_str = self._get_logs_lane(
-            left, use_secondary=use_secondary
+            left, use_secondary=use_secondary, split_depth=split_depth + 1
         )
         if left_err:
             return [], True, left_str
         right_logs, right_err, right_str = self._get_logs_lane(
-            right, use_secondary=use_secondary
+            right, use_secondary=use_secondary, split_depth=split_depth + 1
         )
         if right_err:
             return [], True, right_str
@@ -1361,10 +1389,28 @@ def _run_online_loop(
     last_artifact_ts = time.monotonic()
     cycle_n = 0
     last_processed_block: Optional[int] = None
+    stall_watchdog_s = max(60.0, _STALL_WATCHDOG_S)
 
     while time.monotonic() < deadline:
+        stall_s = funnel.stall_seconds()
+        if stall_s > stall_watchdog_s:
+            progress = funnel.progress_snapshot()
+            logger.error(
+                "sniper_stalled",
+                extra={"context": {
+                    "stall_seconds": round(stall_s, 1),
+                    "watchdog_seconds": stall_watchdog_s,
+                    **progress,
+                }},
+            )
+            raise SniperStalledError(
+                f"SNIPER_STALLED: no progress for {stall_s:.0f}s "
+                f"(watchdog={stall_watchdog_s:.0f}s)"
+            )
+
         cycle_start = time.monotonic()
         cycle_n += 1
+        funnel.touch_progress("poll_cycle_start")
 
         current_block = _get_block_number(rpc_lane.w3)
         if current_block is None:
@@ -1412,7 +1458,21 @@ def _run_online_loop(
                     time.sleep(0.15)
                 futures.append(pool.submit(_poll_factory, cfg))
             for fut in as_completed(futures):
-                cfg, logs, had_err, err_str, lat_ms = fut.result()
+                try:
+                    cfg, logs, had_err, err_str, lat_ms = fut.result(
+                        timeout=_GETLOGS_FACTORY_TIMEOUT_S
+                    )
+                except TimeoutError:
+                    funnel.inc_rpc_error("factory_poll_timeout")
+                    funnel.inc_dex("unknown", "error")
+                    logger.warning(
+                        "factory_poll_timeout",
+                        extra={"context": {
+                            "timeout_s": _GETLOGS_FACTORY_TIMEOUT_S,
+                            "cycle": cycle_n,
+                        }},
+                    )
+                    continue
                 cycle_rpc_calls += 1
                 funnel.inc_rpc_call()
                 per_factory_latency_ms[cfg.dex] = round(lat_ms, 1)
@@ -1506,6 +1566,10 @@ def _run_online_loop(
                     "factory_latency_ms": per_factory_latency_ms,
                 }
             },
+        )
+        funnel.touch_progress(
+            "poll_cycle",
+            block_range=f"{from_block}-{to_block}",
         )
 
         # Sleep the remainder of the poll interval
@@ -1911,6 +1975,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Treat 0 duration as "one cycle then exit"; use a small positive value.
     if duration_s <= 0:
         duration_s = 0.001
+    from core.pipeline_streaming import resolve_sniper_batch_wall_clock_s
+
+    online_duration_s = resolve_sniper_batch_wall_clock_s(args.duration_minutes)
 
     # ------------------------------------------------------------------
     # --prefer-ws: start WSPoolEventListener on a background thread.
@@ -2008,7 +2075,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 seen_ids=seen_ids,
                 poll_interval_s=args.poll_interval_s,
                 blocks_back=args.blocks_back,
-                duration_s=duration_s,
+                duration_s=online_duration_s,
                 source=source,
                 events_lock=events_lock,
                 http_fallback_mode=http_fallback_mode,
@@ -2018,6 +2085,29 @@ def main(argv: Optional[List[str]] = None) -> int:
                 phase2_lock=phase2_lock,
                 arb_trace=arb_trace,
             )
+    except SniperStalledError as exc:
+        logger.error(
+            "sniper_shutdown_stalled",
+            extra={"context": {"error": str(exc)[:200]}},
+        )
+        if ws_listener is not None:
+            ws_listener.stop()
+            if ws_thread is not None:
+                ws_thread.join(timeout=3.0)
+        snap = funnel.snapshot()
+        _build_and_write_artifact(
+            funnel=funnel,
+            recent_events=recent_events,
+            started_at="",
+            elapsed_s=snap["elapsed_s"],
+            source=source,
+            status="STALLED",
+            reasons=["SNIPER_STALLED"],
+            w3=rpc_lane.w3 if rpc_lane is not None else w3,
+            phase2_event_decisions=dict(phase2_event_decisions or {}),
+            arb_trace=list(arb_trace) if arb_trace is not None else None,
+        )
+        return 6
     except KeyboardInterrupt:
         logger.info("sniper interrupted by user (KeyboardInterrupt)")
 

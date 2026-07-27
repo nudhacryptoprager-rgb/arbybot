@@ -4,23 +4,49 @@ Extracted from ``start.py`` (control-plane split).  The process-management
 loop is identical to the legacy inline implementation:
 
 * streamed stdout via a reader thread + queue (no pipe deadlock);
-* hard timeout kills the child (``hard_timeout_<s>s``);
-* stale heartbeat kills the child (``stale_heartbeat_<s>s``) — quiet steps
+* hard timeout kills the child process tree (``hard_timeout_<s>s``);
+* stale heartbeat kills the child process tree (``stale_heartbeat_<s>s``) — quiet steps
   may refresh liveness through ``has_external_activity`` (checkpoint files);
-* final ``proc.wait(timeout=30)`` with a defensive kill.
+* final ``proc.wait(timeout=30)`` with a defensive tree kill.
 
 ``run_with_retries`` adds the per-stage retry budget declared on
 ``PipelineStage.retries``.
 """
 from __future__ import annotations
 
+import os
 import queue as _queue
+import signal
 import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
-__all__ = ["run_stage_subprocess", "run_with_retries"]
+__all__ = ["run_stage_subprocess", "run_with_retries", "terminate_process_tree"]
+
+
+def _popen_kwargs() -> dict:
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Terminate *proc* and any child processes it spawned."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+            check=False,
+        )
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        proc.kill()
 
 
 def run_stage_subprocess(
@@ -45,6 +71,7 @@ def run_stage_subprocess(
         stderr=subprocess.STDOUT,
         text=True,
         env=dict(env) if env is not None else None,
+        **_popen_kwargs(),
     )
     assert proc.stdout is not None
     if on_spawn is not None:
@@ -93,18 +120,18 @@ def run_stage_subprocess(
             break
 
         if timeout_s > 0 and (now_mono - start_mono) > timeout_s:
-            proc.kill()
-            fail_reason = f"hard_timeout_{timeout_s}s"
+            terminate_process_tree(proc)
+            fail_reason = f"hard_timeout_{int(timeout_s)}s"
             break
         if heartbeat_stale_s > 0 and (now_mono - last_output_mono) > heartbeat_stale_s:
-            proc.kill()
+            terminate_process_tree(proc)
             fail_reason = f"stale_heartbeat_{int(heartbeat_stale_s)}s"
             break
 
     try:
         rc = proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        terminate_process_tree(proc)
         rc = 3
     if fail_reason:
         return rc or 1, fail_reason
