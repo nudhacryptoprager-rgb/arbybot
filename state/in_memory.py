@@ -20,14 +20,17 @@ Design notes:
 """
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional
 
 from state.repository import (
     ArtifactPointer,
     IdempotencyKey,
     JobRecord,
+    PipelineEventRecord,
     PoolRecord,
     RouteRecord,
     StateRepository,
@@ -46,6 +49,9 @@ class InMemoryStateRepository(StateRepository):
         self._artifact_pointers: Dict[tuple, Dict[str, Any]] = {}
         self._jobs: List[Dict[str, Any]] = []
         self._job_id_seq = 0
+        self._events: List[Dict[str, Any]] = []
+        self._event_offset_seq = 0
+        self._ingest_cursors: Dict[str, Dict[str, Any]] = {}
 
     @contextmanager
     def transaction(self) -> Iterator["InMemoryStateRepository"]:
@@ -55,6 +61,7 @@ class InMemoryStateRepository(StateRepository):
         snap_tokens = deepcopy(self._tokens)
         snap_pointers = deepcopy(self._artifact_pointers)
         snap_jobs = deepcopy(self._jobs)
+        snap_events = deepcopy(self._events)
         try:
             yield self
         except Exception:
@@ -63,6 +70,7 @@ class InMemoryStateRepository(StateRepository):
             self._tokens = snap_tokens
             self._artifact_pointers = snap_pointers
             self._jobs = snap_jobs
+            self._events = snap_events
             raise
         # commit: nothing to do — we mutated live maps directly. Snapshot is
         # discarded and the live maps stay.
@@ -175,6 +183,7 @@ class InMemoryStateRepository(StateRepository):
             if j["idempotency_key"] == digest:
                 return  # idempotent enqueue
         self._job_id_seq += 1
+        now = time.monotonic()
         self._jobs.append(
             {
                 "job_id": self._job_id_seq,
@@ -186,17 +195,43 @@ class InMemoryStateRepository(StateRepository):
                 "last_error": job.last_error,
                 "idempotency_key": digest,
                 "idempotency": job.idempotency,
+                "available_at": float(job.available_at if job.available_at is not None else now),
+                "lease_expires_at": job.lease_expires_at,
             }
         )
 
-    def claim_jobs(self, *, job_type: str, limit: int) -> List[JobRecord]:
+    def reclaim_expired_leases(self, *, lease_s: float) -> int:
+        now = time.monotonic()
+        reclaimed = 0
+        for j in self._jobs:
+            if j["status"] != "claimed":
+                continue
+            expires = j.get("lease_expires_at")
+            if expires is not None and float(expires) < now:
+                j["status"] = "pending"
+                j["lease_expires_at"] = None
+                reclaimed += 1
+            elif expires is None and lease_s > 0:
+                j["status"] = "pending"
+                reclaimed += 1
+        return reclaimed
+
+    def claim_jobs(self, *, job_type: str, limit: int, lease_s: float = 300.0) -> List[JobRecord]:
+        now = time.monotonic()
+        self.reclaim_expired_leases(lease_s=lease_s)
         claimed: List[JobRecord] = []
         for j in self._jobs:
             if len(claimed) >= limit:
                 break
-            if j["job_type"] == job_type and j["status"] == "pending":
+            if j["job_type"] != job_type:
+                continue
+            if j["status"] == "dead_letter":
+                continue
+            available_at = float(j.get("available_at") or 0.0)
+            if j["status"] == "pending" and available_at <= now:
                 j["status"] = "claimed"
                 j["attempts"] += 1
+                j["lease_expires_at"] = now + float(lease_s)
                 claimed.append(
                     JobRecord(
                         job_id=j["job_id"],
@@ -207,6 +242,8 @@ class InMemoryStateRepository(StateRepository):
                         max_attempts=j["max_attempts"],
                         last_error=j["last_error"],
                         idempotency=j["idempotency"],
+                        available_at=j.get("available_at"),
+                        lease_expires_at=j.get("lease_expires_at"),
                     )
                 )
         return claimed
@@ -215,17 +252,62 @@ class InMemoryStateRepository(StateRepository):
         for j in self._jobs:
             if j["job_id"] == job_id:
                 j["status"] = "done"
+                j["lease_expires_at"] = None
                 return
 
     def fail_job(self, job_id: int, *, error: str) -> None:
         for j in self._jobs:
             if j["job_id"] == job_id:
                 j["last_error"] = error
+                j["lease_expires_at"] = None
                 if j["attempts"] >= j["max_attempts"]:
-                    j["status"] = "failed"
+                    j["status"] = "dead_letter"
                 else:
                     j["status"] = "pending"
+                    j["available_at"] = time.monotonic() + 1.0
                 return
+
+    def append_event(
+        self,
+        *,
+        event_type: str,
+        session_id: str,
+        entity_id: str,
+        payload: Dict[str, Any],
+        observed_block: int = 0,
+    ) -> PipelineEventRecord:
+        self._event_offset_seq += 1
+        row = {
+            "event_type": event_type,
+            "session_id": session_id,
+            "entity_id": entity_id,
+            "payload": dict(payload),
+            "observed_block": int(observed_block or 0),
+            "event_offset": self._event_offset_seq,
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        self._events.append(row)
+        return PipelineEventRecord(**row)
+
+    def list_events(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        since_offset: int = 0,
+    ) -> List[PipelineEventRecord]:
+        out: List[PipelineEventRecord] = []
+        for row in self._events:
+            if int(row.get("event_offset") or 0) <= int(since_offset):
+                continue
+            if session_id and row.get("session_id") != session_id:
+                continue
+            out.append(PipelineEventRecord(**row))
+        return out
+
+    def latest_event_offset(self) -> int:
+        if not self._events:
+            return 0
+        return int(self._events[-1].get("event_offset") or 0)
 
     # -- read helpers (used by JSON projections / API vertical slice) --------
 
@@ -237,3 +319,9 @@ class InMemoryStateRepository(StateRepository):
 
     def tokens(self) -> List[Dict[str, Any]]:
         return [dict(r) for r in self._tokens.values()]
+
+    def get_ingest_cursor(self, session_id: str) -> Dict[str, Any]:
+        return dict(self._ingest_cursors.get(session_id) or {})
+
+    def set_ingest_cursor(self, session_id: str, cursor: Dict[str, Any]) -> None:
+        self._ingest_cursors[session_id] = dict(cursor)

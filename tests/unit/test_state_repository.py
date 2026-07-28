@@ -167,7 +167,7 @@ def test_fail_job_requeues_until_max_attempts():
     repo = _repo_with_fake()
     repo.fail_job(7, error="RPC_TIMEOUT")
     sql, params = repo._conn.executed[-1]
-    assert "WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending'" in sql
+    assert "WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'pending'" in sql
     assert params == ("RPC_TIMEOUT", 7)
 
 

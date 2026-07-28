@@ -1,4 +1,4 @@
-"""Event-driven continuous pipeline — independent workers over StateRepository."""
+"""Event-driven continuous pipeline — shared StateRepository + worker broker."""
 from __future__ import annotations
 
 import time
@@ -15,7 +15,8 @@ EVENT_POOL_DISCOVERED = "pool_discovered"
 EVENT_METADATA_READY = "metadata_ready"
 EVENT_MIRROR_READY = "mirror_ready"
 EVENT_QUOTE_READY = "quote_ready"
-EVENT_M9_QUOTED = "m9_quoted"
+EVENT_M9_QUOTE_RESULT = "m9_quote_result"
+EVENT_M9_QUOTED = "m9_quoted"  # legacy alias — do not emit in production adapters
 
 WORKER_M8_INGEST = "m8_ingest"
 WORKER_M81_PROBE = "m81_probe"
@@ -23,18 +24,18 @@ WORKER_M82_MIRROR = "m82_mirror"
 WORKER_M83_METADATA = "m83_metadata"
 WORKER_M9_GRAPH_QUOTE = "m9_graph_quote"
 
+# pool_discovered → m81 → m82 → m83 → quote_ready → m9
 WORKER_FOR_EVENT: Dict[str, str] = {
-    EVENT_POOL_DISCOVERED: WORKER_M8_INGEST,
-    EVENT_METADATA_READY: WORKER_M83_METADATA,
+    EVENT_POOL_DISCOVERED: WORKER_M81_PROBE,
     EVENT_MIRROR_READY: WORKER_M82_MIRROR,
-    EVENT_QUOTE_READY: WORKER_M81_PROBE,
+    EVENT_METADATA_READY: WORKER_M83_METADATA,
+    EVENT_QUOTE_READY: WORKER_M9_GRAPH_QUOTE,
 }
 
 NEXT_EVENT: Dict[str, str] = {
-    EVENT_POOL_DISCOVERED: EVENT_METADATA_READY,
-    EVENT_METADATA_READY: EVENT_MIRROR_READY,
-    EVENT_MIRROR_READY: EVENT_QUOTE_READY,
-    EVENT_QUOTE_READY: EVENT_M9_QUOTED,
+    EVENT_POOL_DISCOVERED: EVENT_MIRROR_READY,
+    EVENT_MIRROR_READY: EVENT_METADATA_READY,
+    EVENT_METADATA_READY: EVENT_QUOTE_READY,
 }
 
 
@@ -72,7 +73,7 @@ class WorkerResult:
 
 @dataclass
 class ContinuousOrchestrator:
-    """Drains worker jobs; M9 triggers on ``quote_ready`` without waiting for M8 completion."""
+    """Drains worker jobs; M9 runs on ``quote_ready`` without batch completion."""
 
     repository: StateRepository
     config: PipelineRuntimeConfig
@@ -82,7 +83,6 @@ class ContinuousOrchestrator:
         default_factory=dict
     )
     _m9_pending: Set[str] = field(default_factory=set)
-    _event_latencies: List[float] = field(default_factory=list)
 
     def register_handler(
         self,
@@ -106,40 +106,17 @@ class ContinuousOrchestrator:
                     max_attempts=self.policy.retry_budget,
                 )
             )
-        if (
-            event.event_type == EVENT_QUOTE_READY
-            and self.config.m9_trigger_event == EVENT_QUOTE_READY
-            and self.config.workers.get(WORKER_M9_GRAPH_QUOTE, {}).get("enabled", True)
-        ):
-            entity = event.entity_id or str(event.payload.get("pool_address") or "")
-            if entity and entity not in self._m9_pending:
-                self._m9_pending.add(entity)
-                self.repository.enqueue_job(
-                    JobRecord(
-                        job_type=WORKER_M9_GRAPH_QUOTE,
-                        payload={
-                            "event_type": EVENT_QUOTE_READY,
-                            "session_id": event.session_id,
-                            **event.payload,
-                        },
-                        idempotency=IdempotencyKey(
-                            chain_id=int(event.payload.get("chain_id") or 8453),
-                            block_number=int(event.observed_block or 0),
-                            entity_id=entity,
-                            input_revision=f"m9_quote:{event.session_id}",
-                        ),
-                        max_attempts=self.policy.retry_budget,
-                    )
-                )
 
     def process_worker_jobs(
         self,
         worker: str,
         *,
         limit: int = 1,
+        lease_s: Optional[float] = None,
     ) -> List[WorkerResult]:
         results: List[WorkerResult] = []
-        jobs = self.repository.claim_jobs(job_type=worker, limit=limit)
+        claim_lease = float(lease_s if lease_s is not None else self.policy.work_item_lease_s)
+        jobs = self.repository.claim_jobs(job_type=worker, limit=limit, lease_s=claim_lease)
         handler = self._handlers.get(worker)
         for job in jobs:
             started = time.monotonic()
@@ -148,8 +125,7 @@ class ContinuousOrchestrator:
                     result = self._default_handler(worker, job.payload)
                 else:
                     result = handler(job.payload)
-                latency = time.monotonic() - started
-                result.latency_s = latency
+                result.latency_s = time.monotonic() - started
                 if result.ok:
                     self.repository.complete_job(int(job.job_id or 0))
                     if result.next_event:
@@ -176,58 +152,17 @@ class ContinuousOrchestrator:
         return results
 
     def _default_handler(self, worker: str, payload: Dict[str, Any]) -> WorkerResult:
-        if worker == WORKER_M9_GRAPH_QUOTE:
-            return WorkerResult(
-                worker=worker,
-                ok=True,
-                next_event=EVENT_M9_QUOTED,
-            )
         event_type = str(payload.get("event_type") or EVENT_POOL_DISCOVERED)
         nxt = NEXT_EVENT.get(event_type)
         return WorkerResult(worker=worker, ok=True, next_event=nxt)
 
-    def simulate_pool_to_m9(
-        self,
-        pool_address: str,
-        *,
-        chain_id: int = 8453,
-        block_number: int = 1,
-    ) -> float:
-        """Emit full chain; return seconds until M9 job is enqueued (not M8 idle)."""
-        started = time.monotonic()
-        event = PipelineEvent(
-            event_type=EVENT_POOL_DISCOVERED,
+    def m9_jobs_done(self) -> int:
+        events = self.repository.list_events(
             session_id=self.session_id,
-            payload={"pool_address": pool_address, "chain_id": chain_id},
-            observed_block=block_number,
-            entity_id=pool_address,
+            since_offset=0,
         )
-        self.emit(event)
-        # Fast-forward through metadata + mirror + quote without waiting for ingest idle.
-        for evt in (EVENT_METADATA_READY, EVENT_MIRROR_READY, EVENT_QUOTE_READY):
-            self.emit(
-                PipelineEvent(
-                    event_type=evt,
-                    session_id=self.session_id,
-                    payload={"pool_address": pool_address, "chain_id": chain_id},
-                    observed_block=block_number,
-                    entity_id=pool_address,
-                )
-            )
-        return time.monotonic() - started
-
-    def m9_jobs_enqueued(self) -> int:
-        jobs_fn = getattr(self.repository, "_jobs", None)
-        if not isinstance(jobs_fn, list):
-            claim = self.repository.claim_jobs(job_type=WORKER_M9_GRAPH_QUOTE, limit=1000)
-            count = len(claim)
-            for job in claim:
-                self.repository.fail_job(int(job.job_id or 0), error="test_requeue")
-            return count
         return sum(
-            1
-            for j in jobs_fn
-            if j.get("job_type") == WORKER_M9_GRAPH_QUOTE
+            1 for e in events if e.event_type in (EVENT_M9_QUOTE_RESULT, EVENT_M9_QUOTED)
         )
 
 
@@ -246,43 +181,74 @@ def build_continuous_pipeline_steps(
     *,
     session_id: str,
     config: PipelineRuntimeConfig,
+    broker_drain: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Internal continuous steps — no global service timeouts."""
-    steps: List[Dict[str, Any]] = []
-    for worker in build_continuous_worker_names(config):
-        steps.append(
+    """Continuous mode steps. Default: spawn background services then one-shot projections."""
+    shadow_minutes = int(getattr(config.shadow, "duration_minutes", None) or 10)
+    if broker_drain:
+        return [
             {
-                "name": f"continuous_{worker}",
-                "internal": "continuous_worker",
-                "worker": worker,
+                "name": "continuous_broker",
+                "internal": "continuous_broker",
                 "session_id": session_id,
                 "timeout_seconds": None,
-            }
-        )
-    steps.append(
+            },
+            {
+                "name": "session_aggregate_acceptance",
+                "internal": "session_aggregate_acceptance",
+                "session_id": session_id,
+                "timeout_seconds": None,
+            },
+            {
+                "name": "session_aggregate_bridge",
+                "internal": "session_aggregate_bridge",
+                "session_id": session_id,
+                "timeout_seconds": None,
+            },
+            {
+                "name": "continuous_m9_raw_route_diagnostic",
+                "internal": "continuous_m9_shadow",
+                "session_id": session_id,
+                "duration_minutes": shadow_minutes,
+                "timeout_seconds": None,
+            },
+        ]
+    return [
         {
-            "name": "m8_2_acceptance_aggregate",
+            "name": "continuous_m8_sniper_spawn",
+            "internal": "continuous_m8_sniper_spawn",
+            "session_id": session_id,
+            "timeout_seconds": None,
+        },
+        {
+            "name": "continuous_broker_spawn",
+            "internal": "continuous_broker_spawn",
+            "session_id": session_id,
+            "timeout_seconds": None,
+        },
+        {
+            "name": "session_aggregate_acceptance",
             "internal": "session_aggregate_acceptance",
             "session_id": session_id,
             "timeout_seconds": None,
-        }
-    )
-    steps.append(
+        },
         {
-            "name": "m9_bridge_from_aggregate",
+            "name": "session_aggregate_bridge",
             "internal": "session_aggregate_bridge",
             "session_id": session_id,
             "timeout_seconds": None,
-        }
-    )
-    if config.shadow.duration_minutes > 0:
-        steps.append(
-            {
-                "name": "m9_shadow",
-                "internal": "continuous_m9_shadow",
-                "session_id": session_id,
-                "duration_minutes": config.shadow.duration_minutes,
-                "timeout_seconds": None,
-            }
-        )
-    return steps
+        },
+        {
+            "name": "continuous_m9_raw_route_diagnostic",
+            "internal": "continuous_m9_shadow",
+            "session_id": session_id,
+            "duration_minutes": shadow_minutes,
+            "timeout_seconds": None,
+        },
+        {
+            "name": "continuous_services_stop",
+            "internal": "continuous_services_stop",
+            "session_id": session_id,
+            "timeout_seconds": None,
+        },
+    ]

@@ -71,11 +71,26 @@ class JobRecord:
     job_type: str  # e.g. "ingest_verify", "graph_quote", "risk_simulate"
     payload: Dict[str, Any]
     idempotency: IdempotencyKey
-    status: str = "pending"  # pending | claimed | done | failed
+    status: str = "pending"  # pending | claimed | done | failed | dead_letter
     attempts: int = 0
     max_attempts: int = 3
     last_error: Optional[str] = None
     job_id: Optional[int] = None
+    available_at: Optional[float] = None
+    lease_expires_at: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class PipelineEventRecord:
+    """Immutable event ledger row for continuous pipeline handoff."""
+
+    event_type: str
+    session_id: str
+    entity_id: str
+    payload: Dict[str, Any]
+    observed_block: int = 0
+    event_offset: int = 0
+    created_at_utc: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +164,13 @@ class StateRepository(ABC):
         """Idempotent enqueue: same idempotency digest is a no-op."""
 
     @abstractmethod
-    def claim_jobs(self, *, job_type: str, limit: int) -> List[JobRecord]:
+    def claim_jobs(
+        self,
+        *,
+        job_type: str,
+        limit: int,
+        lease_s: float = 300.0,
+    ) -> List[JobRecord]:
         """Claim pending jobs with FOR UPDATE SKIP LOCKED semantics."""
 
     @abstractmethod
@@ -157,3 +178,46 @@ class StateRepository(ABC):
 
     @abstractmethod
     def fail_job(self, job_id: int, *, error: str) -> None: ...
+
+    # -- continuous pipeline (event ledger + lease reclaim) -----------------
+    def append_event(
+        self,
+        *,
+        event_type: str,
+        session_id: str,
+        entity_id: str,
+        payload: Dict[str, Any],
+        observed_block: int = 0,
+    ) -> PipelineEventRecord:
+        raise NotImplementedError
+
+    def list_events(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        since_offset: int = 0,
+    ) -> List[PipelineEventRecord]:
+        raise NotImplementedError
+
+    def reclaim_expired_leases(self, *, lease_s: float) -> int:
+        raise NotImplementedError
+
+    # -- inventory reads (continuous aggregate projection) ----------------
+    def list_pools(self) -> List[Dict[str, Any]]:
+        fn = getattr(self, "pools", None)
+        return list(fn()) if callable(fn) else []
+
+    def list_routes(self) -> List[Dict[str, Any]]:
+        fn = getattr(self, "routes", None)
+        return list(fn()) if callable(fn) else []
+
+    def list_tokens(self) -> List[Dict[str, Any]]:
+        fn = getattr(self, "tokens", None)
+        return list(fn()) if callable(fn) else []
+
+    # -- ingest cursor (atomic, per session) ------------------------------
+    def get_ingest_cursor(self, session_id: str) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def set_ingest_cursor(self, session_id: str, cursor: Dict[str, Any]) -> None:
+        raise NotImplementedError

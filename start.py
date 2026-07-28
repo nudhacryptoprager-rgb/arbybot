@@ -57,20 +57,19 @@ from core.batch_path_resolver import (
     batched_final_truth_gate_args,
     resolve_streaming_step_cmd,
 )
-from core.pipeline_provenance import (  # noqa: F401
-    ENV_PIPELINE_SESSION_ID,
-    new_pipeline_session_id,
-)
-from core.pipeline_runtime_config import (
-    load_pipeline_runtime_config,
-    resolve_sniper_minutes_from_config,
-)
-from core.timeout_policy import TimeoutPolicy, resolve_step_timeout_seconds
 from core.continuous_pipeline import (
     ContinuousOrchestrator,
     build_continuous_pipeline_steps,
 )
-from core.session_aggregate import load_or_build_session_aggregate
+from core.pipeline_provenance import (  # noqa: F401
+    ENV_PIPELINE_SESSION_ID,
+    new_pipeline_session_id,
+)
+from core.pipeline_runtime import run_streaming_batch_upstream_gate
+from core.pipeline_runtime_config import (
+    load_pipeline_runtime_config,
+    resolve_sniper_minutes_from_config,
+)
 from core.pipeline_slo import PipelineSloTracker
 from core.pipeline_streaming import (
     batched_m8_refresh_mode,
@@ -81,7 +80,10 @@ from core.pipeline_streaming import (
     resolve_streaming_batches,
     streaming_enabled,
 )
+from core.session_aggregate import load_or_build_session_aggregate, session_aggregate_path
+from core.timeout_policy import TimeoutPolicy, resolve_step_timeout_seconds
 from m8.discovery.streaming_handoff import write_streaming_batch_manifest
+from state.repository_context import get_shared_repository
 from strategy.chain_stats import (  # noqa: F401
     SANE_ROUNDTRIP_PNL_BPS_MAX,
     SANE_ROUNDTRIP_PNL_BPS_MIN,
@@ -853,7 +855,16 @@ def _pipeline_timeout_policy(args: argparse.Namespace) -> TimeoutPolicy:
 def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int:
     if step.get("timeout_seconds") is None and (
         bool(getattr(args, "continuous", False))
-        or step.get("internal") in {"continuous_worker", "session_aggregate_acceptance", "session_aggregate_bridge", "continuous_m9_shadow"}
+        or step.get("internal") in {
+            "continuous_worker",
+            "continuous_m8_sniper_spawn",
+            "continuous_broker_spawn",
+            "continuous_broker",
+            "continuous_services_stop",
+            "session_aggregate_acceptance",
+            "session_aggregate_bridge",
+            "continuous_m9_shadow",
+        }
     ):
         return 0
     policy = _pipeline_timeout_policy(args)
@@ -977,53 +988,142 @@ def _clear_pipeline_current() -> None:
 
 
 def _continuous_orchestrator(session_id: str) -> ContinuousOrchestrator:
-    from state.in_memory import InMemoryStateRepository
+    from scripts.continuous_handler_wiring import build_wired_orchestrator
+    from state.repository_context import get_shared_repository
 
-    config = _load_runtime_config(_CURRENT_PIPELINE_ARGS or argparse.Namespace())
-    policy = TimeoutPolicy.from_config(config, continuous=True)
-    return ContinuousOrchestrator(
-        repository=InMemoryStateRepository(),
-        config=config,
-        policy=policy,
-        session_id=session_id,
-    )
+    return build_wired_orchestrator(session_id, repository=get_shared_repository())
 
 
-def _run_continuous_worker_step(step: dict[str, Any]) -> int:
-    worker = str(step.get("worker") or "")
+def _resolve_continuous_session_id(step: dict[str, Any]) -> str:
     session_id = str(
         step.get("session_id") or os.environ.get(ENV_PIPELINE_SESSION_ID, "")
     ).strip()
     if not session_id:
         session_id = new_pipeline_session_id()
         os.environ[ENV_PIPELINE_SESSION_ID] = session_id
+    return session_id
+
+
+def _run_continuous_m8_sniper_spawn(step: dict[str, Any]) -> int:
+    from core.continuous_services import spawn_sniper_service
+
+    session_id = _resolve_continuous_session_id(step)
+    pid = spawn_sniper_service(session_id)
+    print(f"continuous_m8_sniper_spawn: session={session_id} pid={pid}", flush=True)
+    return 0
+
+
+def _run_continuous_broker_spawn(step: dict[str, Any]) -> int:
+    from core.continuous_services import spawn_broker_service
+
+    session_id = _resolve_continuous_session_id(step)
+    args = _CURRENT_PIPELINE_ARGS
+    dev_seed = getattr(args, "dev_seed_pool", None) if args else None
+    if dev_seed:
+        os.environ.setdefault("ARBY_CONTINUOUS_STUB_ADAPTERS", "1")
+        orch = _continuous_orchestrator(session_id)
+        from core.continuous_broker import seed_pool_discovered
+
+        seed_pool_discovered(orch, pool_address=str(dev_seed), block_number=1)
+    pid = spawn_broker_service(session_id)
+    print(f"continuous_broker_spawn: session={session_id} pid={pid}", flush=True)
+    return 0
+
+
+def _run_continuous_services_stop(step: dict[str, Any]) -> int:
+    from core.continuous_services import stop_all_services
+
+    session_id = _resolve_continuous_session_id(step)
+    stop_all_services(session_id)
+    print(f"continuous_services_stop: session={session_id}", flush=True)
+    return 0
+
+
+def _run_continuous_broker(step: dict[str, Any]) -> int:
+    from core.continuous_broker import run_broker_loop
+
+    session_id = _resolve_continuous_session_id(step)
+    args = _CURRENT_PIPELINE_ARGS
+    dev_seed = getattr(args, "dev_seed_pool", None) if args else None
+    if dev_seed:
+        os.environ.setdefault("ARBY_CONTINUOUS_STUB_ADAPTERS", "1")
     orch = _continuous_orchestrator(session_id)
-    results = orch.process_worker_jobs(worker, limit=1)
+    if dev_seed:
+        from core.continuous_broker import seed_pool_discovered
+
+        seed_pool_discovered(orch, pool_address=str(dev_seed), block_number=1)
+    drain = os.environ.get("ARBY_BROKER_DRAIN") == "1" or bool(
+        getattr(args, "broker_drain", False) if args else False
+    )
+    if not drain:
+        print(
+            "continuous_broker: blocking service removed; use spawn steps or --broker-drain",
+            flush=True,
+        )
+        return 2
+    result = run_broker_loop(
+        orch,
+        max_rounds=200,
+        jobs_per_worker=16,
+        idle_exit_rounds=3,
+    )
+    print(
+        "continuous_broker: "
+        f"session={session_id} mode=drain rounds={result.rounds} "
+        f"jobs_processed={result.jobs_processed} m9_quote_results={result.m9_quote_results}",
+        flush=True,
+    )
+    return 0
+
+
+def _run_continuous_worker_step(step: dict[str, Any]) -> int:
+    worker = str(step.get("worker") or "")
+    session_id = _resolve_continuous_session_id(step)
+    orch = _continuous_orchestrator(session_id)
+    lease_s = orch.policy.work_item_lease_s
+    results = orch.process_worker_jobs(worker, limit=8, lease_s=lease_s)
     if not results:
         return 0
-    return 0 if results[-1].ok else 1
+    return 0 if all(r.ok for r in results) else 1
 
 
 def _run_session_aggregate_acceptance(step: dict[str, Any]) -> int:
-    session_id = str(
-        step.get("session_id") or os.environ.get(ENV_PIPELINE_SESSION_ID, "")
-    ).strip()
+    session_id = _resolve_continuous_session_id(step)
     if not session_id:
         return 2
-    load_or_build_session_aggregate(session_id)
+    load_or_build_session_aggregate(session_id, repository=get_shared_repository())
     print(f"session_aggregate_acceptance: session={session_id} aggregate materialized", flush=True)
     return 0
 
 
 def _run_session_aggregate_bridge(step: dict[str, Any]) -> int:
-    session_id = str(
-        step.get("session_id") or os.environ.get(ENV_PIPELINE_SESSION_ID, "")
-    ).strip()
+    session_id = _resolve_continuous_session_id(step)
     if not session_id:
         return 2
-    agg = load_or_build_session_aggregate(session_id)
+    agg = load_or_build_session_aggregate(session_id, repository=get_shared_repository())
+    agg_path = session_aggregate_path(session_id)
+    cmd = [
+        sys.executable,
+        "scripts/m9_bridge_build.py",
+        "--output",
+        "data/runs/_rolling/m9_bridge_inventory_latest.json",
+    ]
+    use_aggregate = bool(agg.routes)
+    if use_aggregate and agg_path.is_file():
+        cmd.extend(["--session-aggregate", str(agg_path)])
+    else:
+        print(
+            "session_aggregate_bridge: aggregate routes=0 — using canonical rolling M8 artifacts",
+            flush=True,
+        )
+    print(f"session_aggregate_bridge: invoking canonical bridge build: {' '.join(cmd)}", flush=True)
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        print(f"session_aggregate_bridge: canonical build failed rc={rc}", flush=True)
+        return int(rc)
     print(
-        f"session_aggregate_bridge: pools={len(agg.pools)} tokens={len(agg.tokens)} routes={len(agg.routes)}",
+        f"session_aggregate_bridge: canonical m9_bridge_build OK "
+        f"(aggregate_routes={len(agg.routes)})",
         flush=True,
     )
     return 0
@@ -1031,8 +1131,31 @@ def _run_session_aggregate_bridge(step: dict[str, Any]) -> int:
 
 def _run_continuous_m9_shadow(step: dict[str, Any]) -> int:
     duration = int(step.get("duration_minutes") or 10)
-    print(f"continuous_m9_shadow: duration_minutes={duration} (event-driven admission)", flush=True)
-    return 0
+    session_id = _resolve_continuous_session_id(step)
+    if os.environ.get("ARBY_SKIP_RPC") == "1":
+        print(
+            f"continuous_m9_raw_route_diagnostic: skipped (ARBY_SKIP_RPC=1) "
+            f"duration_budget_min={duration}",
+            flush=True,
+        )
+        return 0
+    bridge_inv = "data/runs/_rolling/m9_bridge_inventory_latest.json"
+    cmd = [
+        sys.executable,
+        "scripts/m9_quote_route_diagnostic.py",
+        "--inventory",
+        bridge_inv,
+        "--limit",
+        "5",
+        "--lane",
+        "productive",
+    ]
+    print(
+        "continuous_m9_raw_route_diagnostic: "
+        f"session={session_id} inventory={bridge_inv} duration_budget_min={duration}",
+        flush=True,
+    )
+    return int(subprocess.call(cmd))
 
 
 def _run_internal_pipeline_step(internal: str, step: dict[str, Any] | None = None) -> int:
@@ -1068,6 +1191,14 @@ def _run_internal_pipeline_step(internal: str, step: dict[str, Any] | None = Non
         return _gate_recall_verify_admission()
     if internal == "continuous_worker":
         return _run_continuous_worker_step(step or {})
+    if internal == "continuous_m8_sniper_spawn":
+        return _run_continuous_m8_sniper_spawn(step or {})
+    if internal == "continuous_broker_spawn":
+        return _run_continuous_broker_spawn(step or {})
+    if internal == "continuous_broker":
+        return _run_continuous_broker(step or {})
+    if internal == "continuous_services_stop":
+        return _run_continuous_services_stop(step or {})
     if internal == "session_aggregate_acceptance":
         return _run_session_aggregate_acceptance(step or {})
     if internal == "session_aggregate_bridge":
@@ -2739,25 +2870,10 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         if continuous:
             session_id = resolve_pipeline_session_id(args)
             os.environ.setdefault(ENV_PIPELINE_SESSION_ID, session_id)
-            steps.append(
-                _pipeline_step(
-                    "continuous_m8_ingest",
-                    _productive_rpc_cmd(
-                        "-u",
-                        "scripts/sniper_smoke_run.py",
-                        "--chain",
-                        "base",
-                        "--acceptance-run",
-                        "--blocks-back",
-                        "50",
-                    ),
-                    env={"ARBY_SNIPER_ENABLE": "1"},
-                    timeout_seconds=None,
-                )
-            )
             for cw in build_continuous_pipeline_steps(
                 session_id=session_id,
                 config=runtime_config,
+                broker_drain=bool(getattr(args, "broker_drain", False)),
             ):
                 steps.append(
                     _pipeline_step(
@@ -2770,7 +2886,6 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                         duration_minutes=cw.get("duration_minutes"),
                     )
                 )
-            add_m9()
         else:
             add_m8()
             if not streaming:
@@ -3410,6 +3525,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Event-driven continuous workers (no global M8/M9 service timeout)",
+    )
+    ap.add_argument(
+        "--dev-seed-pool",
+        default=None,
+        help="DEV ONLY: seed one pool into continuous broker (never use in production)",
+    )
+    ap.add_argument(
+        "--broker-drain",
+        action="store_true",
+        default=False,
+        help="Drain broker queues and exit (test/CI); default is long-lived service until SIGTERM",
     )
     ap.add_argument(
         "--streaming",

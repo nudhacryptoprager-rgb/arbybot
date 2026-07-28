@@ -134,6 +134,11 @@ def _parse_args() -> argparse.Namespace:
         default="data/runs/_rolling/m8_3_token_metadata_registry_latest.json",
         help="M8.3 token metadata registry applied during bridge build",
     )
+    p.add_argument(
+        "--session-aggregate",
+        default=None,
+        help="Path to session_aggregate.json from continuous pipeline (skips rolling M8 artifacts)",
+    )
     return p.parse_args()
 
 
@@ -146,6 +151,38 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     log = logging.getLogger("m9_bridge_build")
+
+    if args.session_aggregate:
+        import json
+        from pathlib import Path
+
+        from core.session_aggregate import SessionAggregate, bridge_inventory_from_aggregate
+
+        agg_path = Path(args.session_aggregate)
+        if not agg_path.is_file():
+            log.error("session aggregate not found: %s", agg_path)
+            return 2
+        doc = json.loads(agg_path.read_text(encoding="utf-8"))
+        agg = SessionAggregate(session_id=str(doc.get("session_id") or "unknown"))
+        for pool in doc.get("pools") or []:
+            if isinstance(pool, dict):
+                agg.upsert_pool(pool)
+        for token in doc.get("tokens") or []:
+            if isinstance(token, dict):
+                agg.upsert_token(token)
+        for route in doc.get("routes") or []:
+            if isinstance(route, dict):
+                agg.upsert_route(route)
+        bridge_doc = bridge_inventory_from_aggregate(agg)
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(bridge_doc, indent=2) + "\n", encoding="utf-8")
+        log.info(
+            "Bridge from session aggregate: routes=%d output=%s",
+            bridge_doc.get("graph_ready_total", 0),
+            out_path,
+        )
+        return 0 if bridge_doc.get("graph_ready_total", 0) > 0 else 1
 
     from m9.graph_arb.bridge_builder import build_bridge_inventory
 

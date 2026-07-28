@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional
 
 from core.pipeline_streaming import STREAMING_ROOT_DIR, sanitize_session_id
 from state.repository import StateRepository
@@ -17,6 +18,7 @@ class SessionAggregate:
     tokens: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     routes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     events: List[Dict[str, Any]] = field(default_factory=list)
+    event_offset_watermark: int = 0
 
     def upsert_pool(self, pool: Dict[str, Any]) -> None:
         addr = str(pool.get("pool_address") or pool.get("pool") or "").lower()
@@ -49,6 +51,7 @@ class SessionAggregate:
             "tokens": list(self.tokens.values()),
             "routes": list(self.routes.values()),
             "events": list(self.events),
+            "event_offset_watermark": int(self.event_offset_watermark),
             "counts": {
                 "pools": len(self.pools),
                 "tokens": len(self.tokens),
@@ -58,8 +61,13 @@ class SessionAggregate:
         }
 
     def write(self, path: Path) -> Path:
+        return self.write_atomic(path)
+
+    def write_atomic(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
         return path
 
 
@@ -72,11 +80,7 @@ def merge_repository_into_aggregate(
     aggregate: SessionAggregate,
     repository: StateRepository,
 ) -> SessionAggregate:
-    pools_fn = getattr(repository, "pools", None)
-    routes_fn = getattr(repository, "routes", None)
-    tokens_fn = getattr(repository, "tokens", None)
-    if callable(pools_fn):
-        for row in pools_fn():
+    for row in repository.list_pools():
             aggregate.upsert_pool(
                 {
                     "pool_address": row.get("pool_address"),
@@ -87,12 +91,43 @@ def merge_repository_into_aggregate(
                     **(row.get("extra") or {}),
                 }
             )
-    if callable(routes_fn):
-        for row in routes_fn():
-            aggregate.upsert_route(dict(row))
-    if callable(tokens_fn):
-        for row in tokens_fn():
-            aggregate.upsert_token(dict(row))
+    for row in repository.list_routes():
+            aggregate.upsert_route(
+                {
+                    "route_id": row.get("route_id"),
+                    "pool_address": row.get("pool_address"),
+                    "dex_id": row.get("dex_id"),
+                    "token_in": row.get("token_in"),
+                    "token_out": row.get("token_out"),
+                    "status": row.get("status"),
+                    **(row.get("extra") or {}),
+                }
+            )
+    for row in repository.list_tokens():
+            aggregate.upsert_token(
+                {
+                    "address": row.get("address"),
+                    "decimals": row.get("decimals"),
+                    "symbol": row.get("symbol"),
+                    "chain_id": row.get("chain_id"),
+                }
+            )
+    events_fn = getattr(repository, "list_events", None)
+    latest_fn = getattr(repository, "latest_event_offset", None)
+    if callable(events_fn):
+        since = int(aggregate.event_offset_watermark or 0)
+        for ev in events_fn(session_id=aggregate.session_id, since_offset=since):
+            aggregate.record_event(
+                {
+                    "event_type": ev.event_type,
+                    "entity_id": ev.entity_id,
+                    "observed_block": ev.observed_block,
+                    "event_offset": ev.event_offset,
+                    "payload": dict(ev.payload),
+                }
+            )
+    if callable(latest_fn):
+        aggregate.event_offset_watermark = int(latest_fn())
     return aggregate
 
 
@@ -156,10 +191,14 @@ def load_or_build_session_aggregate(
     repository: Optional[StateRepository] = None,
 ) -> SessionAggregate:
     path = session_aggregate_path(session_id)
+    agg: Optional[SessionAggregate] = None
     if path.is_file():
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
-            agg = SessionAggregate(session_id=session_id)
+            agg = SessionAggregate(
+                session_id=session_id,
+                event_offset_watermark=int(doc.get("event_offset_watermark") or 0),
+            )
             for pool in doc.get("pools") or []:
                 if isinstance(pool, dict):
                     agg.upsert_pool(pool)
@@ -170,17 +209,33 @@ def load_or_build_session_aggregate(
                 if isinstance(route, dict):
                     agg.upsert_route(route)
             agg.events.extend(doc.get("events") or [])
-            return agg
         except (OSError, json.JSONDecodeError, TypeError):
-            pass
+            agg = None
 
-    safe = sanitize_session_id(session_id)
-    root = STREAMING_ROOT_DIR / safe
-    batch_dirs = sorted(root.glob("batch_*")) if root.is_dir() else []
-    agg = build_session_aggregate(
-        session_id,
-        repository=repository,
-        batch_dirs=batch_dirs,
-    )
-    agg.write(path)
+    if agg is None:
+        safe = sanitize_session_id(session_id)
+        root = STREAMING_ROOT_DIR / safe
+        batch_dirs = sorted(root.glob("batch_*")) if root.is_dir() else []
+        agg = build_session_aggregate(
+            session_id,
+            repository=repository,
+            batch_dirs=batch_dirs,
+        )
+    elif repository is not None:
+        merge_repository_into_aggregate(agg, repository)
+
+    agg.write_atomic(path)
     return agg
+
+
+def bridge_inventory_from_aggregate(aggregate: SessionAggregate) -> Dict[str, Any]:
+    """Minimal bridge handoff document from continuous session aggregate."""
+    routes = list(aggregate.routes.values())
+    return {
+        "schema_version": "m9_bridge_inventory.1",
+        "session_id": aggregate.session_id,
+        "source": "session_aggregate",
+        "active_routes": routes,
+        "graph_ready_total": len(routes),
+        "counts": aggregate.to_dict().get("counts") or {},
+    }

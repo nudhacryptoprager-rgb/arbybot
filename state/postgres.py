@@ -37,13 +37,15 @@ PostgreSQL is available):
 """
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from state.repository import (
     ArtifactPointer,
     IdempotencyKey,
     JobRecord,
+    PipelineEventRecord,
     PoolRecord,
     RouteRecord,
     StateRepository,
@@ -282,9 +284,38 @@ ALTER TABLE artifact_pointers
     ADD COLUMN IF NOT EXISTS idempotency_input_revision TEXT;
 """
 
+_MIGRATION_0003_DDL = """
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    event_offset      BIGSERIAL PRIMARY KEY,
+    event_type        TEXT NOT NULL,
+    session_id        TEXT NOT NULL,
+    entity_id         TEXT NOT NULL,
+    payload           JSONB NOT NULL DEFAULT '{}',
+    observed_block    BIGINT NOT NULL DEFAULT 0,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS pipeline_events_session_offset_idx
+    ON pipeline_events (session_id, event_offset);
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+"""
+
+_MIGRATION_0004_DDL = """
+CREATE TABLE IF NOT EXISTS continuous_ingest_cursors (
+    session_id          TEXT PRIMARY KEY,
+    seen_event_ids      JSONB NOT NULL DEFAULT '[]',
+    last_run_timestamp  TEXT,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
 MIGRATIONS: List[Tuple[int, str, str]] = [
     (1, "initial_schema", _MIGRATION_0001_DDL),
     (2, "monotonic_idempotency", _MIGRATION_0002_DDL),
+    (3, "pipeline_events_and_job_leases", _MIGRATION_0003_DDL),
+    (4, "continuous_ingest_cursors", _MIGRATION_0004_DDL),
 ]
 
 # Backward-compat: scripts/tests that introspect the union schema still see
@@ -550,14 +581,16 @@ class PostgresStateRepository(StateRepository):
             ),
         )
 
-    def claim_jobs(self, *, job_type: str, limit: int) -> List[JobRecord]:
+    def claim_jobs(self, *, job_type: str, limit: int, lease_s: float = 300.0) -> List[JobRecord]:
         cur = self._conn.execute(
             """
             UPDATE jobs SET status = 'claimed', attempts = attempts + 1,
+                            lease_expires_at = now() + (%s || ' seconds')::interval,
                             updated_at = now()
             WHERE job_id IN (
                 SELECT job_id FROM jobs
                 WHERE job_type = %s AND status = 'pending'
+                  AND (available_at IS NULL OR available_at <= now())
                 ORDER BY job_id
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
@@ -565,7 +598,7 @@ class PostgresStateRepository(StateRepository):
             RETURNING job_id, job_type, payload, status, attempts,
                       max_attempts, last_error, idempotency_key
             """,
-            (job_type, limit),
+            (float(lease_s), job_type, limit),
         )
         rows = cur.fetchall()
         return [
@@ -594,12 +627,201 @@ class PostgresStateRepository(StateRepository):
         self._conn.execute(
             """
             UPDATE jobs SET
-                status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END,
+                status = CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'pending' END,
                 last_error = %s,
                 updated_at = now()
             WHERE job_id = %s
             """,
             (error, job_id),
+        )
+
+    def reclaim_expired_leases(self, *, lease_s: float) -> int:
+        cur = self._conn.execute(
+            """
+            UPDATE jobs SET status = 'pending', lease_expires_at = NULL, updated_at = now()
+            WHERE status = 'claimed' AND lease_expires_at IS NOT NULL
+              AND lease_expires_at < now()
+            RETURNING job_id
+            """
+        )
+        rows = cur.fetchall()
+        return len(rows)
+
+    def append_event(
+        self,
+        *,
+        event_type: str,
+        session_id: str,
+        entity_id: str,
+        payload: Dict[str, Any],
+        observed_block: int = 0,
+    ) -> PipelineEventRecord:
+        cur = self._conn.execute(
+            """
+            INSERT INTO pipeline_events (
+                event_type, session_id, entity_id, payload, observed_block
+            ) VALUES (%s, %s, %s, %s, %s)
+            RETURNING event_offset, created_at
+            """,
+            (event_type, session_id, entity_id, _jsonb(payload), int(observed_block or 0)),
+        )
+        row = cur.fetchone()
+        offset = int(row[0]) if row else 0
+        created = str(row[1]) if row and row[1] is not None else None
+        return PipelineEventRecord(
+            event_type=event_type,
+            session_id=session_id,
+            entity_id=entity_id,
+            payload=dict(payload),
+            observed_block=int(observed_block or 0),
+            event_offset=offset,
+            created_at_utc=created,
+        )
+
+    def list_events(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        since_offset: int = 0,
+    ) -> List[PipelineEventRecord]:
+        if session_id:
+            cur = self._conn.execute(
+                """
+                SELECT event_type, session_id, entity_id, payload, observed_block,
+                       event_offset, created_at
+                FROM pipeline_events
+                WHERE session_id = %s AND event_offset > %s
+                ORDER BY event_offset
+                """,
+                (session_id, int(since_offset)),
+            )
+        else:
+            cur = self._conn.execute(
+                """
+                SELECT event_type, session_id, entity_id, payload, observed_block,
+                       event_offset, created_at
+                FROM pipeline_events
+                WHERE event_offset > %s
+                ORDER BY event_offset
+                """,
+                (int(since_offset),),
+            )
+        out: List[PipelineEventRecord] = []
+        for row in cur.fetchall():
+            payload = row[3] if isinstance(row[3], dict) else {}
+            out.append(
+                PipelineEventRecord(
+                    event_type=str(row[0]),
+                    session_id=str(row[1]),
+                    entity_id=str(row[2]),
+                    payload=dict(payload),
+                    observed_block=int(row[4] or 0),
+                    event_offset=int(row[5] or 0),
+                    created_at_utc=str(row[6]) if row[6] is not None else None,
+                )
+            )
+        return out
+
+    def latest_event_offset(self) -> int:
+        cur = self._conn.execute("SELECT COALESCE(MAX(event_offset), 0) FROM pipeline_events")
+        row = cur.fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def list_pools(self) -> List[Dict[str, Any]]:
+        cur = self._conn.execute(
+            """
+            SELECT chain_id, pool_address, dex_id, token0, token1, pool_type,
+                   fee, status, extra, observed_block
+            FROM pools ORDER BY pool_address
+            """
+        )
+        return [
+            {
+                "chain_id": row[0],
+                "pool_address": row[1],
+                "dex_id": row[2],
+                "token0": row[3],
+                "token1": row[4],
+                "pool_type": row[5],
+                "fee": row[6],
+                "status": row[7],
+                "extra": row[8] if isinstance(row[8], dict) else {},
+                "observed_block": row[9],
+            }
+            for row in cur.fetchall()
+        ]
+
+    def list_routes(self) -> List[Dict[str, Any]]:
+        cur = self._conn.execute(
+            """
+            SELECT chain_id, route_id, dex_id, token_in, token_out,
+                   pool_address, status, extra, observed_block
+            FROM routes ORDER BY route_id
+            """
+        )
+        return [
+            {
+                "chain_id": row[0],
+                "route_id": row[1],
+                "dex_id": row[2],
+                "token_in": row[3],
+                "token_out": row[4],
+                "pool_address": row[5],
+                "status": row[6],
+                "extra": row[7] if isinstance(row[7], dict) else {},
+                "observed_block": row[8],
+            }
+            for row in cur.fetchall()
+        ]
+
+    def list_tokens(self) -> List[Dict[str, Any]]:
+        cur = self._conn.execute(
+            """
+            SELECT chain_id, address, decimals, symbol, observed_block
+            FROM tokens ORDER BY address
+            """
+        )
+        return [
+            {
+                "chain_id": row[0],
+                "address": row[1],
+                "decimals": row[2],
+                "symbol": row[3],
+                "observed_block": row[4],
+            }
+            for row in cur.fetchall()
+        ]
+
+    def get_ingest_cursor(self, session_id: str) -> Dict[str, Any]:
+        cur = self._conn.execute(
+            """
+            SELECT seen_event_ids, last_run_timestamp
+            FROM continuous_ingest_cursors WHERE session_id = %s
+            """,
+            (session_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {}
+        seen = row[0] if isinstance(row[0], list) else []
+        return {
+            "seen_event_ids": list(seen),
+            "last_run_timestamp": str(row[1] or ""),
+        }
+
+    def set_ingest_cursor(self, session_id: str, cursor: Dict[str, Any]) -> None:
+        seen = list(cursor.get("seen_event_ids") or [])
+        last_ts = str(cursor.get("last_run_timestamp") or "")
+        self._conn.execute(
+            """
+            INSERT INTO continuous_ingest_cursors (session_id, seen_event_ids, last_run_timestamp)
+            VALUES (%s, %s::jsonb, %s)
+            ON CONFLICT (session_id) DO UPDATE SET
+                seen_event_ids = EXCLUDED.seen_event_ids,
+                last_run_timestamp = EXCLUDED.last_run_timestamp,
+                updated_at = now()
+            """,
+            (session_id, json.dumps(seen), last_ts),
         )
 
 
