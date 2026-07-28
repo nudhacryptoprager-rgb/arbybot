@@ -205,15 +205,12 @@ def _artifact_age_seconds(artifact: Dict, now_ts: float) -> Optional[float]:
 
 
 _ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-# Base anchor token addresses → symbols (address-only sniper events).
-_BASE_ANCHOR_ADDR_TO_SYMBOL: Dict[str, str] = {
-    "0x4200000000000000000000000000000000000006": "WETH",
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
-    "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": "EURC",
-    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": "cbBTC",
-    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
-    "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": "USDT",
-}
+
+
+def _base_anchor_addr_to_symbol() -> Dict[str, str]:
+    from core.protocol_deployments import anchor_addr_to_symbol
+
+    return anchor_addr_to_symbol("base")
 
 
 def _is_symbol_valid(sym: str) -> bool:
@@ -234,7 +231,7 @@ def _symbol_from_token_addr(addr: Optional[str]) -> str:
     normalized = addr.lower()
     if normalized == _ZERO_ADDRESS:
         return "WETH"
-    anchor_sym = _BASE_ANCHOR_ADDR_TO_SYMBOL.get(normalized)
+    anchor_sym = _base_anchor_addr_to_symbol().get(normalized)
     if anchor_sym:
         return anchor_sym
     if normalized.startswith("0x") and len(normalized) >= 10:

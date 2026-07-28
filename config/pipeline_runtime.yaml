@@ -1,0 +1,54 @@
+# Pipeline runtime policy — single source for orchestration, timeouts, workers, shadow.
+# CLI flags in start.py may override these values; code must not hardcode business policy.
+schema_version: pipeline_runtime.1
+
+orchestration:
+  # continuous: event-driven workers until process stop
+  # batched_streaming: legacy per-batch M8 refresh (test/soak only)
+  mode_default: continuous
+  # null = unbounded sniper ingest until SIGTERM (continuous mode)
+  sniper_minutes_default: null
+  # Used only when --streaming (batched_streaming)
+  sniper_batch_minutes: 15
+  streaming_total_minutes: null
+
+timeouts:
+  # Per-RPC / per-work-item only — never a global service timeout in continuous mode.
+  rpc_timeout_s: 45
+  work_item_lease_s: 300
+  retry_budget: 3
+  heartbeat_stale_s: 300
+  # Batched streaming step caps (ignored in continuous mode)
+  sniper_batch_timeout_factor: 1.47
+  sniper_self_test_budget_s: 900
+  sniper_startup_grace_s: 120
+
+workers:
+  m8_ingest:
+    enabled: true
+    poll_interval_s: 30
+  m81_probe:
+    enabled: true
+  m82_mirror:
+    enabled: true
+  m83_metadata:
+    enabled: true
+  m9_graph_quote:
+    enabled: true
+  # M9 admits on quote_ready — does not wait for sniper batch or M8.3 full refresh.
+  m9_trigger_event: quote_ready
+
+shadow:
+  duration_minutes: 10
+  max_cycles_per_sweep: 20
+  quote_workers: 1
+
+limits:
+  token_concurrency: 4
+  max_radar_tokens: 753
+  step_timeout_s: null
+
+economics:
+  require_config: true
+  config_path: config/exotic_base_anchor.yaml
+  fallback_allowed: false

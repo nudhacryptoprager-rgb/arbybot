@@ -386,6 +386,9 @@ ALLOWED_YAML_FILES = {
     "m9_token_baselines.yaml",
     # Per-provider RPC quota budgets (chains.provider_quota)
     "provider_quotas.yaml",
+    # Pipeline orchestration + protocol deployments (continuous mode)
+    "pipeline_runtime.yaml",
+    "protocol_deployments.yaml",
 }
 
 

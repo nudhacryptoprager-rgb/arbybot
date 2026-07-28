@@ -10,13 +10,13 @@ LIVENESS_MAX_SIZE_USD: float = 5.0
 
 _DEFAULT_CONFIG_PATH = "config/exotic_base_anchor.yaml"
 
-# Fallback when config is unavailable (must match production_conservative defaults).
-_DEFAULT_GAS_USD: float = 0.05
-_DEFAULT_L1_FEE_USD: float = 0.01
-_DEFAULT_SLIPPAGE_BPS: float = 5.0
-_DEFAULT_TARGET_NET_BPS: float = 10.0
-_DEFAULT_SAFETY_FACTOR: float = 1.5
-_DEFAULT_MIN_FLOOR_USD: float = 25.0
+ECONOMICS_INPUT_UNAVAILABLE = "ECONOMICS_INPUT_UNAVAILABLE"
+
+
+class EconomicsInputUnavailable(RuntimeError):
+    """Raised when production economics inputs are missing (no synthetic fallback)."""
+
+    code = ECONOMICS_INPUT_UNAVAILABLE
 
 KNOWN_ECONOMICS_PROFILES: Tuple[str, ...] = (
     "production_conservative",
@@ -36,12 +36,12 @@ def is_patient_lane_mode() -> bool:
 
 def economic_size_floor_usd(
     *,
-    gas_usd: float = _DEFAULT_GAS_USD,
-    l1_fee_usd: float = _DEFAULT_L1_FEE_USD,
-    slippage_bps: float = _DEFAULT_SLIPPAGE_BPS,
-    target_net_bps: float = _DEFAULT_TARGET_NET_BPS,
-    safety_factor: float = _DEFAULT_SAFETY_FACTOR,
-    min_floor_usd: float = _DEFAULT_MIN_FLOOR_USD,
+    gas_usd: float = 0.05,
+    l1_fee_usd: float = 0.01,
+    slippage_bps: float = 5.0,
+    target_net_bps: float = 10.0,
+    safety_factor: float = 1.5,
+    min_floor_usd: float = 25.0,
     economics_floor_usd: Optional[float] = None,
 ) -> float:
     """Minimum notional so fixed gas/L1 is not dominant vs target net edge."""
@@ -83,15 +83,34 @@ def resolve_active_economics_profile_name(
     return str(cm.get("default_profile") or "production_conservative")
 
 
+def _economics_fallback_allowed() -> bool:
+    if os.environ.get("ARBY_ECONOMICS_STRICT", "1").strip().lower() in ("0", "false", "no"):
+        return True
+    try:
+        from core.pipeline_runtime_config import load_pipeline_runtime_config
+
+        return bool(load_pipeline_runtime_config().economics.fallback_allowed)
+    except Exception:
+        return False
+
+
+def require_cost_model(config_path: str = _DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
+    """Load cost model or fail closed for production paths."""
+    cm = load_cost_model(config_path)
+    if not cm and not _economics_fallback_allowed():
+        raise EconomicsInputUnavailable(ECONOMICS_INPUT_UNAVAILABLE)
+    return cm
+
+
 def profile_params(profile: Optional[Dict[str, Any]]) -> Dict[str, float]:
     p = profile or {}
     out: Dict[str, float] = {
-        "gas_usd": float(p.get("gas_usd", _DEFAULT_GAS_USD)),
-        "l1_fee_usd": float(p.get("l1_fee_usd", _DEFAULT_L1_FEE_USD)),
-        "slippage_bps": float(p.get("slippage_bps", _DEFAULT_SLIPPAGE_BPS)),
-        "target_net_bps": float(p.get("target_net_bps", _DEFAULT_TARGET_NET_BPS)),
-        "safety_factor": float(p.get("safety_factor", _DEFAULT_SAFETY_FACTOR)),
-        "min_floor_usd": float(p.get("min_floor_usd", _DEFAULT_MIN_FLOOR_USD)),
+        "gas_usd": float(p.get("gas_usd", 0.05)),
+        "l1_fee_usd": float(p.get("l1_fee_usd", 0.01)),
+        "slippage_bps": float(p.get("slippage_bps", 5.0)),
+        "target_net_bps": float(p.get("target_net_bps", 10.0)),
+        "safety_factor": float(p.get("safety_factor", 1.5)),
+        "min_floor_usd": float(p.get("min_floor_usd", 25.0)),
     }
     if p.get("economics_floor_usd") is not None:
         out["economics_floor_usd"] = float(p["economics_floor_usd"])
@@ -116,7 +135,7 @@ def economics_profile_specs(
     config_path: str = _DEFAULT_CONFIG_PATH,
 ) -> Dict[str, Dict[str, Any]]:
     """Return named economics profiles with computed floors and metadata."""
-    cm = cost_model if cost_model is not None else load_cost_model(config_path)
+    cm = cost_model if cost_model is not None else require_cost_model(config_path)
     profiles = cm.get("profiles") or {}
     meta = cm.get("economics_profiles") or {}
     names = list(meta.keys()) or list(KNOWN_ECONOMICS_PROFILES)

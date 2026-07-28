@@ -37,6 +37,10 @@ active_configs:
     role: M9_TOKEN_BASELINES
   - path: config/provider_quotas.yaml
     role: PROVIDER_QUOTA_REGISTRY
+  - path: config/pipeline_runtime.yaml
+    role: PIPELINE_RUNTIME_POLICY
+  - path: config/protocol_deployments.yaml
+    role: PROTOCOL_DEPLOYMENTS
 
 adapter_metadata_policy:
   production_include_config_seed: false

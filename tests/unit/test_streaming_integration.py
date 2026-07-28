@@ -98,12 +98,12 @@ def test_streaming_lane_acceptance_uses_final_batch_artifacts(monkeypatch):
     assert "m8_2_acceptance_report_latest.json" not in joined
 
 
-def test_streaming_shadow_before_final_m82_acceptance(monkeypatch):
+def test_m82_acceptance_before_shadow_in_streaming(monkeypatch):
     monkeypatch.setenv("ARBY_PIPELINE_SESSION_ID", "session-final-batch")
     monkeypatch.setenv("ARBY_STREAMING_FINAL_BATCH_INDEX", "3")
     steps = build_project_pipeline_steps(_fake_args(skip_shadow=False))
     names = [s["name"] for s in steps]
-    assert names.index("m9_shadow_10m") < names.index("m8_2_acceptance_final_batch")
+    assert names.index("m8_2_acceptance_final_batch") < names.index("m9_shadow_10m")
 
 
 def test_final_m82_acceptance_allows_shadow(tmp_path, monkeypatch):

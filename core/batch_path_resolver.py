@@ -18,6 +18,7 @@ STREAMING_M83_REGISTRY_SENTINEL = "__ARBY_STREAMING_M83_REGISTRY__"
 STREAMING_M82_ACCEPTANCE_SENTINEL = "__ARBY_STREAMING_M82_ACCEPTANCE__"
 STREAMING_BATCH_DIR_SENTINEL = "__ARBY_STREAMING_BATCH_DIR__"
 STREAMING_UPSTREAM_GATE_SENTINEL = "__ARBY_STREAMING_UPSTREAM_GATE__"
+STREAMING_SESSION_AGGREGATE_SENTINEL = "__ARBY_STREAMING_SESSION_AGGREGATE__"
 ENV_STREAMING_FINAL_BATCH_INDEX = "ARBY_STREAMING_FINAL_BATCH_INDEX"
 
 ROLLING_EXPANSION_PATH = "data/runs/_rolling/m8_cross_dex_expansion_latest.json"
@@ -58,6 +59,10 @@ def resolve_streaming_step_cmd(step: dict[str, Any], cmd: list[str]) -> list[str
             resolved.append(str(paths.batch_dir))
         elif token == STREAMING_UPSTREAM_GATE_SENTINEL:
             resolved.append(str(paths.upstream_gate_output))
+        elif token == STREAMING_SESSION_AGGREGATE_SENTINEL:
+            from core.session_aggregate import session_aggregate_path
+
+            resolved.append(str(session_aggregate_path(paths.session_id)))
         else:
             resolved.append(token)
     return resolved
@@ -73,6 +78,17 @@ def batched_final_truth_gate_args() -> list[str]:
         STREAMING_M82_EXPANSION_SENTINEL,
         "--m8-3-registry",
         STREAMING_M83_REGISTRY_SENTINEL,
+    ]
+
+
+def batched_session_aggregate_bridge_args() -> list[str]:
+    return [
+        "--anchor",
+        STREAMING_M81_OUTPUT_SENTINEL,
+        "--expansion",
+        STREAMING_M82_EXPANSION_SENTINEL,
+        "--session-aggregate",
+        STREAMING_SESSION_AGGREGATE_SENTINEL,
     ]
 
 

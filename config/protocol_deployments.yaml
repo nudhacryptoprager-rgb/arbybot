@@ -1,0 +1,18 @@
+# On-chain protocol deployments and anchor token policy (chain-scoped).
+# Production modules must load addresses from here, not hardcode in Python.
+schema_version: protocol_deployments.1
+
+chains:
+  base:
+    chain_id: 8453
+    anchor_tokens:
+      "0x4200000000000000000000000000000000000006": WETH
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": USDC
+      "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": EURC
+      "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": cbBTC
+      "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": DAI
+      "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": USDT
+    protocols:
+      uniswap_v4_pool_manager: "0x498581ff718922c3f8e6a244956af099b2652b2b"
+      uniswap_v4_state_view: "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
+      balancer_vault: "0xba12222222228d8ba445958a75a0704d566bf2c8"

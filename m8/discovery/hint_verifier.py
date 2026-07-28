@@ -8,12 +8,9 @@ import urllib.request
 from typing import Any, Dict, Optional, Set, Tuple
 
 from m8.discovery.pool_hints import PoolHint
+from core.protocol_deployments import protocol_address
 
-# Uniswap V4 StateView on Base (lens contract)
-_V4_STATEVIEW_BASE = "0xa3c0c9b65bad0b08107aa264b0f3db444b867a71"
-_V4_POOL_MANAGER_BASE = "0x498581ff718922c3f8e6a244956af099b2652b2b"
-_BALANCER_VAULT = "0xba12222222228d8ba445958a75a0704d566bf2c8"
-
+# ABI selectors only — deployment addresses come from config/protocol_deployments.yaml
 _SEL_V4_GET_SLOT0 = "c815641c"  # getSlot0(bytes32)
 _SEL_V4_GET_LIQUIDITY = "fa6793d5"  # getLiquidity(bytes32)
 _SEL_BALANCER_GET_POOL_TOKENS = "f94d4668"  # getPoolTokens(bytes32)
@@ -28,6 +25,18 @@ VERIFY_BALANCER_POOL_TOKENS = "balancer_getPoolTokens"
 VERIFY_CURVE_COINS = "curve_coins"
 VERIFY_MAVERICK_TOKEN_PAIR = "maverick_tokenAB"
 VERIFY_NONE = "none"
+
+
+def _v4_stateview_base() -> str:
+    return protocol_address("uniswap_v4_state_view") or ""
+
+
+def _v4_pool_manager_base() -> str:
+    return protocol_address("uniswap_v4_pool_manager") or ""
+
+
+def _balancer_vault() -> str:
+    return protocol_address("balancer_vault") or ""
 
 
 def is_bytes32_hex(value: str) -> bool:
@@ -133,7 +142,7 @@ def verify_v4_pool_id(
     url = _rpc_url(chain, rpc_url)
     if not url:
         return False, "RPC_UNAVAILABLE"
-    stateview = _V4_STATEVIEW_BASE
+    stateview = _v4_stateview_base()
     arg = _encode_bytes32_arg(pool_id)
     slot0 = _eth_call(url, stateview, "0x" + _SEL_V4_GET_SLOT0 + arg)
     if not slot0 or len(slot0) < 66:
@@ -163,7 +172,7 @@ def verify_v4_pool_id_exists(
     if not url:
         return False, "RPC_UNAVAILABLE"
     arg = _encode_bytes32_arg(pool_id)
-    slot0 = _eth_call(url, _V4_STATEVIEW_BASE, "0x" + _SEL_V4_GET_SLOT0 + arg)
+    slot0 = _eth_call(url, _v4_stateview_base(), "0x" + _SEL_V4_GET_SLOT0 + arg)
     if slot0 and len(slot0) >= 66:
         return True, VERIFY_V4_STATEVIEW
     return False, "V4_SLOT0_EMPTY"
@@ -183,7 +192,7 @@ def verify_balancer_pool_id(
     if not url:
         return False, "RPC_UNAVAILABLE"
     arg = _encode_bytes32_arg(pool_id)
-    result = _eth_call(url, _BALANCER_VAULT, "0x" + _SEL_BALANCER_GET_POOL_TOKENS + arg)
+    result = _eth_call(url, _balancer_vault(), "0x" + _SEL_BALANCER_GET_POOL_TOKENS + arg)
     if not result or len(result) < 130:
         return False, "BALANCER_GET_POOL_TOKENS_FAILED"
     raw = result[2:] if result.startswith("0x") else result
@@ -377,7 +386,7 @@ def verify_hint_specialized(
         )
         if ok:
             h.pool_id = pool_id or h.pool_address
-            h.pool_manager = h.pool_manager or _V4_POOL_MANAGER_BASE
+            h.pool_manager = h.pool_manager or _v4_pool_manager_base()
             h.verify_method = method
             return h, "OK"
         if h.token0_addr and h.token1_addr:
@@ -408,7 +417,7 @@ def verify_hint_specialized(
         )
         if ok:
             h.pool_id = pid
-            h.vault_address = h.factory_address or _BALANCER_VAULT
+            h.vault_address = h.factory_address or _balancer_vault()
             h.verify_method = method
             return h, "OK"
         return h, method

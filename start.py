@@ -61,7 +61,16 @@ from core.pipeline_provenance import (  # noqa: F401
     ENV_PIPELINE_SESSION_ID,
     new_pipeline_session_id,
 )
-from core.pipeline_runtime import run_streaming_batch_upstream_gate
+from core.pipeline_runtime_config import (
+    load_pipeline_runtime_config,
+    resolve_sniper_minutes_from_config,
+)
+from core.timeout_policy import TimeoutPolicy, resolve_step_timeout_seconds
+from core.continuous_pipeline import (
+    ContinuousOrchestrator,
+    build_continuous_pipeline_steps,
+)
+from core.session_aggregate import load_or_build_session_aggregate
 from core.pipeline_slo import PipelineSloTracker
 from core.pipeline_streaming import (
     batched_m8_refresh_mode,
@@ -827,7 +836,38 @@ def _pipeline_step(
     return step
 
 
+def _load_runtime_config(args: argparse.Namespace):
+    overrides: dict[str, Any] = {}
+    if getattr(args, "sniper_batch_minutes", None) is not None:
+        overrides.setdefault("orchestration", {})["sniper_batch_minutes"] = int(
+            args.sniper_batch_minutes
+        )
+    return load_pipeline_runtime_config(overrides=overrides or None)
+
+
+def _pipeline_timeout_policy(args: argparse.Namespace) -> TimeoutPolicy:
+    continuous = bool(getattr(args, "continuous", False))
+    return TimeoutPolicy.from_config(_load_runtime_config(args), continuous=continuous)
+
+
 def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int:
+    if step.get("timeout_seconds") is None and (
+        bool(getattr(args, "continuous", False))
+        or step.get("internal") in {"continuous_worker", "session_aggregate_acceptance", "session_aggregate_bridge", "continuous_m9_shadow"}
+    ):
+        return 0
+    policy = _pipeline_timeout_policy(args)
+    config = _load_runtime_config(args)
+    resolved = resolve_step_timeout_seconds(
+        step,
+        policy=policy,
+        config=config,
+        batch_index=int(str(step.get("name", "")).rsplit("_", 1)[-1])
+        if str(step.get("name", "")).startswith("m8_sniper_acceptance_batch_")
+        else 1,
+    )
+    if resolved is not None:
+        return int(resolved)
     explicit = step.get("timeout_seconds")
     if explicit is not None:
         return int(explicit)
@@ -837,9 +877,11 @@ def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int
 
         batch_minutes = int(getattr(args, "sniper_batch_minutes", 15) or 15)
         batch_index = int(name.rsplit("_", 1)[-1])
+        config = _load_runtime_config(args)
         return resolve_sniper_batch_step_timeout_s(
             batch_minutes,
             batch_index=batch_index,
+            timeout_config=config.timeouts,
         )
     if name == "m8_2_radar_two_phase":
         radar_timeout = int(getattr(args, "radar_step_timeout_s", 0) or 0)
@@ -934,6 +976,65 @@ def _clear_pipeline_current() -> None:
         pass
 
 
+def _continuous_orchestrator(session_id: str) -> ContinuousOrchestrator:
+    from state.in_memory import InMemoryStateRepository
+
+    config = _load_runtime_config(_CURRENT_PIPELINE_ARGS or argparse.Namespace())
+    policy = TimeoutPolicy.from_config(config, continuous=True)
+    return ContinuousOrchestrator(
+        repository=InMemoryStateRepository(),
+        config=config,
+        policy=policy,
+        session_id=session_id,
+    )
+
+
+def _run_continuous_worker_step(step: dict[str, Any]) -> int:
+    worker = str(step.get("worker") or "")
+    session_id = str(
+        step.get("session_id") or os.environ.get(ENV_PIPELINE_SESSION_ID, "")
+    ).strip()
+    if not session_id:
+        session_id = new_pipeline_session_id()
+        os.environ[ENV_PIPELINE_SESSION_ID] = session_id
+    orch = _continuous_orchestrator(session_id)
+    results = orch.process_worker_jobs(worker, limit=1)
+    if not results:
+        return 0
+    return 0 if results[-1].ok else 1
+
+
+def _run_session_aggregate_acceptance(step: dict[str, Any]) -> int:
+    session_id = str(
+        step.get("session_id") or os.environ.get(ENV_PIPELINE_SESSION_ID, "")
+    ).strip()
+    if not session_id:
+        return 2
+    load_or_build_session_aggregate(session_id)
+    print(f"session_aggregate_acceptance: session={session_id} aggregate materialized", flush=True)
+    return 0
+
+
+def _run_session_aggregate_bridge(step: dict[str, Any]) -> int:
+    session_id = str(
+        step.get("session_id") or os.environ.get(ENV_PIPELINE_SESSION_ID, "")
+    ).strip()
+    if not session_id:
+        return 2
+    agg = load_or_build_session_aggregate(session_id)
+    print(
+        f"session_aggregate_bridge: pools={len(agg.pools)} tokens={len(agg.tokens)} routes={len(agg.routes)}",
+        flush=True,
+    )
+    return 0
+
+
+def _run_continuous_m9_shadow(step: dict[str, Any]) -> int:
+    duration = int(step.get("duration_minutes") or 10)
+    print(f"continuous_m9_shadow: duration_minutes={duration} (event-driven admission)", flush=True)
+    return 0
+
+
 def _run_internal_pipeline_step(internal: str, step: dict[str, Any] | None = None) -> int:
     if internal == "pending_1_to_2_queue":
         return _export_pending_1_to_2_queue()
@@ -965,6 +1066,14 @@ def _run_internal_pipeline_step(internal: str, step: dict[str, Any] | None = Non
         return _run_mirror_selection_pass()
     if internal == "gate_recall_verify_admission":
         return _gate_recall_verify_admission()
+    if internal == "continuous_worker":
+        return _run_continuous_worker_step(step or {})
+    if internal == "session_aggregate_acceptance":
+        return _run_session_aggregate_acceptance(step or {})
+    if internal == "session_aggregate_bridge":
+        return _run_session_aggregate_bridge(step or {})
+    if internal == "continuous_m9_shadow":
+        return _run_continuous_m9_shadow(step or {})
     if internal == "streaming_batch_upstream_gate":
         return _run_streaming_batch_upstream_gate(step or {})
     if internal == "streaming_batch_manifest":
@@ -1435,20 +1544,30 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
         int((ttm_profile or {}).get("max_radar_tokens") or getattr(args, "max_radar_tokens", 753) or 753)
     )
     streaming = bool(getattr(args, "streaming", False)) or streaming_enabled()
+    continuous = bool(getattr(args, "continuous", False))
+    runtime_config = _load_runtime_config(args)
+    sniper_minutes_int = resolve_sniper_minutes_from_config(
+        getattr(args, "sniper_minutes", None),
+        config=runtime_config,
+        continuous=continuous,
+    )
     streaming_final_batch_index: int | None = None
     if streaming:
+        total_for_batches = sniper_minutes_int if sniper_minutes_int is not None else 45
         streaming_final_batch_index = len(
             resolve_streaming_batches(
-                int(getattr(args, "sniper_minutes", 45) or 45),
+                total_for_batches,
                 batch_minutes=int(getattr(args, "sniper_batch_minutes", 15) or 15),
             )
         )
     sniper_minutes = str(
         resolve_sniper_minutes(
-            int(getattr(args, "sniper_minutes", 45) or 45),
+            int(sniper_minutes_int or 45),
             streaming=streaming,
             batch_minutes=int(getattr(args, "sniper_batch_minutes", 15) or 15),
         )
+        if sniper_minutes_int is not None
+        else "0"
     )
     token_concurrency = str(max(1, int(getattr(args, "token_concurrency", 4) or 4)))
     skip_coingecko = bool(getattr(args, "skip_coingecko", True))
@@ -1457,7 +1576,7 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
     steps: list[dict[str, Any]] = []
 
     def add_m8() -> None:
-        total_sniper_minutes = int(getattr(args, "sniper_minutes", 45) or 45)
+        total_sniper_minutes = int(sniper_minutes_int or 45)
         batch_minutes = int(getattr(args, "sniper_batch_minutes", 15) or 15)
         if streaming:
             batches = resolve_streaming_batches(
@@ -2175,39 +2294,6 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                 allow_exit_codes=(0, 2),
             )
         )
-        if include_shadow:
-            steps.append(
-                _pipeline_step(
-                    "m9_shadow_10m",
-                    _productive_rpc_cmd(
-                        "-u",
-                        "-m",
-                        "m9.graph_arb.runner",
-                        "--chain",
-                        "base",
-                        "--config",
-                        "config/exotic_base_anchor.yaml",
-                        "--inventory",
-                        PRODUCTION_BRIDGE,
-                        "--duration-minutes",
-                        "10",
-                        "--productive-lane",
-                        "--require-factory-verified",
-                        "--require-cycles-at-floor",
-                        "--capacity-diagnostic",
-                        CAPACITY_DIAGNOSTIC,
-                        "--quote-backend",
-                        "raw_http",
-                        "--quote-workers",
-                        "1",
-                        "--max-cycles-per-sweep",
-                        "20",
-                        "--artifact-path",
-                        M9_SHADOW_ARTIFACT,
-                    ),
-                    env=_resolve_m9_shadow_step_env(),
-                )
-            )
         if use_batched_final:
             steps.append(
                 _pipeline_step(
@@ -2225,6 +2311,41 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
                     ),
                     streaming_final_batch=True,
                     allow_exit_codes=(0, 1),
+                    description="M8.2 admission guard — must run before M9 shadow",
+                )
+            )
+        if include_shadow:
+            shadow_cfg = _load_runtime_config(args).shadow
+            steps.append(
+                _pipeline_step(
+                    "m9_shadow_10m",
+                    _productive_rpc_cmd(
+                        "-u",
+                        "-m",
+                        "m9.graph_arb.runner",
+                        "--chain",
+                        "base",
+                        "--config",
+                        "config/exotic_base_anchor.yaml",
+                        "--inventory",
+                        PRODUCTION_BRIDGE,
+                        "--duration-minutes",
+                        str(shadow_cfg.duration_minutes),
+                        "--productive-lane",
+                        "--require-factory-verified",
+                        "--require-cycles-at-floor",
+                        "--capacity-diagnostic",
+                        CAPACITY_DIAGNOSTIC,
+                        "--quote-backend",
+                        "raw_http",
+                        "--quote-workers",
+                        str(shadow_cfg.quote_workers),
+                        "--max-cycles-per-sweep",
+                        str(shadow_cfg.max_cycles_per_sweep),
+                        "--artifact-path",
+                        M9_SHADOW_ARTIFACT,
+                    ),
+                    env=_resolve_m9_shadow_step_env(),
                 )
             )
         lane_acceptance_cmd = [
@@ -2615,11 +2736,47 @@ def build_project_pipeline_steps(args: argparse.Namespace) -> list[dict[str, Any
     elif mode == "cross_chain_research":
         add_cross_chain_research()
     elif mode in {"m8_m9", "full"}:
-        add_m8()
-        if not streaming:
-            add_m82()
-            add_m83()
-        add_m9()
+        if continuous:
+            session_id = resolve_pipeline_session_id(args)
+            os.environ.setdefault(ENV_PIPELINE_SESSION_ID, session_id)
+            steps.append(
+                _pipeline_step(
+                    "continuous_m8_ingest",
+                    _productive_rpc_cmd(
+                        "-u",
+                        "scripts/sniper_smoke_run.py",
+                        "--chain",
+                        "base",
+                        "--acceptance-run",
+                        "--blocks-back",
+                        "50",
+                    ),
+                    env={"ARBY_SNIPER_ENABLE": "1"},
+                    timeout_seconds=None,
+                )
+            )
+            for cw in build_continuous_pipeline_steps(
+                session_id=session_id,
+                config=runtime_config,
+            ):
+                steps.append(
+                    _pipeline_step(
+                        cw["name"],
+                        [],
+                        internal=cw["internal"],
+                        worker=cw.get("worker"),
+                        session_id=session_id,
+                        timeout_seconds=cw.get("timeout_seconds"),
+                        duration_minutes=cw.get("duration_minutes"),
+                    )
+                )
+            add_m9()
+        else:
+            add_m8()
+            if not streaming:
+                add_m82()
+                add_m83()
+            add_m9()
     else:
         raise ValueError(f"unknown pipeline mode: {mode}")
 
@@ -3242,7 +3399,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Diagnostic override for scored on-chain verify cap (-time_to_mirror --hot only)",
     )
-    ap.add_argument("--sniper-minutes", type=int, default=45)
+    ap.add_argument(
+        "--sniper-minutes",
+        type=int,
+        default=None,
+        help="Sniper ingest minutes; omit for unbounded continuous ingest until process stop",
+    )
+    ap.add_argument(
+        "--continuous",
+        action="store_true",
+        default=False,
+        help="Event-driven continuous workers (no global M8/M9 service timeout)",
+    )
     ap.add_argument(
         "--streaming",
         action="store_true",

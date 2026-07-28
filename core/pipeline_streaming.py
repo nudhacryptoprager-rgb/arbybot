@@ -65,18 +65,26 @@ def resolve_sniper_batch_step_timeout_s(
     batch_minutes: int,
     *,
     batch_index: int = 1,
+    timeout_config: Any = None,
 ) -> int:
-    """Hard pipeline timeout for one sniper streaming batch.
+    """Hard pipeline timeout for one sniper streaming batch (batched mode only).
 
     Batch 1 runs historical self-test before the scan window; batch 2+ skip
     self-test (checkpoint reuse) and only need scan duration + startup grace.
     """
+    factor = _SNIPER_BATCH_TIMEOUT_FACTOR
+    self_test_s = DEFAULT_SNIPER_SELF_TEST_BUDGET_S
+    grace_s = DEFAULT_SNIPER_STARTUP_GRACE_S
+    if timeout_config is not None:
+        factor = float(getattr(timeout_config, "sniper_batch_timeout_factor", factor))
+        self_test_s = int(getattr(timeout_config, "sniper_self_test_budget_s", self_test_s))
+        grace_s = int(getattr(timeout_config, "sniper_startup_grace_s", grace_s))
+
     batch_s = max(5, int(batch_minutes or DEFAULT_SNIPER_BATCH_MINUTES)) * 60
-    scan_budget_s = int(batch_s * _SNIPER_BATCH_TIMEOUT_FACTOR)
-    grace_s = max(0, DEFAULT_SNIPER_STARTUP_GRACE_S)
+    scan_budget_s = int(batch_s * factor)
+    grace_s = max(0, grace_s)
     if int(batch_index) <= 1:
-        self_test_s = max(0, DEFAULT_SNIPER_SELF_TEST_BUDGET_S)
-        return scan_budget_s + self_test_s + grace_s
+        return scan_budget_s + max(0, self_test_s) + grace_s
     return scan_budget_s + grace_s
 
 
