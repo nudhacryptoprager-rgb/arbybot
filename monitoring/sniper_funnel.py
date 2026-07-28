@@ -275,8 +275,12 @@ class FunnelTracker:
         self._sniper_rpc_secondary_provider: str = "none"
         self._sniper_rpc_failover_count: int = 0
         self._getlogs_400_count: int = 0
+        self._getlogs_400_by_provider: Dict[str, int] = {}
         self._getlogs_429_count: int = 0
         self._getlogs_chunk_size: int = 0
+        self._range_shrinks: int = 0
+        self._provider_switches: int = 0
+        self._rpc_retry_exhausted: int = 0
         self._ws_provider: str = "none"
         self._http_fallback_provider: str = "unknown"
         self._factory_poll_attempts: Dict[str, int] = {}
@@ -432,9 +436,30 @@ class FunnelTracker:
         with self._lock:
             self._getlogs_400_count += 1
 
+    def inc_getlogs_400_by_provider(self, provider: str) -> None:
+        with self._lock:
+            key = str(provider or "unknown")
+            self._getlogs_400_by_provider[key] = self._getlogs_400_by_provider.get(key, 0) + 1
+
+    def getlogs_400_total(self) -> int:
+        with self._lock:
+            return int(self._getlogs_400_count)
+
     def inc_getlogs_429(self) -> None:
         with self._lock:
             self._getlogs_429_count += 1
+
+    def inc_range_shrink(self) -> None:
+        with self._lock:
+            self._range_shrinks += 1
+
+    def inc_provider_switch(self) -> None:
+        with self._lock:
+            self._provider_switches += 1
+
+    def inc_rpc_retry_exhausted(self) -> None:
+        with self._lock:
+            self._rpc_retry_exhausted += 1
 
     def set_getlogs_chunk_size(self, chunk_blocks: int) -> None:
         with self._lock:
@@ -630,8 +655,12 @@ class FunnelTracker:
                 "sniper_rpc_secondary_provider": self._sniper_rpc_secondary_provider,
                 "sniper_rpc_failover_count": self._sniper_rpc_failover_count,
                 "getlogs_400_count": self._getlogs_400_count,
+                "getlogs_400_count_by_provider": dict(self._getlogs_400_by_provider),
                 "getlogs_429_count": self._getlogs_429_count,
                 "getlogs_chunk_size": self._getlogs_chunk_size,
+                "range_shrinks": self._range_shrinks,
+                "provider_switches": self._provider_switches,
+                "rpc_retry_exhausted": self._rpc_retry_exhausted,
                 "ws_provider": self._ws_provider,
                 "http_fallback_provider": self._http_fallback_provider,
                 "factory_error_rate_by_dex": {

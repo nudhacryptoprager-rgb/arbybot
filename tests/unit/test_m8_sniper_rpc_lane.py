@@ -154,6 +154,45 @@ class TestSniperGetLogsFailover(unittest.TestCase):
         self.assertEqual(logs, [])
         self.assertIn("split depth exhausted", err)
 
+    def test_400_circuit_breaker_forces_provider_switch(self):
+        from m8.runtime import smoke_run as smoke_mod
+
+        funnel = FunnelTracker()
+        always_400 = Exception("400 Bad Request: block range too large")
+        lane = _make_lane(
+            [always_400] * 30,
+            [["log_from_secondary"]],
+            funnel=funnel,
+        )
+        with unittest.mock.patch.object(smoke_mod, "_GETLOGS_400_PER_RANGE_CIRCUIT", 1):
+            logs, had_err, _ = lane.get_logs(
+                {"fromBlock": 1, "toBlock": 200, "address": "0xabc"}
+            )
+        self.assertFalse(had_err)
+        self.assertEqual(logs, ["log_from_secondary"])
+        snap = funnel.snapshot()
+        self.assertGreaterEqual(snap["provider_switches"], 1)
+        self.assertGreaterEqual(snap["getlogs_400_count_by_provider"].get("alchemy", 0), 1)
+        self.assertEqual(snap["getlogs_400_count"], 1)
+
+    def test_400_batch_budget_returns_bounded_error(self):
+        from m8.runtime import smoke_run as smoke_mod
+
+        funnel = FunnelTracker()
+        for _ in range(smoke_mod._GETLOGS_400_BATCH_BUDGET):
+            funnel.inc_getlogs_400()
+        lane = _make_lane(
+            [Exception("400 Bad Request: block range too large")],
+            [["should_not_run"]],
+            funnel=funnel,
+        )
+        logs, had_err, err = lane.get_logs({"fromBlock": 1, "toBlock": 2})
+        self.assertTrue(had_err)
+        self.assertEqual(logs, [])
+        self.assertIn("budget exhausted", err)
+        self.assertGreaterEqual(funnel.snapshot()["rpc_retry_exhausted"], 1)
+        lane.w3_secondary.eth.get_logs.assert_not_called()
+
 
 class TestSniperArtifactPreserve(unittest.TestCase):
     def test_preserve_recent_events_on_rpc_error(self):

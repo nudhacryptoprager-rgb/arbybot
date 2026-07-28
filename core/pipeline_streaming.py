@@ -20,6 +20,16 @@ DEFAULT_SNIPER_BATCH_MINUTES = 15
 DEFAULT_STREAMING_TOTAL_MINUTES = 45
 DEFAULT_SNIPER_ARTIFACT = "data/runs/_rolling/new_pool_sniper_latest.json"
 DEFAULT_M81_ROLLING = "data/runs/_rolling/m8_1_stable_anchor_latest.json"
+# Batch-1 sniper step includes self-test replay (~12m) before the scan window.
+DEFAULT_SNIPER_SELF_TEST_BUDGET_S = int(
+    os.environ.get("ARBY_SNIPER_SELF_TEST_BUDGET_S", "900")
+)
+DEFAULT_SNIPER_STARTUP_GRACE_S = int(
+    os.environ.get("ARBY_SNIPER_STARTUP_GRACE_S", "120")
+)
+_SNIPER_BATCH_TIMEOUT_FACTOR = float(
+    os.environ.get("ARBY_SNIPER_BATCH_TIMEOUT_FACTOR", "1.47")
+)
 
 STREAMING_MANIFEST_PATH = Path("data/tmp/m8_streaming_batch_manifest_latest.json")
 STREAMING_ROOT_DIR = Path("data/tmp/streaming_batches")
@@ -51,11 +61,23 @@ def resolve_sniper_minutes(
     return max(5, min(req, int(batch_minutes)))
 
 
-def resolve_sniper_batch_step_timeout_s(batch_minutes: int) -> int:
-    """Hard pipeline timeout for one sniper streaming batch (includes bootstrap slack)."""
+def resolve_sniper_batch_step_timeout_s(
+    batch_minutes: int,
+    *,
+    batch_index: int = 1,
+) -> int:
+    """Hard pipeline timeout for one sniper streaming batch.
+
+    Batch 1 runs historical self-test before the scan window; batch 2+ skip
+    self-test (checkpoint reuse) and only need scan duration + startup grace.
+    """
     batch_s = max(5, int(batch_minutes or DEFAULT_SNIPER_BATCH_MINUTES)) * 60
-    # 15-minute batch budget -> ~22-minute wall-clock cap at the pipeline wrapper.
-    return int(batch_s * 1.47)
+    scan_budget_s = int(batch_s * _SNIPER_BATCH_TIMEOUT_FACTOR)
+    grace_s = max(0, DEFAULT_SNIPER_STARTUP_GRACE_S)
+    if int(batch_index) <= 1:
+        self_test_s = max(0, DEFAULT_SNIPER_SELF_TEST_BUDGET_S)
+        return scan_budget_s + self_test_s + grace_s
+    return scan_budget_s + grace_s
 
 
 def resolve_sniper_batch_wall_clock_s(duration_minutes: float) -> float:

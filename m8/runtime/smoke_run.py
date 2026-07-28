@@ -53,7 +53,7 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -122,6 +122,12 @@ _GETLOGS_TRANSIENT_RETRIES: int = 2
 _GETLOGS_RETRY_DELAY_S: float = 2.0
 _SNIPER_RPC_TIMEOUT_S: float = float(os.environ.get("ARBY_SNIPER_RPC_TIMEOUT_S", "45"))
 _MAX_GETLOGS_SPLIT_DEPTH: int = int(os.environ.get("ARBY_SNIPER_GETLOGS_SPLIT_DEPTH", "16"))
+_GETLOGS_400_PER_RANGE_CIRCUIT: int = int(
+    os.environ.get("ARBY_SNIPER_GETLOGS_400_CIRCUIT", "4")
+)
+_GETLOGS_400_BATCH_BUDGET: int = int(
+    os.environ.get("ARBY_SNIPER_GETLOGS_400_BUDGET", "120")
+)
 _GETLOGS_FACTORY_TIMEOUT_S: float = float(os.environ.get("ARBY_SNIPER_FACTORY_TIMEOUT_S", "90"))
 _STALL_WATCHDOG_S: float = float(os.environ.get("ARBY_SNIPER_STALL_SECONDS", "300"))
 _FAILOVER_GETLOGS_ERRORS = frozenset({
@@ -649,6 +655,21 @@ class SniperRpcLane:
     primary_provider: str
     secondary_provider: Optional[str]
     funnel: FunnelTracker
+    _range_provider_400: Dict[str, Dict[str, int]] = field(default_factory=dict)
+
+    def _range_key(self, params: Dict[str, Any]) -> str:
+        return f"{params.get('fromBlock')}-{params.get('toBlock')}"
+
+    def _provider_400_count(self, range_key: str, provider: str) -> int:
+        return int(self._range_provider_400.get(range_key, {}).get(provider, 0))
+
+    def _record_provider_400(self, range_key: str, provider: str) -> int:
+        bucket = self._range_provider_400.setdefault(range_key, {})
+        bucket[provider] = int(bucket.get(provider, 0)) + 1
+        return int(bucket[provider])
+
+    def _circuit_open(self, range_key: str, provider: str) -> bool:
+        return self._provider_400_count(range_key, provider) >= _GETLOGS_400_PER_RANGE_CIRCUIT
 
     @property
     def w3(self) -> Any:
@@ -673,6 +694,7 @@ class SniperRpcLane:
         *,
         use_secondary: bool,
         split_depth: int = 0,
+        range_key: Optional[str] = None,
     ) -> tuple[List[Any], bool, str]:
         w3 = self.w3_secondary if use_secondary else self.w3_primary
         provider = (
@@ -680,6 +702,11 @@ class SniperRpcLane:
         )
         if w3 is None:
             return [], True, "no secondary sniper RPC configured"
+
+        top_range_key = range_key or self._range_key(params)
+        if self.funnel.getlogs_400_total() >= _GETLOGS_400_BATCH_BUDGET:
+            self.funnel.inc_rpc_retry_exhausted()
+            return [], True, "getLogs 400 batch budget exhausted"
 
         self.funnel.touch_progress(
             "eth_getLogs",
@@ -700,6 +727,8 @@ class SniperRpcLane:
         err_type = _classify_getlogs_error(err)
         if err_type == "400_range":
             self.funnel.inc_getlogs_400()
+            self.funnel.inc_getlogs_400_by_provider(provider)
+            self._record_provider_400(top_range_key, provider)
         elif err_type == "429":
             self.funnel.inc_getlogs_429()
 
@@ -707,18 +736,49 @@ class SniperRpcLane:
             return [], True, err
 
         if err_type == "400_range" and split_depth >= _MAX_GETLOGS_SPLIT_DEPTH:
+            self.funnel.inc_rpc_retry_exhausted()
             return [], True, "block range split depth exhausted"
+
+        force_failover = (
+            err_type == "400_range"
+            and not use_secondary
+            and self.w3_secondary is not None
+            and self._circuit_open(top_range_key, provider)
+        )
+
+        if force_failover:
+            self.funnel.inc_provider_switch()
+            self.funnel.inc_sniper_rpc_failover()
+            logger.info(
+                "sniper_rpc_failover",
+                extra={"context": {
+                    "from_provider": self.primary_provider,
+                    "to_provider": self.secondary_provider,
+                    "error_type": err_type,
+                    "provider": provider,
+                    "reason": "getlogs_400_circuit",
+                    "range_key": top_range_key,
+                }},
+            )
+            return self._get_logs_lane(
+                params,
+                use_secondary=True,
+                split_depth=split_depth,
+                range_key=top_range_key,
+            )
 
         if not use_secondary and err_type == "400_range":
             split_logs, split_err, split_str = self._split_range_get_logs(
                 params,
                 use_secondary=False,
                 split_depth=split_depth,
+                range_key=top_range_key,
             )
             if not split_err:
                 return split_logs, False, ""
 
         if not use_secondary and self.w3_secondary is not None:
+            self.funnel.inc_provider_switch()
             self.funnel.inc_sniper_rpc_failover()
             logger.info(
                 "sniper_rpc_failover",
@@ -729,14 +789,23 @@ class SniperRpcLane:
                     "provider": provider,
                 }},
             )
-            return self._get_logs_lane(params, use_secondary=True, split_depth=split_depth)
+            return self._get_logs_lane(
+                params,
+                use_secondary=True,
+                split_depth=split_depth,
+                range_key=top_range_key,
+            )
 
         if use_secondary and err_type == "400_range":
             split_logs, split_err, split_str = self._split_range_get_logs(
-                params, use_secondary=True, split_depth=split_depth
+                params,
+                use_secondary=True,
+                split_depth=split_depth,
+                range_key=top_range_key,
             )
             if not split_err:
                 return split_logs, False, ""
+            self.funnel.inc_rpc_retry_exhausted()
             return [], True, split_str
 
         return [], True, err
@@ -747,6 +816,7 @@ class SniperRpcLane:
         *,
         use_secondary: bool = False,
         split_depth: int = 0,
+        range_key: Optional[str] = None,
     ) -> tuple[List[Any], bool, str]:
         from_b = _parse_block_num(params.get("fromBlock", 0))
         to_b = _parse_block_num(params.get("toBlock", from_b))
@@ -754,6 +824,7 @@ class SniperRpcLane:
         if span <= _MIN_GETLOGS_CHUNK_BLOCKS:
             return [], True, "block range split exhausted"
 
+        self.funnel.inc_range_shrink()
         mid = from_b + span // 2 - 1
         left = dict(params)
         left["fromBlock"] = from_b
@@ -762,13 +833,20 @@ class SniperRpcLane:
         right["fromBlock"] = mid + 1
         right["toBlock"] = to_b
 
+        top_range_key = range_key or self._range_key(params)
         left_logs, left_err, left_str = self._get_logs_lane(
-            left, use_secondary=use_secondary, split_depth=split_depth + 1
+            left,
+            use_secondary=use_secondary,
+            split_depth=split_depth + 1,
+            range_key=top_range_key,
         )
         if left_err:
             return [], True, left_str
         right_logs, right_err, right_str = self._get_logs_lane(
-            right, use_secondary=use_secondary, split_depth=split_depth + 1
+            right,
+            use_secondary=use_secondary,
+            split_depth=split_depth + 1,
+            range_key=top_range_key,
         )
         if right_err:
             return [], True, right_str

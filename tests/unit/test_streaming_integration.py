@@ -12,6 +12,7 @@ import pytest
 from core.pipeline_slo import PipelineSloTracker
 from core.pipeline_streaming import (
     m81_streaming_cli_args,
+    resolve_sniper_batch_step_timeout_s,
     resolve_streaming_batch_paths,
     sanitize_session_id,
 )
@@ -500,6 +501,26 @@ def test_new_session_ignores_env_and_produces_valid_handoff(tmp_path, monkeypatc
     assert not (streaming_root / sanitize_session_id(session_a)).exists() or (
         streaming_root / sanitize_session_id(resolved)
     ).exists()
+
+
+def test_sniper_batch1_timeout_exceeds_later_batches_for_same_minutes():
+    batch1 = resolve_sniper_batch_step_timeout_s(15, batch_index=1)
+    batch2 = resolve_sniper_batch_step_timeout_s(15, batch_index=2)
+    batch3 = resolve_sniper_batch_step_timeout_s(15, batch_index=3)
+    assert batch1 > batch2
+    assert batch2 == batch3
+    assert batch2 == int(15 * 60 * 1.47) + 120
+    assert batch1 == batch2 + 900
+
+
+def test_streaming_step_timeout_uses_batch_index():
+    steps = build_project_pipeline_steps(_fake_args())
+    batch1 = next(s for s in steps if s["name"] == "m8_sniper_acceptance_batch_1")
+    batch2 = next(s for s in steps if s["name"] == "m8_sniper_acceptance_batch_2")
+    from start import _resolve_step_timeout
+
+    args = _fake_args()
+    assert _resolve_step_timeout(batch1, args) > _resolve_step_timeout(batch2, args)
 
 
 def test_resume_session_rejects_force_rerun():

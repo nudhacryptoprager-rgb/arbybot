@@ -836,7 +836,11 @@ def _resolve_step_timeout(step: dict[str, Any], args: argparse.Namespace) -> int
         from core.pipeline_streaming import resolve_sniper_batch_step_timeout_s
 
         batch_minutes = int(getattr(args, "sniper_batch_minutes", 15) or 15)
-        return resolve_sniper_batch_step_timeout_s(batch_minutes)
+        batch_index = int(name.rsplit("_", 1)[-1])
+        return resolve_sniper_batch_step_timeout_s(
+            batch_minutes,
+            batch_index=batch_index,
+        )
     if name == "m8_2_radar_two_phase":
         radar_timeout = int(getattr(args, "radar_step_timeout_s", 0) or 0)
         if radar_timeout > 0:
