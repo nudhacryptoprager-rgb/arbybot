@@ -58,7 +58,7 @@ _HOSTED_FALLBACKS: Dict[str, Dict[str, str]] = {
 
 def _token_symbols_for_chain(chain: str) -> Dict[str, str]:
     """Address → symbol from config/core_tokens.yaml (not inline hardcode)."""
-    from m9.graph_arb.core_tokens_loader import address_symbol_map
+    from core.token_identity import address_symbol_map
 
     return {k.lower(): v for k, v in address_symbol_map(chain).items()}
 

@@ -35,7 +35,7 @@ def _resolve_decimals(
             return int(registry_row["decimals"])
         except (TypeError, ValueError):
             pass
-    from m9.graph_arb.core_tokens_loader import address_decimals_map
+    from core.token_identity import address_decimals_map
 
     known = address_decimals_map("base").get(addr.lower())
     if known is not None:
@@ -45,7 +45,7 @@ def _resolve_decimals(
             if (tc.address or "").lower() == addr.lower():
                 return int(tc.decimals)
     if w3 is not None:
-        from m9.graph_arb.token_decimals import fetch_on_chain_decimals
+        from core.token_identity import fetch_on_chain_decimals
 
         dec = fetch_on_chain_decimals(w3, addr)
         if dec is not None:

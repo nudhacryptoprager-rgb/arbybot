@@ -209,7 +209,7 @@ def resolve_token_entry(
                 if c:
                     candidates.append(c)
 
-    from m9.graph_arb.core_tokens_loader import address_decimals_map, address_symbol_map
+    from core.token_identity import address_decimals_map, address_symbol_map
 
     known_dec = address_decimals_map("base").get(addr)
     if known_dec is not None:
@@ -260,7 +260,7 @@ def resolve_token_entry(
                 or {}
             )
         else:
-            from m9.graph_arb.token_decimals import fetch_on_chain_decimals
+            from core.token_identity import fetch_on_chain_decimals
 
             dec = fetch_on_chain_decimals(w3, addr)
             if dec is not None:

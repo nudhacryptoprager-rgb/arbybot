@@ -19,7 +19,7 @@ _DEFAULT_TIMEOUT_S = 10.0
 
 
 def _probe_tokens(chain: str = "base") -> tuple[str, str]:
-    from m9.graph_arb.core_tokens_loader import address_symbol_map
+    from core.token_identity import address_symbol_map
 
     addr_map = address_symbol_map(chain)
     sym_to_addr = {v.upper(): k.lower() for k, v in addr_map.items()}

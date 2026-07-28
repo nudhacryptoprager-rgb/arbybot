@@ -20,12 +20,16 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.token_identity import (
+    fetch_on_chain_decimals,
+    is_truncated_hex_token,
+    is_valid_eth_address,
+)
 from m8_1.stable_anchor.config_loader import M8_1Config
 
 log = logging.getLogger(__name__)
 
 DEFAULT_CACHE_PATH = "data/tmp/m9_token_decimals_cache.json"
-_ERC20_DECIMALS_SELECTOR = "0x313ce567"
 
 DECIMALS_SOURCE_ERC20 = "erc20_call"
 DECIMALS_SOURCE_CORE_CONFIG = "core_config"
@@ -42,27 +46,9 @@ DECIMALS_STATUS_UNKNOWN_DIAGNOSTIC = "UNKNOWN_DIAGNOSTIC"
 TOPOLOGY_PROBE_DECIMALS_FALLBACK = 18
 
 def _known_address_decimals(chain: str = "base") -> Dict[str, int]:
-    from m9.graph_arb.core_tokens_loader import address_decimals_map
+    from core.token_identity import address_decimals_map
 
     return address_decimals_map(chain)
-
-
-def is_truncated_hex_token(sym: str) -> bool:
-    s = (sym or "").strip().lower()
-    return s.startswith("0x") and 2 < len(s) < 42
-
-
-def is_valid_eth_address(addr: object) -> bool:
-    if not isinstance(addr, str):
-        return False
-    a = addr.strip().lower()
-    if not a.startswith("0x") or len(a) != 42 or a == "0x" + "0" * 40:
-        return False
-    try:
-        int(a[2:], 16)
-    except ValueError:
-        return False
-    return True
 
 
 def is_strict_token_address(addr: object) -> bool:
@@ -113,21 +99,6 @@ def save_decimals_cache(cache: Dict[str, int], path: str = DEFAULT_CACHE_PATH) -
         os.replace(tmp, str(p))
 
 
-def fetch_on_chain_decimals(w3: Any, address: str) -> Optional[int]:
-    if w3 is None or not is_valid_eth_address(address):
-        return None
-    try:
-        raw = w3.eth.call({"to": address, "data": _ERC20_DECIMALS_SELECTOR})
-        if not raw or raw == b"" or raw == "0x":
-            return None
-        if isinstance(raw, str):
-            return int(raw, 16)
-        return int.from_bytes(raw[-32:], "big")
-    except Exception as exc:
-        log.debug("on-chain decimals() failed for %s: %s", address[:12], exc)
-        return None
-
-
 def _hint_decimals_for_route(route: Dict[str, Any], dec_key: str) -> Optional[int]:
     hint_key = dec_key.replace("_decimals", "_decimals_hint")
     raw = route.get(hint_key)
@@ -158,7 +129,7 @@ def resolve_decimals_with_source(
 ) -> Tuple[Optional[int], str]:
     """Return (decimals, source_tag). Source is ``fallback_unknown`` when unresolved."""
     if not is_valid_eth_address(address):
-        from m9.graph_arb.core_tokens_loader import (
+        from core.token_identity import (
             build_route_address_prefix_index,
             resolve_truncated_address,
         )

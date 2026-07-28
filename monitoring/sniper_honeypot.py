@@ -62,7 +62,7 @@ KNOWN_SCAM_TOKENS: frozenset = frozenset({
 
 
 def _load_known_legit_tokens(chain: str = "base") -> frozenset:
-    from m9.graph_arb.core_tokens_loader import anchor_token_addresses
+    from core.token_identity import anchor_token_addresses
 
     return anchor_token_addresses(chain)
 

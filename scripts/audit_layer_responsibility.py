@@ -81,6 +81,95 @@ _IMPORT_BOUNDARY_RULES = [
 
 _IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)")
 
+# ---------------------------------------------------------------------------
+# Upward M9 imports from lower layers.
+#
+# M9 consumes M8/M8.1/M8.2/M8.3 output; the reverse direction makes the M8 and
+# M9 packages inseparable. Lazy function-level imports hid this class of defect
+# from the boundary rules above, because those only guard core/state/application.
+#
+# _M9_UPWARD_DEBT is a ratchet: entries may be removed as modules are fixed,
+# but new ones must not be added. Token identity is already at zero and stays
+# there via core.token_identity.
+# ---------------------------------------------------------------------------
+_M9_UPWARD_SCAN_LAYERS = ("m8", "m8_1", "discovery", "monitoring", "dex", "chains")
+
+_M9_UPWARD_DEBT = frozenset(
+    {
+        "m8/discovery/coingecko_onchain_hints.py::m9.graph_arb.token_price_fetcher",
+        "m8/discovery/cross_dex_expand.py::m9.graph_arb.cost_model",
+        "m8/discovery/cross_dex_expand.py::m9.graph_arb.expansion_admission",
+        "m8/discovery/cross_dex_expand.py::m9.graph_arb.pool_quality",
+        "m8/discovery/distinct_pricing_lane.py::m9.graph_arb.productive_distinct_quote",
+        "m8/discovery/graph_handoff.py::m9.graph_arb.node_canonical",
+        "m8/discovery/graph_handoff.py::m9.graph_arb.topology_diagnostic",
+        "m8/discovery/hot_path_focused_quote.py::m9.graph_arb.builder",
+        "m8/discovery/hot_path_focused_quote.py::m9.graph_arb.finder",
+        "m8/discovery/hot_path_focused_quote.py::m9.graph_arb.models",
+        "m8/discovery/hot_path_focused_quote.py::m9.graph_arb.quoter",
+        "m8/discovery/time_to_mirror_lane.py::m9.graph_arb.narrow_universe_gate",
+        "m8/discovery/token_watchlist.py::m9.graph_arb.cost_model",
+        "dex/adapters/balancer_vault.py::m9.graph_arb.productive_distinct_quote",
+        "dex/adapters/maverick_v2.py::m9.graph_arb.productive_distinct_quote",
+    }
+)
+
+
+def collect_m9_upward_imports(repo_root: Path = REPO) -> set[str]:
+    """Return ``path::module`` keys for every lower-layer import of ``m9``."""
+    found: set[str] = set()
+    for layer in _M9_UPWARD_SCAN_LAYERS:
+        layer_dir = repo_root / layer
+        if not layer_dir.is_dir():
+            continue
+        for path in sorted(layer_dir.rglob("*.py")):
+            rel = str(path.relative_to(repo_root)).replace("\\", "/")
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                m = _IMPORT_RE.match(line)
+                if not m:
+                    continue
+                module = m.group(1)
+                if module == "m9" or module.startswith("m9."):
+                    found.add(f"{rel}::{module}")
+    return found
+
+
+def check_m9_upward_imports(repo_root: Path = REPO) -> list[dict]:
+    """Fail on new upward M9 imports and on stale debt entries."""
+    violations: list[dict] = []
+    found = collect_m9_upward_imports(repo_root)
+    for key in sorted(found - _M9_UPWARD_DEBT):
+        rel, module = key.split("::", 1)
+        violations.append(
+            {
+                "rule_id": "M9_UPWARD_IMPORT",
+                "path": rel,
+                "lines": [],
+                "message": (
+                    f"lower layer must not import {module}; move the shared symbol "
+                    "into core/ (see core/token_identity.py) instead of adding debt"
+                ),
+            }
+        )
+    for key in sorted(_M9_UPWARD_DEBT - found):
+        rel, module = key.split("::", 1)
+        violations.append(
+            {
+                "rule_id": "M9_UPWARD_DEBT_STALE",
+                "path": rel,
+                "lines": [],
+                "message": (
+                    f"{module} import is resolved; remove this entry from "
+                    "_M9_UPWARD_DEBT so the ratchet stays honest"
+                ),
+            }
+        )
+    return violations
+
 
 def check_import_boundaries(repo_root: Path = REPO) -> list[dict]:
     """Static import-boundary scan for infrastructure layers.
@@ -195,6 +284,9 @@ def run_audit(*, strict: bool = True) -> dict:
 
     # Import boundary rules (core/state/application must not import upward).
     violations.extend(check_import_boundaries(REPO))
+
+    # M8/M8.1/discovery/monitoring/dex must not import M9 (ratcheted debt).
+    violations.extend(check_m9_upward_imports(REPO))
 
     ok = not violations
     return {"ok": ok, "violations": violations, "strict": strict}

@@ -43,7 +43,7 @@ def _native_eth_addr() -> str:
 
 
 def _base_anchor_addrs() -> Dict[str, str]:
-    from m9.graph_arb.core_tokens_loader import address_symbol_map
+    from core.token_identity import address_symbol_map
 
     out: Dict[str, str] = {}
     for addr, sym in address_symbol_map("base").items():

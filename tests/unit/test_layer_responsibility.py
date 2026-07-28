@@ -53,3 +53,45 @@ def test_audit_layer_responsibility_passes():
 
     result = run_audit(strict=True)
     assert result["ok"] is True
+
+
+def test_token_identity_has_no_milestone_imports():
+    """core.token_identity is the lowest-layer token truth: config only."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "core" / "token_identity.py").read_text(
+        encoding="utf-8"
+    )
+    for forbidden in ("m8", "m8_1", "m9", "scripts", "discovery", "monitoring"):
+        assert f"import {forbidden}" not in src
+        assert f"from {forbidden}" not in src
+
+
+def test_lower_layers_do_not_import_m9_for_token_identity():
+    """Token identity must never travel upward into M9 again."""
+    from scripts.audit_layer_responsibility import collect_m9_upward_imports
+
+    token_identity_modules = {
+        "m9.graph_arb.core_tokens_loader",
+        "m9.graph_arb.token_decimals",
+    }
+    offenders = {
+        key
+        for key in collect_m9_upward_imports()
+        if key.split("::", 1)[1] in token_identity_modules
+    }
+    assert offenders == set()
+
+
+def test_m9_upward_debt_ratchet_reports_new_violations():
+    from scripts.audit_layer_responsibility import check_m9_upward_imports
+
+    assert check_m9_upward_imports() == []
+
+
+def test_core_tokens_loader_shim_matches_token_identity():
+    from core import token_identity
+    from m9.graph_arb import core_tokens_loader
+
+    for name in core_tokens_loader.__all__:
+        assert getattr(core_tokens_loader, name) is getattr(token_identity, name)
